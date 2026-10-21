@@ -377,7 +377,11 @@ must respect. Don't log routine changes here; they belong in git history and
 - **Consequences:** The app now owns agent behaviour for this agent: the
   system prompt, tool set, retries, context trimming and provider quirks are
   ours to maintain. Effort support per model follows published families
-  (`effortTiers`), since providers do not report it.
+  (`effortTiers`), since providers do not report it. Provider quirks stay in
+  the shared wire rather than in a path per provider: NVIDIA NIM, for one,
+  rejects request fields its schema does not list, so `stream_options` goes
+  only to providers known to accept it (`USAGE_IN_STREAM`), and its RFC 7807
+  error bodies are read by their `detail`.
 
 ### A tool result is three channels, and the model pages what does not fit
 

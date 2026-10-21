@@ -32,7 +32,7 @@ function unlistedNote(names: string[]) {
   return `${names.join(" and ")} ${many ? "are" : "is"} not in the current model list. ${many ? "They stay" : "It stays"} here because this thread or your default model uses ${many ? "them" : "it"}.`;
 }
 
-const PROVIDERS: Record<string, string> = { opencode: "OpenCode Zen", openrouter: "OpenRouter", meta: "Meta", grok: "xAI", xai: "xAI", anthropic: "Anthropic", openai: "OpenAI", google: "Google Gemini", deepseek: "DeepSeek", groq: "Groq", mistral: "Mistral", ollama: "Ollama", lmstudio: "LM Studio", custom: "Custom endpoint" };
+const PROVIDERS: Record<string, string> = { opencode: "OpenCode Zen", openrouter: "OpenRouter", meta: "Meta", grok: "xAI", xai: "xAI", anthropic: "Anthropic", openai: "OpenAI", google: "Google Gemini", deepseek: "DeepSeek", groq: "Groq", mistral: "Mistral", nvidia: "NVIDIA NIM", ollama: "Ollama", lmstudio: "LM Studio", custom: "Custom endpoint" };
 
 function providerName(id?: string) {
   if (!id) return "Models";

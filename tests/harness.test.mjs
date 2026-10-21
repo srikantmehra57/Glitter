@@ -270,6 +270,57 @@ test('OpenAI-compatible providers stream text and tool calls through the same lo
   assert.equal(events.filter(({ payload }) => payload.item?.kind === 'agentMessage').at(-1).payload.item.text, 'Found hello.txt.');
 });
 
+test('NVIDIA NIM lists its chat models and runs a tool-call turn over the OpenAI wire', async () => {
+  const root = await workspace();
+  const requests = [];
+  const fetchImpl = async (url, init) => {
+    if (String(url) === 'https://integrate.api.nvidia.com/v1/models') {
+      return Response.json({ object: 'list', data: ['nvidia/nv-embedqa-mistral-7b-v2', 'nvidia/nemotron-3.5-content-safety', 'nvidia/nemotron-4-340b-reward', 'nvidia/nemotron-parse', 'z-ai/glm-5.3-flash', 'moonshotai/kimi-k2.6', 'openai/gpt-oss-20b'].map((id) => ({ id, object: 'model', owned_by: id.split('/')[0] })) });
+    }
+    const body = JSON.parse(init.body);
+    requests.push({ url: String(url), headers: init.headers, body });
+    if (body.model === 'openai/gpt-oss-20b') return new Response(JSON.stringify({ status: 403, title: 'Forbidden', detail: 'Authorization failed' }), { status: 403, headers: { 'content-type': 'application/problem+json' } });
+    if (requests.length === 1) {
+      return sse([
+        { choices: [{ delta: { role: 'assistant', reasoning_content: 'Listing first.' } }] },
+        { choices: [{ delta: { tool_calls: [{ index: 0, id: 'chatcmpl-tool-1', type: 'function', function: { name: 'list_files', arguments: '{"pattern":' } }] } }] },
+        { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '"*.txt"}' } }] }, finish_reason: 'tool_calls' }] },
+        '[DONE]',
+      ]);
+    }
+    return sse([{ choices: [{ delta: { content: 'There is hello.txt.' }, finish_reason: 'stop' }] }, '[DONE]']);
+  };
+  const events = [];
+  const instance = new HarnessHost((event, payload) => events.push({ event, payload }), new SessionStore(await mkdtemp(join(temporary, 'store-'))), fetchImpl);
+  instance.setCredentials({ nvidia: { key: 'nvapi-test-key' } });
+  const listed = await instance.listModels();
+  assert.deepEqual(listed.models.map((model) => model.modelId), ['nvidia/z-ai/glm-5.3-flash', 'nvidia/moonshotai/kimi-k2.6', 'nvidia/openai/gpt-oss-20b'], 'embedding, safety, reward and parsing models are left out');
+  assert.equal(listed.models.find((model) => model.isDefault)?.modelId, 'nvidia/moonshotai/kimi-k2.6');
+  assert.equal(listed.models[0].description, 'NVIDIA NIM');
+  assert.deepEqual(listed.models.find((model) => model.modelId === 'nvidia/openai/gpt-oss-20b').reasoningEfforts, ['low', 'medium', 'high']);
+  assert.deepEqual(listed.models.find((model) => model.modelId === 'nvidia/moonshotai/kimi-k2.6').reasoningEfforts, []);
+
+  const { sessionId } = await instance.startSession({ workspaceRoot: root });
+  await instance.sendTurn({ sessionId, text: 'list text files' });
+  await until(events, ({ event }) => event === 'turnCompleted');
+  assert.equal(requests[0].url, 'https://integrate.api.nvidia.com/v1/chat/completions');
+  assert.equal(requests[0].headers.authorization, 'Bearer nvapi-test-key');
+  assert.equal(requests[0].body.model, 'moonshotai/kimi-k2.6', 'the provider prefix is stripped, the org prefix kept');
+  assert.equal(requests[0].body.stream, true);
+  assert.equal(requests[0].body.stream_options, undefined, 'NIM rejects fields its schema does not list');
+  assert.equal(requests[0].body.tools[0].type, 'function');
+  assert.equal(requests[1].body.messages.at(-1).role, 'tool');
+  assert.equal(requests[1].body.messages.at(-1).tool_call_id, 'chatcmpl-tool-1');
+  assert.match(requests[1].body.messages.at(-1).content, /hello\.txt/);
+  assert.equal(events.filter(({ payload }) => payload.item?.kind === 'agentMessage').at(-1).payload.item.text, 'There is hello.txt.');
+
+  events.length = 0;
+  await instance.setModel({ sessionId, modelId: 'nvidia/openai/gpt-oss-20b' });
+  await instance.sendTurn({ sessionId, text: 'again' });
+  const failed = await until(events, ({ event }) => event === 'turnCompleted');
+  assert.match(failed.payload.outcome.params.error.message, /NVIDIA NIM returned 403: Authorization failed\. Check the key/, 'a problem+json error reads as its detail');
+});
+
 test('a rate-limited call is retried, and an unconfigured provider fails with what to do', async () => {
   const root = await workspace();
   let attempts = 0;

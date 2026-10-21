@@ -31,6 +31,7 @@ export const PROVIDERS: ProviderSpec[] = [
   { id: "deepseek", name: "DeepSeek", wire: "openai", baseUrl: "https://api.deepseek.com/v1" },
   { id: "groq", name: "Groq", wire: "openai", baseUrl: "https://api.groq.com/openai/v1" },
   { id: "mistral", name: "Mistral", wire: "openai", baseUrl: "https://api.mistral.ai/v1" },
+  { id: "nvidia", name: "NVIDIA NIM", wire: "openai", baseUrl: "https://integrate.api.nvidia.com/v1" },
   { id: "ollama", name: "Ollama", wire: "openai", baseUrl: "http://localhost:11434/v1", keyless: true },
   { id: "lmstudio", name: "LM Studio", wire: "openai", baseUrl: "http://localhost:1234/v1", keyless: true },
   { id: "custom", name: "Custom endpoint", wire: "openai", baseUrl: "" },
@@ -87,6 +88,8 @@ export function effortTiers(providerId: string, model: string): Tier[] {
   if (providerId === "openai") return /^(o\d|gpt-5|codex)/.test(id) ? ["minimal", "low", "medium", "high"] : [];
   if (providerId === "xai") return /grok-3-mini/.test(id) ? ["low", "high"] : [];
   if (providerId === "google") return /gemini-(2\.5|[3-9])/.test(id) ? ["none", "low", "medium", "high"] : [];
+  // NIM documents `reasoning_effort` only for its gpt-oss models.
+  if (providerId === "nvidia") return /(^|\/)gpt-oss/.test(id) ? ["low", "medium", "high"] : [];
   if (providerId === "openrouter") {
     return /(^|\/)(o\d|gpt-5)|claude-(3-7|sonnet-4|opus-4|[a-z]+-[4-9])|gemini-(2\.5|[3-9])|deepseek-r1|grok-3-mini|qwq|reasoning|thinking/.test(id) ? ["low", "medium", "high"] : [];
   }

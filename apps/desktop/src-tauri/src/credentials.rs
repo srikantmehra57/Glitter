@@ -210,7 +210,7 @@ pub async fn credential_set(value: String) -> Result<(), String> {
 /// Model providers the built-in harness may hold a key for. The bridge's
 /// `harness/providers.ts` is the catalog; this list only bounds what the
 /// renderer may store, so a forged id can never mint a new entry.
-pub const PROVIDER_IDS: &[&str] = &["anthropic", "openai", "google", "openrouter", "xai", "deepseek", "groq", "mistral", "ollama", "lmstudio", "custom"];
+pub const PROVIDER_IDS: &[&str] = &["anthropic", "openai", "google", "openrouter", "xai", "deepseek", "groq", "mistral", "nvidia", "ollama", "lmstudio", "custom"];
 /// Providers whose address the user sets: a custom endpoint, and local servers
 /// that may listen on another port.
 const PROVIDER_URL_IDS: &[&str] = &["custom", "ollama", "lmstudio"];
@@ -515,6 +515,10 @@ mod tests {
         assert!(apply_provider_change(&mut keys, "custom", Some("k".into()), Some("https://user:pw@host/v1".into()), false).is_err());
         apply_provider_change(&mut keys, "anthropic", None, None, true).expect("clear");
         assert!(!keys.contains_key("anthropic"));
+        // NVIDIA NIM is a hosted provider like the others: a key, and no address of its own.
+        apply_provider_change(&mut keys, "nvidia", Some("nvapi-abcd5678".into()), None, false).expect("nvidia");
+        assert!(apply_provider_change(&mut keys, "nvidia", None, Some("https://nim.example/v1".into()), false).is_err(), "NIM's address is fixed");
+        assert_eq!(provider_status(&keys).iter().find(|row| row.id == "nvidia").and_then(|row| row.key_hint.clone()).as_deref(), Some("••••5678"));
     }
 
     /// An in-memory keychain. `broken` makes writes to one account fail.

@@ -168,8 +168,9 @@ async function errorText(name: string, response: Response): Promise<string> {
   try {
     const raw = await response.text();
     try {
-      const parsed = JSON.parse(raw) as { error?: { message?: string } | string; message?: string };
-      detail = typeof parsed.error === "string" ? parsed.error : parsed.error?.message ?? parsed.message ?? raw;
+      // `detail` is the RFC 7807 problem shape NVIDIA NIM answers with.
+      const parsed = JSON.parse(raw) as { error?: { message?: string } | string; message?: string; detail?: string };
+      detail = typeof parsed.error === "string" ? parsed.error : parsed.error?.message ?? parsed.message ?? parsed.detail ?? raw;
     } catch {
       detail = raw;
     }

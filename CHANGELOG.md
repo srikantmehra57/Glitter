@@ -14,9 +14,10 @@ licence terms.
 
 - A built-in agent, **Harness**, that works without any agent CLI installed.
   Add your own key in Settings → Providers (Anthropic, OpenAI, Google Gemini,
-  OpenRouter, xAI, DeepSeek, Groq, Mistral, a custom OpenAI-compatible
-  endpoint, or Ollama and LM Studio on this Mac) and its models appear in the
-  composer. It reads, searches and edits files in the workspace and runs
+  OpenRouter, xAI, DeepSeek, Groq, Mistral, NVIDIA NIM, a custom
+  OpenAI-compatible endpoint, or Ollama and LM Studio on this Mac) and its
+  models appear in the composer. Each hosted provider's key form links to the
+  page where you create a key. It reads, searches and edits files in the workspace and runs
   commands under the OS sandbox, follows the permission modes and Plan mode,
   asks through the usual approval cards, and keeps its threads on this Mac.
   Keys stay in the keychain and are sent only to their provider.

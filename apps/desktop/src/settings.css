@@ -336,7 +336,8 @@ button.setting-row.sidebar-accent-option:focus-visible { outline-offset: -2px; }
 .provider-form input { width: 100%; height: 32px; padding: 0 12px; border: 1px solid var(--border); border-radius: var(--r-pill); background: var(--well); color: var(--ink); font-size: 12.5px; outline: none; transition: border-color var(--dur-1) var(--ease), box-shadow var(--dur-1) var(--ease); }
 .provider-form input:focus { border-color: color-mix(in oklab, var(--accent) 70%, transparent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .provider-form .settings-note { margin: 0; }
-.provider-form-actions { display: flex; justify-content: flex-end; }
+.provider-form-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.provider-key-link { min-width: 0; margin: 0 auto 0 -6px; font-size: 11.5px; }
 .ghost-btn.danger-text { color: var(--danger); }
 .ghost-btn.danger-text:hover:not(:disabled) { background: color-mix(in oklab, var(--danger) 12%, transparent); color: var(--danger); }
 

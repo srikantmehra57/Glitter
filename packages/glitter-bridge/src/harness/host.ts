@@ -74,7 +74,7 @@ function contextWindow(providerId: string, model: string, listed?: number | null
   return null;
 }
 
-const NOT_CHAT = /embed|whisper|tts|dall-e|davinci|babbage|moderation|image|audio|realtime|transcribe|search|imagen|veo|aqa|guard|rerank|computer-use|sora/i;
+const NOT_CHAT = /embed|whisper|tts|dall-e|davinci|babbage|moderation|image|audio|realtime|transcribe|search|imagen|veo|aqa|guard|safety|reward|rerank|parse|nvclip|detector|computer-use|sora/i;
 
 /**
  * Every way an approval request can end. Each reaches the model as its own
@@ -243,7 +243,7 @@ export class HarnessHost {
 
   /** A sensible first model: the newest mainstream coding model from the first provider that has one. */
   private markDefault(models: HarnessModel[]): HarnessModel[] {
-    const preferences = [/anthropic\/claude-sonnet/, /anthropic\/claude-opus/, /anthropic\/claude/, /openai\/gpt-5(?!.*(nano|mini))/, /openai\/gpt-4\.1$/, /google\/gemini-.*pro/, /xai\/grok-4/, /deepseek\/deepseek-chat/, /./];
+    const preferences = [/anthropic\/claude-sonnet/, /anthropic\/claude-opus/, /anthropic\/claude/, /openai\/gpt-5(?!.*(nano|mini))/, /openai\/gpt-4\.1$/, /google\/gemini-.*pro/, /xai\/grok-4/, /deepseek\/deepseek-chat/, /nvidia\/moonshotai\/kimi-k[\d.]+$/, /nvidia\/z-ai\/glm-[\d.]+$/, /nvidia\/nvidia\/nemotron-[\d.]+-super/, /./];
     let pick: HarnessModel | undefined;
     for (const pattern of preferences) {
       const hits = models.filter((model) => pattern.test(model.modelId));

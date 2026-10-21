@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
-import { KeyRound, LoaderCircle } from "lucide-react";
-import { providerKeySet, providerKeysGet, type ProviderStatus } from "../lib/bridge";
+import { ExternalLink, KeyRound, LoaderCircle } from "lucide-react";
+import { openUrl, providerKeySet, providerKeysGet, type ProviderStatus } from "../lib/bridge";
 import { describeError } from "../lib/errors";
 import { PROVIDER_IDS, PROVIDERS, type ProviderEntry } from "../lib/providers";
 import { Collapse } from "./Presence";
@@ -62,6 +62,7 @@ function ProviderRow({ provider, status, editing, onEdit, onSave }: { provider: 
   const [error, setError] = useState<string | null>(null);
   const configured = Boolean(status?.configured);
   const needsUrl = provider.custom || provider.local;
+  const keyUrl = provider.keyUrl;
   useEffect(() => {
     if (!editing) return;
     setKey("");
@@ -117,6 +118,11 @@ function ProviderRow({ provider, status, editing, onEdit, onSave }: { provider: 
           {provider.custom && configured ? <p className="field-help">Changing the address needs the key again, so a saved key is never sent to a new server.</p> : null}
           {error ? <p className="settings-note danger" role="alert">{error}</p> : null}
           <div className="provider-form-actions">
+            {keyUrl ? (
+              <button type="button" className="text-btn provider-key-link" onClick={() => void openUrl(keyUrl).catch((cause) => setError(describeError("Could not open the browser", cause)))}>
+                Get a key at {new URL(keyUrl).hostname}<ExternalLink size={11} aria-hidden="true" />
+              </button>
+            ) : null}
             <button type="submit" className="primary" disabled={!canSave || busy}>{busy ? <><LoaderCircle size={13} className="spin" aria-hidden="true" />Saving…</> : "Save"}</button>
           </div>
         </form>
