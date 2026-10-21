@@ -46,7 +46,7 @@ describe("usage ledger", () => {
     const [entry] = useAppStore.getState().usageLedger.turns;
     expect(entry).toMatchObject({ key: "h-session-1:t1", agentId: "harness", providerId: "anthropic", modelId: "anthropic/claude-sonnet-5", effort: "high", inputTokens: 5_000, outputTokens: 300, estimated: false, tools: { bash: 1 } });
     vi.advanceTimersByTime(2_000);
-    expect(JSON.parse(localStorage.getItem("muse.usageLedger") ?? "null").turns).toHaveLength(1);
+    expect(JSON.parse(localStorage.getItem("glitter.usageLedger") ?? "null").turns).toHaveLength(1);
   });
 
   it("counts cached prompt tokens as input", () => {
@@ -72,6 +72,6 @@ describe("usage ledger", () => {
     useAppStore.getState().clearUsageHistory();
     expect(useAppStore.getState().usageLedger.turns).toEqual([]);
     vi.advanceTimersByTime(2_000);
-    expect(JSON.parse(localStorage.getItem("muse.usageLedger") ?? "null").turns).toEqual([]);
+    expect(JSON.parse(localStorage.getItem("glitter.usageLedger") ?? "null").turns).toEqual([]);
   });
 });

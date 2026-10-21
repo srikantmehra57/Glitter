@@ -15,19 +15,19 @@ async function bundle(entry, replacements = {}) {
   await build({ entryPoints: [resolve(entry)], bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'silent',
     plugins: [{ name: 'test-boundaries', setup(builder) {
       builder.onResolve({ filter: /.*/ }, ({ path }) => Object.hasOwn(replacements, path) ? { path, namespace: 'test-boundary' } : undefined);
-      builder.onLoad({ filter: /.*/, namespace: 'test-boundary' }, ({ path }) => ({ contents: replacements[path], loader: 'ts', resolveDir: resolve('packages/muse-bridge/src') }));
+      builder.onLoad({ filter: /.*/, namespace: 'test-boundary' }, ({ path }) => ({ contents: replacements[path], loader: 'ts', resolveDir: resolve('packages/glitter-bridge/src') }));
     } }],
   });
   return import(pathToFileURL(outfile).href);
 }
 
-const cliUpdate = await bundle('packages/muse-bridge/src/cli-update.ts', {
+const cliUpdate = await bundle('packages/glitter-bridge/src/cli-update.ts', {
   './detect.js': `export const resolveMuseBin = () => globalThis.testMuseBin ?? null;`,
 });
-const { cachedProbe, forgetProbe, rememberProbe } = await bundle('packages/muse-bridge/src/probe-cache.ts');
+const { cachedProbe, forgetProbe, rememberProbe } = await bundle('packages/glitter-bridge/src/probe-cache.ts');
 // A second cli-update bundle with a forget spy: each bundle inlines its own
 // probe-cache copy, so the real invalidation is observed through the spy.
-const spied = await bundle('packages/muse-bridge/src/cli-update.ts', {
+const spied = await bundle('packages/glitter-bridge/src/cli-update.ts', {
   './detect.js': `export const resolveMuseBin = () => globalThis.testMuseBin ?? null;`,
   './probe-cache.js': `export const forgetProbe = (path) => { (globalThis.forgotten ??= []).push(path); };`,
 });

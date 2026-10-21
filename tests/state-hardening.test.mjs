@@ -614,13 +614,13 @@ const hydrateStubs = {
 };
 
 test('a restored store document tells the user which backup was used', async () => {
-  globalThis.storeRepair = { status: 'restored', restoredFrom: 'muse-desktop.json.bak' };
+  globalThis.storeRepair = { status: 'restored', restoredFrom: 'glitter.json.bak' };
   globalThis.persistedData = { sessionMemory: { version: 1, drafts: { 'thread:s1': { text: 'Recovered draft', images: [] } } } };
   const store = await frontendStore(true, hydrateStubs);
   try {
     await store.getState().hydrate();
     assert.equal(store.getState().persistNotice,
-      'Your saved drafts and thread titles were recovered from a backup (muse-desktop.json.bak). Anything saved after that point was lost.');
+      'Your saved drafts and thread titles were recovered from a backup (glitter.json.bak). Anything saved after that point was lost.');
     assert.equal(store.getState().drafts['thread:s1'].text, 'Recovered draft', 'the restored document still loads');
     store.getState().dismissPersistNotice();
     assert.equal(store.getState().persistNotice, null);
@@ -631,13 +631,13 @@ test('a restored store document tells the user which backup was used', async () 
 });
 
 test('a quarantined store document names the set-aside file and starts empty', async () => {
-  globalThis.storeRepair = { status: 'quarantined', quarantinedTo: 'muse-desktop.json.corrupt' };
+  globalThis.storeRepair = { status: 'quarantined', quarantinedTo: 'glitter.json.corrupt' };
   globalThis.persistedData = {};
   const store = await frontendStore(true, hydrateStubs);
   try {
     await store.getState().hydrate();
     assert.equal(store.getState().persistNotice,
-      'Your saved drafts and thread titles could not be read and were set aside (muse-desktop.json.corrupt). Muse started with empty local state.');
+      'Your saved drafts and thread titles could not be read and were set aside (glitter.json.corrupt). Glitter started with empty local state.');
     assert.deepEqual(store.getState().drafts, {}, 'the quarantined document contributes nothing');
   } finally {
     globalThis.storeRepair = undefined;
@@ -659,7 +659,7 @@ test('a newer session document is left unchanged and the banner says so', async 
     assert.equal(store.getState().drafts['thread:s1'].text, 'from the future');
     store.getState().setDockOpen(false);
     await flushMemorySave();
-    assert.match(store.getState().persistNotice, /newer Muse Code/);
+    assert.match(store.getState().persistNotice, /newer version of Glitter/);
     assert.doesNotMatch(store.getState().persistNotice ?? '', /not being saved locally/);
     assert.equal(globalThis.persistedData.sessionMemory.version, 99);
     assert.equal(globalThis.persistedData.sessionMemory.futureOnly.keep, true);

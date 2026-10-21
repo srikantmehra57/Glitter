@@ -48,10 +48,10 @@ import {
   type UserInputResponse, type GoalState, type ContextUsage, type TokenUsage, type SubscriptionUsage, type SubagentResult, type Suggestion, type TrustPreview, type SkillRow, type McpServer, type PluginEntry, type SkillEntry, type HostPosture, type EnterpriseStatus, type SettingsTab,
 } from "./types";
 
-const persist = isTauri() ? new LazyStore("muse-desktop.json", { autoSave: false, defaults: {} }) : null;
+const persist = isTauri() ? new LazyStore("glitter.json", { autoSave: false, defaults: {} }) : null;
 /**
  * `tauri-plugin-store` saves with a bare truncate-and-write, so a crash mid-save
- * can leave `muse-desktop.json` half-written — silently destroying every draft
+ * can leave `glitter.json` half-written — silently destroying every draft
  * and thread title. Keep the plugin as the in-memory cache and reader, but route
  * saves through the native atomic writer (temp file + rename + `.bak`).
  */
@@ -736,7 +736,7 @@ function scheduleLedger(get: () => AppStore) {
     const state = get();
     if (state.preview) return;
     if (persistentStore) void persistentStore.set(LEDGER_KEY, state.usageLedger).then(() => persistentStore.save()).catch((error) => log.warn("usage.save_failed", { error: String(error) }));
-    else try { localStorage.setItem(`muse.${LEDGER_KEY}`, JSON.stringify(state.usageLedger)); } catch { /* no storage: the record lives for this session */ }
+    else try { localStorage.setItem(`glitter.${LEDGER_KEY}`, JSON.stringify(state.usageLedger)); } catch { /* no storage: the record lives for this session */ }
   }, 1500);
 }
 
@@ -813,7 +813,7 @@ async function persistMemory(state: AppStore) {
 let persistFailures = 0;
 
 const PERSIST_FAILURE_NOTICE = "Drafts and thread titles are not being saved locally. Changes made now may be lost.";
-const VERSION_REFUSE_NOTICE = "Your saved drafts and thread titles were written by a newer Muse Code. This copy is leaving that file unchanged.";
+const VERSION_REFUSE_NOTICE = "Your saved drafts and thread titles were written by a newer version of Glitter. This copy is leaving that file unchanged.";
 
 /**
  * REC-002: a save failure must be visible. The composer promises drafts are
@@ -1324,7 +1324,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
             set({ persistNotice: `Your saved drafts and thread titles were recovered from a backup (${repair.restoredFrom ?? "backup"}). Anything saved after that point was lost.` });
             log.warn("store.restored", { from: repair.restoredFrom, quarantined: repair.quarantinedTo });
           } else if (repair.status === "quarantined") {
-            set({ persistNotice: "Your saved drafts and thread titles could not be read and were set aside (muse-desktop.json.corrupt). Muse started with empty local state." });
+            set({ persistNotice: "Your saved drafts and thread titles could not be read and were set aside (glitter.json.corrupt). Glitter started with empty local state." });
             log.warn("store.quarantined", { file: repair.quarantinedTo });
           }
         } catch (error) {
@@ -1363,7 +1363,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         if (get().zoom !== 1) void setInterfaceZoom(get().zoom).catch(() => {});
         if (Object.keys(get().shortcutOverrides ?? {}).length) void setMenuShortcuts(menuAccelerators(get().shortcutOverrides ?? {})).catch(() => {});
         try {
-          const storedLedger = persistentStore ? await persistentStore.get<unknown>(LEDGER_KEY) : JSON.parse(localStorage.getItem(`muse.${LEDGER_KEY}`) ?? "null");
+          const storedLedger = persistentStore ? await persistentStore.get<unknown>(LEDGER_KEY) : JSON.parse(localStorage.getItem(`glitter.${LEDGER_KEY}`) ?? "null");
           set({ usageLedger: compact(asLedger(storedLedger)) });
         } catch { /* an unreadable ledger starts empty */ }
         const restored = asSubscriptionUsage(memory.subscriptionUsage);
@@ -3621,8 +3621,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
     }
     const workspace: Workspace = {
       id: "preview",
-      path: "/Users/you/Muse Code",
-      name: "Muse Code",
+      path: "/Users/you/Glitter",
+      name: "Glitter",
       grantId: "preview",
     };
     // The last demo thread shows how a thread from another installed agent looks.
@@ -4049,7 +4049,7 @@ export function bindBridgeEvents() {
     const maybeNotify = (sessionId: string, title: string, detail?: string) => {
       const state = useAppStore.getState();
       const thread = state.threads.find((thread) => thread.sessionId === sessionId);
-      const body = [detail, thread?.title, thread ? workspaceName(thread.workspacePath) : ""].filter(Boolean).join(" · ") || "Muse Code";
+      const body = [detail, thread?.title, thread ? workspaceName(thread.workspacePath) : ""].filter(Boolean).join(" · ") || "Glitter";
       const focused = typeof document !== "undefined" && typeof document.hasFocus === "function" ? document.hasFocus() : true;
       if (shouldNotify({ enabled: state.notifications !== false, focused, selected: sessionId === state.selectedSessionId, preview: state.preview })) void notify(title, body);
     };

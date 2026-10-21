@@ -199,7 +199,7 @@ document.querySelectorAll("[data-split]").forEach((el) => {
   const shotSrc = ({ theme, accent }) => [`${shots}/app-${theme}-${accent}.webp`, `${shots}/app-${theme}-${accent}@1x.webp 1440w, ${shots}/app-${theme}-${accent}.webp 2880w`];
   [shotA.src, shotA.srcset] = shotSrc(currentLook());
   let showingB = false;
-  window.addEventListener("muse:theme", (e) => {
+  window.addEventListener("glitter:theme", (e) => {
     const [src, srcset] = shotSrc(e.detail);
     const incoming = showingB ? shotA : shotB;
     const outgoing = showingB ? shotB : shotA;
@@ -511,7 +511,7 @@ initRun();
 
 window.matchMedia("(prefers-color-scheme: light)").addEventListener("change", (event) => {
   try {
-    if (localStorage.getItem("muse-site-theme")) return;
+    if (localStorage.getItem("glitter-site-theme")) return;
   } catch {}
   applyTheme({ theme: event.matches ? "light" : "dark" });
 });

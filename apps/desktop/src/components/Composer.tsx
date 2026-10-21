@@ -145,8 +145,8 @@ function ComposerView({ above }: { above?: ReactNode }) {
   const capabilitiesShown = useRef(new Set<string>());
   const showCapabilities = useCallback(() => {
     void s.confirm({
-      title: `${agentName} capabilities in Muse Code`,
-      body: `Threads, file edits, tool approvals, and the agent’s models and modes are supported.\n\nThis adapter does not support fork/export, older history paging, compaction, queued messages, ! shell commands, or Muse’s goal and background-task controls. Stop a running turn before sending another message.\n\nThese are Muse Code adapter limits, rather than limits of the ${agentName} CLI. You can reopen this information from the model picker’s Agent section.`,
+      title: `${agentName} capabilities in Glitter`,
+      body: `Threads, file edits, tool approvals, and the agent’s models and modes are supported.\n\nThis adapter does not support fork/export, older history paging, compaction, queued messages, ! shell commands, or Muse’s goal and background-task controls. Stop a running turn before sending another message.\n\nThese are Glitter adapter limits, rather than limits of the ${agentName} CLI. You can reopen this information from the model picker’s Agent section.`,
       confirmLabel: "Don’t show again",
       info: true,
     }).then((hide) => { if (hide) void s.commitSettings({ hideAgentCapabilities: true }); });

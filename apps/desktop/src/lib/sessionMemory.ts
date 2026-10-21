@@ -9,7 +9,7 @@ export type Draft = {
   /**
    * Attachments whose bytes are still in memory. `persistableDrafts` empties
    * this for the settings document — image payloads in drafts used to push the
-   * whole `muse-desktop.json` past the 48 MiB IPC body limit, freezing every
+   * whole `glitter.json` past the 48 MiB IPC body limit, freezing every
    * save (drafts, titles, settings) rather than just dropping the bytes.
    */
   images: ComposerImage[];
@@ -215,7 +215,7 @@ export class SessionMemoryPersistence {
     }
     if (this.fallback) {
       try {
-        const raw = this.fallback.getItem("muse-session-memory");
+        const raw = this.fallback.getItem("glitter-session-memory");
         const parsed = raw ? JSON.parse(raw) as Partial<SessionMemory> : undefined;
         this.loadedVersion = documentVersion(parsed);
         return normalizeMemory(parsed);
@@ -245,7 +245,7 @@ export class SessionMemoryPersistence {
         await this.store.save();
         return;
       }
-      this.fallback?.setItem("muse-session-memory", JSON.stringify(guarded));
+      this.fallback?.setItem("glitter-session-memory", JSON.stringify(guarded));
     });
     this.pending = run.catch(() => {});
     return run;

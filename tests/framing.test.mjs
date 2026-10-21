@@ -19,7 +19,7 @@ const options = { bundle: true, platform: 'node', format: 'esm', logLevel: 'sile
   },
 }] };
 for (const name of ['framing', 'acp', 'index']) {
-  await build({ ...options, entryPoints: [resolve(`packages/muse-bridge/src/${name}.ts`)], outfile: join(dir, `${name}.mjs`) });
+  await build({ ...options, entryPoints: [resolve(`packages/glitter-bridge/src/${name}.ts`)], outfile: join(dir, `${name}.mjs`) });
 }
 const { LineFrames, encodeFrame } = await import(pathToFileURL(join(dir, 'framing.mjs')).href);
 const { AcpAgentHost } = await import(pathToFileURL(join(dir, 'acp.mjs')).href);

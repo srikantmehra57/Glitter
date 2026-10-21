@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 jobs:
-  # Muse Code ships for macOS only (docs/DECISIONS.md, "macOS is the only platform").
+  # Glitter ships for macOS only (docs/DECISIONS.md, "macOS is the only platform").
   test:
     name: tests (macos)
     runs-on: macos-latest
@@ -34,7 +34,7 @@ jobs:
       # though debug/test builds spawn ambient node and never run the
       # staged runtime. Stage it exactly like a release build does.
       - name: Stage bridge sidecar
-        run: npm run build:sidecar -w @muse/bridge
+        run: npm run build:sidecar -w @glitter/bridge
       # RELEASING.md counts the website build among the verify gates; a
       # broken site used to ship undetected.
       - name: Build website
@@ -88,5 +88,5 @@ jobs:
       - name: Upload unsigned bundle
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: muse-code-desktop-macos-unsigned
-          path: "apps/desktop/src-tauri/target/release/bundle/macos/Muse Code.app"
+          name: glitter-macos-unsigned
+          path: "apps/desktop/src-tauri/target/release/bundle/macos/Glitter.app"

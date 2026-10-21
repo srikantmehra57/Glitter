@@ -1,7 +1,7 @@
 # Harness reviews: four agent harnesses, and what our harness should take
 
 We reviewed four open-source agent harnesses against our own built-in harness
-(`packages/muse-bridge/src/harness`, 1,469 lines). This is the index and the
+(`packages/glitter-bridge/src/harness`, 1,469 lines). This is the index and the
 combined ranking.
 
 The ranked items are **sequenced into phases in

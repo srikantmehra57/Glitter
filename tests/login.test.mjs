@@ -8,7 +8,7 @@ import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 /**
- * In-app `muse login` device-code flow (`packages/muse-bridge/src/login.ts`):
+ * In-app `muse login` device-code flow (`packages/glitter-bridge/src/login.ts`):
  * prompt parsing plus start/cancel/completion against a stubbed child process.
  * The Muse binary itself is stubbed out, so no real sign-in is attempted.
  */
@@ -18,7 +18,7 @@ after(() => rm(temporary, { recursive: true, force: true }));
 
 const outfile = join(temporary, 'login.mjs');
 await build({
-  entryPoints: [resolve('packages/muse-bridge/src/login.ts')],
+  entryPoints: [resolve('packages/glitter-bridge/src/login.ts')],
   bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'silent',
   plugins: [{ name: 'test-boundaries', setup(builder) {
     builder.onResolve({ filter: /.*/ }, ({ path }) => path === './detect.js' ? { path, namespace: 'test-boundary' } : undefined);

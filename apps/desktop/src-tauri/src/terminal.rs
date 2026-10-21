@@ -19,7 +19,7 @@ pub const MAX_TERMINALS: usize = 8;
 /// Bytes accepted per write: far more than a paste, far less than a flood.
 pub const WRITE_LIMIT: usize = 64 * 1024;
 /// Longest a held burst of output waits for more before it is emitted,
-/// mirroring `FLUSH_MS` in `packages/muse-bridge/src/output.ts`.
+/// mirroring `FLUSH_MS` in `packages/glitter-bridge/src/output.ts`.
 const OUTPUT_FLUSH_MS: Duration = Duration::from_millis(12);
 /// A held burst this large is emitted at once instead of waiting out the
 /// timer, mirroring `FLUSH_CHARS` in the bridge.
@@ -179,7 +179,7 @@ impl Terminals {
 /// One terminal's output, coalesced for IPC. Held bytes are emitted once
 /// `OUTPUT_FLUSH_BYTES` have piled up or `OUTPUT_FLUSH_MS` after the first
 /// held byte, whichever comes first — the same merge the bridge applies to
-/// deltas (`queueDelta` in `packages/muse-bridge/src/output.ts`). `Exited`
+/// deltas (`queueDelta` in `packages/glitter-bridge/src/output.ts`). `Exited`
 /// flushes what is held before the exit is reported, so a listener observes
 /// the same ordering as an unmerged stream.
 fn coalesce_output(id: &str, rx: Receiver<ReadEvent>, on_event: impl Fn(&str, Event)) {

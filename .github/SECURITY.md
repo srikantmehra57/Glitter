@@ -1,6 +1,6 @@
 # Security policy
 
-Muse Code Desktop runs coding agents with access to your files, shell and
+Glitter runs coding agents with access to your files, shell and
 credentials. Its native shell is the trust boundary (see
 [docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md#the-renderer-is-untrusted)), so
 we treat reports against it as the highest priority.
@@ -22,7 +22,7 @@ Please do not open a public issue for a security problem.
 
 Include the affected version or commit, your OS, reproduction steps, and the
 impact you observed. Never include real API keys, tokens or private workspace
-contents. Redacted logs from `~/Library/Logs/com.musecode.desktop/` (macOS) are
+contents. Redacted logs from `~/Library/Logs/com.glitter.desktop/` (macOS) are
 welcome.
 
 We aim to acknowledge a report within 3 working days and to share a fix plan

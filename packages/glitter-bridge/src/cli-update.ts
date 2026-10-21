@@ -181,7 +181,7 @@ export async function checkCliUpdate(options: { museBin?: string | null; fetchIm
     // The channel manifest needs no auth (the launcher fetches it bare too);
     // only the release manifest and artifact may ask for a sign-in.
     const response = await fetchImpl(channelManifestUrl(channel), {
-      headers: { Accept: "application/json", "User-Agent": "muse-code-desktop" },
+      headers: { Accept: "application/json", "User-Agent": "glitter" },
       signal: controller.signal,
     });
     if (!response.ok) throw new Error(`Channel request failed (HTTP ${response.status}).`);

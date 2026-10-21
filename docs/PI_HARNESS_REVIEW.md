@@ -3,7 +3,7 @@
 Pi (`earendil-works/pi`, MIT) is a minimal, extensible agent harness —
 "unified LLM API, agent loop, TUI, coding agent CLI". This document
 reverse-engineers it and assesses what belongs in *our* harness
-(`packages/muse-bridge/src/harness`).
+(`packages/glitter-bridge/src/harness`).
 
 Read alongside [ZCODE_HARNESS_REVIEW.md](ZCODE_HARNESS_REVIEW.md),
 [DEEPSEEK_HARNESS_REVIEW.md](DEEPSEEK_HARNESS_REVIEW.md) and
@@ -366,7 +366,7 @@ assumed:
    "strict JSONL framing (one object per line, LF-terminated; strip optional
    CR; **do not** split on U+2028/U+2029 — Node's `readline` does and breaks
    JSON strings)". Ours
-   (`packages/muse-bridge/src/framing.ts:12-47`) splits on **raw byte 10**
+   (`packages/glitter-bridge/src/framing.ts:12-47`) splits on **raw byte 10**
    and decodes UTF-8 per frame — it never goes through `readline` and never
    treats U+2028/U+2029 as a delimiter, so a line separator inside a JSON
    string stays inside the frame. No change needed. Worth recording because

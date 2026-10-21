@@ -2,7 +2,7 @@
 
 MiniMax Code (`MiniMax-AI/minimax-code`, "MCode") is MiniMax's coding-agent
 CLI. This document reverse-engineers it and assesses what belongs in *our*
-harness (`packages/muse-bridge/src/harness`).
+harness (`packages/glitter-bridge/src/harness`).
 
 Read alongside [ZCODE_HARNESS_REVIEW.md](ZCODE_HARNESS_REVIEW.md),
 [DEEPSEEK_HARNESS_REVIEW.md](DEEPSEEK_HARNESS_REVIEW.md) and

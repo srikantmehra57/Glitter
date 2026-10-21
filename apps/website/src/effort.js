@@ -74,7 +74,7 @@ export function initEffort() {
     detent = index;
     scrubber.setAttribute("aria-valuenow", String(index));
     scrubber.setAttribute("aria-valuetext", TIERS[index].label);
-    window.museScene?.setEffort(index / max);
+    window.glitterScene?.setEffort(index / max);
     paint();
     preview();
   }

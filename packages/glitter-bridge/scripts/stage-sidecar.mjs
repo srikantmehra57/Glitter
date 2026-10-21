@@ -16,7 +16,7 @@
  * (`postject`, abandoned 2023) cannot parse current Node Mach-O binaries.
  * Bundling the stock runtime keeps dev/prod behavior identical.
  *
- * Usage: npm run build:sidecar -w @muse/bridge
+ * Usage: npm run build:sidecar -w @glitter/bridge
  */
 import { execFileSync } from "node:child_process";
 import { chmodSync, copyFileSync, createWriteStream, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -38,8 +38,8 @@ const PINNED_SHA256 = {
 };
 
 const TARGETS = {
-  "darwin-arm64": { dist: "darwin-arm64.tar.gz", member: "bin/node", out: "muse-node-aarch64-apple-darwin" },
-  "darwin-x64": { dist: "darwin-x64.tar.gz", member: "bin/node", out: "muse-node-x86_64-apple-darwin" },
+  "darwin-arm64": { dist: "darwin-arm64.tar.gz", member: "bin/node", out: "glitter-node-aarch64-apple-darwin" },
+  "darwin-x64": { dist: "darwin-x64.tar.gz", member: "bin/node", out: "glitter-node-x86_64-apple-darwin" },
 };
 
 const key = `${process.platform}-${process.arch}`;

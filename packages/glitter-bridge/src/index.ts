@@ -219,12 +219,12 @@ function queueKey(method: string, params: Record<string, unknown>) {
 const WORK_CEILING_MS = 100_000;
 
 /**
- * Test seam: `MUSE_WORK_CEILING_MS` may only *tighten* the ceiling, never
+ * Test seam: `GLITTER_WORK_CEILING_MS` may only *tighten* the ceiling, never
  * loosen it, so an override can shorten the wait a test has to sit through
  * without ever weakening the guard in a real session.
  */
 function workCeiling(): number {
-  const raw = process.env.MUSE_WORK_CEILING_MS;
+  const raw = process.env.GLITTER_WORK_CEILING_MS;
   const parsed = raw === undefined ? NaN : Number(raw);
   return Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, WORK_CEILING_MS) : WORK_CEILING_MS;
 }

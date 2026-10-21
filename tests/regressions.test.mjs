@@ -727,7 +727,7 @@ test('failed question response preserves pending questions; success removes only
   assert.deepEqual(store.getState().threads[0].userInputs.map(x => x.userInputId), ['q2']);
 });
 
-const { UserInputRelay, observeNotifications } = await bundle('packages/muse-bridge/src/user-input.ts');
+const { UserInputRelay, observeNotifications } = await bundle('packages/glitter-bridge/src/user-input.ts');
 const notification = (method, params) => ({ jsonrpc: '2.0', method, params });
 test('question relay preserves simultaneous sessions and does not revive settled requests', () => {
   const relay = new UserInputRelay(() => {});
@@ -798,7 +798,7 @@ async function fakeHost(t) {
       async resumeSession({ sessionId }) { return { sessionId, onApproval() {}, onApprovalError() {}, onGapError() {}, opening: { verb: 'session/resume', result: { session: { sessionId, activeTurnId: null }, history: { items: [] } } } }; }
     },
   };
-  const { MuseHost } = await bundle('packages/muse-bridge/src/host.ts', {
+  const { MuseHost } = await bundle('packages/glitter-bridge/src/host.ts', {
     '@muse-code/sdk': 'export const spawnMspConnection=(...args)=>globalThis.fakeSdk.spawn(...args); export const MuseClient=globalThis.fakeSdk.MuseClient; export const readSessionDurability=()=>({kind:"durable"}); export const EXPECTED_SCHEMA_FINGERPRINT="sha256:fake-pin";',
     './detect.js': 'export const resolveMuseBin=()=>"/fake/muse"; export const detectMuse=()=>({found:true}); export const museEnv=base=>({...base});',
   });

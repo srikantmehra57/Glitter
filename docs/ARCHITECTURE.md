@@ -1,8 +1,8 @@
 # Architecture
 
-Muse Code Desktop is a coding-agent app with its own agent harness. The
+Glitter is a coding-agent app with its own agent harness. The
 built-in **Harness** agent calls model providers directly with the user's own
-keys and runs its tools inside the workspace (see `packages/muse-bridge/src/harness`).
+keys and runs its tools inside the workspace (see `packages/glitter-bridge/src/harness`).
 The app also drives external agent CLIs: the official `muse` CLI and supported
 third-party ACP agents, which do their own work while the app starts them, shows
 their output and forwards the user's decisions.
@@ -16,7 +16,7 @@ needs no agent CLI installed. External CLIs stay supported side by side.
 flowchart LR
   UI["Renderer<br/>React 19 + Zustand<br/>apps/desktop/src"]
   Shell["Native shell<br/>Rust + Tauri 2<br/>apps/desktop/src-tauri"]
-  Bridge["Bridge<br/>Node, bundled runtime<br/>packages/muse-bridge"]
+  Bridge["Bridge<br/>Node, bundled runtime<br/>packages/glitter-bridge"]
   Muse["muse serve<br/>(MSP)"]
   ACP["ACP agent CLIs<br/>opencode, grok, gemini, qwen, goose"]
   Providers["Model providers<br/>Anthropic, OpenAI-compatible,<br/>local servers"]
@@ -35,7 +35,7 @@ flowchart LR
 |---|---|---|
 | Renderer (OS webview) | `apps/desktop/src/main.tsx` → `App.tsx` | All UI. One Zustand store. Talks only to the native shell. |
 | Native shell | `apps/desktop/src-tauri/src/main.rs` → `lib.rs::run()` | Trust boundary. Validates every renderer request, owns workspace grants, credentials, git, dialogs, files, logs, and the bridge child process. |
-| Bridge | `packages/muse-bridge/src/index.ts` (bundled to `dist/index.js`) | Line-delimited JSON RPC on stdio. Runs the built-in `HarnessHost`, one `MuseHost` (MSP via the SDK) and one `AcpAgentHost` per third-party agent, and turns their streams into one event vocabulary. |
+| Bridge | `packages/glitter-bridge/src/index.ts` (bundled to `dist/index.js`) | Line-delimited JSON RPC on stdio. Runs the built-in `HarnessHost`, one `MuseHost` (MSP via the SDK) and one `AcpAgentHost` per third-party agent, and turns their streams into one event vocabulary. |
 | `muse serve` | Started by `host.ts` | The real agent: sessions, turns, tools, approvals, models, usage. |
 
 ## The renderer is untrusted
@@ -60,9 +60,9 @@ The native shell treats the webview as possibly compromised:
   pinned by digest. Third-party ACP agents also need an explicit, keyring-stored
   isolation consent (`exec.rs`).
 - **Release builds verify the bridge.** `build.rs` bakes the SHA-256 of
-  `packages/muse-bridge/dist/index.js` into the binary, and the packaged script
+  `packages/glitter-bridge/dist/index.js` into the binary, and the packaged script
   is checked before it runs. The bridge runs on a bundled Node runtime (the
-  `muse-node` sidecar staged by `packages/muse-bridge/scripts/stage-sidecar.mjs`),
+  `glitter-node` sidecar staged by `packages/glitter-bridge/scripts/stage-sidecar.mjs`),
   never on the user's Node.
 
 The bridge applies its own isolation (`isolation.ts`). Child processes get
@@ -101,17 +101,18 @@ shell before they're logged.
    choice goes back as `decideApproval` / `respondUserInput`.
 
 The protocol types the renderer and bridge share live in
-`packages/muse-bridge/src/protocol.ts`, which the renderer imports directly.
+`packages/glitter-bridge/src/protocol.ts`, which the renderer imports directly.
 
 ## State and persistence
 
 | Data | Where | Owner |
 |---|---|---|
 | UI state, threads, transcripts in view | Zustand store (`useAppStore`, `apps/desktop/src/lib/store.ts`) | Renderer |
-| Settings (`DEFAULT_SETTINGS` in `types.ts`) and session memory (drafts, titles, pins, layout) | `muse-desktop.json` in the app data dir, written atomically by the native `persist_store_atomic` (temp file + rename, `.bak` kept, corrupt file quarantined) | `settingsPersistence.ts`, `sessionMemory.ts` |
-| API key, provider keys (BYOK), workspace grants, agent digest pins, ACP consent | OS keyring, service `com.musecode.desktop` | `credentials.rs`, `lib.rs` |
-| App and security logs | OS log dir (`muse-desktop.log`, `security-audit.log`) | `lib.rs`, `logger.ts` |
-| Session history | The agent CLI's own data directory; for the built-in harness, JSONL files in `<app data>/harness` (`MUSE_HARNESS_DIR`) | Muse / ACP agent / `harness/store.ts` |
+| Settings (`DEFAULT_SETTINGS` in `types.ts`) and session memory (drafts, titles, pins, layout) | `glitter.json` in the app data dir, written atomically by the native `persist_store_atomic` (temp file + rename, `.bak` kept, corrupt file quarantined) | `settingsPersistence.ts`, `sessionMemory.ts` |
+| API key, provider keys (BYOK), workspace grants, agent digest pins, ACP consent | OS keyring, service `com.glitter.desktop` | `credentials.rs`, `lib.rs` |
+| App and security logs | OS log dir (`glitter.log`, `security-audit.log`) | `lib.rs`, `logger.ts` |
+| Session history | The agent CLI's own data directory; for the built-in harness, JSONL files in `<app data>/harness` (`GLITTER_HARNESS_DIR`) | Muse / ACP agent / `harness/store.ts` |
+| Data of a Muse Code install (bundle id `com.musecode.desktop`) | Moved into the folders and keychain service above on first launch; its worktrees stay in its old data folder | `legacy.rs` |
 
 There's no router. `App.tsx` shows onboarding or the main shell (sidebar,
 thread view, review dock) and mounts the modal surfaces.
@@ -157,8 +158,9 @@ this for UI work without Rust or a CLI. The website's screenshot script
 - `process.rs`: child-process environment and process-group shutdown.
 - `framing.rs`: bounded NDJSON reader.
 - `credentials.rs`: keyring access.
+- `legacy.rs`: the one-time carry-over of a Muse Code install.
 
-### `packages/muse-bridge/src` (bridge)
+### `packages/glitter-bridge/src` (bridge)
 
 - `index.ts`: stdio dispatch and agent routing.
 - `harness/`: the built-in agent. `providers.ts` (catalog, keys, effort tiers),
@@ -205,7 +207,7 @@ desktop app. See `apps/website/README.md`.
 - Every privileged action is authorized natively. Adding a renderer feature that
   touches files, processes or credentials means adding a native command or
   bridge verb with a DTO, not widening an existing one.
-- `@muse-code/sdk` is pinned exactly (`packages/muse-bridge/package.json`). The
+- `@muse-code/sdk` is pinned exactly (`packages/glitter-bridge/package.json`). The
   pin and `BRIDGE_SDK_VERSION` in `host.ts` move together, and a test checks the
   installed SDK version. At handshake the SDK's schema fingerprint is compared
   with the one the CLI serves, and any mismatch shows under Settings →

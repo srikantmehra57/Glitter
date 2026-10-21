@@ -16,7 +16,7 @@ const SOURCES = [
   ["package.json", (text) => JSON.parse(text).version],
   ["apps/desktop/package.json", (text) => JSON.parse(text).version],
   ["apps/website/package.json", (text) => JSON.parse(text).version],
-  ["packages/muse-bridge/package.json", (text) => JSON.parse(text).version],
+  ["packages/glitter-bridge/package.json", (text) => JSON.parse(text).version],
   ["apps/desktop/src-tauri/Cargo.toml", (text) => /^\s*version\s*=\s*"([^"]+)"/m.exec(text)?.[1]],
   ["apps/desktop/src-tauri/tauri.conf.json", (text) => JSON.parse(text).version],
 ];

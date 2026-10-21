@@ -268,7 +268,6 @@ html[data-theme="light"] .btn-primary {
 }
 .brand { display: inline-flex; align-items: center; gap: 9px; font-family: var(--sans); font-weight: 600; font-size: 17px; color: var(--ink); letter-spacing: -0.02em; margin-right: 14px; }
 .brand img { border-radius: 7px; }
-.brand-dim { color: var(--tertiary); font-weight: 400; margin-left: 1px; }
 .nav-links { display: flex; gap: 0; }
 .nav-links a {
   position: relative;

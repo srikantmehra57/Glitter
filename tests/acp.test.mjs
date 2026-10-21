@@ -8,7 +8,7 @@ import { pathToFileURL } from 'node:url';
 
 const temporary = await mkdtemp(join(tmpdir(), 'muse-acp-'));
 const outfile = join(temporary, 'acp.mjs');
-await build({ entryPoints: [resolve('packages/muse-bridge/src/acp.ts')], bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'silent' });
+await build({ entryPoints: [resolve('packages/glitter-bridge/src/acp.ts')], bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'silent' });
 const { AcpAgentHost, fatalProviderError, zenFreeModel, fallbackOpencodeModel, modelIdsFromError } = await import(pathToFileURL(outfile).href);
 
 test('rate limits and disabled models are fatal provider errors', () => {
@@ -189,8 +189,8 @@ test('ACP models, effort tiers, and sessions come from the agent', async () => {
 test('ACP cancel waits for a terminal state and kills a hanging process tree', { timeout: 8000 }, async () => {
   const pidFile = join(temporary, `grandchild-${Date.now()}.pid`);
   const spec = { id: 'fake', name: 'Fake', protocol: 'acp', bins: [], acpArgs: [resolve('tests/fixtures/hung-acp-agent.mjs')], verified: true, signIn: '' };
-  const previous = process.env.MUSE_TEST_PID_FILE;
-  process.env.MUSE_TEST_PID_FILE = pidFile;
+  const previous = process.env.GLITTER_TEST_PID_FILE;
+  process.env.GLITTER_TEST_PID_FILE = pidFile;
   const host = new AcpAgentHost(spec, process.execPath, () => {});
   try {
     await host.startSession({ workspaceRoot: temporary });
@@ -205,8 +205,8 @@ test('ACP cancel waits for a terminal state and kills a hanging process tree', {
     }
   } finally {
     await host.stop();
-    if (previous === undefined) delete process.env.MUSE_TEST_PID_FILE;
-    else process.env.MUSE_TEST_PID_FILE = previous;
+    if (previous === undefined) delete process.env.GLITTER_TEST_PID_FILE;
+    else process.env.GLITTER_TEST_PID_FILE = previous;
     await rm(pidFile, { force: true });
   }
 });

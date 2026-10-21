@@ -3,9 +3,12 @@ use std::sync::Mutex;
 // Serialize access: some platform credential stores do not support concurrent writes.
 static CREDENTIAL_LOCK: Mutex<()> = Mutex::new(());
 
+/// The keychain service every entry lives under: the bundle identifier.
+pub const SERVICE: &str = "com.glitter.desktop";
+
 #[cfg(target_os = "macos")]
 fn entry() -> Result<keyring::Entry, String> {
-    keyring::Entry::new("com.musecode.desktop", "muse-api-key").map_err(|_| "Could not access the system credential store".into())
+    keyring::Entry::new(SERVICE, "muse-api-key").map_err(|_| "Could not access the system credential store".into())
 }
 
 /// Workspace grants live in the OS keyring — NOT in a file under AppData,
@@ -16,10 +19,10 @@ fn grants_entry() -> Result<keyring::Entry, String> {
     // Test seam (debug builds only): the e2e suite reroutes grants to a
     // throwaway account so the user's real entry is never touched.
     #[cfg(debug_assertions)]
-    let account = std::env::var("MUSE_TEST_GRANTS_ACCOUNT").unwrap_or_else(|_| "workspace-grants".into());
+    let account = std::env::var("GLITTER_TEST_GRANTS_ACCOUNT").unwrap_or_else(|_| "workspace-grants".into());
     #[cfg(not(debug_assertions))]
     let account = "workspace-grants";
-    keyring::Entry::new("com.musecode.desktop", &account).map_err(|_| "Could not access the system credential store".into())
+    keyring::Entry::new(SERVICE, &account).map_err(|_| "Could not access the system credential store".into())
 }
 
 /// ACP agent identity pins (path + digest per agent). The renderer can read
@@ -28,7 +31,7 @@ fn grants_entry() -> Result<keyring::Entry, String> {
 /// never a renderer-nominated string.
 #[cfg(target_os = "macos")]
 fn agent_pins_entry() -> Result<keyring::Entry, String> {
-    keyring::Entry::new("com.musecode.desktop", "agent-pins").map_err(|_| "Could not access the system credential store".into())
+    keyring::Entry::new(SERVICE, "agent-pins").map_err(|_| "Could not access the system credential store".into())
 }
 
 pub fn agent_pins_value() -> Result<Option<String>, String> {
@@ -45,7 +48,7 @@ pub fn agent_pins_value() -> Result<Option<String>, String> {
 
 #[cfg(target_os = "macos")]
 fn acp_consent_entry() -> Result<keyring::Entry, String> {
-    keyring::Entry::new("com.musecode.desktop", "acp-isolation-consent").map_err(|_| "Could not access the system credential store".into())
+    keyring::Entry::new(SERVICE, "acp-isolation-consent").map_err(|_| "Could not access the system credential store".into())
 }
 
 /// Last consent value read from or written to the credential store. Only this
@@ -238,7 +241,7 @@ pub struct ProviderStatus {
 
 #[cfg(target_os = "macos")]
 fn provider_keys_entry() -> Result<keyring::Entry, String> {
-    keyring::Entry::new("com.musecode.desktop", "provider-keys").map_err(|_| "Could not access the system credential store".into())
+    keyring::Entry::new(SERVICE, "provider-keys").map_err(|_| "Could not access the system credential store".into())
 }
 
 /// The keychain entry is read once and cached: every harness request injects
@@ -394,6 +397,88 @@ pub async fn provider_key_set(provider: String, key: Option<String>, base_url: O
     .map_err(|_| "Credential store task failed".to_string())?
 }
 
+/// Every account this app keeps under its keychain service.
+#[cfg(any(target_os = "macos", test))]
+const ACCOUNTS: &[&str] = &["muse-api-key", "workspace-grants", "agent-pins", "acp-isolation-consent", "provider-keys"];
+
+/// The reads and writes `carry_over` needs: the keychain in the app, a map in tests.
+#[cfg(any(target_os = "macos", test))]
+trait Vault {
+    fn get(&self, service: &str, account: &str) -> Result<Option<String>, String>;
+    fn set(&self, service: &str, account: &str, value: &str) -> Result<(), String>;
+    fn delete(&self, service: &str, account: &str) -> Result<(), String>;
+}
+
+/// Move every account from service `from` to `to`. A value already saved under
+/// `to` wins. The old entry is deleted only once the new one reads back
+/// intact, so a failure leaves it for the next launch. Returns the accounts
+/// that could not be moved.
+#[cfg(any(target_os = "macos", test))]
+fn carry_over(vault: &impl Vault, from: &str, to: &str) -> Vec<&'static str> {
+    let mut failed = Vec::new();
+    for &account in ACCOUNTS {
+        let moved = (|| {
+            let Some(value) = vault.get(from, account)? else {
+                return Ok(());
+            };
+            if vault.get(to, account)?.is_none() {
+                vault.set(to, account, &value)?;
+                if vault.get(to, account)?.as_deref() != Some(value.as_str()) {
+                    return Err("the new entry did not read back".to_string());
+                }
+            }
+            vault.delete(from, account)
+        })();
+        if moved.is_err() {
+            failed.push(account);
+        }
+    }
+    failed
+}
+
+#[cfg(target_os = "macos")]
+struct Keychain;
+
+#[cfg(target_os = "macos")]
+impl Vault for Keychain {
+    fn get(&self, service: &str, account: &str) -> Result<Option<String>, String> {
+        match keyring::Entry::new(service, account).and_then(|entry| entry.get_password()) {
+            Ok(value) => Ok(Some(value)),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(err) => Err(err.to_string()),
+        }
+    }
+
+    fn set(&self, service: &str, account: &str, value: &str) -> Result<(), String> {
+        keyring::Entry::new(service, account).and_then(|entry| entry.set_password(value)).map_err(|err| err.to_string())
+    }
+
+    fn delete(&self, service: &str, account: &str) -> Result<(), String> {
+        match keyring::Entry::new(service, account).and_then(|entry| entry.delete_credential()) {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(err) => Err(err.to_string()),
+        }
+    }
+}
+
+/// Move a Muse Code install's keychain entries (service `legacy::IDENTIFIER`)
+/// to this app's service. Runs once at startup, before anything reads them;
+/// macOS may ask the user to allow each read, since another app saved them.
+pub fn carry_over_legacy_entries() -> Result<(), String> {
+    let _guard = CREDENTIAL_LOCK.lock().map_err(|_| "Credential store lock failed")?;
+    #[cfg(target_os = "macos")]
+    {
+        let failed = carry_over(&Keychain, crate::legacy::IDENTIFIER, SERVICE);
+        if failed.is_empty() {
+            Ok(())
+        } else {
+            Err(format!("keychain entries not moved: {}", failed.join(", ")))
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -430,5 +515,66 @@ mod tests {
         assert!(apply_provider_change(&mut keys, "custom", Some("k".into()), Some("https://user:pw@host/v1".into()), false).is_err());
         apply_provider_change(&mut keys, "anthropic", None, None, true).expect("clear");
         assert!(!keys.contains_key("anthropic"));
+    }
+
+    /// An in-memory keychain. `broken` makes writes to one account fail.
+    #[derive(Default)]
+    struct MapVault {
+        entries: std::cell::RefCell<std::collections::BTreeMap<(String, String), String>>,
+        broken: Option<&'static str>,
+    }
+
+    impl MapVault {
+        fn with(entries: &[(&str, &str, &str)]) -> Self {
+            let vault = Self::default();
+            for (service, account, value) in entries {
+                vault.entries.borrow_mut().insert((service.to_string(), account.to_string()), value.to_string());
+            }
+            vault
+        }
+
+        fn value(&self, service: &str, account: &str) -> Option<String> {
+            self.entries.borrow().get(&(service.to_string(), account.to_string())).cloned()
+        }
+    }
+
+    impl Vault for MapVault {
+        fn get(&self, service: &str, account: &str) -> Result<Option<String>, String> {
+            Ok(self.value(service, account))
+        }
+
+        fn set(&self, service: &str, account: &str, value: &str) -> Result<(), String> {
+            if self.broken == Some(account) {
+                return Err("locked".into());
+            }
+            self.entries.borrow_mut().insert((service.to_string(), account.to_string()), value.to_string());
+            Ok(())
+        }
+
+        fn delete(&self, service: &str, account: &str) -> Result<(), String> {
+            self.entries.borrow_mut().remove(&(service.to_string(), account.to_string()));
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn carry_over_moves_every_entry_to_the_new_service() {
+        let vault = MapVault::with(&[("old", "muse-api-key", "sk-1"), ("old", "workspace-grants", "{}"), ("old", "provider-keys", "{\"openai\":{}}"), ("old", "unrelated", "kept")]);
+        assert!(carry_over(&vault, "old", "new").is_empty());
+        assert_eq!(vault.value("new", "muse-api-key").as_deref(), Some("sk-1"));
+        assert_eq!(vault.value("new", "workspace-grants").as_deref(), Some("{}"));
+        assert_eq!(vault.value("new", "provider-keys").as_deref(), Some("{\"openai\":{}}"));
+        assert_eq!(vault.value("old", "muse-api-key"), None, "a moved entry leaves the old service");
+        assert_eq!(vault.value("new", "agent-pins"), None, "an absent entry is not invented");
+        assert_eq!(vault.value("old", "unrelated").as_deref(), Some("kept"), "only this app's accounts move");
+    }
+
+    #[test]
+    fn carry_over_keeps_a_newer_value_and_retries_a_failed_move() {
+        let vault = MapVault { broken: Some("agent-pins"), ..MapVault::with(&[("old", "muse-api-key", "stale"), ("new", "muse-api-key", "current"), ("old", "agent-pins", "pins")]) };
+        assert_eq!(carry_over(&vault, "old", "new"), ["agent-pins"]);
+        assert_eq!(vault.value("new", "muse-api-key").as_deref(), Some("current"), "a value saved by this build wins");
+        assert_eq!(vault.value("old", "muse-api-key"), None);
+        assert_eq!(vault.value("old", "agent-pins").as_deref(), Some("pins"), "a failed copy keeps the original for the next launch");
     }
 }

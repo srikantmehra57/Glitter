@@ -1,6 +1,6 @@
 # Improvement plan
 
-This plan comes from a comparison of Muse Code Desktop with the Codex app,
+This plan comes from a comparison of Glitter with the Codex app,
 Claude Code (desktop and CLI) and ZCode on 2026-10-11. It also draws on a
 walkthrough of the browser preview (`npm run dev:ui`). It lists the gaps in
 functionality, UX and UI, ordered by impact, and gives each one a concrete
@@ -219,7 +219,7 @@ Per-item log (newest first):
 
 - **Phase 3 done — A1.** A new Muse thread can choose Local or Worktree below
   the composer, with an optional base branch or commit. `git_worktree_create`
-  makes a linked worktree on a new `muse/` branch in the app data directory and
+  makes a linked worktree on a new `glitter/` branch in the app data directory and
   mints a derived grant for its root; the session starts there, and snapshots,
   Changes, review scopes, the file index and opened files follow the thread.
   The thread stays under its workspace in the sidebar with a branch marker.
@@ -433,7 +433,7 @@ Per-item log (newest first):
 - **Effort.** Small means renderer-only and local. Medium crosses one layer
   boundary. Large crosses several layers or needs a new dependency.
 - **Layers.** UI (`components/`), store (`lib/store.ts`), IPC (`lib/bridge.ts`),
-  native (`src-tauri/`), bridge (`packages/muse-bridge/`), CLI (needs the Muse
+  native (`src-tauri/`), bridge (`packages/glitter-bridge/`), CLI (needs the Muse
   CLI or protocol to change).
 
 ## Summary

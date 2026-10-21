@@ -8,9 +8,9 @@ import sharp from 'sharp';
 const root = fileURLToPath(new URL('..', import.meta.url));
 const brand = join(root, 'docs/brand');
 const icons = join(root, 'apps/desktop/src-tauri/icons');
-const mark = await readFile(join(brand, 'muse-mark.svg'), 'utf8');
+const mark = await readFile(join(brand, 'glitter-mark.svg'), 'utf8');
 const inner = mark.match(/<svg[^>]*>([\s\S]*)<\/svg>/)?.[1];
-if (!inner) throw new Error('The Muse mark must contain SVG content.');
+if (!inner) throw new Error('The Glitter mark must contain SVG content.');
 
 for (const app of ['desktop', 'website']) {
   await writeFile(join(root, `apps/${app}/public/spark.svg`), mark);
@@ -44,11 +44,11 @@ for (const [mode, from, to, edge] of [
   <g transform="translate(9 9) scale(0.75)">${markContent(mode)}</g>
 </svg>
 `;
-  await writeFile(join(brand, `muse-icon-${mode}.svg`), svg);
-  await sharp(Buffer.from(svg), { density: 1152 }).resize(1024, 1024).png().toFile(join(icons, `muse-${mode}.png`));
+  await writeFile(join(brand, `glitter-icon-${mode}.svg`), svg);
+  await sharp(Buffer.from(svg), { density: 1152 }).resize(1024, 1024).png().toFile(join(icons, `glitter-${mode}.png`));
 }
 
 // Run the installed CLI through Node directly rather than through a shell shim.
 const require = createRequire(import.meta.url);
 const cli = join(dirname(require.resolve('@tauri-apps/cli/package.json')), 'tauri.js');
-execFileSync(process.execPath, [cli, 'icon', join(brand, 'muse-icon-light.svg'), '--output', icons], { cwd: root, stdio: 'inherit' });
+execFileSync(process.execPath, [cli, 'icon', join(brand, 'glitter-icon-light.svg'), '--output', icons], { cwd: root, stdio: 'inherit' });

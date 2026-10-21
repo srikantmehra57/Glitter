@@ -222,12 +222,12 @@ export default function App() {
 
   if (!ready || showBootPreview) {
     return (
-      <div className="boot" role="status" aria-live="polite" aria-busy="true" aria-label="Starting Muse Code">
+      <div className="boot" role="status" aria-live="polite" aria-busy="true" aria-label="Starting Glitter">
         <div className="boot-aurora" aria-hidden="true" />
         <section className="boot-panel">
           <div className="boot-brand">
             <span className="boot-logo"><img src="/spark.svg" alt="" /></span>
-            <span>Muse Code</span>
+            <span>Glitter</span>
           </div>
           <div className="boot-copy">
             <h1>Preparing your workspace</h1>

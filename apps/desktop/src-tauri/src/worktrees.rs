@@ -1,5 +1,5 @@
 //! Per-thread git worktrees. Each one is a linked worktree of a granted
-//! repository, checked out on its own `muse/` branch under the app data
+//! repository, checked out on its own `glitter/` branch under the app data
 //! directory. The commands in `lib.rs` own grants and locking; this module only
 //! runs git and keeps every path inside the store it is handed.
 
@@ -10,7 +10,10 @@ use sha2::Digest;
 use super::{run_git, run_git_read};
 
 /// Branches this app creates. Only these are ever deleted on removal.
-const BRANCH_PREFIX: &str = "muse/";
+const BRANCH_PREFIX: &str = "glitter/";
+/// Builds named Muse Code made `muse/` branches; their worktrees outlive the
+/// rename, so removing one still cleans up its branch.
+const LEGACY_BRANCH_PREFIX: &str = "muse/";
 
 #[derive(Debug)]
 pub struct Created {
@@ -97,7 +100,7 @@ pub fn changes(repo: &Path, dir: &Path) -> Result<Option<Vec<u8>>, String> {
     let theirs = run_git_read(dir, &["rev-parse", "--verify", "HEAD^{commit}"])?.trim().to_string();
     let ours = run_git_read(repo, &["rev-parse", "--verify", "HEAD^{commit}"]).map_err(|_| "The workspace has no commit to compare against.")?.trim().to_string();
     let base = run_git_read(repo, &["merge-base", &ours, &theirs]).map_err(|_| "The worktree and the workspace share no history.")?.trim().to_string();
-    let index = std::env::temp_dir().join(format!("muse-handoff-{}.index", uuid::Uuid::new_v4().simple()));
+    let index = std::env::temp_dir().join(format!("glitter-handoff-{}.index", uuid::Uuid::new_v4().simple()));
     let with_index = |args: &[&str]| -> Result<Vec<u8>, String> {
         let mut cmd = super::command("git");
         super::strip_ambient_git_env(&mut cmd);
@@ -148,7 +151,7 @@ fn registered_branch(repo: &Path, dir: &Path) -> Option<String> {
 /// Delete an app-made branch only when another ref still reaches its tip, so
 /// no commit is ever lost. Returns whether the branch is gone.
 fn delete_merged_branch(repo: &Path, branch: &str) -> bool {
-    if !branch.starts_with(BRANCH_PREFIX) {
+    if !branch.starts_with(BRANCH_PREFIX) && !branch.starts_with(LEGACY_BRANCH_PREFIX) {
         return false;
     }
     let own = format!("refs/heads/{branch}");
@@ -316,13 +319,13 @@ mod tests {
     }
 
     #[test]
-    fn create_checks_out_a_linked_worktree_on_a_muse_branch() {
+    fn create_checks_out_a_linked_worktree_on_a_glitter_branch() {
         let (root, repo, store) = fixture_repo("create");
         let head = run_git_read(&repo, &["rev-parse", "--verify", "HEAD^{commit}"]).expect("head").trim().to_string();
 
         let created = create(&repo, &store, None).expect("create");
 
-        assert!(created.branch.starts_with("muse/"), "unexpected branch: {}", created.branch);
+        assert!(created.branch.starts_with("glitter/"), "unexpected branch: {}", created.branch);
         assert!(created.path.starts_with(repo_store(&store, &repo)), "worktree escaped its repo folder: {}", created.path.display());
         assert!(created.path.join("a.txt").exists(), "the worktree must check out the repository");
         assert_eq!(created.base, current_branch(&repo));
@@ -448,7 +451,8 @@ mod tests {
         let main = current_branch(&repo);
         assert!(!delete_merged_branch(&repo, &main), "the workspace branch must never be deleted");
         assert!(!delete_merged_branch(&repo, "feature/not-ours"), "a missing foreign branch reports not-deleted, not gone");
-        assert!(delete_merged_branch(&repo, "muse/already-gone"), "a missing app branch is already gone");
+        assert!(delete_merged_branch(&repo, "glitter/already-gone"), "a missing app branch is already gone");
+        assert!(delete_merged_branch(&repo, "muse/already-gone"), "a missing branch from a Muse Code build is already gone");
         std::fs::remove_dir_all(root).unwrap();
     }
 

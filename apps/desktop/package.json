@@ -1,5 +1,5 @@
 {
-  "name": "muse-code-desktop",
+  "name": "@glitter/desktop",
   "private": true,
   "version": "0.1.0",
   "type": "module",

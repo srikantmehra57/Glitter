@@ -1,4 +1,4 @@
-# Muse Code Desktop — Design System
+# Glitter — Design System
 
 Implementation must follow this document. Tokens live in
 `apps/desktop/src/styles.css`; where this document and the stylesheet disagree,
@@ -27,7 +27,7 @@ the stylesheet wins and this document should be corrected.
 | Plan | Todo list (internal only) |
 | Changes | Review dock, git panel |
 | Terminal | The integrated terminal pane: the user's own shell on a PTY. Not the shell card in a run (a “command” step) and not the composer's `!` escape (a “shell command”) |
-| Local / Worktree | Where a thread works: the workspace folder, or its own checkout on a `muse/` branch. Not “sandbox”, “copy” or “isolated mode” |
+| Local / Worktree | Where a thread works: the workspace folder, or its own checkout on a `glitter/` branch. Not “sandbox”, “copy” or “isolated mode” |
 | Stop | Cancel turn (button label: Stop) |
 | Allow in thread | An approval that reaches past this one call, for the rest of the thread. Its scope names what it covers (this exact command, a command prefix, one program, a file, a folder, the workspace). Not “session”, “rule” or “whitelist” |
 
@@ -441,10 +441,10 @@ Centered, 420px, search field + command rows with shortcut glyphs. Arrow keys + 
 
 The identity combines the five-tile ember M mark, frosted glass surfaces,
 system sans typography, and a warm ember accent.
-`docs/brand/muse-mark.svg` is the editable source: two pillars of two stacked
+`docs/brand/glitter-mark.svg` is the editable source: two pillars of two stacked
 rounded tiles each, with a rounded downward-pointing wedge (▽) between them —
 the silhouette reads `|▽|`. All tiles share one ember gradient plus a white top
-sheen. Use it at 16–36px beside “Muse Code”; it reads on both light and dark UI
+sheen. Use it at 16–36px beside “Glitter”; it reads on both light and dark UI
 without theme switching. App icons embed the mark on a frosted-grey tile
 (light) or a graphite tile (dark); the running Mac Dock icon follows
 the OS appearance, independently of an explicit interface theme selection.

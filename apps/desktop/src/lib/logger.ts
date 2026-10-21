@@ -1,4 +1,4 @@
-import { diagnostics, DIAGNOSTIC_LIMIT } from "../../../../packages/muse-bridge/src/redaction";
+import { diagnostics, DIAGNOSTIC_LIMIT } from "../../../../packages/glitter-bridge/src/redaction";
 import { invoke } from "@tauri-apps/api/core";
 import { isTauri } from "./format";
 
@@ -11,9 +11,9 @@ function write(level: "debug" | "info" | "warn" | "error", event: string, extra?
   const serialized = extra ? JSON.stringify(diagnostics.value(extra)) : "";
   const detail = serialized.length > DIAGNOSTIC_LIMIT ? "[diagnostic omitted: size limit]" : serialized;
   const line = detail ? `${event} ${detail}` : event;
-  if (level === "error") console.error(`[muse] ${line}`);
-  else if (level === "warn") console.warn(`[muse] ${line}`);
-  else if (import.meta.env?.DEV) console.info(`[muse:${level}] ${line}`);
+  if (level === "error") console.error(`[glitter] ${line}`);
+  else if (level === "warn") console.warn(`[glitter] ${line}`);
+  else if (import.meta.env?.DEV) console.info(`[glitter:${level}] ${line}`);
   if (isTauri()) void invoke("append_app_log", { level, event, detail }).catch(() => {});
 }
 

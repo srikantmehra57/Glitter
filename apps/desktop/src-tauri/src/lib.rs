@@ -19,6 +19,7 @@ mod dto;
 mod exec;
 mod export_markdown;
 mod framing;
+mod legacy;
 mod process;
 mod snapshots;
 mod terminal;
@@ -273,7 +274,7 @@ fn persist_grants(grants: &HashMap<String, PathBuf>) -> Option<String> {
     // Unit tests build throwaway grant tables. Only the e2e fixture, which
     // reroutes the keyring account, may write one.
     #[cfg(test)]
-    std::env::var_os("MUSE_TEST_GRANTS_ACCOUNT")?;
+    std::env::var_os("GLITTER_TEST_GRANTS_ACCOUNT")?;
     match render_grants(grants).and_then(|raw| credentials::grants_store(&raw)) {
         Ok(()) => None,
         Err(err) => {
@@ -772,7 +773,7 @@ fn node_bin() -> Result<PathBuf, String> {
             let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
             which::which_in("node", Some(augmented_path()), cwd)
         })
-        .map_err(|_| "Node.js 24 or newer is required to run the Muse protocol bridge in development. Install Node and restart the app.".to_string())
+        .map_err(|_| "Node.js 24 or newer is required to run the Glitter bridge in development. Install Node and restart the app.".to_string())
 }
 
 #[cfg(debug_assertions)]
@@ -780,13 +781,13 @@ fn bridge_script<R: Runtime>(_app: &AppHandle<R>) -> Result<PathBuf, String> {
     // Test seam (debug builds only): integration tests point the bridge at a
     // fixture script. Release builds resolve the digest-verified resource and
     // never consult this variable.
-    if let Ok(custom) = std::env::var("MUSE_BRIDGE_SCRIPT") {
+    if let Ok(custom) = std::env::var("GLITTER_BRIDGE_SCRIPT") {
         let path = PathBuf::from(&custom);
         if path.is_file() {
             return Ok(path);
         }
     }
-    let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../packages/muse-bridge/dist/index.js");
+    let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../packages/glitter-bridge/dist/index.js");
     if dev.exists() {
         return Ok(dev);
     }
@@ -797,7 +798,7 @@ fn bridge_script<R: Runtime>(_app: &AppHandle<R>) -> Result<PathBuf, String> {
 /// baked at compile time, so a swapped script fails before it ever runs.
 #[cfg(not(debug_assertions))]
 fn bridge_script<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
-    let script = app.path().resolve("muse-bridge/index.js", BaseDirectory::Resource).map_err(|err| err.to_string())?;
+    let script = app.path().resolve("glitter-bridge/index.js", BaseDirectory::Resource).map_err(|err| err.to_string())?;
     verify_bridge_script(&script)?;
     Ok(script)
 }
@@ -808,9 +809,9 @@ fn verify_bridge_script(script: &Path) -> Result<(), String> {
     if BAKED == "none" {
         return Err("Bridge script digest missing from this build. Reinstall the app.".into());
     }
-    let digest = exec::sha256_file(script).map_err(|_| "The Muse bridge script is missing from the installation. Reinstall the app.".to_string())?;
+    let digest = exec::sha256_file(script).map_err(|_| "The Glitter bridge script is missing from the installation. Reinstall the app.".to_string())?;
     if digest != BAKED {
-        return Err("The Muse bridge script does not match this installation. Reinstall the app.".into());
+        return Err("The Glitter bridge script does not match this installation. Reinstall the app.".into());
     }
     Ok(())
 }
@@ -819,7 +820,7 @@ fn verify_bridge_script(script: &Path) -> Result<(), String> {
 /// The staging file has a target suffix; the runtime beside the app does not.
 #[cfg_attr(debug_assertions, allow(dead_code))]
 fn sidecar_file_name() -> &'static str {
-    "muse-node"
+    "glitter-node"
 }
 
 /// Locate the bundled bridge runtime next to the app binary and validate it:
@@ -832,8 +833,8 @@ fn sidecar_path(state: &AppState) -> Result<PathBuf, String> {
     let dir = exe.parent().ok_or("Could not locate the app binary directory")?;
     let candidate = dir.join(sidecar_file_name());
     let name = sidecar_file_name();
-    let canonical = exec::validate_exec(&candidate.to_string_lossy(), &|file| file == name, "The Muse bridge runtime").map_err(|_| format!("The Muse bridge runtime is missing from the installation ({}). Reinstall the app.", sidecar_file_name()))?;
-    state.exec_pins.check(&canonical, "The Muse bridge runtime")?;
+    let canonical = exec::validate_exec(&candidate.to_string_lossy(), &|file| file == name, "The Glitter bridge runtime").map_err(|_| format!("The Glitter bridge runtime is missing from the installation ({}). Reinstall the app.", sidecar_file_name()))?;
+    state.exec_pins.check(&canonical, "The Glitter bridge runtime")?;
     Ok(canonical)
 }
 
@@ -905,7 +906,7 @@ fn harness_env<R: Runtime>(app: &AppHandle<R>, cmd: &mut std::process::Command) 
             use std::os::unix::fs::PermissionsExt;
             let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
         }
-        cmd.env("MUSE_HARNESS_DIR", dir);
+        cmd.env("GLITTER_HARNESS_DIR", dir);
     }
 }
 
@@ -920,7 +921,7 @@ fn spawn_bridge<R: Runtime>(app: &AppHandle<R>, state: &AppState) -> Result<Brid
         process::isolate_command(&mut cmd);
         cmd.env("PATH", augmented_path());
         harness_env(app, &mut cmd);
-        let child = cmd.spawn().map_err(|err| format!("Failed to start Muse bridge: {err}"))?;
+        let child = cmd.spawn().map_err(|err| format!("Failed to start Glitter bridge: {err}"))?;
         spawn_bridge_stdio(child, app)
     }
     #[cfg(not(debug_assertions))]
@@ -934,7 +935,7 @@ fn spawn_bridge<R: Runtime>(app: &AppHandle<R>, state: &AppState) -> Result<Brid
         process::isolate_command(&mut cmd);
         cmd.env("PATH", augmented_path());
         harness_env(app, &mut cmd);
-        let child = cmd.spawn().map_err(|err| format!("Failed to start Muse bridge: {err}"))?;
+        let child = cmd.spawn().map_err(|err| format!("Failed to start Glitter bridge: {err}"))?;
         return spawn_bridge_stdio(child, app);
     }
 }
@@ -1879,6 +1880,24 @@ fn worktree_store<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
     dir.canonicalize().map_err(|err| format!("Worktree storage is unavailable: {err}"))
 }
 
+/// Worktrees made by builds named Muse Code stay in that app's data folder
+/// (see `legacy.rs`). This is their store while any remain.
+fn legacy_worktree_store<R: Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
+    let data = app.path().app_data_dir().ok()?;
+    legacy::sibling(&data).join("worktrees").canonicalize().ok()
+}
+
+/// The store a grant's worktree belongs to: the legacy one when its root lies
+/// there, otherwise the current store.
+fn worktree_store_for<R: Runtime>(app: &AppHandle<R>, state: &AppState, grant_id: &str) -> Result<PathBuf, String> {
+    let store = worktree_store(app)?;
+    let Some(legacy) = legacy_worktree_store(app) else {
+        return Ok(store);
+    };
+    let root = state.grants.lock().map_err(|err| err.to_string())?.get(grant_id).cloned();
+    Ok(if root.is_some_and(|root| root.starts_with(&legacy)) { legacy } else { store })
+}
+
 /// Create a worktree of a granted repository and mint a grant for its root.
 /// This is the one place a grant is derived instead of picked: the new root is
 /// a directory this command just created inside the app's own store, for a
@@ -1887,7 +1906,8 @@ fn worktree_store<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
 async fn git_worktree_create(app: AppHandle, grant_id: String, base: Option<String>) -> Result<WorktreeGrant, String> {
     blocking(move || {
         let state = app.state::<AppState>();
-        let store = worktree_store(&app)?;
+        // A legacy worktree is refused like any other: the inner check sees its store.
+        let store = worktree_store_for(&app, &state, &grant_id)?;
         git_worktree_create_inner(&state, &store, &grant_id, base.as_deref())
     })
     .await
@@ -1943,7 +1963,7 @@ struct WorktreeHandoff {
 async fn git_worktree_handoff(app: AppHandle, grant_id: String) -> Result<WorktreeHandoff, String> {
     blocking(move || {
         let state = app.state::<AppState>();
-        let store = worktree_store(&app)?;
+        let store = worktree_store_for(&app, &state, &grant_id)?;
         git_worktree_handoff_inner(&state, &store, &grant_id)
     })
     .await
@@ -1951,7 +1971,7 @@ async fn git_worktree_handoff(app: AppHandle, grant_id: String) -> Result<Worktr
 
 fn git_worktree_handoff_inner(state: &AppState, store: &Path, grant_id: &str) -> Result<WorktreeHandoff, String> {
     let dir = grant_root(state, grant_id)?;
-    let home = dir.parent().filter(|home| home.parent() == Some(store)).ok_or("That folder is not a worktree made by Muse Code.")?;
+    let home = dir.parent().filter(|home| home.parent() == Some(store)).ok_or("That folder is not a worktree made by Glitter.")?;
     // The destination is the granted workspace this worktree was made from; a
     // revoked workspace cannot be written to through its worktree.
     let repo = {
@@ -1987,8 +2007,12 @@ fn git_worktree_handoff_inner(state: &AppState, store: &Path, grant_id: &str) ->
 async fn git_worktree_remove(app: AppHandle, grant_id: String) -> Result<WorktreeRemoval, String> {
     blocking(move || {
         let state = app.state::<AppState>();
-        let store = worktree_store(&app)?;
-        git_worktree_remove_inner(&state, &store, &grant_id)
+        let store = worktree_store_for(&app, &state, &grant_id)?;
+        let removed = git_worktree_remove_inner(&state, &store, &grant_id)?;
+        if legacy_worktree_store(&app).as_ref() == Some(&store) {
+            legacy::prune_worktree_store(&store);
+        }
+        Ok(removed)
     })
     .await
 }
@@ -2003,7 +2027,7 @@ fn git_worktree_remove_inner(state: &AppState, store: &Path, grant_id: &str) -> 
     let (dir, repo) = {
         let grants = state.grants.lock().map_err(|err| err.to_string())?;
         let dir = grants.get(grant_id).cloned().ok_or("Unknown workspace grant.")?;
-        let home = dir.parent().filter(|home| home.parent() == Some(store)).ok_or("That folder is not a worktree made by Muse Code.")?;
+        let home = dir.parent().filter(|home| home.parent() == Some(store)).ok_or("That folder is not a worktree made by Glitter.")?;
         let repo = grants.values().find(|root| !root.starts_with(store) && worktrees::repo_store(store, root) == home).cloned();
         (dir, repo)
     };
@@ -3027,15 +3051,17 @@ async fn blocking<T: Send + 'static>(work: impl FnOnce() -> Result<T, String> + 
 /// from it, and return every revoked id. A worktree with nothing uncommitted is
 /// removed from disk; one that still holds changes is left in place for the
 /// user to recover with git, since nothing here asked to discard them.
-fn revoke_grant(state: &AppState, store: Option<&Path>, grant_id: &str) -> Result<Vec<String>, String> {
+fn revoke_grant(state: &AppState, stores: &[PathBuf], grant_id: &str) -> Result<Vec<String>, String> {
     let mut grants = state.grants.lock().map_err(|err| err.to_string())?;
     let mut revoked = vec![grant_id.to_string()];
-    if let (Some(store), Some(root)) = (store, grants.get(grant_id).cloned()) {
-        if !root.starts_with(store) {
-            for (id, dir) in derived_grants(&grants, store, &root) {
-                let _ = worktrees::remove(Some(&root).filter(|root| root.exists()).map(PathBuf::as_path), &dir, false);
-                grants.remove(&id);
-                revoked.push(id);
+    if let Some(root) = grants.get(grant_id).cloned() {
+        if !stores.iter().any(|store| root.starts_with(store)) {
+            for store in stores {
+                for (id, dir) in derived_grants(&grants, store, &root) {
+                    let _ = worktrees::remove(Some(&root).filter(|root| root.exists()).map(PathBuf::as_path), &dir, false);
+                    grants.remove(&id);
+                    revoked.push(id);
+                }
             }
         }
     }
@@ -3057,8 +3083,12 @@ async fn remove_grant(app: AppHandle, grant_id: String) -> Result<(), String> {
         // grant; queued restores must resolve their owner again afterwards.
         let _write = git_write_lock();
         native_log("info", "grant.revoked", &format!("workspace grant revoked: {}", grant_tag(&grant_id)));
-        let store = worktree_store(&app).ok();
-        let revoked = revoke_grant(&state, store.as_deref(), &grant_id)?;
+        let legacy = legacy_worktree_store(&app);
+        let stores: Vec<PathBuf> = worktree_store(&app).ok().into_iter().chain(legacy.clone()).collect();
+        let revoked = revoke_grant(&state, &stores, &grant_id)?;
+        if let Some(legacy) = &legacy {
+            legacy::prune_worktree_store(legacy);
+        }
         for id in &revoked {
             drop_grant_bindings(&state, id);
         }
@@ -3770,7 +3800,7 @@ async fn save_output_text(app: AppHandle, window: tauri::WebviewWindow, file_nam
             .set_parent(&window)
             .set_title("Save tool output")
             .set_file_name(if stem.is_empty() {
-                "muse-output.txt".to_string()
+                "tool-output.txt".to_string()
             } else {
                 stem
             })
@@ -4252,7 +4282,7 @@ const STORE_DOCUMENT_LIMIT: usize = IPC_BODY_LIMIT;
 /// (its `store.rs` uses `BaseDirectory::AppData`), so the atomic writer below
 /// and the plugin's reader always agree on one file.
 fn store_document_path(app: &AppHandle) -> Result<PathBuf, String> {
-    app.path().resolve("muse-desktop.json", BaseDirectory::AppData).map_err(|err| format!("Could not resolve the settings path: {err}"))
+    app.path().resolve("glitter.json", BaseDirectory::AppData).map_err(|err| format!("Could not resolve the settings path: {err}"))
 }
 
 fn write_fsync(path: &Path, bytes: &[u8]) -> Result<(), String> {
@@ -4276,7 +4306,7 @@ struct StoreRepair {
 }
 
 /// Make the store document safe to read before hydration. A file that will not
-/// parse is preserved as `muse-desktop.json.corrupt` rather than overwritten —
+/// parse is preserved as `glitter.json.corrupt` rather than overwritten —
 /// the next save must never silently replace a damaged file with defaults —
 /// and the newest complete fallback is restored in its place.
 fn repair_store_files(target: &Path) -> Result<StoreRepair, String> {
@@ -4290,10 +4320,10 @@ fn repair_store_files(target: &Path) -> Result<StoreRepair, String> {
         return Ok(repaired);
     }
     if target.exists() {
-        let quarantine = dir.join("muse-desktop.json.corrupt");
+        let quarantine = dir.join("glitter.json.corrupt");
         let _ = std::fs::remove_file(&quarantine);
         if std::fs::rename(target, &quarantine).is_ok() {
-            repaired.quarantined_to = Some("muse-desktop.json.corrupt".to_string());
+            repaired.quarantined_to = Some("glitter.json.corrupt".to_string());
         }
     }
     // A `.tmp` is newer than `.bak` (it is the write that was interrupted), so
@@ -4307,14 +4337,14 @@ fn repair_store_files(target: &Path) -> Result<StoreRepair, String> {
                 .flatten()
                 .filter_map(|entry| {
                     let name = entry.file_name().to_str()?.to_string();
-                    (name == "muse-desktop.json.tmp" || name.starts_with("muse-desktop.json.tmp.")).then(|| (entry.path(), name))
+                    (name == "glitter.json.tmp" || name.starts_with("glitter.json.tmp.")).then(|| (entry.path(), name))
                 })
                 .collect()
         })
         .unwrap_or_default();
     temps.sort_by_key(|(path, _)| std::fs::metadata(path).and_then(|meta| meta.modified()).ok());
     let mut fallbacks: Vec<(PathBuf, String)> = temps.into_iter().rev().collect();
-    fallbacks.push((dir.join("muse-desktop.json.bak"), "muse-desktop.json.bak".to_string()));
+    fallbacks.push((dir.join("glitter.json.bak"), "glitter.json.bak".to_string()));
     for (candidate, label) in fallbacks {
         if !store_document_is_valid(&candidate) {
             continue;
@@ -4347,18 +4377,18 @@ static STORE_TEMP_SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::Atomi
 /// Does the temp name belong to an interrupted atomic store write? The plain
 /// `.tmp` covers files written before the per-call suffix existed.
 fn is_store_temp_name(name: &str) -> bool {
-    name == "muse-desktop.json.tmp" || name.starts_with("muse-desktop.json.tmp.")
+    name == "glitter.json.tmp" || name.starts_with("glitter.json.tmp.")
 }
 
 fn write_store_document(dir: &Path, json: &str) -> Result<(), String> {
     // The guarded value is `()`, so a poisoned lock holds no broken state.
     let _write = STORE_WRITE_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     std::fs::create_dir_all(dir).map_err(|err| format!("Could not create the settings directory: {err}"))?;
-    let target = dir.join("muse-desktop.json");
-    let backup = dir.join("muse-desktop.json.bak");
+    let target = dir.join("glitter.json");
+    let backup = dir.join("glitter.json.bak");
     // Unique per call even under the lock: a leftover temp from a killed write
     // can never be mistaken for this one, and repair can tell them apart.
-    let tmp = dir.join(format!("muse-desktop.json.tmp.{}.{}", std::process::id(), STORE_TEMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
+    let tmp = dir.join(format!("glitter.json.tmp.{}.{}", std::process::id(), STORE_TEMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
     write_fsync(&tmp, json.as_bytes())?;
     // Rotate the previous copy aside before replacing, so a crash between the
     // two renames still leaves one complete document for `repair_store_files`.
@@ -4392,7 +4422,7 @@ fn write_store_document(dir: &Path, json: &str) -> Result<(), String> {
 }
 
 /// Persist the settings document atomically: temp file, fsync, rename, keeping
-/// the previous good copy as `muse-desktop.json.bak`. `tauri-plugin-store`'s own
+/// the previous good copy as `glitter.json.bak`. `tauri-plugin-store`'s own
 /// `save()` is a bare `fs::write`, which a crash can leave truncated.
 #[tauri::command]
 async fn persist_store_atomic(app: AppHandle, json: String) -> Result<(), String> {
@@ -4420,7 +4450,7 @@ async fn repair_store_document(app: AppHandle) -> Result<StoreRepair, String> {
 fn app_log_path(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = app.path().app_log_dir().map_err(|err| err.to_string())?;
     std::fs::create_dir_all(&dir).map_err(|err| format!("Could not create log directory: {err}"))?;
-    Ok(dir.join("muse-desktop.log"))
+    Ok(dir.join("glitter.log"))
 }
 
 #[derive(Serialize)]
@@ -4493,7 +4523,7 @@ fn native_log(level: &str, event: &str, detail: &str) {
         .map(|ch| if ch.is_control() { ' ' } else { ch })
         .take(8192)
         .collect();
-    eprintln!("[muse-desktop] {level} {event}: {detail}");
+    eprintln!("[glitter] {level} {event}: {detail}");
     if let Some(path) = APP_LOG_PATH.get() {
         let _ = append_log_line(path, level, &event, &detail);
     }
@@ -4746,8 +4776,8 @@ fn build_app_menu<R: Runtime>(app: &AppHandle<R>, rebound: &HashMap<String, Stri
     let mut menu = MenuBuilder::new(app);
     #[cfg(target_os = "macos")]
     {
-        let app_menu = SubmenuBuilder::new(app, "Muse Code")
-            .item(&PredefinedMenuItem::about(app, Some("About Muse Code"), None)?)
+        let app_menu = SubmenuBuilder::new(app, "Glitter")
+            .item(&PredefinedMenuItem::about(app, Some("About Glitter"), None)?)
             .separator()
             .item(&item("settings", "Settings…", "CmdOrCtrl+,")?)
             .separator()
@@ -4776,7 +4806,7 @@ pub fn run() {
         let message = info.payload().downcast_ref::<&str>().copied().or_else(|| info.payload().downcast_ref::<String>().map(String::as_str)).unwrap_or("panic");
         let location = info.location().map(|loc| format!(" at {}:{}:{}", loc.file(), loc.line(), loc.column())).unwrap_or_default();
         let safe = redact_log_detail(&format!("{message}{location}"));
-        eprintln!("[muse-desktop] panic: {safe}");
+        eprintln!("[glitter] panic: {safe}");
         if let Some(path) = APP_LOG_PATH.get() {
             let _ = append_log_line(path, "error", "panic", &safe);
         }
@@ -4880,10 +4910,18 @@ pub fn run() {
         .setup(|app| {
             let handle = app.handle().clone();
             let state = app.state::<AppState>();
+            // Before anything below opens the app's folders or keychain entries.
+            let moved = match (handle.path().app_data_dir(), handle.path().app_log_dir()) {
+                (Ok(data), Ok(logs)) => legacy::migrate(&data, &logs),
+                _ => None,
+            };
             if let Ok(dir) = handle.path().app_log_dir() {
                 let _ = std::fs::create_dir_all(&dir);
                 let _ = SECURITY_AUDIT.set(dir.join("security-audit.log"));
-                let _ = APP_LOG_PATH.set(dir.join("muse-desktop.log"));
+                let _ = APP_LOG_PATH.set(dir.join("glitter.log"));
+            }
+            if let Some((level, detail)) = moved {
+                native_log(level, "legacy.migrate", &detail);
             }
             if let Ok(mut grants) = state.grants.lock() {
                 *grants = load_grants();
@@ -4938,7 +4976,7 @@ pub fn run() {
             }
         })
         .build(tauri::generate_context!())
-        .expect("error while building Muse Code Desktop")
+        .expect("error while building Glitter")
         .run(|_app, _event| {
             #[cfg(target_os = "macos")]
             if matches!(_event, tauri::RunEvent::Ready) {
@@ -5144,48 +5182,48 @@ mod tests {
     #[test]
     fn store_document_is_valid_rejects_a_truncated_document() {
         let dir = store_dir("valid");
-        let target = dir.join("muse-desktop.json");
+        let target = dir.join("glitter.json");
         std::fs::write(&target, "{\"settings\":{},\"sessionMemory\":{}}").expect("write");
         assert!(store_document_is_valid(&target));
         // What a crash part-way through a truncate-and-write leaves behind.
         std::fs::write(&target, "{\"settings\":{").expect("write");
         assert!(!store_document_is_valid(&target), "truncated JSON must not be accepted");
-        assert!(!store_document_is_valid(&dir.join("muse-desktop.json.missing")));
+        assert!(!store_document_is_valid(&dir.join("glitter.json.missing")));
         std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn a_truncated_store_is_quarantined_and_restored_from_the_backup() {
         let dir = store_dir("restore");
-        let target = dir.join("muse-desktop.json");
+        let target = dir.join("glitter.json");
         // The atomic writer rotated the last good copy aside before replacing it.
-        std::fs::write(dir.join("muse-desktop.json.bak"), "{\"sessionMemory\":{\"version\":1}}").expect("write");
+        std::fs::write(dir.join("glitter.json.bak"), "{\"sessionMemory\":{\"version\":1}}").expect("write");
         std::fs::write(&target, "{\"settings\":{").expect("write");
 
         let repaired = repair_store_files(&target).expect("repair");
 
         assert_eq!(repaired.status, "restored");
-        assert_eq!(repaired.restored_from.as_deref(), Some("muse-desktop.json.bak"));
-        assert_eq!(repaired.quarantined_to.as_deref(), Some("muse-desktop.json.corrupt"));
+        assert_eq!(repaired.restored_from.as_deref(), Some("glitter.json.bak"));
+        assert_eq!(repaired.quarantined_to.as_deref(), Some("glitter.json.corrupt"));
         assert!(store_document_is_valid(&target), "the good copy must be back in place");
         // The damaged original is preserved for forensics rather than overwritten.
-        assert!(dir.join("muse-desktop.json.corrupt").exists());
+        assert!(dir.join("glitter.json.corrupt").exists());
         std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn an_interrupted_write_prefers_the_newer_tmp_over_the_backup() {
         let dir = store_dir("tmp-wins");
-        let target = dir.join("muse-desktop.json");
+        let target = dir.join("glitter.json");
         // Crash between the two renames: the old copy is already at `.bak` and
         // the interrupted write is a complete `.tmp`.
-        std::fs::write(dir.join("muse-desktop.json.bak"), "{\"sessionMemory\":{\"generation\":1}}").expect("write");
-        std::fs::write(dir.join("muse-desktop.json.tmp"), "{\"sessionMemory\":{\"generation\":2}}").expect("write");
+        std::fs::write(dir.join("glitter.json.bak"), "{\"sessionMemory\":{\"generation\":1}}").expect("write");
+        std::fs::write(dir.join("glitter.json.tmp"), "{\"sessionMemory\":{\"generation\":2}}").expect("write");
 
         let repaired = repair_store_files(&target).expect("repair");
 
         assert_eq!(repaired.status, "restored");
-        assert_eq!(repaired.restored_from.as_deref(), Some("muse-desktop.json.tmp"));
+        assert_eq!(repaired.restored_from.as_deref(), Some("glitter.json.tmp"));
         assert_eq!(std::fs::read_to_string(&target).expect("read"), "{\"sessionMemory\":{\"generation\":2}}", "the interrupted write is newer than the backup and must win");
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -5193,16 +5231,16 @@ mod tests {
     #[test]
     fn an_interrupted_write_with_a_per_call_tmp_name_still_beats_the_backup() {
         let dir = store_dir("tmp-suffix");
-        let target = dir.join("muse-desktop.json");
-        // Every save now writes its own `muse-desktop.json.tmp.<pid>.<n>`;
+        let target = dir.join("glitter.json");
+        // Every save now writes its own `glitter.json.tmp.<pid>.<n>`;
         // repair must recognize a suffixed interrupted write the same way.
-        std::fs::write(dir.join("muse-desktop.json.bak"), "{\"sessionMemory\":{\"generation\":1}}").expect("write");
-        std::fs::write(dir.join("muse-desktop.json.tmp.123.7"), "{\"sessionMemory\":{\"generation\":2}}").expect("write");
+        std::fs::write(dir.join("glitter.json.bak"), "{\"sessionMemory\":{\"generation\":1}}").expect("write");
+        std::fs::write(dir.join("glitter.json.tmp.123.7"), "{\"sessionMemory\":{\"generation\":2}}").expect("write");
 
         let repaired = repair_store_files(&target).expect("repair");
 
         assert_eq!(repaired.status, "restored");
-        assert_eq!(repaired.restored_from.as_deref(), Some("muse-desktop.json.tmp.123.7"));
+        assert_eq!(repaired.restored_from.as_deref(), Some("glitter.json.tmp.123.7"));
         assert_eq!(std::fs::read_to_string(&target).expect("read"), "{\"sessionMemory\":{\"generation\":2}}");
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -5210,7 +5248,7 @@ mod tests {
     #[test]
     fn overlapping_store_writes_stay_whole_and_leave_no_temp_files() {
         let dir = store_dir("concurrent");
-        let target = dir.join("muse-desktop.json");
+        let target = dir.join("glitter.json");
         std::fs::write(&target, "{\"settings\":{}}").expect("seed");
         // Session-memory saves are not serialized renderer-side, so two calls
         // can genuinely overlap. Each document is self-describing: a pad whose
@@ -5246,7 +5284,7 @@ mod tests {
     #[test]
     fn an_unreadable_store_with_no_fallback_is_quarantined_not_silently_reset() {
         let dir = store_dir("quarantine");
-        let target = dir.join("muse-desktop.json");
+        let target = dir.join("glitter.json");
         std::fs::write(&target, "not json at all").expect("write");
 
         let repaired = repair_store_files(&target).expect("repair");
@@ -5254,14 +5292,14 @@ mod tests {
         assert_eq!(repaired.status, "quarantined");
         assert_eq!(repaired.restored_from, None, "nothing recoverable, so nothing restored");
         assert!(!target.exists(), "the unreadable file must not be left to poison the next load");
-        assert_eq!(std::fs::read_to_string(dir.join("muse-desktop.json.corrupt")).expect("read"), "not json at all", "the damaged file must survive byte-for-byte");
+        assert_eq!(std::fs::read_to_string(dir.join("glitter.json.corrupt")).expect("read"), "not json at all", "the damaged file must survive byte-for-byte");
         std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn a_missing_store_is_a_clean_first_run() {
         let dir = store_dir("first-run");
-        let repaired = repair_store_files(&dir.join("muse-desktop.json")).expect("repair");
+        let repaired = repair_store_files(&dir.join("glitter.json")).expect("repair");
         assert_eq!(repaired.status, "empty");
         assert_eq!(repaired.restored_from, None);
         assert_eq!(repaired.quarantined_to, None);
@@ -5681,7 +5719,7 @@ mod tests {
         let _ = std::fs::remove_file(&swap);
         // The worktree bundle verifies when it exists, proving the baked
         // digest tracks the packaged script.
-        let dist = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../packages/muse-bridge/dist/index.js");
+        let dist = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../packages/glitter-bridge/dist/index.js");
         if dist.exists() {
             assert!(verify_bridge_script(&dist).is_ok());
         }
@@ -5867,7 +5905,7 @@ mod tests {
     #[test]
     fn log_tail_returns_all_lines_from_a_small_file() {
         let dir = LogTestDir::new("tail-small");
-        let path = dir.file("muse-desktop.log");
+        let path = dir.file("glitter.log");
         std::fs::write(&path, "first\nsecond\nthird\n").expect("write log");
 
         assert_eq!(log_tail(&path, 200, 64 * 1024).expect("read log"), vec!["first".to_string(), "second".to_string(), "third".to_string()]);
@@ -5876,7 +5914,7 @@ mod tests {
     #[test]
     fn log_tail_drops_a_partial_first_line_after_seeking_to_the_window() {
         let dir = LogTestDir::new("tail-window");
-        let path = dir.file("muse-desktop.log");
+        let path = dir.file("glitter.log");
         let contents = format!("{}\nkept-one\nkept-two\n", "x".repeat(20));
         std::fs::write(&path, contents).expect("write log");
 
@@ -5886,7 +5924,7 @@ mod tests {
     #[test]
     fn log_tail_keeps_only_the_most_recent_lines() {
         let dir = LogTestDir::new("tail-limit");
-        let path = dir.file("muse-desktop.log");
+        let path = dir.file("glitter.log");
         std::fs::write(&path, "one\ntwo\nthree\nfour\n").expect("write log");
 
         assert_eq!(log_tail(&path, 2, 64 * 1024).expect("read log"), vec!["three".to_string(), "four".to_string()]);
@@ -5895,7 +5933,7 @@ mod tests {
     #[test]
     fn log_tail_redacts_secret_canaries() {
         let dir = LogTestDir::new("tail-redaction");
-        let path = dir.file("muse-desktop.log");
+        let path = dir.file("glitter.log");
         std::fs::write(&path, "approval stripe sk_live_CANARYabcdefghijklmnop\n").expect("write log");
 
         assert_eq!(log_tail(&path, 200, 64 * 1024).expect("read log"), vec!["[redacted sensitive fields]".to_string()]);
@@ -6239,8 +6277,8 @@ mod tests {
     #[test]
     fn rotate_if_large_rotates_at_limit_but_not_below_it() {
         let dir = LogTestDir::new("rotate");
-        let path = dir.file("muse-desktop.log");
-        let previous = dir.file("muse-desktop.previous.log");
+        let path = dir.file("glitter.log");
+        let previous = dir.file("glitter.previous.log");
 
         std::fs::write(&path, b"12345678").expect("write log");
         rotate_if_large(&path, 8).expect("rotate at limit");
@@ -6276,7 +6314,7 @@ mod tests {
     #[test]
     fn concurrent_app_log_writes_are_complete_tsv_lines() {
         let dir = LogTestDir::new("concurrent");
-        let path = dir.file("muse-desktop.log");
+        let path = dir.file("glitter.log");
 
         std::thread::scope(|scope| {
             for worker in 0..8 {
@@ -6472,7 +6510,7 @@ mod tests {
         let pid = std::process::id();
         // Grants must never touch the user's real keyring entry in tests.
         let grants_account = format!("e2e-grants-{pid}");
-        std::env::set_var("MUSE_TEST_GRANTS_ACCOUNT", &grants_account);
+        std::env::set_var("GLITTER_TEST_GRANTS_ACCOUNT", &grants_account);
         // Non-temp scratch dirs: exec validation rejects /tmp, and grant roots
         // must exist on disk.
         let scratch = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target").join(format!("e2e-{pid}"));
@@ -6482,7 +6520,7 @@ mod tests {
         // Give it its own repo so its files use normal workspace ignore rules.
         run_git(&workspace, &["init"]).unwrap();
         let stub = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../tests/fixtures/stub-bridge.mjs").canonicalize().unwrap();
-        std::env::set_var("MUSE_BRIDGE_SCRIPT", &stub);
+        std::env::set_var("GLITTER_BRIDGE_SCRIPT", &stub);
 
         use tauri::Listener;
         let app = tauri::test::mock_app();
@@ -6628,7 +6666,7 @@ mod tests {
         }
         #[cfg(target_os = "macos")]
         {
-            let _ = keyring::Entry::new("com.musecode.desktop", &grants_account).map(|e| e.delete_credential());
+            let _ = keyring::Entry::new(credentials::SERVICE, &grants_account).map(|e| e.delete_credential());
         }
         let _ = std::fs::remove_dir_all(&scratch);
     }
@@ -6809,7 +6847,7 @@ mod tests {
         let made = git_worktree_create_inner(&state, &store, &grant, None).expect("create");
         let root = PathBuf::from(&made.path);
         assert!(root.starts_with(&store) && valid_grant_id(&made.grant_id) && made.grant_id != grant);
-        assert!(made.branch.starts_with("muse/"));
+        assert!(made.branch.starts_with("glitter/"));
         assert_eq!(grant_root(&state, &made.grant_id).expect("derived grant"), root);
         assert_eq!(std::fs::read_to_string(root.join("app.txt")).expect("checked out"), "base\n");
 
@@ -6947,7 +6985,7 @@ mod tests {
         state.grants.lock().unwrap().insert(other.clone(), other_dir.canonicalize().expect("canon"));
         let kept = git_worktree_create_inner(&state, &store, &other, None).expect("create");
 
-        let mut revoked = revoke_grant(&state, Some(&store), &grant).expect("revoke");
+        let mut revoked = revoke_grant(&state, std::slice::from_ref(&store), &grant).expect("revoke");
         revoked.sort();
         let mut expected = vec![grant.clone(), clean.grant_id.clone(), dirty.grant_id.clone()];
         expected.sort();
@@ -6958,6 +6996,35 @@ mod tests {
         assert!(grant_root(&state, &kept.grant_id).is_ok() && grant_root(&state, &other).is_ok());
         assert!(grant_root(&state, &dirty.grant_id).is_err() && dir.join("app.txt").exists());
         for path in [&dir, &store, &other_dir] {
+            let _ = std::fs::remove_dir_all(path);
+        }
+    }
+
+    #[test]
+    fn worktrees_left_in_the_muse_code_store_keep_working() {
+        let (state, grant, dir, store) = worktree_fixture("legacy");
+        let old_data = std::env::temp_dir().join(format!("glitter-legacy-data-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(old_data.join("worktrees")).expect("store");
+        let legacy = old_data.join("worktrees").canonicalize().expect("canon");
+        // Made before the rename: it lives in the old app's data folder.
+        let old = git_worktree_create_inner(&state, &legacy, &grant, None).expect("create");
+        let older = git_worktree_create_inner(&state, &legacy, &grant, None).expect("create");
+        let new = git_worktree_create_inner(&state, &store, &grant, None).expect("create");
+
+        assert_eq!(git_worktree_handoff_inner(&state, &legacy, &old.grant_id).expect("handoff").files, 0);
+        assert!(git_worktree_create_inner(&state, &legacy, &old.grant_id, None).is_err(), "a legacy worktree is not a workspace");
+        git_worktree_remove_inner(&state, &legacy, &old.grant_id).expect("remove");
+        assert!(!Path::new(&old.path).exists());
+
+        // Revoking the workspace reaches its worktrees in both stores.
+        let mut revoked = revoke_grant(&state, &[store.clone(), legacy.clone()], &grant).expect("revoke");
+        revoked.sort();
+        let mut expected = vec![grant.clone(), older.grant_id.clone(), new.grant_id.clone()];
+        expected.sort();
+        assert_eq!(revoked, expected);
+        legacy::prune_worktree_store(&legacy);
+        assert!(!old_data.exists(), "the emptied legacy store and its data folder are removed");
+        for path in [&dir, &store] {
             let _ = std::fs::remove_dir_all(path);
         }
     }
