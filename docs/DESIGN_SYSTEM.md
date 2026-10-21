@@ -54,7 +54,7 @@ a matte light-grey canvas with frosted-white glass. New installations default to
 | Token | Role |
 |---|---|
 | `--bg` | Window under-layer |
-| `--shell`, `--shell-opacity` | The surface behind the sidebar and the gutter around the main panel: `--bg`, or `--bg` tinted with the accent. `lib/theme.ts` sets the opacity (0–1) of the layer that paints it; below 1 the window's material shows through |
+| `--shell`, `--shell-opacity` | The surface behind the sidebar: `--bg`, or `--bg` tinted with the accent. `lib/theme.ts` sets the opacity (0–1) of the layer that paints it; below 1 the window's material shows through |
 | `--surface`, `--surface-2`, `--surface-3` | Solid panels, raised rows, wells, from lowest to highest — where transcript, code and diff content lives |
 | `--ink` | Primary text |
 | `--secondary` | Secondary text |
@@ -136,16 +136,13 @@ Use the tokens, not literal pixel values:
 | `--r-lg` | 20px | Cards, popovers, dialogs |
 | `--r-xl` | 24px | The composer, the command palette |
 | `--r-pill` | 999px | Capsule ends on single-line controls and rows: buttons, chips, icon buttons, sidebar and file rows, picker and menu triggers |
-| `--r-panel` | `--r-lg` | The main panel |
 
 Section surfaces run round: the composer and palette take the full 24px, and
 every clickable row, chip and button is a capsule on `--r-pill`. Menu items and
 multi-line options stay on `--r-sm`, where a capsule would read as a bubble.
 
-The window's own corner radius is 16pt on macOS 26 and later; `--shell-gap` is
-the gutter between the window edge and the main panel. The panel takes the
-section scale's `--r-lg` rather than nesting inside the window corner, where the
-8px carve read sharper than every other surface.
+The main pane has no radius of its own: it runs flush to the window's edges,
+and the window's 16pt corner (macOS 26 and later) rounds it.
 
 Circles are allowed for status dots, spinners, radio knobs and avatars-as-dots;
 switches are pill tracks with round knobs.
@@ -455,15 +452,15 @@ Footer/About: **Not affiliated with Meta.** No Meta wordmark.
 
 Shared radii use `--r-sm` through `--r-xl` (12/18/20/24px). Status dots, spinners
 and radio knobs retain circles for recognition; switches are pill tracks. The
-main pane is a floating rounded panel (`--r-panel`) on the shell, below the
-title bar. With "Tint
+main pane is flush with the window, title bar included, on `--surface`; one
+`--border` hairline separates it from the sidebar. With "Tint
 the sidebar" on, the shell takes the accent and a subtle accent-derived glow
 sits under the sidebar's rows in the top-left corner; with it off the sidebar
 carries no accent colour.
 
-The sidebar has no fill, blur or edge of its own. It and the gutter around the
-main panel are one surface, the shell, so the accent tint and the window's
-translucency reach both alike and no seam separates them. The sidebar's rows
+The sidebar has no fill, blur or edge of its own: it sits on the shell, so the
+accent tint and the window's translucency reach it. The main pane is opaque and
+takes neither. The sidebar's rows
 are New thread, the workspaces and their threads, then the account button;
 Settings and its pages open from the account menu, the shortcut or the palette.
 The list scrolls vertically only — never sideways — and a thread name that does

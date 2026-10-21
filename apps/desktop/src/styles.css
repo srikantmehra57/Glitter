@@ -70,12 +70,6 @@
   --r-xl: 24px;
   /* Fully-rounded ends for controls, chips and single-line row highlights. */
   --r-pill: 999px;
-  /* The gutter between the window edge and the main panel. */
-  --shell-gap: 8px;
-  /* The panel runs at the section scale like the other large surfaces. It does
-     not nest concentrically inside the window's 16pt corner: the 8px carve read
-     sharper than everything else on screen. */
-  --r-panel: var(--r-lg);
   --ease: cubic-bezier(0.2, 0, 0, 1);
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
@@ -396,7 +390,7 @@ html[data-sidebar-accent="true"] .app::after { opacity: 1; }
 /* Collapsed, the sidebar gives up its column. Its buttons become a row in the
    title bar, after the window controls, and the title makes room for them. */
 .app.sidebar-collapsed:has(.sidebar-rail .update-dot) { --rail-width: 148px; }
-.app.sidebar-collapsed .main { margin-left: var(--shell-gap); }
+.app.sidebar-collapsed :is(.main, .topbar) { border-left-color: transparent; }
 .app.sidebar-collapsed .topbar { padding-left: calc(var(--window-controls) + 8px + var(--rail-width) + 12px); }
 .main, .sidebar, .dock { min-height: 0; }
 /* A banner's grow/shrink wrapper keeps its height in the panel's column. */
@@ -430,7 +424,7 @@ html[data-sidebar-accent="true"] .app::after { opacity: 1; }
   position: absolute;
   top: var(--titlebar-height);
   right: -19px;
-  bottom: var(--shell-gap);
+  bottom: 0;
   width: 24px;
   min-width: 0;
   cursor: col-resize;
@@ -864,14 +858,12 @@ html[data-sidebar-accent="true"] .sidebar .nav-row:not(.new-thread):active:not(:
   display: flex;
   flex-direction: column;
   min-width: 0;
-  /* The title bar is the top edge; the shell gutter runs round the other three. */
-  margin: 0 var(--shell-gap) var(--shell-gap) 0;
+  /* Flush to the window on three sides; a hairline is the only seam with the
+     sidebar, and the title bar above continues the same surface. */
   background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--r-panel);
-  box-shadow: var(--shadow);
+  border-left: 1px solid var(--border);
   overflow: hidden;
-  transition: margin-left var(--dur-3) var(--ease-out);
+  transition: border-color var(--dur-3) var(--ease-out);
 }
 
 /* Chat and the Changes dock share the main panel side by side. */
@@ -1041,9 +1033,9 @@ html[data-theme="light"] .usage-providers, html[data-theme="light"] .usage-detai
   .activity-map.period-overview { gap: 2px; }
 }
 
-/* The title bar sits on the shell, not in the panel: no fill and no edge of its
-   own, so the tint and the translucency reach it as they reach the sidebar. Its
-   controls line up with the panel's edges below. */
+/* The title bar is the top of the main pane: the same surface and the same
+   hairline against the sidebar, so the pane reads as one column from the top of
+   the window to the bottom. Only the sidebar sits on the shell. */
 .topbar {
   grid-column: 2;
   grid-row: 1;
@@ -1054,11 +1046,13 @@ html[data-theme="light"] .usage-providers, html[data-theme="light"] .usage-detai
   align-items: center;
   gap: 6px;
   min-width: 0;
-  padding: 0 var(--shell-gap) 0 8px;
+  padding: 0 12px 0 8px;
+  background: var(--surface);
+  border-left: 1px solid var(--border);
   -webkit-app-region: drag;
   container-type: inline-size;
   container-name: titlebar;
-  transition: padding-left var(--dur-3) var(--ease-out);
+  transition: padding-left var(--dur-3) var(--ease-out), border-color var(--dur-3) var(--ease-out);
 }
 .topbar button, .topbar input, .topbar .branch, .topbar h1 { -webkit-app-region: no-drag; }
 .crumbs { display: flex; align-items: center; gap: 4px; min-width: 0; }
@@ -1864,6 +1858,12 @@ button.attachment:hover { background: var(--surface-3); color: var(--ink); }
 }
 .approval-args { margin: -2px 0 10px; }
 .approval-args summary { cursor: pointer; font-size: 11.5px; color: var(--tertiary); padding: 2px 0 6px; }
+.approval-args summary:hover { color: var(--secondary); }
+.approval-args .cmd { color: var(--secondary); margin-bottom: 0; }
+.choices { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.choices kbd { margin-left: 6px; opacity: 0.7; }
+.approval-diff { flex: none; max-height: 280px; margin: 0 0 10px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--bg); }
+.approval-scope { margin: 8px 0 0; font-size: 11.5px; }
 .approval-risk { display: flex; align-items: flex-start; gap: 6px; margin: -2px 0 10px; font-size: 12px; line-height: 1.45; color: var(--ink); }
 .approval-risk svg { flex: none; margin-top: 2px; color: var(--warning); }
 .approval-allow { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px; margin-left: auto; min-width: 0; }
@@ -1878,12 +1878,6 @@ button.attachment:hover { background: var(--surface-3); color: var(--ink); }
 .approval-grant > .secondary:hover:not(:disabled) { background: var(--hover); }
 .approval-grant > .secondary:active:not(:disabled) { transform: none; background: var(--active); }
 .approval-scope-select .select-menu-popover { min-width: 240px; }
-.approval-args summary:hover { color: var(--secondary); }
-.approval-args .cmd { color: var(--secondary); margin-bottom: 0; }
-.choices { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.choices kbd { margin-left: 6px; opacity: 0.7; }
-.approval-diff { flex: none; max-height: 280px; margin: 0 0 10px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--bg); }
-.approval-scope { margin: 8px 0 0; font-size: 11.5px; }
 .approval-expiry { margin: 8px 0 0; font-size: 11.5px; }
 
 .user-input { border-color: color-mix(in oklab, var(--accent) 35%, var(--border)); box-shadow: inset 0 2px 0 color-mix(in oklab, var(--accent) 55%, transparent), 0 0 0 4px var(--accent-soft), var(--shadow); }

@@ -95,8 +95,8 @@ function rules(css, selector) {
 
 test('the shell is one surface: the sidebar has no fill or edge of its own', async () => {
   const css = await readFile(resolve('apps/desktop/src/styles.css'), 'utf8');
-  // A fill or a border on the sidebar splits it from the gutter around the main
-  // panel, so a tint or a translucent window reaches one and not the other.
+  // The sidebar is the shell itself: a fill, a border or a blur of its own would
+  // stop the tint and the window's translucency reaching it.
   assert.doesNotMatch(rules(css, '.sidebar'), /border-right|background|backdrop-filter/);
   // Plain opacity on a layer: WebKit in the desktop app did not paint a color-mix() with a custom-property percentage.
   assert.doesNotMatch(rules(css, '.app'), /background/);
@@ -105,31 +105,30 @@ test('the shell is one surface: the sidebar has no fill or edge of its own', asy
   assert.match(css, /html\[data-translucent="true"\][^{]*#root \{ background: transparent; \}/);
 });
 
-test('the main panel runs at the section radius', async () => {
+test('the main pane is flush, split from the sidebar by a hairline', async () => {
   const css = await readFile(resolve('apps/desktop/src/styles.css'), 'utf8');
-  const root = rules(css, ':root');
-  // Round like the cards and dialogs; a concentric carve into the window corner
-  // read sharper than everything else on screen.
-  assert.match(root, /--r-lg:\s*20px;/);
-  assert.match(root, /--r-panel:\s*var\(--r-lg\);/);
-  assert.match(root, /--shell-gap:\s*8px;/);
+  // No floating card: the pane meets the window edges, and a single hairline
+  // against the sidebar is the only seam.
   const main = rules(css, '.main');
-  assert.match(main, /border-radius:\s*var\(--r-panel\);/);
-  // The title bar is the panel's top edge; the gutter runs round the other three sides.
-  assert.match(main, /margin:\s*0 var\(--shell-gap\) var\(--shell-gap\) 0;/);
+  assert.doesNotMatch(main, /margin|border-radius|box-shadow/);
+  assert.match(main, /background:\s*var\(--surface\);/);
+  assert.match(main, /border-left:\s*1px solid var\(--border\);/);
+  assert.doesNotMatch(css, /--r-panel|--shell-gap/);
 });
 
-test('the title bar is a strip of the shell, apart from the main panel', async () => {
+test('the title bar is the top of the main pane', async () => {
   const css = await readFile(resolve('apps/desktop/src/styles.css'), 'utf8');
   // One row across the window holds the window controls, the sidebar's buttons,
-  // the title and the panel's actions. The panel starts below it.
+  // the title and the pane's actions. The pane's content starts below it.
   const app = rules(css, '.app');
   assert.match(app, /grid-template-rows:\s*var\(--titlebar-height\) minmax\(0, 1fr\);/);
   const bar = rules(css, '.topbar');
   assert.match(bar, /grid-row:\s*1;/);
   assert.match(rules(css, '.main'), /grid-row:\s*2;/);
-  // A fill or an edge of its own would make it a second surface on the shell.
-  assert.doesNotMatch(bar, /background|border|backdrop-filter/);
+  // It continues the pane's surface and hairline, so the pane reads as one column.
+  assert.match(bar, /background:\s*var\(--surface\);/);
+  assert.match(bar, /border-left:\s*1px solid var\(--border\);/);
+  assert.doesNotMatch(bar, /backdrop-filter/);
   // The window controls share its centre line. macOS 27 centres them 2pt above the configured inset.
   const conf = JSON.parse(await readFile(resolve('apps/desktop/src-tauri/tauri.conf.json'), 'utf8'));
   const height = Number(app.match(/--titlebar-height:\s*(\d+)px;/)[1]);
