@@ -2880,6 +2880,7 @@ dialog.preview-dialog:is([open], [data-closing]), dialog.output-dialog:is([open]
 .toggle:disabled { opacity: 0.45; cursor: not-allowed; }
 .permission-note { margin: 0 0 10px; color: var(--tertiary); font-size: 11.5px; line-height: 1.5; }
 .permission-note[role="alert"] { color: var(--danger); }
+.permission-note code { font-family: var(--font-mono); font-size: 11px; color: var(--secondary); }
 /* The unified control keeps the model readable as the composer narrows. */
 .composer { container-type: inline-size; container-name: composer; }
 @container composer (max-width: 600px) {

@@ -323,6 +323,25 @@ read-only; a guard denial survives a policy listener that says allow.
 
 ## Phase 5 — App parity
 
+**Status: in progress.** 5.1 is done (2026-10-21, with the DECISIONS entry
+"Harness skills are folders it discovers each turn"); 5.2–5.5 are not started.
+
+- [x] 5.1 `harness/skills.ts`: a skill is a folder with a `SKILL.md` whose
+      frontmatter has `name` (the folder name when missing) and
+      `description`. Roots, nearest first: `.glitter/skills` and
+      `.agents/skills` in the workspace, then the same two in the home folder;
+      the nearest wins a duplicate name. A skill with no description, an
+      invalid name, or a folder or file that resolves outside its root is
+      skipped. The `skills` extension publishes names and descriptions as a
+      stable prompt section, rebuilt every turn and saying it replaces any
+      earlier list, and adds a `skill` tool (read kind, so no approval) only
+      when the catalog has entries. The tool loads the body, or with `file`
+      another file confined to that skill's folder. A `/name` typed in a
+      Harness thread is expanded when sent: the transcript shows what was
+      typed, the model gets the same `<skill_content>` rendering the tool
+      returns. The composer, the slash menu and Extensions list Harness skills
+      through `listSkills`.
+
 **Goal.** Give the harness the features the app already gives Muse.
 
 | # | Change | Source | Effort |

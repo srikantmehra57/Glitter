@@ -762,3 +762,29 @@ must respect. Don't log routine changes here; they belong in git history and
   channel the request is refused at once instead of waiting.
 - **Not done:** Full access still runs ask-level risks without asking. A guarded
   "autonomous but not reckless" mode is harness plan item 5.5.
+
+### Harness skills are folders it discovers each turn
+
+- **Date:** 2026-10-21
+- **Decision:** The harness reads skills itself instead of through an agent
+  CLI. A skill is a folder holding a `SKILL.md` with `name` and `description`
+  frontmatter, found under `.glitter/skills` and `.agents/skills` in the
+  workspace and then in the home folder; the nearest root wins a duplicate
+  name. `.agents/skills` is the convention the reviewed harnesses share, and
+  `.glitter/skills` is ours.
+- **Progressive disclosure:** A turn's system prompt carries names and
+  descriptions only. The `skill` tool loads a body, and with `file` any other
+  file in that skill's folder. The catalog is rebuilt for every turn inside the
+  registry snapshot and says it replaces any earlier list, so a removed or
+  renamed skill does not linger. Discovery is synchronous because the snapshot
+  must not await; it reads at most 16 KiB of each `SKILL.md` and 200 skills.
+- **Reach:** Loading a skill is a read and needs no approval, including a skill
+  from the home folder, which is outside the workspace: the user put it in a
+  skills folder for agents to read. The tool's `file` argument cannot leave that
+  skill's folder, and a skill folder or `SKILL.md` that resolves outside its
+  root through a symlink is not listed. Workspace skills load like `AGENTS.md`
+  does: whoever can change the workspace can change what the agent reads.
+- **Typed invocations:** `/name` in a Harness thread is expanded when it is
+  sent, so a queued turn runs the skill as it was then. The transcript keeps
+  what the user typed; the model receives the tool's own rendering. An unknown
+  name fails with `skillNotFound`, which makes the app refresh its list.

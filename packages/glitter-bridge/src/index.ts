@@ -154,6 +154,12 @@ function text(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
 
+/** A skill invocation from the renderer: a selector string, and arguments when they are a string. */
+function skillParam(value: unknown): { selector: string; arguments?: string } | undefined {
+  const skill = value as { selector?: unknown; arguments?: unknown } | undefined;
+  return skill && typeof skill.selector === "string" ? { selector: skill.selector, ...(typeof skill.arguments === "string" ? { arguments: skill.arguments } : {}) } : undefined;
+}
+
 /**
  * Serialize a dispatch failure without flattening its structure: the
  * message stays human-readable, while an SDK `MspError` kind (found on the
@@ -489,7 +495,6 @@ async function dispatch(method: string, params: Record<string, unknown>) {
       if (ifBusy !== undefined && ifBusy !== "queue" && ifBusy !== "steer" && ifBusy !== "replace") {
         throw new Error("Busy disposition must be queue, steer, or replace.");
       }
-      const skill = params.skill as { selector?: unknown; arguments?: unknown } | undefined;
       return host.sendTurn({
         sessionId: String(params.sessionId ?? ""),
         text: String(params.text ?? ""),
@@ -497,7 +502,7 @@ async function dispatch(method: string, params: Record<string, unknown>) {
         images: Array.isArray(params.images) ? params.images : undefined,
         clientTurnId: typeof params.clientTurnId === "string" ? params.clientTurnId : undefined,
         ifBusy: ifBusy as "queue" | "steer" | "replace" | undefined,
-        skill: skill && typeof skill.selector === "string" ? { selector: skill.selector, ...(typeof skill.arguments === "string" ? { arguments: skill.arguments } : {}) } : undefined,
+        skill: skillParam(params.skill),
       });
     }
     case "steerTurn":
@@ -777,6 +782,7 @@ async function dispatchHarness(method: string, params: Record<string, unknown>) 
         reasoningEffort: typeof params.reasoningEffort === "string" ? params.reasoningEffort : undefined,
         images: Array.isArray(params.images) ? params.images : undefined,
         ifBusy: ifBusy as "queue" | "steer" | "replace" | undefined,
+        skill: skillParam(params.skill),
       });
     }
     case "steerTurn":
@@ -785,9 +791,12 @@ async function dispatchHarness(method: string, params: Record<string, unknown>) 
         text: String(params.text ?? ""),
         reasoningEffort: typeof params.reasoningEffort === "string" ? params.reasoningEffort : undefined,
         images: Array.isArray(params.images) ? params.images : undefined,
+        skill: skillParam(params.skill),
       });
     case "unqueueTurn":
       return harness.unqueueTurn({ sessionId, turnId: String(params.turnId ?? "") });
+    case "listSkills":
+      return harness.listSkills({ sessionId });
     case "cancelTurn":
       return harness.cancelTurn({ sessionId });
     case "decideApproval":

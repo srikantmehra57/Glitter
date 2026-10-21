@@ -4,7 +4,7 @@ import { useShallow } from "zustand/react/shallow";
 import { Check, KeyRound, LogOut, Package, Puzzle, RefreshCw, Server, WandSparkles, X } from "lucide-react";
 import { mcpLogin, mcpLogout, pluginInspect, pluginReview, skillInspect, skillSet } from "../lib/bridge";
 import { skillSelectorText, skillUseText } from "../lib/composerText";
-import { currentThread, currentWorkspace, useAppStore } from "../lib/store";
+import { currentThread, currentWorkspace, supportsSkills, useAppStore } from "../lib/store";
 import { skillScopeArg, type PluginDetail, type SkillDetail, type SkillEntry, type SkillRow } from "../lib/types";
 
 const selectorText = (row: SkillRow) => skillSelectorText(row.selector);
@@ -109,8 +109,10 @@ export function ExtensionsView({ onOpenThreads, embedded = false }: { onOpenThre
     }
   };
 
-  const skills = thread && !thread.agentId ? thread.skills : null;
-  const skillsState = !thread ? "none" : thread.agentId ? "foreign" : skills == null ? "unloaded" : skills.length ? "ready" : "empty";
+  const skilled = thread != null && supportsSkills(thread.agentId);
+  const harness = thread?.agentId === "harness";
+  const skills = skilled ? thread.skills : null;
+  const skillsState = !thread ? "none" : !skilled ? "foreign" : skills == null ? "unloaded" : skills.length ? "ready" : "empty";
   const workspace = currentWorkspace(s);
 
   const toggleSkill = async (entry: SkillEntry, enabled: boolean) => {
@@ -121,7 +123,7 @@ export function ExtensionsView({ onOpenThreads, embedded = false }: { onOpenThre
     try {
       await skillSet(entry.id, scope, enabled, workspace?.grantId ?? undefined, s.museBin || undefined);
       await s.refreshManagedSkills();
-      if (thread && !thread.agentId) await s.refreshSkills(thread.sessionId);
+      if (thread && supportsSkills(thread.agentId)) await s.refreshSkills(thread.sessionId);
     } catch (error) {
       setSkillError(describeError("Could not finish that", error));
     } finally {
@@ -175,14 +177,15 @@ export function ExtensionsView({ onOpenThreads, embedded = false }: { onOpenThre
         <section className="extensions-section" aria-labelledby="extensions-skills-title">
           <div className="extensions-section-head">
             <h2 id="extensions-skills-title"><Puzzle size={15} aria-hidden="true" />Skills</h2>
-            <button type="button" className="ghost-btn small" disabled={!thread || !!thread.agentId || skillsBusy} onClick={() => void refreshSkills()}>
+            <button type="button" className="ghost-btn small" disabled={!skilled || skillsBusy} onClick={() => void refreshSkills()}>
               <RefreshCw size={11} className={skillsBusy ? "spin" : ""} />{skillsBusy ? "Refreshing…" : "Refresh"}
             </button>
           </div>
           {skillsState === "none" ? <p className="permission-note extension-empty">Open a thread to see its skills.</p> : null}
-          {skillsState === "foreign" ? <p className="permission-note">Skills are a Muse capability; this thread runs on another agent.</p> : null}
+          {skillsState === "foreign" ? <p className="permission-note">Skills work with Muse and Harness; this thread runs on another agent.</p> : null}
+          {harness ? <p className="permission-note">Harness loads skills from <code>.glitter/skills</code> and <code>.agents/skills</code>, in the workspace and in your home folder. A workspace skill wins over a home one with the same name.</p> : null}
           {skillsState === "unloaded" ? <p className="permission-note">The skill catalog has not loaded yet. Refresh to fetch it.</p> : null}
-          {skillsState === "empty" ? <p className="permission-note">No skills are available for this session. Workspace skills load only from trusted workspaces.</p> : null}
+          {skillsState === "empty" ? <p className="permission-note">{harness ? "No skills yet. Add a folder with a SKILL.md to one of those places, then refresh." : "No skills are available for this session. Workspace skills load only from trusted workspaces."}</p> : null}
           {skillsState === "ready" ? <ul className="extension-list">
             {(skills ?? []).map((row) => <SkillCard key={`${row.source ?? ""}:${row.selector}`} row={row} onUse={useSkill} />)}
           </ul> : null}

@@ -170,6 +170,8 @@ this for UI work without Rust or a CLI. The website's screenshot script
   (`ExtensionRegistry`: the tools, prompt sections and hooks a turn snapshots
   when it starts), `permission/` (the shell reader, the read-only classifier,
   the danger rules, thread grants, the ask-policy and deny-only guards),
+  `skills.ts` (`SKILL.md` discovery, the per-turn catalog and the `skill`
+  tool),
   `store.ts` (JSONL sessions) and `host.ts` (`HarnessHost`:
   the agent loop, approvals and the bridge events).
 - `host.ts`: `MuseHost`, which handles MSP sessions, turns, approvals, models

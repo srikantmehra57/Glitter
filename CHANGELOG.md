@@ -20,6 +20,11 @@ licence terms.
   commands under the OS sandbox, follows the permission modes and Plan mode,
   asks through the usual approval cards, and keeps its threads on this Mac.
   Keys stay in the keychain and are sent only to their provider.
+- Harness has skills. Put a folder with a `SKILL.md` (a `name` and a
+  `description` in its frontmatter) in `.agents/skills` or `.glitter/skills`,
+  in the workspace or in your home folder. Harness sees the list each turn,
+  loads a skill when a request matches it, and runs one when you type
+  `/name`. Extensions and the composer's slash menu list them.
 - Harness approvals name what they allow. "Allow in thread" now covers what
   you pick on the card: this exact command, a command prefix such as
   `git push …`, every command of one program, one file, a folder, or the

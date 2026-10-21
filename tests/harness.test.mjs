@@ -19,11 +19,12 @@ export { assessCommand } from ${JSON.stringify(resolve('packages/glitter-bridge/
 export { covers, scopesFor } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/permission/grants.ts'))};
 export { runGuards } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/permission/guards.ts'))};
 export { decide } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/permission/policy.ts'))};
+export { catalogPrompt, discoverSkills, parseFrontmatter } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/skills.ts'))};
 export { isTruncatedStop, repairHistory, classifyProviderFailure } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/wire.ts'))};
 export { effortTiers, resolveProvider } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/providers.ts'))};
 `);
 await build({ entryPoints: [join(temporary, 'entry.ts')], bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'silent' });
-const { HarnessHost, SessionStore, BUILTIN_TOOLS, ExtensionRegistry, parseScript, isReadOnly, assessCommand, covers, scopesFor, runGuards, decide, confine, globRegex, runTool, scheduleToolCalls, encodeSegment, repairHistory, isTruncatedStop, retryBudgetOpen, effortTiers, resolveProvider, classifyProviderFailure } = await import(pathToFileURL(outfile).href);
+const { HarnessHost, SessionStore, BUILTIN_TOOLS, ExtensionRegistry, parseScript, isReadOnly, assessCommand, covers, scopesFor, runGuards, decide, catalogPrompt, discoverSkills, parseFrontmatter, confine, globRegex, runTool, scheduleToolCalls, encodeSegment, repairHistory, isTruncatedStop, retryBudgetOpen, effortTiers, resolveProvider, classifyProviderFailure } = await import(pathToFileURL(outfile).href);
 
 const sse = (frames) => new Response(new ReadableStream({
   start(controller) {
@@ -1022,6 +1023,95 @@ test('an edit grant names a file or a folder, not every edit', async () => {
   }
   assert.deepEqual(asked, [0, 2, 4], 'the file grant covers its file; the folder grant covers src/ and not the root');
   assert.equal(await readFile(join(root, 'src/c.txt'), 'utf8'), 'd');
+});
+
+/** Write `<root>/<scope dir>/<name>/SKILL.md` with the given frontmatter and body. */
+async function addSkill(root, base, folder, frontmatter, body = 'Do the thing.') {
+  const dir = join(root, ...base.split('/'), folder);
+  await mkdir(dir, { recursive: true });
+  await writeFile(join(dir, 'SKILL.md'), `---\n${frontmatter}\n---\n\n${body}\n`);
+  return dir;
+}
+
+test('skill frontmatter: plain, quoted and block values', () => {
+  const parsed = parseFrontmatter('---\nname: "review"\ndescription: >\n  Reviews a diff\n  for bugs.\nnotes: |\n  one\n  two\n---\nBody here\n');
+  assert.deepEqual(parsed.fields, { name: 'review', description: 'Reviews a diff for bugs.', notes: 'one\ntwo' });
+  assert.equal('---\nname: review\ndescription: x\n---\nBody here\n'.slice(parseFrontmatter('---\nname: review\ndescription: x\n---\nBody here\n').bodyStart), 'Body here\n');
+  assert.equal(parseFrontmatter('no frontmatter'), null);
+  assert.equal(parseFrontmatter('---\nname: open\n'), null, 'an unclosed block is not frontmatter');
+});
+
+test('skills are discovered nearest first, and malformed or escaping skills are skipped', async () => {
+  const root = await workspace();
+  const home = await mkdtemp(join(temporary, 'home-'));
+  await addSkill(root, '.glitter/skills', 'review', 'name: review\ndescription: The workspace review skill.');
+  await addSkill(root, '.agents/skills', 'review', 'name: review\ndescription: A shadowed review skill.');
+  await addSkill(home, '.agents/skills', 'review', 'name: review\ndescription: The home review skill.');
+  await addSkill(home, '.agents/skills', 'deploy', 'description: Ships a release.');
+  await addSkill(root, '.agents/skills', 'nameless', 'name: bad name!\ndescription: An invalid name.');
+  await addSkill(root, '.agents/skills', 'silent', 'name: silent');
+  const outside = await addSkill(await mkdtemp(join(temporary, 'outside-')), 'x', 'leak', 'name: leak\ndescription: Lives outside.');
+  await symlink(outside, join(root, '.agents', 'skills', 'leak'));
+  const skills = discoverSkills(root, home);
+  assert.deepEqual(skills.map((skill) => [skill.name, skill.scope, skill.description]), [
+    ['deploy', 'user', 'Ships a release.'],
+    ['review', 'project', 'The workspace review skill.'],
+  ], 'the folder name stands in for a missing name; the nearest root wins a duplicate; no description, an invalid name or a link out is skipped');
+  assert.equal(skills[1].label, '.glitter/skills/review');
+  assert.equal(skills[0].label, '~/.agents/skills/deploy');
+  const prompt = catalogPrompt(skills);
+  assert.match(prompt, /- deploy: Ships a release\.\n- review: The workspace review skill\./);
+  assert.match(prompt, /replaces any list of skills you saw earlier/);
+  assert.doesNotMatch(prompt, /Do the thing/, 'bodies stay out of the catalog');
+  assert.equal(catalogPrompt([]), undefined);
+});
+
+test('the harness publishes the catalog each turn and loads a skill only when asked', async () => {
+  const root = await workspace();
+  const home = await mkdtemp(join(temporary, 'home-'));
+  const dir = await addSkill(root, '.agents/skills', 'review', 'name: review\ndescription: Reviews a diff for bugs.', 'Read the diff, then list every bug.\nSee checklist.md.');
+  await writeFile(join(dir, 'checklist.md'), '- null checks\n');
+  const { calls, fetchImpl } = anthropicStub([
+    () => toolReply('s1', 'skill', { name: 'review' }),
+    () => toolReply('s2', 'skill', { name: 'review', file: 'checklist.md' }),
+    () => toolReply('s3', 'skill', { name: 'review', file: '../../../hello.txt' }),
+    () => textReply('reviewed'),
+    () => textReply('no skills now'),
+  ]);
+  const { instance, events } = host(fetchImpl, new SessionStore(await mkdtemp(join(temporary, 'store-'))), { homeDir: home });
+  const { sessionId } = await instance.startSession({ workspaceRoot: root });
+  assert.deepEqual(instance.listSkills({ sessionId }).skills, [{ selector: 'review', description: 'Reviews a diff for bugs.', source: 'project' }]);
+  await instance.sendTurn({ sessionId, text: 'review my change' });
+  await settled(events, 1);
+  assert.match(calls[0].body.system[0].text, /- review: Reviews a diff for bugs\./);
+  assert.doesNotMatch(calls[0].body.system[0].text, /list every bug/, 'the body is not in the prompt');
+  assert.ok(calls[0].body.tools.some((tool) => tool.name === 'skill'));
+  assert.match(calls[1].body.messages.at(-1).content[0].content, /<skill_content name="review" folder="\.agents\/skills\/review">\nRead the diff, then list every bug\./);
+  assert.match(calls[2].body.messages.at(-1).content[0].content, /file="checklist\.md">\n- null checks/);
+  assert.match(calls[3].body.messages.at(-1).content[0].content, /outside the review skill's folder/);
+  assert.equal(events.some(({ event }) => event === 'approval'), false, 'loading a skill needs no approval');
+  await rm(join(root, '.agents'), { recursive: true });
+  await instance.sendTurn({ sessionId, text: 'again' });
+  await settled(events, 2);
+  assert.doesNotMatch(calls[4].body.system[0].text, /review/, 'the next turn publishes the new catalog, not the old one');
+  assert.equal(calls[4].body.tools.some((tool) => tool.name === 'skill'), false, 'with no skills there is no skill tool');
+});
+
+test('a /skill the user types shows as typed and reaches the model expanded', async () => {
+  const root = await workspace();
+  const home = await mkdtemp(join(temporary, 'home-'));
+  await addSkill(home, '.agents/skills', 'deploy', 'name: deploy\ndescription: Ships a release.', 'Tag, build, then publish.');
+  const { calls, fetchImpl } = anthropicStub([() => textReply('shipping')]);
+  const { instance, events } = host(fetchImpl, new SessionStore(await mkdtemp(join(temporary, 'store-'))), { homeDir: home });
+  const { sessionId } = await instance.startSession({ workspaceRoot: root });
+  await instance.sendTurn({ sessionId, text: '', skill: { selector: 'deploy', arguments: 'v2.1' } });
+  await settled(events, 1);
+  const user = events.find(({ event, payload }) => event === 'item' && payload.item.kind === 'userMessage');
+  assert.equal(user.payload.item.text, '/deploy v2.1');
+  const sent = calls[0].body.messages[0].content.map((part) => part.text).join('');
+  assert.match(sent, /The user invoked the deploy skill\.[\s\S]*<skill_content name="deploy" folder="~\/\.agents\/skills\/deploy">\nTag, build, then publish\.\n<\/skill_content>\n\nv2\.1$/);
+  assert.equal(events.find(({ event }) => event === 'sessionTitle').payload.title, '/deploy v2.1');
+  await assert.rejects(instance.sendTurn({ sessionId, text: '', skill: { selector: 'gone' } }), (error) => error.code === 'skillNotFound' && /no longer available/.test(error.message));
 });
 
 test.after(async () => { await rm(temporary, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });

@@ -1,13 +1,14 @@
 import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { platform } from "node:os";
+import { homedir, platform } from "node:os";
 import { approvalAlive, approvalExpiry, approvalExpiryMono, APPROVAL_TTL_MS, describeIsolation, osSandboxAvailable, type IsolationReport } from "../isolation.js";
 import type { Grant, Subject } from "./permission/grants.js";
 import { runGuards } from "./permission/guards.js";
 import { decide, type ApprovalMode, type Verdict } from "./permission/policy.js";
 import { TIERS, configuredProviders, effortTiers, providerSpec, resolveProvider, splitModelId, type ProviderCredentials, type ResolvedProvider } from "./providers.js";
 import { ExtensionRegistry, type HookEvents, type HookFailure, type HookName, type TurnContributions } from "./registry.js";
+import { discoverSkills, expandInvocation, skillsExtension } from "./skills.js";
 import { SessionStore, type SessionMeta } from "./store.js";
 import { BUILTIN_EXTENSION, canonicalize, executeTool, executionMode, prepareTool, repeatReminder, scheduleToolCalls, type PresentationMeta, type ToolKind } from "./tools.js";
 import { ProviderError, isTransientProviderError, isTruncatedStop, streamChat, truncatedToolResult, type AssistantMessage, type ChatMessage, type ContentPart, type SystemPrompt, type ToolCall, type ToolSchema } from "./wire.js";
@@ -98,12 +99,17 @@ const REFUSALS: Record<Exclude<ApprovalOutcome["kind"], "allowed">, string> = {
 
 type TurnRequest = {
   turnId: string;
+  /** What the model receives. */
   text: string;
+  /** What the transcript shows, when it differs: a `/skill` the user typed. */
+  display?: string;
   images?: Array<{ mediaType: string; base64Data: string }>;
   effort?: string;
 };
 
 type SteerRequest = { text: string; images?: Array<{ mediaType: string; base64Data: string }> };
+
+type SkillInvocation = { selector: string; arguments?: string };
 
 type Live = {
   meta: SessionMeta;
@@ -137,6 +143,8 @@ type HostLimits = {
   beforeTool?: (name: string) => Promise<void> | void;
   /** False when nothing can answer an approval (a delegated child, a headless run): every request is refused as unavailable. */
   approvalChannel?: boolean;
+  /** Test seam: the folder user skills load from. Production uses the OS home folder. */
+  homeDir?: string;
 };
 
 export class HarnessHost {
@@ -154,6 +162,7 @@ export class HarnessHost {
   constructor(emit: Emit, private readonly store = new SessionStore(), private readonly fetchImpl: typeof fetch = fetch, private readonly limits: HostLimits = {}) {
     this.emit = emit;
     this.registry.register(BUILTIN_EXTENSION);
+    this.registry.register(skillsExtension(this.homeDir));
   }
 
   /** The native shell injects the keychain's provider keys into every harness request. */
@@ -413,9 +422,21 @@ export class HarnessHost {
     live.controller?.abort();
   }
 
-  async sendTurn(options: { sessionId: string; text: string; reasoningEffort?: string; images?: Array<{ mediaType: string; base64Data: string }>; ifBusy?: "queue" | "steer" | "replace" }) {
+  private get homeDir() { return this.limits.homeDir ?? homedir(); }
+
+  /** Skills the thread's workspace and the home folder provide, as rows the composer and Extensions list. */
+  listSkills(options: { sessionId: string }) {
     const live = this.requireLive(options.sessionId);
-    const request = { text: options.text, images: options.images, effort: options.reasoningEffort };
+    return { skills: discoverSkills(live.meta.workspaceRoot, this.homeDir).map((skill) => ({ selector: skill.name, description: skill.description, source: skill.scope })) };
+  }
+
+  async sendTurn(options: { sessionId: string; text: string; reasoningEffort?: string; images?: Array<{ mediaType: string; base64Data: string }>; ifBusy?: "queue" | "steer" | "replace"; skill?: SkillInvocation }) {
+    const live = this.requireLive(options.sessionId);
+    // A typed `/skill` is expanded now, so a queued turn runs the skill as it was when sent.
+    const expanded = options.skill ? expandInvocation(live.meta.workspaceRoot, this.homeDir, options.skill, options.text) : undefined;
+    const text = expanded?.content ?? options.text;
+    const display = expanded?.display ?? options.text;
+    const request = { text, images: options.images, effort: options.reasoningEffort, ...(expanded ? { display } : {}) };
     if (live.prompting) {
       if (options.ifBusy === "queue") {
         const turnId = this.mintTurnId();
@@ -423,10 +444,10 @@ export class HarnessHost {
         return { turnId, disposition: "queued" as const };
       }
       if (options.ifBusy === "steer") {
-        if (!options.text.trim() && !options.images?.length) throw new Error("A message is required to steer the turn.");
-        live.steering.push({ text: options.text, images: options.images });
+        if (!text.trim() && !options.images?.length) throw new Error("A message is required to steer the turn.");
+        live.steering.push({ text, images: options.images });
         // The transcript shows it now. The model sees it at the next tool boundary.
-        this.emitItem(live, { itemId: `${live.turnId}:steer:${randomUUID().slice(0, 8)}`, kind: "userMessage", status: "completed", text: options.text, turnId: live.turnId }, true);
+        this.emitItem(live, { itemId: `${live.turnId}:steer:${randomUUID().slice(0, 8)}`, kind: "userMessage", status: "completed", text: display, turnId: live.turnId }, true);
         return { turnId: live.turnId, disposition: "steered" as const };
       }
       if (options.ifBusy === "replace") {
@@ -446,7 +467,7 @@ export class HarnessHost {
   }
 
   /** Fold a message into the running turn. Same admission as `sendTurn` with `ifBusy: "steer"`. */
-  steerTurn(options: { sessionId: string; text: string; reasoningEffort?: string; images?: Array<{ mediaType: string; base64Data: string }> }) {
+  steerTurn(options: { sessionId: string; text: string; reasoningEffort?: string; images?: Array<{ mediaType: string; base64Data: string }>; skill?: SkillInvocation }) {
     return this.sendTurn({ ...options, ifBusy: "steer" });
   }
 
@@ -474,9 +495,9 @@ export class HarnessHost {
       this.resetRepeat(live);
       await this.store.append(live.meta.sessionId, [{ type: "message", message: user }]);
       durable = true;
-      this.emitItem(live, { itemId: `${request.turnId}:user`, kind: "userMessage", status: "completed", text: request.text, turnId: request.turnId }, true);
+      this.emitItem(live, { itemId: `${request.turnId}:user`, kind: "userMessage", status: "completed", text: request.display ?? request.text, turnId: request.turnId }, true);
       if (!live.meta.title) {
-        const title = request.text.trim().split("\n")[0].slice(0, 80) || "New thread";
+        const title = (request.display ?? request.text).trim().split("\n")[0].slice(0, 80) || "New thread";
         live.meta.title = title;
         void this.store.update(live.meta.sessionId, { title });
         this.emit("sessionTitle", { sessionId: live.meta.sessionId, title });

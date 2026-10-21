@@ -2409,9 +2409,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
   refreshSkills: async (sessionId?: string) => {
     const id = sessionId ?? currentThread(get())?.sessionId;
     const thread = get().threads.find((item) => item.sessionId === id);
-    if (!id || !thread || thread.agentId || get().preview) return;
+    if (!id || !thread || !supportsSkills(thread.agentId) || get().preview) return;
     try {
-      const catalog = await bridge<{ skills?: SkillRow[] }>("listSkills", { sessionId: id });
+      const catalog = await bridge<{ skills?: SkillRow[] }>("listSkills", { sessionId: id, agentId: thread.agentId });
       set({ threads: get().threads.map((item) => item.sessionId === id ? { ...item, skills: catalog.skills ?? [] } : item) });
     } catch (error) {
       log.warn("skills.refresh.failed", { error: message(error) });
@@ -2991,7 +2991,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       // spelling matches the catalog verbatim (unknown stays plain text),
       // and the invocation travels as a structured skill part.
       const invocation = parseSkillInvocation(text);
-      const skill = thread && !thread.agentId && invocation
+      const skill = thread && supportsSkills(thread.agentId) && invocation
         ? (thread.skills ?? []).find((row) => row.selector.replace(/^\//, "").toLowerCase() === invocation.selector.replace(/^\//, "").toLowerCase())
         : undefined;
       const skillPart = skill ? { selector: skill.selector, ...(invocation!.args ? { arguments: invocation!.args } : {}) } : undefined;
@@ -3771,6 +3771,11 @@ export function reconcileRunningThreads(): Promise<void> {
   const tracked = inFlight.finally(() => { reconcileInFlight = null; });
   reconcileInFlight = tracked;
   return tracked;
+}
+
+/** Muse and Harness have skills: a session catalog, and `/name` sent as a skill part. ACP agents do not. */
+export function supportsSkills(agentId: string | undefined): boolean {
+  return !agentId || agentId === "harness";
 }
 
 /** Muse and Harness accept a follow-up while a turn runs. ACP agents and preview do not. */
