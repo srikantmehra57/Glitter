@@ -134,7 +134,9 @@ function useDesktopShortcuts() {
         if (approval.expiresAt != null && approval.expiresAt <= Date.now()) return;
         const allow = approval.availableChoices.filter((choice) => !choice.decision.startsWith("denied"));
         const deny = approval.availableChoices.filter((choice) => choice.decision.startsWith("denied"));
-        const choice = event.key === "Backspace" ? deny[0] : event.shiftKey ? allow[1] : allow[0];
+        // With a scope picker on the card, the wider shortcut approves the scope it shows.
+        const picked = thread?.approvalScope?.approvalId === approval.approvalId ? allow.find((option) => option.choiceId === thread.approvalScope?.choiceId) : undefined;
+        const choice = event.key === "Backspace" ? deny[0] : event.shiftKey ? picked ?? allow[1] : allow[0];
         if (!choice) return;
         event.preventDefault();
         void state.decide(approval.approvalId, choice.choiceId);

@@ -3,6 +3,9 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { platform } from "node:os";
 import { approvalAlive, approvalExpiry, approvalExpiryMono, APPROVAL_TTL_MS, describeIsolation, osSandboxAvailable, type IsolationReport } from "../isolation.js";
+import type { Grant, Subject } from "./permission/grants.js";
+import { runGuards } from "./permission/guards.js";
+import { decide, type ApprovalMode, type Verdict } from "./permission/policy.js";
 import { TIERS, configuredProviders, effortTiers, providerSpec, resolveProvider, splitModelId, type ProviderCredentials, type ResolvedProvider } from "./providers.js";
 import { ExtensionRegistry, type HookEvents, type HookFailure, type HookName, type TurnContributions } from "./registry.js";
 import { SessionStore, type SessionMeta } from "./store.js";
@@ -41,8 +44,6 @@ const MODES = [
   { value: "plan", name: "Plan", description: "Reads the workspace and plans. File edits are refused." },
 ];
 
-/** Permission modes the app offers, in the app's vocabulary. */
-type ApprovalMode = "denyUnmatched" | "promptUnmatched" | "onRequest" | "allowAll";
 const APPROVAL_MODES = new Set<ApprovalMode>(["denyUnmatched", "promptUnmatched", "onRequest", "allowAll"]);
 
 const MAX_STEPS = 80;
@@ -74,7 +75,26 @@ function contextWindow(providerId: string, model: string, listed?: number | null
 
 const NOT_CHAT = /embed|whisper|tts|dall-e|davinci|babbage|moderation|image|audio|realtime|transcribe|search|imagen|veo|aqa|guard|rerank|computer-use|sora/i;
 
-type Approval = { sessionId: string; turnId: string; kind: ToolKind; choices: Set<string>; expiresAtMono: number; resolve: (choiceId: string | null) => void };
+/**
+ * Every way an approval request can end. Each reaches the model as its own
+ * message, so it can tell a refusal from a timeout or from no one to ask.
+ */
+type ApprovalOutcome =
+  | { kind: "allowed"; grant?: Grant }
+  | { kind: "rejected" }
+  | { kind: "cancelled" }
+  | { kind: "expired" }
+  /** No channel can answer: the request fails closed instead of waiting. */
+  | { kind: "unavailable" };
+
+type Approval = { sessionId: string; turnId: string; choices: Map<string, ApprovalOutcome>; expiresAtMono: number; resolve: (outcome: ApprovalOutcome) => void };
+
+const REFUSALS: Record<Exclude<ApprovalOutcome["kind"], "allowed">, string> = {
+  rejected: "The user denied this tool call.",
+  cancelled: "The user stopped this turn.",
+  expired: "No one answered the approval request within 10 minutes, so the call did not run. Ask the user before trying it again.",
+  unavailable: "No one can approve tool calls in this session, so the call was refused. Continue without it, or explain what approval is needed.",
+};
 
 type TurnRequest = {
   turnId: string;
@@ -89,8 +109,8 @@ type Live = {
   meta: SessionMeta;
   messages: ChatMessage[];
   approvalMode: ApprovalMode;
-  /** Tool kinds the user allowed for the rest of the session. */
-  allowed: Set<ToolKind>;
+  /** Commands, prefixes, files and folders the user allowed for the rest of the thread. */
+  grants: Grant[];
   prompting: boolean;
   controller: AbortController | null;
   turnId: string;
@@ -115,6 +135,8 @@ type HostLimits = {
   retryElapsedMs?: number;
   /** Test seam: invoked after a call is approved and before it runs. Production leaves it unset. */
   beforeTool?: (name: string) => Promise<void> | void;
+  /** False when nothing can answer an approval (a delegated child, a headless run): every request is refused as unavailable. */
+  approvalChannel?: boolean;
 };
 
 export class HarnessHost {
@@ -150,7 +172,7 @@ export class HarnessHost {
   async start() { /* in-process: nothing to spawn */ }
 
   async stop() {
-    for (const approval of this.approvals.values()) approval.resolve(null);
+    for (const approval of this.approvals.values()) approval.resolve({ kind: "cancelled" });
     this.approvals.clear();
     for (const live of this.sessions.values()) live.controller?.abort();
     this.sessions.clear();
@@ -274,7 +296,7 @@ export class HarnessHost {
   }
 
   private track(meta: SessionMeta, messages: ChatMessage[], approvalMode?: string): Live {
-    const live: Live = { meta, messages, approvalMode: APPROVAL_MODES.has(approvalMode as ApprovalMode) ? approvalMode as ApprovalMode : "promptUnmatched", allowed: new Set(), prompting: false, controller: null, turnId: "idle", counter: 0, usage: { promptTokens: meta.usage?.promptTokens ?? 0, outputTokens: meta.usage?.outputTokens ?? 0, cacheReadTokens: meta.usage?.cacheReadTokens ?? 0, cacheWriteTokens: meta.usage?.cacheWriteTokens ?? 0 }, queue: [], steering: [], replacing: false, repeatCount: 0 };
+    const live: Live = { meta, messages, approvalMode: APPROVAL_MODES.has(approvalMode as ApprovalMode) ? approvalMode as ApprovalMode : "promptUnmatched", grants: [], prompting: false, controller: null, turnId: "idle", counter: 0, usage: { promptTokens: meta.usage?.promptTokens ?? 0, outputTokens: meta.usage?.outputTokens ?? 0, cacheReadTokens: meta.usage?.cacheReadTokens ?? 0, cacheWriteTokens: meta.usage?.cacheWriteTokens ?? 0 }, queue: [], steering: [], replacing: false, repeatCount: 0 };
     this.sessions.set(meta.sessionId, live);
     return live;
   }
@@ -338,8 +360,8 @@ export class HarnessHost {
     const live = this.requireLive(sessionId);
     if (!APPROVAL_MODES.has(mode as ApprovalMode)) throw new Error("Unknown permission mode.");
     live.approvalMode = mode as ApprovalMode;
-    // Widening or narrowing the mode resets "for this session" grants.
-    live.allowed.clear();
+    // Widening or narrowing the mode resets thread grants.
+    live.grants = [];
     return { status: "accepted", effectiveMode: { mode } };
   }
 
@@ -385,7 +407,7 @@ export class HarnessHost {
   private stopInFlight(live: Live) {
     for (const [id, approval] of this.approvals) {
       if (approval.sessionId !== live.meta.sessionId) continue;
-      approval.resolve(null);
+      approval.resolve({ kind: "cancelled" });
       this.approvals.delete(id);
     }
     live.controller?.abort();
@@ -496,13 +518,14 @@ export class HarnessHost {
     if (!approval) throw new Error("No pending approval with that id.");
     if (!approvalAlive(approval.expiresAtMono)) {
       this.approvals.delete(options.approvalId);
-      approval.resolve(null);
+      approval.resolve({ kind: "expired" });
       this.emit("approvalAudit", { approvalId: options.approvalId, sessionId: approval.sessionId, turnId: approval.turnId, choiceId: options.choiceId, outcome: "expired" });
       throw new Error("This approval expired. Re-run the turn to request it again.");
     }
-    if (!approval.choices.has(options.choiceId)) throw new Error("That approval choice is not available.");
+    const outcome = approval.choices.get(options.choiceId);
+    if (!outcome) throw new Error("That approval choice is not available.");
     this.approvals.delete(options.approvalId);
-    approval.resolve(options.choiceId);
+    approval.resolve(outcome);
     this.emit("approvalAudit", { approvalId: options.approvalId, sessionId: approval.sessionId, turnId: approval.turnId, choiceId: options.choiceId, outcome: "decided" });
     return { decided: true };
   }
@@ -593,33 +616,29 @@ export class HarnessHost {
     });
   }
 
-  /** Whether a tool may run now: yes, no (with the reason the model reads), or ask the user. */
-  private gate(live: Live, kind: ToolKind): "allow" | "ask" | string {
-    if (kind === "read" || kind === "plan") return "allow";
-    if (kind === "edit" && live.meta.mode === "plan") return "Plan mode is on: files are not edited. Finish the plan, or ask the user to switch to Build.";
-    if (live.approvalMode === "denyUnmatched") return `The thread is read-only: ${kind === "edit" ? "file edits" : "commands"} are refused. Ask the user to change the permission mode if this is needed.`;
-    if (live.approvalMode === "allowAll" || live.allowed.has(kind)) return "allow";
-    if (live.approvalMode === "onRequest" && kind === "edit") return "allow";
-    return "ask";
-  }
-
-  private ask(live: Live, call: ToolCall, kind: ToolKind): Promise<"once" | "session" | null> {
+  /** Ask the user about one call. Thread choices come from the policy, narrowest first. */
+  private ask(live: Live, call: ToolCall, kind: ToolKind, verdict: Extract<Verdict, { kind: "ask" }>): Promise<ApprovalOutcome> {
+    if (this.limits.approvalChannel === false) return Promise.resolve({ kind: "unavailable" });
     const approvalId = randomUUID();
     const choices = [
       { choiceId: "allow-once", label: "Allow once", decision: "approved", scope: "once" },
-      { choiceId: "allow-session", label: kind === "edit" ? "Allow edits for session" : "Allow commands for session", decision: "approved", scope: "session" },
+      ...verdict.scopes.map((scope) => ({ choiceId: scope.choiceId, label: scope.label, scopeLabel: scope.scopeLabel, decision: "approved", scope: "session" })),
       { choiceId: "deny", label: "Deny", decision: "denied", scope: "once" },
     ];
+    const outcomes = new Map<string, ApprovalOutcome>([
+      ["allow-once", { kind: "allowed" }],
+      ...verdict.scopes.map((scope): [string, ApprovalOutcome] => [scope.choiceId, { kind: "allowed", grant: scope.grant }]),
+      ["deny", { kind: "rejected" }],
+    ]);
     return new Promise((resolve) => {
-      const settle = (choiceId: string | null) => resolve(choiceId === "allow-once" ? "once" : choiceId === "allow-session" ? "session" : null);
-      this.approvals.set(approvalId, { sessionId: live.meta.sessionId, turnId: live.turnId, kind, choices: new Set(choices.map((choice) => choice.choiceId)), expiresAtMono: approvalExpiryMono(), resolve: settle });
+      this.approvals.set(approvalId, { sessionId: live.meta.sessionId, turnId: live.turnId, choices: outcomes, expiresAtMono: approvalExpiryMono(), resolve });
       const expiry = setTimeout(() => {
         const approval = this.approvals.get(approvalId);
         if (!approval) return;
         this.approvals.delete(approvalId);
         this.emit("approvalResolved", { approvalId, sessionId: live.meta.sessionId });
         this.emit("approvalAudit", { approvalId, sessionId: live.meta.sessionId, turnId: live.turnId, choiceId: null, outcome: "expired" });
-        settle(null);
+        resolve({ kind: "expired" });
       }, APPROVAL_TTL_MS);
       expiry.unref?.();
       this.emit("approval", {
@@ -628,7 +647,7 @@ export class HarnessHost {
         turnId: live.turnId,
         toolName: call.name,
         rawArgs: JSON.stringify(call.input),
-        subject: { kind: kind === "shell" ? "command" : "edit" },
+        subject: { kind: kind === "shell" ? "command" : "edit", ...(verdict.risk ? { risk: verdict.risk } : {}) },
         expiresAt: approvalExpiry(),
         availableChoices: choices,
       });
@@ -858,20 +877,24 @@ export class HarnessHost {
     const base = this.toolBase(live, call, frozen);
     // Plan bookkeeping shows as the plan card, not as a step.
     if (kind !== "plan") this.emitItem(live, { ...base, status: "inProgress" });
-    const verdict = this.gate(live, kind);
-    if (verdict !== "allow" && verdict !== "ask") {
-      const output = noted(verdict);
+    let subject: Subject | undefined;
+    try { subject = definition.subject?.(live.meta.workspaceRoot, frozen) ?? { kind: "none" }; } catch { /* refused below */ }
+    // Guards first, in every mode: the policy below never sees a call they refused.
+    const refusal = subject ? runGuards(turn.guards, { toolName: call.name, kind, subject }) : "A permission check failed, so this call was refused.";
+    const verdict: Verdict = refusal || !subject ? { kind: "deny", reason: refusal ?? "" } : decide({ kind, subject, mode: live.approvalMode, planMode: live.meta.mode === "plan", grants: live.grants });
+    if (verdict.kind === "deny") {
+      const output = noted(verdict.reason);
       this.emitItem(live, { ...base, status: "failed", failureReason: output, visibleOutput: output }, true);
       return { id: call.id, name: call.name, output, isError: true };
     }
-    if (verdict === "ask") {
-      const choice = await this.ask(live, call, kind);
-      if (!choice) {
-        const output = noted(signal.aborted ? "The user stopped this turn." : "The user denied this tool call.");
-        this.emitItem(live, { ...base, status: signal.aborted ? "cancelled" : "failed", failureReason: output, visibleOutput: output }, true);
+    if (verdict.kind === "ask") {
+      const outcome = await this.ask(live, call, kind, verdict);
+      if (outcome.kind !== "allowed") {
+        const output = noted(REFUSALS[outcome.kind]);
+        this.emitItem(live, { ...base, status: outcome.kind === "cancelled" ? "cancelled" : "failed", failureReason: output, visibleOutput: output }, true);
         return { id: call.id, name: call.name, output, isError: true };
       }
-      if (choice === "session") live.allowed.add(kind);
+      if (outcome.grant) live.grants.push(outcome.grant);
     }
     if (this.limits.beforeTool) await this.limits.beforeTool(call.name);
     const observed = { id: call.id, name: call.name, input: frozen };

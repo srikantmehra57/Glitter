@@ -145,6 +145,44 @@ describe("denial explanations", () => {
     expect(decide).toHaveBeenCalledTimes(2);
   });
 
+  it("groups scoped thread choices into one picker and approves the scope it shows", () => {
+    const decide = vi.fn(async () => {});
+    useAppStore.setState({ decide });
+    mount(approval({
+      rawArgs: JSON.stringify({ command: "git push origin main" }),
+      availableChoices: [
+        { choiceId: "allow-once", label: "Allow once", decision: "approved", scope: "once" },
+        { choiceId: "allow-session", label: "Allow this command in this thread", decision: "approved", scope: "session", scopeLabel: "This exact command" },
+        { choiceId: "allow-session-prefix", label: "Allow `git push …` in this thread", decision: "approved", scope: "session", scopeLabel: "git push …" },
+        { choiceId: "allow-session-program", label: "Allow every `git` command in this thread", decision: "approved", scope: "session", scopeLabel: "Any git command" },
+        { choiceId: "deny", label: "Deny", decision: "denied", scope: "once" },
+      ],
+    }));
+    // One button per decision, not one per scope; the narrowest scope is the default.
+    expect(screen.queryByRole("button", { name: /Allow every/ })).toBeNull();
+    const trigger = screen.getByRole("button", { name: /What to allow in this thread/ });
+    expect(trigger).toHaveTextContent("This exact command");
+    fireEvent.click(trigger);
+    fireEvent.click(screen.getByRole("option", { name: /Any git command/ }));
+    expect(useAppStore.getState().threads[0].approvalScope).toEqual({ approvalId: "a1", choiceId: "allow-session-program" });
+    expect(screen.getByRole("button", { name: /What to allow in this thread/ })).toHaveTextContent("Any git command");
+    fireEvent.click(screen.getByRole("button", { name: /Allow in thread/ }));
+    expect(decide).toHaveBeenLastCalledWith("a1", "allow-session-program");
+  });
+
+  it("says why a risky command can only be allowed once", () => {
+    mount(approval({
+      rawArgs: JSON.stringify({ command: "git push --force" }),
+      subject: { kind: "command", risk: "Overwrites or deletes history on the remote." },
+      availableChoices: [
+        { choiceId: "allow-once", label: "Allow once", decision: "approved", scope: "once" },
+        { choiceId: "deny", label: "Deny", decision: "denied", scope: "once" },
+      ],
+    }));
+    expect(screen.getByText(/Overwrites or deletes history on the remote\. It can only be allowed once\./)).toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Allow in this thread" })).toBeNull();
+  });
+
   it("ignores Enter and Esc on an expired approval", () => {
     const decide = vi.fn(async () => {});
     useAppStore.setState({ decide });

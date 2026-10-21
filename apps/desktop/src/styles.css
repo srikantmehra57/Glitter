@@ -1864,6 +1864,20 @@ button.attachment:hover { background: var(--surface-3); color: var(--ink); }
 }
 .approval-args { margin: -2px 0 10px; }
 .approval-args summary { cursor: pointer; font-size: 11.5px; color: var(--tertiary); padding: 2px 0 6px; }
+.approval-risk { display: flex; align-items: flex-start; gap: 6px; margin: -2px 0 10px; font-size: 12px; line-height: 1.45; color: var(--ink); }
+.approval-risk svg { flex: none; margin-top: 2px; color: var(--warning); }
+.approval-allow { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px; margin-left: auto; min-width: 0; }
+/* A thread grant: the scope picker and its button read as one split pill. */
+.approval-grant { display: inline-flex; align-items: stretch; min-width: 0; max-width: 100%; height: 30px; border: 1px solid var(--border); border-radius: var(--r-pill); background: var(--raised); box-shadow: var(--shadow-sm); transition: border-color var(--dur-1) var(--ease); }
+.approval-grant:focus-within { border-color: var(--border-heavy); }
+.approval-grant .select-menu { display: flex; min-width: 0; }
+.approval-grant .select-trigger { min-height: 0; height: 100%; max-width: 240px; padding: 0 8px 0 12px; border: 0; border-radius: var(--r-pill) 0 0 var(--r-pill); background: transparent; }
+.approval-grant .select-trigger:hover:not(:disabled) { background: var(--hover); }
+.approval-grant .select-value { font-weight: 500; }
+.approval-grant > .secondary { height: 100%; border: 0; border-left: 1px solid var(--border); border-radius: 0 var(--r-pill) var(--r-pill) 0; background: transparent; box-shadow: none; }
+.approval-grant > .secondary:hover:not(:disabled) { background: var(--hover); }
+.approval-grant > .secondary:active:not(:disabled) { transform: none; background: var(--active); }
+.approval-scope-select .select-menu-popover { min-width: 240px; }
 .approval-args summary:hover { color: var(--secondary); }
 .approval-args .cmd { color: var(--secondary); margin-bottom: 0; }
 .choices { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }

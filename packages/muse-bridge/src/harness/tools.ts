@@ -3,6 +3,8 @@ import { existsSync, realpathSync } from "node:fs";
 import { chmod, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { spawnIsolated, terminateTree } from "../isolation.js";
+import type { Subject } from "./permission/grants.js";
+import { dangerGuard } from "./permission/guards.js";
 import type { Extension } from "./registry.js";
 import type { ToolSchema } from "./wire.js";
 
@@ -99,6 +101,8 @@ export type ToolDefinition = {
   kind: ToolKind;
   /** Only an exact `true` may overlap another call. */
   concurrencySafe?: boolean;
+  /** What the call acts on, for guards and thread grants. Called only after `validate` passed. */
+  subject?: (root: string, input: Readonly<Record<string, unknown>>) => Subject;
   /** Why the frozen arguments are refused before any approval card, or undefined. May throw a ToolError. */
   validate?: (root: string, input: Readonly<Record<string, unknown>>) => Promise<string | undefined> | string | undefined;
   run: (root: string, input: Readonly<Record<string, unknown>>, signal?: AbortSignal) => Promise<ToolProduced> | ToolProduced;
@@ -156,6 +160,7 @@ export const BUILTIN_TOOLS: readonly ToolDefinition[] = [
       parameters: { type: "object", properties: { path: { type: "string" }, content: { type: "string" } }, required: ["path", "content"] },
     },
     kind: "edit",
+    subject: (root, input) => editSubject(root, input),
     validate: (root, input) => {
       if (!str(input.path).trim()) return "A path is required.";
       confine(root, str(input.path));
@@ -170,6 +175,7 @@ export const BUILTIN_TOOLS: readonly ToolDefinition[] = [
       parameters: { type: "object", properties: { path: { type: "string" }, old_string: { type: "string" }, new_string: { type: "string" }, replace_all: { type: "boolean" } }, required: ["path", "old_string", "new_string"] },
     },
     kind: "edit",
+    subject: (root, input) => editSubject(root, input),
     validate: (root, input) => editProblem(root, input),
     run: (root, input) => editTool(root, input),
   },
@@ -180,6 +186,7 @@ export const BUILTIN_TOOLS: readonly ToolDefinition[] = [
       parameters: { type: "object", properties: { command: { type: "string" }, timeout_ms: { type: "integer", minimum: 1000, maximum: SHELL_MAX_MS } }, required: ["command"] },
     },
     kind: "shell",
+    subject: (_root, input) => ({ kind: "command", command: str(input.command) }),
     validate: (_root, input) => (str(input.command).trim() ? undefined : "A command is required."),
     run: (root, input, signal) => shellTool(root, input, signal),
   },
@@ -194,10 +201,11 @@ export const BUILTIN_TOOLS: readonly ToolDefinition[] = [
   },
 ];
 
-/** The built-in tools and the system-prompt guidance that names them. */
+/** The built-in tools, the guard every call passes, and the system-prompt guidance that names the tools. */
 export const BUILTIN_EXTENSION: Extension = {
   id: "builtin",
   tools: BUILTIN_TOOLS,
+  guards: [dangerGuard],
   prompt: [{
     placement: "stable",
     text: "Work methodically: look before you change anything (list_files, grep, read_file), keep edits minimal and in the project's existing style, and verify with the project's own build or tests (bash) when that is practical. Use edit_file for changes to existing files and write_file only for new files or full rewrites. For a task with several steps, keep a checklist with todo_write.",
@@ -231,6 +239,11 @@ export function confine(root: string, raw: string): string {
 }
 
 const display = (root: string, path: string) => relative(realpathSync(root), path) || ".";
+
+/** The file an edit touches, as a workspace-relative `/` path, so a grant can name it. */
+function editSubject(root: string, input: Readonly<Record<string, unknown>>): Subject {
+  return { kind: "path", path: display(root, confine(root, str(input.path))).split(sep).join("/") };
+}
 
 /** A glob (`**`, `*`, `?`) as an anchored regular expression over `/`-separated paths. */
 export function globRegex(glob: string): RegExp {

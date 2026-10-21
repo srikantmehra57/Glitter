@@ -233,6 +233,8 @@ export type ApprovalChoice = {
   decision: string;
   scope: string;
   acceptsFeedback?: boolean;
+  /** How far a thread grant reaches, such as "This exact command". Thread choices that carry one share a scope picker. */
+  scopeLabel?: string;
 };
 
 export type ApprovalRequest = {
@@ -451,6 +453,8 @@ export type Thread = {
   opened?: boolean;
   cancelRequested?: boolean;
   approvalPending?: boolean;
+  /** The thread scope picked on the approval card, so ⇧⌘Y approves what the picker shows. */
+  approvalScope?: { approvalId: string; choiceId: string };
   error?: string | null;
   activity?: "working" | "composing";
   lastTurnId?: string;

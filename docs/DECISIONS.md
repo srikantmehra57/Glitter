@@ -703,3 +703,34 @@ must respect. Don't log routine changes here; they belong in git history and
   and workspace lines; volatile sections follow the date and mode. The built-in
   extension contributes the one line that names its tools, so the prefix a turn
   sends is unchanged by this refactor.
+
+### Harness permissions: guards deny, the policy asks, and a grant names its subject
+
+- **Date:** 2026-10-21
+- **Decision:** Every harness call passes two layers in `harness/permission/`.
+  Deny-only guards run first in every permission mode: a guard can return a
+  refusal and nothing else, and one that throws refuses. The built-in danger
+  guard blocks commands no mode may run (deleting the root or home folder,
+  formatting a disk, raw device writes). Then the ask-policy decides allow,
+  deny or ask from the mode, Plan mode and the thread's grants. The policy
+  never sees a call a guard refused, so no mode or grant can undo a refusal.
+- **Grants:** "Allow in thread" records a grant for the subject the user picked
+  on the card: an exact command, an argv prefix (`git push …`), one program,
+  a file, a folder or the workspace. A prefix grant covers a script only when
+  every command in it is read-only or starts with a granted prefix, with no
+  expansion, assignment or file write. Interpreters get no program-wide grant,
+  and wrappers such as `env`, `sudo` or `xargs` get the exact command only,
+  because either would cover any command. A risky command is asked about every
+  time and offered no grant.
+- **Read-only commands:** A script the shell reader parses, in which every
+  command is on the Codex-derived read-only list, runs without asking in every
+  mode. Arguments that are absolute, start with `~` or contain `..` disqualify
+  it, because the shell can read where the read tools cannot; a symlink inside
+  the workspace that points out is not detected. The reader refuses anything it
+  does not model, and an unparsed script is never read-only and gets only the
+  exact-command grant.
+- **Outcomes:** An approval ends as allowed, rejected, cancelled, expired or
+  unavailable, each with its own message to the model. With no approval
+  channel the request is refused at once instead of waiting.
+- **Not done:** Full access still runs ask-level risks without asking. A guarded
+  "autonomous but not reckless" mode is harness plan item 5.5.

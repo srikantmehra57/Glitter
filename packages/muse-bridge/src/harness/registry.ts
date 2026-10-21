@@ -1,3 +1,4 @@
+import type { ToolGuard } from "./permission/guards.js";
 import type { ToolDefinition, ToolOutcome } from "./tools.js";
 import type { ToolSchema } from "./wire.js";
 
@@ -40,6 +41,8 @@ export type Extension = {
   prompt?: readonly PromptContribution[];
   /** Observers only. A handler cannot change or refuse what the turn does. */
   hooks?: HookTable;
+  /** Deny-only checks every call passes before the permission mode is consulted. */
+  guards?: readonly ToolGuard[];
   /** Named tool subsets, such as the narrowed set a delegated task gets. */
   profiles?: Readonly<Record<string, readonly string[]>>;
 };
@@ -52,6 +55,7 @@ export type TurnContributions = Readonly<{
   context: TurnContext;
   tools: ReadonlyMap<string, ToolDefinition>;
   schemas: readonly ToolSchema[];
+  guards: readonly ToolGuard[];
   prompt: Readonly<{ stable: readonly string[]; volatile: readonly string[] }>;
   runHook: <E extends HookName>(hook: E, payload: HookEvents[E]) => Promise<HookFailure[]>;
 }>;
@@ -146,6 +150,7 @@ export class ExtensionRegistry {
       context: Object.freeze({ ...context }),
       tools,
       schemas: Object.freeze([...tools.values()].map((definition) => definition.schema)),
+      guards: Object.freeze(extensions.flatMap((extension) => extension.guards ?? [])),
       prompt: Object.freeze({ stable: Object.freeze(stable), volatile: Object.freeze(volatile) }),
       runHook,
     });

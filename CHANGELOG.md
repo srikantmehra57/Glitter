@@ -19,6 +19,20 @@ licence terms.
   commands under the OS sandbox, follows the permission modes and Plan mode,
   asks through the usual approval cards, and keeps its threads on this Mac.
   Keys stay in the keychain and are sent only to their provider.
+- Harness approvals name what they allow. "Allow in thread" now covers what
+  you pick on the card: this exact command, a command prefix such as
+  `git push …`, every command of one program, one file, a folder, or the
+  workspace. Before, one click allowed every command, or every edit, for the
+  rest of the thread.
+- Harness runs known read-only commands (`ls`, `git status`, `git diff`,
+  `rg`, `cat` inside the workspace…) without asking, in every permission mode,
+  Plan mode included.
+- Harness never runs a command that would format a disk or delete the root or
+  home folder, in any permission mode. Risky commands, such as `rm -r`,
+  `git push --force`, `git reset --hard` or piping a download into a shell, can
+  only be allowed once, and the card says why.
+- When a Harness approval expires, the agent is told it expired, not that you
+  denied it.
 - Settings → Diagnostics → Copy diagnostics now includes the app version,
   operating system and architecture, and the last 200 redacted lines from the
   app log. If the log cannot be read, the rest of the diagnostics are still

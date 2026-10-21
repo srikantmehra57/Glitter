@@ -549,6 +549,7 @@ type AppStore = Settings & {
   stopTurn: () => Promise<void>;
   unqueueTurn: (turnId: string) => Promise<void>;
   decide: (approvalId: string, choiceId: string, feedback?: string) => Promise<void>;
+  pickApprovalScope: (approvalId: string, choiceId: string) => void;
   reclaimApprovalFeedback: (sessionId: string, id: string) => void;
   respondUserInput: (sessionId: string, userInputId: string, response: UserInputResponse) => Promise<void>;
   refreshGit: () => Promise<void>;
@@ -3103,6 +3104,10 @@ export const useAppStore = create<AppStore>((set, get) => ({
       // turnStarted event promotes it, so the entry is left to reconcile.
       set({ threads: get().threads.map((item) => item.sessionId === thread.sessionId ? { ...item, notice: { level: "warning", message: describeError("Could not reclaim the queued turn", error) } } : item) });
     }
+  },
+
+  pickApprovalScope: (approvalId, choiceId) => {
+    set({ threads: get().threads.map((item) => item.pendingApproval?.approvalId === approvalId ? { ...item, approvalScope: { approvalId, choiceId } } : item) });
   },
 
   decide: async (approvalId, choiceId, feedback) => {

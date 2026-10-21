@@ -253,6 +253,50 @@ harness test suite passes **unchanged**.
 
 ## Phase 4 — The permission model
 
+**Status: done** (2026-10-21, with the DECISIONS entry "Harness permissions:
+guards deny, the policy asks, and a grant names its subject"). The code is in
+`harness/permission/`.
+
+- [x] 4.1 A thread grant is a `Grant` naming its subject: an exact command, an
+      argv prefix, a file, or a folder (`grants.ts`). A tool definition's
+      `subject()` says what a call acts on, so the host stays tool-agnostic.
+      Changing the permission mode clears the grants, as before.
+- [x] 4.2 `classify.ts` ports the Codex read-only list and its per-program
+      rules (`base64`, `find`, `rg`, `git`, `sed`) over a small shell reader
+      (`shell.ts`) instead of a full bash AST. The reader refuses what it does
+      not model (substitution, subshells, here-documents, control flow), and a
+      refused script is never read-only. Stricter than Codex: an argument that
+      is absolute, starts with `~` or has a `..` segment asks instead, because
+      the harness's read tools are confined to the workspace. A read-only
+      script runs without asking in every mode, Plan mode and read-only
+      threads included.
+- [x] 4.3 `danger.ts`: `block` rules (root or home `rm -r`, formatting or
+      erasing a disk, raw writes to a device, recursive `chmod` of root, fork
+      bombs) and `ask` rules (recursive `rm`, force pushes, discarding changes,
+      history rewrites, `find -delete`/`-exec`, `rsync --delete`, inline code,
+      pipe-to-shell, `sudo`, publishing, the keychain). Wrappers such as `sudo`
+      and `env` are unwrapped and `bash -c` scripts read; a script the reader
+      cannot parse is checked against coarser fallback patterns.
+- [x] 4.4 `guards.ts`: a guard returns a refusal or nothing, guards run before
+      the policy in every mode, and a guard that throws refuses. Extensions
+      contribute guards through the registry; the built-in extension
+      contributes the danger guard.
+- [x] 4.5 Approvals end as `allowed`, `rejected`, `cancelled`, `expired` or
+      `unavailable`, each with its own message to the model. `unavailable` is
+      immediate when the host has no approval channel (`approvalChannel:
+      false`), for the delegated children of Phase 7.
+- [x] 4.6 The card offers thread scopes narrowest first. A client that lists
+      every choice gets one labelled button per scope with the narrowest at
+      index 1 (the ⇧⌘Y slot); this app groups choices that carry `scopeLabel`
+      into a picker beside one "Allow in thread" button. A risky command is
+      offered no thread scope, and the card says why.
+
+Differs from the plan: no bash AST (the reader covers what the classifier
+needs and refuses the rest), and an `expired` outcome beside the four named,
+since a timeout was the case the reviews said the model could not tell apart.
+Full access still runs ask-level risks without asking; the guarded mode is
+5.5.
+
 **Goal.** Make the permission model mean something. Today "Allow commands for
 session" allows every command, including `rm -rf`, for the rest of the thread.
 

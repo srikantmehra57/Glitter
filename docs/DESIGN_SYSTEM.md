@@ -29,6 +29,7 @@ the stylesheet wins and this document should be corrected.
 | Terminal | The integrated terminal pane: the user's own shell on a PTY. Not the shell card in a run (a “command” step) and not the composer's `!` escape (a “shell command”) |
 | Local / Worktree | Where a thread works: the workspace folder, or its own checkout on a `muse/` branch. Not “sandbox”, “copy” or “isolated mode” |
 | Stop | Cancel turn (button label: Stop) |
+| Allow in thread | An approval that reaches past this one call, for the rest of the thread. Its scope names what it covers (this exact command, a command prefix, one program, a file, a folder, the workspace). Not “session”, “rule” or “whitelist” |
 
 Copy: short, present tense, no “successfully been executed.”
 

@@ -49,6 +49,7 @@ files (see the README's known limitations).
 | Muse protocol behavior | `packages/muse-bridge/src/host.ts` |
 | Third-party (ACP) agents | `packages/muse-bridge/src/acp.ts`, registry in `agents.ts` |
 | The built-in harness agent | `packages/muse-bridge/src/harness/` (providers, wire, tools, registry, store, host) |
+| Harness permissions: read-only commands, risky and blocked commands, thread grants | `packages/muse-bridge/src/harness/permission/` (`classify.ts`, `danger.ts`, `grants.ts`, `policy.ts`, `guards.ts`, over the `shell.ts` reader) |
 | A harness tool, prompt section or hook | an `Extension` registered on `ExtensionRegistry` (`harness/registry.ts`); built-in tools are `BUILTIN_TOOLS` in `harness/tools.ts` |
 | Provider keys (BYOK) | `credentials.rs` (`provider_key_set`, `provider_keys_get`), Settings → Providers (`ProvidersPanel.tsx`, `lib/providers.ts`) |
 | Bridge request routing | `packages/muse-bridge/src/index.ts` |

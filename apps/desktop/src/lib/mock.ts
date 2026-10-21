@@ -131,7 +131,9 @@ export const MOCK_THREADS: Thread[] = [
       rawArgs: '{"command":"muse serve --workspace ."}',
       availableChoices: [
         { choiceId: "allow-once", label: "Allow once", decision: "approved", scope: "once" },
-        { choiceId: "allow-session", label: "Allow for session", decision: "approvedForSession", scope: "session" },
+        { choiceId: "allow-session", label: "Allow this command in this thread", decision: "approved", scope: "session", scopeLabel: "This exact command" },
+        { choiceId: "allow-session-prefix", label: "Allow `muse serve …` in this thread", decision: "approved", scope: "session", scopeLabel: "muse serve …" },
+        { choiceId: "allow-session-program", label: "Allow every `muse` command in this thread", decision: "approved", scope: "session", scopeLabel: "Any muse command" },
         { choiceId: "deny", label: "Deny", decision: "denied", scope: "once" },
       ],
     },
