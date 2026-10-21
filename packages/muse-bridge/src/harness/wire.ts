@@ -81,7 +81,7 @@ export type ChatRequest = {
   modelId: string;
   system: SystemPrompt;
   messages: ChatMessage[];
-  tools: ToolSchema[];
+  tools: readonly ToolSchema[];
   effort?: string;
   signal?: AbortSignal;
   /** Tests shorten the watchdogs. Production uses the defaults. */

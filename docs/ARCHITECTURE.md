@@ -164,8 +164,10 @@ this for UI work without Rust or a CLI. The website's screenshot script
 - `harness/`: the built-in agent. `providers.ts` (catalog, keys, effort tiers),
   `wire.ts` (streaming Anthropic Messages and OpenAI-compatible Chat
   Completions), `tools.ts` (workspace-confined read, list, grep, write, edit, a
-  sandboxed shell and the plan checklist), `store.ts` (JSONL sessions) and
-  `host.ts` (`HarnessHost`: the agent loop, approvals and the bridge events).
+  sandboxed shell and the plan checklist, as `BUILTIN_TOOLS`), `registry.ts`
+  (`ExtensionRegistry`: the tools, prompt sections and hooks a turn snapshots
+  when it starts), `store.ts` (JSONL sessions) and `host.ts` (`HarnessHost`:
+  the agent loop, approvals and the bridge events).
 - `host.ts`: `MuseHost`, which handles MSP sessions, turns, approvals, models
   and usage.
 - `acp.ts`: `AcpAgentHost`, which translates ACP `session/update` into bridge

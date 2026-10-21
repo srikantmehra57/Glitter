@@ -194,6 +194,35 @@ metadata) and the model can page through truncated output.
 
 ## Phase 3 — An extension surface
 
+**Status: done** (2026-10-21, with the DECISIONS entry "Harness tools,
+prompt sections and hooks come from a registry"). The system prompt and the
+seven tool schemas a turn sends were compared byte for byte before and after,
+in Build and Plan mode, and are identical.
+
+- [x] 3.1 `ExtensionRegistry` in `harness/registry.ts`: an `Extension`
+      contributes tools, `stable` / `volatile` prompt sections (the latter are
+      the reminders) and hooks. `register` returns the function that removes it.
+- [x] 3.2 `HookEvents` maps a name to its payload: `turnStarted`,
+      `toolStarting`, `toolFinished`, `turnFinished`. Handlers observe only, run
+      in registration order, and one that throws becomes a warning notice.
+- [x] 3.3 `snapshot()` is the first statement of `runTurn`, before any await.
+      It copies the tool map, schemas, prompt sections and hook tables, so a
+      registration made mid-turn waits for the next turn.
+- [x] 3.4 A duplicate extension id, static tool name or profile id throws at
+      `register` and adds nothing; a factory's duplicate, an unknown profile, or
+      a profile naming a missing tool throws at `snapshot`, failing the turn
+      before any model call. Profiles exist for Phase 7; nothing uses one yet.
+- [x] 3.5 A tool entry may be a factory of the turn context, returning a
+      definition, a list, or nothing for that turn.
+- [x] 3.6 `BUILTIN_TOOLS` in `tools.ts` holds the seven tools as
+      `ToolDefinition`s (schema, permission `kind`, `concurrencySafe`,
+      `validate`, `run`), registered as the `builtin` extension with the
+      prompt line that names them. `runTool(root, name, …)` stays for tests.
+
+Differs from the plan: the host still owns the permission gate and the plan
+card, keyed on a definition's `kind` (`read` / `edit` / `shell` / `plan`), not
+on tool names. Phase 4 replaces the gate.
+
 **Goal.** Replace the hardcoded `TOOL_SCHEMAS` and `gate()` in `host.ts` with
 a small registry, so that permission, skills, MCP and subagents become
 *modules* rather than special cases.

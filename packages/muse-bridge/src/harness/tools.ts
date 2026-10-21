@@ -3,6 +3,7 @@ import { existsSync, realpathSync } from "node:fs";
 import { chmod, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { spawnIsolated, terminateTree } from "../isolation.js";
+import type { Extension } from "./registry.js";
 import type { ToolSchema } from "./wire.js";
 
 /**
@@ -85,51 +86,123 @@ const ARTIFACT_DIR = join(".muse", "tool-output");
 /** Directories a listing or search never walks into. */
 const SKIP_DIRS = new Set([".git", "node_modules", ".next", "dist", "build", "target", ".venv", "venv", "__pycache__", ".cache", ".turbo", "coverage", ".muse"]);
 
-export const TOOL_SCHEMAS: ToolSchema[] = [
+/** What a handler produces before it is rendered, packed and possibly saved to an artifact. */
+export type ToolProduced = { value: ToolValue; continuation?: Continuation };
+
+/**
+ * One tool, as an extension contributes it. The host reads only these fields:
+ * it never branches on a tool's name.
+ */
+export type ToolDefinition = {
+  schema: ToolSchema;
+  /** The permission class the host's gate reads. */
+  kind: ToolKind;
+  /** Only an exact `true` may overlap another call. */
+  concurrencySafe?: boolean;
+  /** Why the frozen arguments are refused before any approval card, or undefined. May throw a ToolError. */
+  validate?: (root: string, input: Readonly<Record<string, unknown>>) => Promise<string | undefined> | string | undefined;
+  run: (root: string, input: Readonly<Record<string, unknown>>, signal?: AbortSignal) => Promise<ToolProduced> | ToolProduced;
+};
+
+export const BUILTIN_TOOLS: readonly ToolDefinition[] = [
   {
-    name: "read_file",
-    description: "Read a text file in the workspace. Returns numbered lines. Use offset and limit (in lines) for large files. A truncated result names the offset to pass next.",
-    parameters: { type: "object", properties: { path: { type: "string", description: "Path relative to the workspace root." }, offset: { type: "integer", minimum: 1 }, limit: { type: "integer", minimum: 1 } }, required: ["path"] },
+    schema: {
+      name: "read_file",
+      description: "Read a text file in the workspace. Returns numbered lines. Use offset and limit (in lines) for large files. A truncated result names the offset to pass next.",
+      parameters: { type: "object", properties: { path: { type: "string", description: "Path relative to the workspace root." }, offset: { type: "integer", minimum: 1 }, limit: { type: "integer", minimum: 1 } }, required: ["path"] },
+    },
+    kind: "read",
+    concurrencySafe: true,
+    validate: (root, input) => {
+      if (!str(input.path).trim()) return "A path is required.";
+      confine(root, str(input.path));
+      return undefined;
+    },
+    run: (root, input) => readTool(root, input),
   },
   {
-    name: "list_files",
-    description: "List files under a directory of the workspace, optionally filtered by a glob such as **/*.ts. Skips .git, node_modules and build output.",
-    parameters: { type: "object", properties: { path: { type: "string", description: "Directory relative to the workspace root. Defaults to the root." }, pattern: { type: "string", description: "Glob relative to that directory." }, next_offset: { type: "integer", minimum: 0, description: "File index from a previous truncated listing. Pass it to read the next slice." } } },
+    schema: {
+      name: "list_files",
+      description: "List files under a directory of the workspace, optionally filtered by a glob such as **/*.ts. Skips .git, node_modules and build output.",
+      parameters: { type: "object", properties: { path: { type: "string", description: "Directory relative to the workspace root. Defaults to the root." }, pattern: { type: "string", description: "Glob relative to that directory." }, next_offset: { type: "integer", minimum: 0, description: "File index from a previous truncated listing. Pass it to read the next slice." } } },
+    },
+    kind: "read",
+    concurrencySafe: true,
+    validate: (root, input) => {
+      if (str(input.path).trim()) confine(root, str(input.path));
+      return undefined;
+    },
+    run: (root, input) => listTool(root, input),
   },
   {
-    name: "grep",
-    description: "Search file contents with a regular expression. Returns path:line: text for each match. A truncated result names next_offset; pass that same next_offset to read the next matches.",
-    parameters: { type: "object", properties: { pattern: { type: "string" }, path: { type: "string", description: "Directory or file to search. Defaults to the root." }, include: { type: "string", description: "Glob of files to search, such as *.py." }, ignore_case: { type: "boolean" }, next_offset: { type: "integer", minimum: 0, description: "Match index from a previous truncated search. Pass it unchanged to read the next slice." } }, required: ["pattern"] },
+    schema: {
+      name: "grep",
+      description: "Search file contents with a regular expression. Returns path:line: text for each match. A truncated result names next_offset; pass that same next_offset to read the next matches.",
+      parameters: { type: "object", properties: { pattern: { type: "string" }, path: { type: "string", description: "Directory or file to search. Defaults to the root." }, include: { type: "string", description: "Glob of files to search, such as *.py." }, ignore_case: { type: "boolean" }, next_offset: { type: "integer", minimum: 0, description: "Match index from a previous truncated search. Pass it unchanged to read the next slice." } }, required: ["pattern"] },
+    },
+    kind: "read",
+    concurrencySafe: true,
+    validate: (root, input) => {
+      if (!str(input.pattern).trim()) return "A pattern is required.";
+      if (str(input.path).trim()) confine(root, str(input.path));
+      return undefined;
+    },
+    run: (root, input) => grepTool(root, input),
   },
   {
-    name: "write_file",
-    description: "Create or overwrite a file in the workspace with the given content. Prefer edit_file for changes to an existing file.",
-    parameters: { type: "object", properties: { path: { type: "string" }, content: { type: "string" } }, required: ["path", "content"] },
+    schema: {
+      name: "write_file",
+      description: "Create or overwrite a file in the workspace with the given content. Prefer edit_file for changes to an existing file.",
+      parameters: { type: "object", properties: { path: { type: "string" }, content: { type: "string" } }, required: ["path", "content"] },
+    },
+    kind: "edit",
+    validate: (root, input) => {
+      if (!str(input.path).trim()) return "A path is required.";
+      confine(root, str(input.path));
+      return undefined;
+    },
+    run: (root, input) => writeTool(root, input),
   },
   {
-    name: "edit_file",
-    description: "Replace an exact string in a file. old_string must match exactly once unless replace_all is true. Read the file first.",
-    parameters: { type: "object", properties: { path: { type: "string" }, old_string: { type: "string" }, new_string: { type: "string" }, replace_all: { type: "boolean" } }, required: ["path", "old_string", "new_string"] },
+    schema: {
+      name: "edit_file",
+      description: "Replace an exact string in a file. old_string must match exactly once unless replace_all is true. Read the file first.",
+      parameters: { type: "object", properties: { path: { type: "string" }, old_string: { type: "string" }, new_string: { type: "string" }, replace_all: { type: "boolean" } }, required: ["path", "old_string", "new_string"] },
+    },
+    kind: "edit",
+    validate: (root, input) => editProblem(root, input),
+    run: (root, input) => editTool(root, input),
   },
   {
-    name: "bash",
-    description: "Run a shell command in the workspace root. Writes outside the workspace and temp are blocked. Use for builds, tests, git and other CLI work.",
-    parameters: { type: "object", properties: { command: { type: "string" }, timeout_ms: { type: "integer", minimum: 1000, maximum: SHELL_MAX_MS } }, required: ["command"] },
+    schema: {
+      name: "bash",
+      description: "Run a shell command in the workspace root. Writes outside the workspace and temp are blocked. Use for builds, tests, git and other CLI work.",
+      parameters: { type: "object", properties: { command: { type: "string" }, timeout_ms: { type: "integer", minimum: 1000, maximum: SHELL_MAX_MS } }, required: ["command"] },
+    },
+    kind: "shell",
+    validate: (_root, input) => (str(input.command).trim() ? undefined : "A command is required."),
+    run: (root, input, signal) => shellTool(root, input, signal),
   },
   {
-    name: "todo_write",
-    description: "Record the plan for this task as a checklist the user can see. Send the whole list each time; status is pending, in_progress or completed.",
-    parameters: { type: "object", properties: { todos: { type: "array", items: { type: "object", properties: { content: { type: "string" }, status: { type: "string", enum: ["pending", "in_progress", "completed"] } }, required: ["content", "status"] } } }, required: ["todos"] },
+    schema: {
+      name: "todo_write",
+      description: "Record the plan for this task as a checklist the user can see. Send the whole list each time; status is pending, in_progress or completed.",
+      parameters: { type: "object", properties: { todos: { type: "array", items: { type: "object", properties: { content: { type: "string" }, status: { type: "string", enum: ["pending", "in_progress", "completed"] } }, required: ["content", "status"] } } }, required: ["todos"] },
+    },
+    kind: "plan",
+    run: (_root, input) => planTool(input),
   },
 ];
 
-export function toolKind(name: string): ToolKind | null {
-  if (name === "read_file" || name === "list_files" || name === "grep") return "read";
-  if (name === "write_file" || name === "edit_file") return "edit";
-  if (name === "bash") return "shell";
-  if (name === "todo_write") return "plan";
-  return null;
-}
+/** The built-in tools and the system-prompt guidance that names them. */
+export const BUILTIN_EXTENSION: Extension = {
+  id: "builtin",
+  tools: BUILTIN_TOOLS,
+  prompt: [{
+    placement: "stable",
+    text: "Work methodically: look before you change anything (list_files, grep, read_file), keep edits minimal and in the project's existing style, and verify with the project's own build or tests (bash) when that is practical. Use edit_file for changes to existing files and write_file only for new files or full rewrites. For a task with several steps, keep a checklist with todo_write.",
+  }],
+};
 
 class ToolError extends Error {}
 
@@ -313,15 +386,11 @@ export function repeatReminder(name: string, count: number, canonicalArgs: strin
   return `[harness-repeat] Note from the harness, not the user: ${name} has run ${count} times in a row with the same arguments. Canonical arguments: ${args}. Stop repeating it. Change the arguments or answer from the results you already have.`;
 }
 
-/** Only an exact `true` may overlap another call. Anything else runs alone. */
-export function isConcurrencySafe(name: string): boolean {
-  return name === "read_file" || name === "list_files" || name === "grep";
-}
-
 export type ExecutionMode = "concurrent" | "exclusive";
 
-export function executionMode(name: string): ExecutionMode {
-  return isConcurrencySafe(name) === true ? "concurrent" : "exclusive";
+/** Only an exact `true` may overlap another call. Anything else, an unknown tool included, runs alone. */
+export function executionMode(definition: ToolDefinition | undefined): ExecutionMode {
+  return definition?.concurrencySafe === true ? "concurrent" : "exclusive";
 }
 
 /**
@@ -602,29 +671,14 @@ export async function editProblem(root: string, input: Record<string, unknown>):
  * The returned object is what the approval card shows and what the handler runs.
  * An error means the call is refused without a card.
  */
-export async function prepareTool(root: string, name: string, input: Record<string, unknown>): Promise<{ input: Record<string, unknown>; error?: string }> {
+export async function prepareTool(definition: ToolDefinition, root: string, input: Record<string, unknown>): Promise<{ input: Record<string, unknown>; error?: string }> {
   if (typeof input._unparsed === "string") {
     return { input: Object.freeze({ ...input }), error: "The tool arguments were cut off and are not valid JSON. Re-issue the call with complete arguments." };
   }
   const frozen = Object.freeze({ ...input });
   try {
-    if (name === "edit_file") {
-      const error = await editProblem(root, frozen);
-      if (error) return { input: frozen, error };
-    } else if (name === "write_file") {
-      if (!str(frozen.path).trim()) return { input: frozen, error: "A path is required." };
-      confine(root, str(frozen.path));
-    } else if (name === "bash") {
-      if (!str(frozen.command).trim()) return { input: frozen, error: "A command is required." };
-    } else if (name === "read_file") {
-      if (!str(frozen.path).trim()) return { input: frozen, error: "A path is required." };
-      confine(root, str(frozen.path));
-    } else if (name === "grep") {
-      if (!str(frozen.pattern).trim()) return { input: frozen, error: "A pattern is required." };
-      if (str(frozen.path).trim()) confine(root, str(frozen.path));
-    } else if (name === "list_files") {
-      if (str(frozen.path).trim()) confine(root, str(frozen.path));
-    }
+    const error = await definition.validate?.(root, frozen);
+    if (error) return { input: frozen, error };
   } catch (error) {
     return { input: frozen, error: error instanceof Error ? error.message : String(error) };
   }
@@ -721,23 +775,18 @@ async function externalize(root: string, name: string, input: Record<string, unk
 export type RunToolOptions = { canRead?: boolean };
 
 /** Run one tool. Failures come back as error results the model can read and correct, never as exceptions. */
-export async function runTool(root: string, name: string, input: Record<string, unknown>, signal?: AbortSignal, options?: RunToolOptions): Promise<ToolOutcome> {
+export async function executeTool(definition: ToolDefinition, root: string, input: Record<string, unknown>, signal?: AbortSignal, options?: RunToolOptions): Promise<ToolOutcome> {
   try {
-    const produced = await (async () => {
-      switch (name) {
-        case "read_file": return await readTool(root, input);
-        case "list_files": return await listTool(root, input);
-        case "grep": return await grepTool(root, input);
-        case "write_file": return await writeTool(root, input);
-        case "edit_file": return await editTool(root, input);
-        case "bash": return await shellTool(root, input, signal);
-        case "todo_write": return planTool(input);
-        default: return { value: { kind: "error" as const, message: `Unknown tool: ${name}` } };
-      }
-    })();
+    const produced = await definition.run(root, input, signal);
     if (produced.value.kind === "error") return failure(produced.value.message);
-    return await externalize(root, name, input, pack(produced), options?.canRead === true);
+    return await externalize(root, definition.schema.name, input, pack(produced), options?.canRead === true);
   } catch (error) {
     return failure(error instanceof Error ? error.message : String(error));
   }
+}
+
+/** Run a built-in tool by name, outside any turn. */
+export async function runTool(root: string, name: string, input: Record<string, unknown>, signal?: AbortSignal, options?: RunToolOptions): Promise<ToolOutcome> {
+  const definition = BUILTIN_TOOLS.find((tool) => tool.schema.name === name);
+  return definition ? executeTool(definition, root, input, signal, options) : failure(`Unknown tool: ${name}`);
 }

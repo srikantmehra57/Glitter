@@ -11,12 +11,13 @@ const outfile = join(temporary, 'harness.mjs');
 await writeFile(join(temporary, 'entry.ts'), `
 export { HarnessHost, retryBudgetOpen } from ${JSON.stringify(resolve('packages/muse-bridge/src/harness/host.ts'))};
 export { SessionStore } from ${JSON.stringify(resolve('packages/muse-bridge/src/harness/store.ts'))};
-export { confine, globRegex, runTool, scheduleToolCalls, encodeSegment } from ${JSON.stringify(resolve('packages/muse-bridge/src/harness/tools.ts'))};
+export { BUILTIN_TOOLS, confine, globRegex, runTool, scheduleToolCalls, encodeSegment } from ${JSON.stringify(resolve('packages/muse-bridge/src/harness/tools.ts'))};
+export { ExtensionRegistry } from ${JSON.stringify(resolve('packages/muse-bridge/src/harness/registry.ts'))};
 export { isTruncatedStop, repairHistory, classifyProviderFailure } from ${JSON.stringify(resolve('packages/muse-bridge/src/harness/wire.ts'))};
 export { effortTiers, resolveProvider } from ${JSON.stringify(resolve('packages/muse-bridge/src/harness/providers.ts'))};
 `);
 await build({ entryPoints: [join(temporary, 'entry.ts')], bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'silent' });
-const { HarnessHost, SessionStore, confine, globRegex, runTool, scheduleToolCalls, encodeSegment, repairHistory, isTruncatedStop, retryBudgetOpen, effortTiers, resolveProvider, classifyProviderFailure } = await import(pathToFileURL(outfile).href);
+const { HarnessHost, SessionStore, BUILTIN_TOOLS, ExtensionRegistry, confine, globRegex, runTool, scheduleToolCalls, encodeSegment, repairHistory, isTruncatedStop, retryBudgetOpen, effortTiers, resolveProvider, classifyProviderFailure } = await import(pathToFileURL(outfile).href);
 
 const sse = (frames) => new Response(new ReadableStream({
   start(controller) {
@@ -723,6 +724,130 @@ test('provider failures use codes, and a context overflow is not retried', async
   assert.equal(failed.payload.outcome.params.terminal, 'failed');
   assert.equal(attempts, 1);
   assert.match(failed.payload.outcome.params.error.message, /context window/);
+});
+
+/** A read-kind tool that needs no approval and echoes its argument. */
+const echoTool = (name = 'echo') => ({
+  schema: { name, description: 'Echo text back.', parameters: { type: 'object', properties: { text: { type: 'string' } } } },
+  kind: 'read',
+  run: (_root, input) => ({ value: { kind: 'read', path: '.', lines: `${name}:${input.text}`, offset: 1 } }),
+});
+const turnContext = (mode = 'build') => ({ sessionId: 's', turnId: 't', workspaceRoot: '/w', mode });
+
+test('the seven built-in tools are registered in their original order and permission classes', () => {
+  assert.deepEqual(BUILTIN_TOOLS.map((tool) => [tool.schema.name, tool.kind, tool.concurrencySafe === true]), [
+    ['read_file', 'read', true], ['list_files', 'read', true], ['grep', 'read', true],
+    ['write_file', 'edit', false], ['edit_file', 'edit', false], ['bash', 'shell', false], ['todo_write', 'plan', false],
+  ]);
+});
+
+test('the registry refuses duplicates and unresolved profiles instead of discarding them', () => {
+  const registry = new ExtensionRegistry();
+  registry.register({ id: 'one', tools: [echoTool('echo')] });
+  assert.throws(() => registry.register({ id: 'one', tools: [] }), /already registered/, 'a duplicate extension id');
+  assert.throws(() => registry.register({ id: 'two', tools: [echoTool('other'), echoTool('echo')] }), /Tool echo from two is already registered by one/);
+  assert.deepEqual([...registry.snapshot(turnContext()).tools.keys()], ['echo'], 'a refused extension adds nothing, not even its first tool');
+  const remove = registry.register({ id: 'factory', tools: [() => echoTool('echo')] });
+  assert.throws(() => registry.snapshot(turnContext()), /Tool echo from factory is already registered by one/, 'a factory duplicate throws when the turn starts');
+  remove();
+  registry.register({ id: 'profiles', tools: [echoTool('other')], profiles: { narrow: ['other'], broken: ['missing'] } });
+  assert.throws(() => registry.register({ id: 'again', profiles: { narrow: ['echo'] } }), /profile narrow/);
+  assert.deepEqual([...registry.snapshot(turnContext(), 'narrow').tools.keys()], ['other']);
+  assert.deepEqual(registry.snapshot(turnContext(), 'narrow').schemas.map((schema) => schema.name), ['other']);
+  assert.throws(() => registry.snapshot(turnContext(), 'nope'), /Unknown tool profile: nope/);
+  assert.throws(() => registry.snapshot(turnContext(), 'broken'), /names missing, which this turn does not have/);
+});
+
+test('a snapshot fixes tools, factories and prompt sections when it is taken', async () => {
+  const registry = new ExtensionRegistry();
+  registry.register({
+    id: 'ext',
+    tools: [echoTool('always'), (context) => (context.mode === 'plan' ? echoTool('plan_only') : undefined)],
+    prompt: [{ placement: 'stable', text: 'STABLE-A' }, { placement: 'volatile', text: (context) => `MODE-${context.mode}` }, { placement: 'stable', text: () => undefined }],
+  });
+  const build = registry.snapshot(turnContext('build'));
+  assert.deepEqual([...build.tools.keys()], ['always']);
+  assert.deepEqual([...registry.snapshot(turnContext('plan')).tools.keys()], ['always', 'plan_only'], 'a factory decides per turn');
+  assert.deepEqual(build.prompt, { stable: ['STABLE-A'], volatile: ['MODE-build'] });
+  const remove = registry.register({ id: 'late', tools: [echoTool('late')] });
+  assert.deepEqual([...build.tools.keys()], ['always'], 'a later registration does not reach an existing snapshot');
+  remove();
+  assert.deepEqual([...registry.snapshot(turnContext()).tools.keys()], ['always'], 'removing an extension removes its tools');
+  assert.throws(() => build.tools.get('always').kind = 'shell', TypeError, 'a captured definition is frozen');
+});
+
+test('hooks run in registration order, and a handler that throws does not stop the others', async () => {
+  const registry = new ExtensionRegistry();
+  const seen = [];
+  const hooks = { turnStarted: () => { seen.push('first'); throw new Error('boom'); } };
+  registry.register({ id: 'first', hooks });
+  registry.register({ id: 'second', hooks: { turnStarted: async () => { seen.push('second'); } } });
+  const turn = registry.snapshot(turnContext());
+  hooks.turnStarted = () => { seen.push('swapped'); };
+  const failures = await turn.runHook('turnStarted', { context: turn.context });
+  assert.deepEqual(seen, ['first', 'second'], 'the table is copied when the turn starts');
+  assert.deepEqual(failures, [{ extensionId: 'first', hook: 'turnStarted', message: 'boom' }]);
+  assert.deepEqual(await turn.runHook('toolStarting', { context: turn.context, call: { id: '1', name: 'x', input: {} } }), []);
+});
+
+test('an extension tool runs through the host, and a registration made mid-turn waits for the next turn', async () => {
+  const root = await workspace();
+  const order = [];
+  let instance;
+  const { calls, fetchImpl } = anthropicStub([
+    () => toolReply('e1', 'echo', { text: 'hi' }),
+    () => textReply('first done'),
+    () => textReply('second done'),
+  ]);
+  const made = host(fetchImpl, new SessionStore(await mkdtemp(join(temporary, 'store-'))), {
+    beforeTool: (name) => {
+      if (name === 'echo') instance.registry.register({ id: 'late', tools: [echoTool('late')] });
+    },
+  });
+  instance = made.instance;
+  instance.registry.register({
+    id: 'echoer',
+    tools: [echoTool('echo')],
+    prompt: [{ placement: 'stable', text: 'ECHO-RULE' }],
+    hooks: {
+      turnStarted: ({ context }) => { order.push(`turn:${context.mode}`); },
+      toolStarting: ({ call }) => { order.push(`start:${call.name}:${call.input.text}`); },
+      toolFinished: ({ call, outcome }) => {
+        order.push(`end:${call.name}:${outcome.output}`);
+        assert.throws(() => { outcome.output = 'rewritten'; }, TypeError, 'an observer cannot rewrite the result');
+        throw new Error('observer broke');
+      },
+      turnFinished: ({ outcome }) => { order.push(`done:${outcome.params.terminal}`); },
+    },
+  });
+  const { sessionId } = await instance.startSession({ workspaceRoot: root });
+  await instance.sendTurn({ sessionId, text: 'echo hi' });
+  await settled(made.events, 1);
+  const names = (index) => calls[index].body.tools.map((tool) => tool.name);
+  assert.ok(names(0).includes('echo') && names(0).includes('read_file'), 'extension tools sit beside the built-ins');
+  assert.equal(names(1).includes('late'), false, 'the running turn keeps the tool set it started with');
+  assert.match(calls[0].body.system[0].text, /ECHO-RULE/, 'a stable prompt section joins the cached prefix');
+  assert.match(calls[1].body.messages.at(-1).content[0].content, /echo:hi/, 'the tool result reaches the model');
+  assert.deepEqual(order, ['turn:build', 'start:echo:hi', 'end:echo:echo:hi', 'done:completed']);
+  const warning = made.events.find(({ event, payload }) => event === 'agentNotice' && payload.level === 'warning');
+  assert.match(warning.payload.message, /echoer extension failed in toolFinished: observer broke/);
+  assert.equal((await settled(made.events, 1))[0].payload.outcome.params.terminal, 'completed', 'a failing hook does not fail the turn');
+  await instance.sendTurn({ sessionId, text: 'again' });
+  await settled(made.events, 2);
+  assert.ok(names(2).includes('late'), 'the next turn sees the new tool');
+});
+
+test('a turn whose contributions conflict fails before calling the model', async () => {
+  const root = await workspace();
+  const { calls, fetchImpl } = anthropicStub([() => textReply('never')]);
+  const { instance, events } = host(fetchImpl, new SessionStore(await mkdtemp(join(temporary, 'store-'))));
+  instance.registry.register({ id: 'clash', tools: [() => echoTool('bash')] });
+  const { sessionId } = await instance.startSession({ workspaceRoot: root });
+  await instance.sendTurn({ sessionId, text: 'hi' });
+  const [done] = await settled(events, 1);
+  assert.equal(done.payload.outcome.params.terminal, 'failed');
+  assert.match(done.payload.outcome.params.error.message, /Tool bash from clash is already registered by builtin/);
+  assert.equal(calls.length, 0);
 });
 
 test.after(async () => { await rm(temporary, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });

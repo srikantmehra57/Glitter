@@ -364,8 +364,8 @@ must respect. Don't log routine changes here; they belong in git history and
   replaced with a receipt that says how to search it and that the receipt is
   not evidence. If that write fails, the inline result stays. The turn only
   does this when a read tool is available, which the built-in set always is.
-- **Parallelism:** A tool runs beside other tools only when
-  `isConcurrencySafe` is exactly true (`read_file`, `list_files`, `grep`).
+- **Parallelism:** A tool runs beside other tools only when its definition's
+  `concurrencySafe` is exactly true (`read_file`, `list_files`, `grep`).
   Anything else, including an unknown name, runs alone after the pool is idle.
   Results are committed in the model's call order. A call that never started
   because the turn was stopped still gets a result, so the history stays valid.
@@ -674,3 +674,32 @@ must respect. Don't log routine changes here; they belong in git history and
   sidecar script. The keyring and single-instance dependencies are macOS-only.
   Earlier decisions that mention those platforms describe how the code was
   written, not what ships.
+
+### Harness tools, prompt sections and hooks come from a registry
+
+- **Date:** 2026-10-21
+- **Decision:** `HarnessHost` does not know what a tool is. Tools, system
+  prompt sections and hook handlers are contributed by extensions registered
+  on `ExtensionRegistry` (`harness/registry.ts`); the seven built-in tools are
+  the `builtin` extension (`BUILTIN_TOOLS` in `tools.ts`). A tool is a
+  `ToolDefinition`: its schema, a permission `kind` the gate reads, whether it
+  is concurrency-safe, a `validate` step run on the frozen arguments before any
+  approval card, and `run`. Skills, MCP and subagents (Phases 5–7 of the
+  harness plan) are meant to be extensions, not new branches in `host.ts`.
+- **Snapshot:** `runTurn` takes a snapshot before its first await, and the
+  whole turn works from it: tool map, schemas, prompt sections and copied hook
+  tables. A registration or removal made during a turn reaches the next turn,
+  so a model never sees a tool set that changed between its steps.
+- **Fail loudly:** A duplicate extension id, static tool name or profile id
+  throws at `register` and adds nothing. A factory's duplicate, an unknown
+  profile, or a profile naming a tool the turn lacks throws at `snapshot`,
+  which fails the turn before any model call. Nothing is silently dropped.
+- **Hooks observe:** Handlers run in registration order, one at a time. They
+  cannot change or refuse a call; a handler that throws becomes a warning
+  notice and the turn continues. Permission stays in the host's gate, so no
+  extension or listener order can turn a denial into an allow (Phase 4 adds
+  deny-only guards as their own layer).
+- **Stable prompt:** Stable sections join the cached prefix after the identity
+  and workspace lines; volatile sections follow the date and mode. The built-in
+  extension contributes the one line that names its tools, so the prefix a turn
+  sends is unchanged by this refactor.

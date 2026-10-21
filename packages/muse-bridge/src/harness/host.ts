@@ -4,9 +4,10 @@ import { join } from "node:path";
 import { platform } from "node:os";
 import { approvalAlive, approvalExpiry, approvalExpiryMono, APPROVAL_TTL_MS, describeIsolation, osSandboxAvailable, type IsolationReport } from "../isolation.js";
 import { TIERS, configuredProviders, effortTiers, providerSpec, resolveProvider, splitModelId, type ProviderCredentials, type ResolvedProvider } from "./providers.js";
+import { ExtensionRegistry, type HookEvents, type HookFailure, type HookName, type TurnContributions } from "./registry.js";
 import { SessionStore, type SessionMeta } from "./store.js";
-import { TOOL_SCHEMAS, canonicalize, executionMode, prepareTool, repeatReminder, runTool, scheduleToolCalls, toolKind, type PresentationMeta, type ToolKind } from "./tools.js";
-import { ProviderError, isTransientProviderError, isTruncatedStop, streamChat, truncatedToolResult, type AssistantMessage, type ChatMessage, type ContentPart, type SystemPrompt, type ToolCall } from "./wire.js";
+import { BUILTIN_EXTENSION, canonicalize, executeTool, executionMode, prepareTool, repeatReminder, scheduleToolCalls, type PresentationMeta, type ToolKind } from "./tools.js";
+import { ProviderError, isTransientProviderError, isTruncatedStop, streamChat, truncatedToolResult, type AssistantMessage, type ChatMessage, type ContentPart, type SystemPrompt, type ToolCall, type ToolSchema } from "./wire.js";
 
 /**
  * The built-in agent: the app's own harness, driving any provider the user has
@@ -125,9 +126,12 @@ export class HarnessHost {
   /** The listing in flight and the keys it was started with; a newly added key starts a new one. */
   private catalogLoading: { key: string; run: Promise<HarnessModel[]> } | null = null;
   private readonly emit: Emit;
+  /** Tools, prompt sections and hooks. Each turn works from a snapshot taken when it starts. */
+  readonly registry = new ExtensionRegistry();
 
   constructor(emit: Emit, private readonly store = new SessionStore(), private readonly fetchImpl: typeof fetch = fetch, private readonly limits: HostLimits = {}) {
     this.emit = emit;
+    this.registry.register(BUILTIN_EXTENSION);
   }
 
   /** The native shell injects the keychain's provider keys into every harness request. */
@@ -508,13 +512,13 @@ export class HarnessHost {
    * The volatile half is the date and the mode, which may change without rewriting that prefix.
    * Read once per turn so a mid-turn edit of AGENTS.md does not bust the cache on the next step.
    */
-  private async systemPrompt(live: Live): Promise<SystemPrompt> {
+  private async systemPrompt(live: Live, turn: TurnContributions): Promise<SystemPrompt> {
     let rules = "";
     try { rules = (await readFile(join(live.meta.workspaceRoot, "AGENTS.md"), "utf8")).slice(0, 20_000); } catch { /* no project rules */ }
     const stable = [
       `You are ${HARNESS_NAME}, a coding agent working in the user's local workspace through tools. You are running inside a desktop app; the user sees your tool calls and replies as they happen.`,
       `Workspace root: ${live.meta.workspaceRoot}. Platform: ${platform()}.`,
-      "Work methodically: look before you change anything (list_files, grep, read_file), keep edits minimal and in the project's existing style, and verify with the project's own build or tests (bash) when that is practical. Use edit_file for changes to existing files and write_file only for new files or full rewrites. For a task with several steps, keep a checklist with todo_write.",
+      ...turn.prompt.stable,
       "Paths are relative to the workspace root. Tools cannot reach outside it, and the shell cannot write outside it.",
       "The user may refuse a tool call; if so, adjust instead of retrying the same call. Never claim to have run or changed something you did not.",
       "Reply in concise Markdown. When you finish, summarise what changed and anything left to do.",
@@ -523,6 +527,7 @@ export class HarnessHost {
     const volatile = [
       `Date: ${new Date().toISOString().slice(0, 10)}.`,
       live.meta.mode === "plan" ? "PLAN MODE: do not edit files. Investigate, then reply with a concrete plan the user can approve. Read-only commands are fine." : "",
+      ...turn.prompt.volatile,
     ].filter(Boolean).join("\n\n");
     return { stable, volatile };
   }
@@ -642,15 +647,29 @@ export class HarnessHost {
     call.started = true;
   }
 
+  /** Run a hook for this turn. A handler that throws becomes a warning; the turn carries on. */
+  private async hook<E extends HookName>(turn: TurnContributions, hook: E, payload: HookEvents[E]) {
+    this.reportHookFailures(turn, await turn.runHook(hook, payload));
+  }
+
+  private reportHookFailures(turn: TurnContributions, failures: HookFailure[]) {
+    for (const failure of failures) this.emit("agentNotice", { sessionId: turn.context.sessionId, level: "warning", message: `The ${failure.extensionId} extension failed in ${failure.hook}: ${failure.message}` });
+  }
+
   private async runTurn(live: Live, turnId: string) {
     const controller = new AbortController();
     live.controller = controller;
     const sessionId = live.meta.sessionId;
     let outcome: Json = { kind: "completed", params: { terminal: "completed" } };
     const cancelled = () => { outcome = { kind: "completed", params: { terminal: "cancelled" } }; };
+    let turn: TurnContributions | undefined;
     try {
+      // Before the first await, so a registry change made during this turn waits for the next one.
+      turn = this.registry.snapshot({ sessionId, turnId, workspaceRoot: live.meta.workspaceRoot, mode: live.meta.mode === "plan" ? "plan" : "build" });
+      const contributions = turn;
+      await this.hook(contributions, "turnStarted", { context: contributions.context });
       // Once per turn: a mid-turn edit of AGENTS.md must not change the cached prefix.
-      const system = await this.systemPrompt(live);
+      const system = await this.systemPrompt(live, contributions);
       for (let step = 0; step < MAX_STEPS; step += 1) {
         if (controller.signal.aborted) { cancelled(); break; }
         // Steering that arrived during tools waits until the results are in the history.
@@ -662,7 +681,7 @@ export class HarnessHost {
         const { providerId, model } = splitModelId(modelId);
         const provider = resolveProvider(providerId, this.credentials);
         if (!provider) throw new ProviderError(`${providerSpec(providerId)?.name ?? providerId} has no key. Add it in Settings → Providers, or pick another model.`, undefined, "MISSING_CREDENTIAL");
-        const { message: reply, stopReason } = await this.callModel(live, provider, modelId, model, system, controller.signal);
+        const { message: reply, stopReason } = await this.callModel(live, provider, modelId, model, system, contributions.schemas, controller.signal);
         live.messages.push(reply);
         await this.store.append(sessionId, [{ type: "message", message: reply }]);
         // A cut-off reply can carry valid JSON that is still an incomplete tool call. Do not run it.
@@ -687,12 +706,12 @@ export class HarnessHost {
         const reminders = calls.map((call) => this.observeRepeat(live, call.name, call.input));
         const stopped = (index: number) => ({ id: calls[index].id, name: calls[index].name, output: this.withRepeat("The user stopped this turn.", reminders[index]), isError: true as const });
         const results = await scheduleToolCalls({
-          safe: calls.map((call) => executionMode(call.name) === "concurrent"),
+          safe: calls.map((call) => executionMode(contributions.tools.get(call.name)) === "concurrent"),
           signal: controller.signal,
           onAborted: stopped,
           run: (index) => {
             if (controller.signal.aborted) return Promise.resolve(stopped(index));
-            return this.runToolCall(live, calls[index], controller.signal, reminders[index]);
+            return this.runToolCall(live, contributions, calls[index], controller.signal, reminders[index]);
           },
         });
         const message: ChatMessage = { role: "tool", results };
@@ -709,19 +728,23 @@ export class HarnessHost {
       // A steer accepted in the last moment stays in history. Cancel and replace drop what was not flushed.
       if (controller.signal.aborted) live.steering = [];
       else await this.flushSteering(live).catch(() => {});
+      // While the turn still holds the session, so no next turn starts before its observers have run.
+      const finished = turn ? await turn.runHook("turnFinished", { context: turn.context, outcome }) : [];
       const startNext = live.replacing || !controller.signal.aborted;
       live.replacing = false;
       live.prompting = false;
       live.controller = null;
       void this.store.update(sessionId, {});
       this.emit("agentNotice", { sessionId, message: null });
+      // After the notice is cleared, or the warning would vanish with it.
+      if (turn) this.reportHookFailures(turn, finished);
       this.emit("turnCompleted", { sessionId, turnId, outcome });
       if (startNext) this.pump(live);
     }
   }
 
   /** One model call, streamed into reasoning and message items, with retries for transient failures. */
-  private async callModel(live: Live, provider: ResolvedProvider, modelId: string, model: string, system: SystemPrompt, signal: AbortSignal): Promise<{ message: AssistantMessage; stopReason: string }> {
+  private async callModel(live: Live, provider: ResolvedProvider, modelId: string, model: string, system: SystemPrompt, tools: readonly ToolSchema[], signal: AbortSignal): Promise<{ message: AssistantMessage; stopReason: string }> {
     let effort = live.meta.effort && live.meta.effort !== "none" ? live.meta.effort : undefined;
     const tiers = effortTiers(provider.id, model) as string[];
     if (effort && !tiers.includes(effort)) effort = undefined;
@@ -738,7 +761,7 @@ export class HarnessHost {
         }
       };
       try {
-        for await (const event of streamChat({ provider, modelId, system, messages: this.history(live), tools: TOOL_SCHEMAS, effort, signal, timeouts: { idleMs: this.limits.idleMs, firstEventMs: this.limits.firstEventMs }, fetchImpl: this.fetchImpl })) {
+        for await (const event of streamChat({ provider, modelId, system, messages: this.history(live), tools, effort, signal, timeouts: { idleMs: this.limits.idleMs, firstEventMs: this.limits.firstEventMs }, fetchImpl: this.fetchImpl })) {
           if (event.type === "text" || event.type === "reasoning") {
             const kind = event.type;
             // A reply that switches from thinking to text closes the thinking item first.
@@ -814,15 +837,16 @@ export class HarnessHost {
     }
   }
 
-  private async runToolCall(live: Live, call: ToolCall, signal: AbortSignal, reminder?: string): Promise<{ id: string; name: string; output: string; isError?: boolean }> {
+  private async runToolCall(live: Live, turn: TurnContributions, call: ToolCall, signal: AbortSignal, reminder?: string): Promise<{ id: string; name: string; output: string; isError?: boolean }> {
     const noted = (output: string) => this.withRepeat(output, reminder);
-    const kind = toolKind(call.name);
-    if (!kind) {
+    const definition = turn.tools.get(call.name);
+    if (!definition) {
       const output = noted(`Unknown tool: ${call.name}`);
       this.emitItem(live, { ...this.toolBase(live, call, call.input), status: "failed", failureReason: output, visibleOutput: output }, true);
       return { id: call.id, name: call.name, output, isError: true };
     }
-    const prepared = await prepareTool(live.meta.workspaceRoot, call.name, call.input);
+    const kind = definition.kind;
+    const prepared = await prepareTool(definition, live.meta.workspaceRoot, call.input);
     if (prepared.error) {
       const output = noted(prepared.error);
       this.emitItem(live, { ...this.toolBase(live, call, prepared.input), status: "failed", failureReason: output, visibleOutput: output }, true);
@@ -850,13 +874,17 @@ export class HarnessHost {
       if (choice === "session") live.allowed.add(kind);
     }
     if (this.limits.beforeTool) await this.limits.beforeTool(call.name);
+    const observed = { id: call.id, name: call.name, input: frozen };
+    await this.hook(turn, "toolStarting", { context: turn.context, call: observed });
     if (signal.aborted) {
       const output = noted("The user stopped this turn.");
       this.emitItem(live, { ...base, status: "cancelled", failureReason: output, visibleOutput: output }, true);
       return { id: call.id, name: call.name, output, isError: true };
     }
     await this.markStarted(live, call);
-    const result = await runTool(live.meta.workspaceRoot, call.name, frozen, signal, { canRead: true });
+    // Frozen before observers see it: a hook cannot rewrite what the model or the card receives.
+    const result = Object.freeze(await executeTool(definition, live.meta.workspaceRoot, frozen, signal, { canRead: true }));
+    await this.hook(turn, "toolFinished", { context: turn.context, call: observed, outcome: result });
     const output = noted(result.output);
     const visible = noted(result.display ?? result.output);
     if (result.plan) {
