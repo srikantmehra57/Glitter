@@ -18,8 +18,8 @@ import { ProviderError, isTransientProviderError, isTruncatedStop, streamChat, t
 /**
  * The built-in agent: the app's own harness, driving any provider the user has
  * a key for. It speaks the same bridge events as Muse and the ACP agents
- * (`item`, `delta`, `approval`, `sessionFacts`, `agentConfig`, `turnCompleted`),
- * so the renderer shows its threads with no special cases.
+ * (`item`, `delta`, `approval`, `sessionFacts`, `modelCall`, `agentConfig`,
+ * `turnCompleted`), so the renderer shows its threads with no special cases.
  */
 
 export const HARNESS_ID = "harness";
@@ -433,6 +433,15 @@ export class HarnessHost {
     if (persist) void this.store.append(live.meta.sessionId, [{ type: "item", item }]).catch(() => {});
   }
 
+  /**
+   * One model call's own facts, for the app's per-call trajectory. Accounting
+   * lives in the app's ledger, so the session log keeps no copy of it.
+   */
+  private emitCall(live: Live, call: Json) {
+    if (live.muted) return;
+    this.emit("modelCall", { sessionId: live.meta.sessionId, turnId: live.turnId, call });
+  }
+
   private mintTurnId() {
     return `turn-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
   }
@@ -835,6 +844,7 @@ export class HarnessHost {
       const streams: { reasoning?: { itemId: string; text: string }; text?: { itemId: string; text: string } } = {};
       // This call's own counts. Cache fields stay put when a later event omits them.
       const spent = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+      const attemptAt = Date.now();
       const close = () => {
         for (const kind of ["reasoning", "text"] as const) {
           const open = streams[kind];
@@ -890,6 +900,20 @@ export class HarnessHost {
               this.emitUsage(live);
               void this.store.update(live.meta.sessionId, { usage: live.usage });
             }
+            this.emitCall(live, {
+              at: attemptAt,
+              providerId: provider.id,
+              modelId,
+              ...(effort ? { effort } : {}),
+              inputTokens: spent.input + spent.cacheRead + spent.cacheWrite,
+              cachedTokens: spent.cacheRead + spent.cacheWrite,
+              outputTokens: spent.output,
+              ...(event.stopReason ? { stopReason: event.stopReason } : {}),
+              durationMs: Date.now() - attemptAt,
+              // Only a retried call says so: the first attempt is the normal case.
+              ...(attempt > 1 ? { attempt } : {}),
+              toolCalls: event.message.toolCalls?.length ?? 0,
+            });
             return { message: event.message, stopReason: event.stopReason };
           }
         }

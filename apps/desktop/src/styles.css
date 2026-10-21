@@ -961,10 +961,10 @@ button.sidebar-alert:hover { background: var(--hover); }
 
 /* Provider colours: one fixed hue per slot, checked for colour-vision separation
    and 3:1 against each theme's card surface. Past five, providers share grey. */
-.usage-providers, .usage-details {
+.usage-providers, .usage-details, .usage-trajectory {
   --series-1: #3987E5; --series-2: #D95926; --series-3: #199E70; --series-4: #C98500; --series-5: #D55181; --series-other: #6B6B72;
 }
-html[data-theme="light"] .usage-providers, html[data-theme="light"] .usage-details {
+html[data-theme="light"] .usage-providers, html[data-theme="light"] .usage-details, html[data-theme="light"] .usage-trajectory {
   --series-1: #2A78D6; --series-2: #EB6834; --series-3: #1BAF7A; --series-4: #EDA100; --series-5: #E87BA4; --series-other: #A3A3A9;
 }
 :is(.usage-swatch, .usage-share > span)[data-slot="0"] { --slot: var(--series-other); }
@@ -991,6 +991,26 @@ html[data-theme="light"] .usage-providers, html[data-theme="light"] .usage-detai
 .usage-ranking li > span:nth-child(2) em { margin-left: 6px; color: var(--tertiary); font-size: 11px; font-style: normal; }
 .usage-rank-swatch { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; }
 
+/* Trajectory: the model calls behind each recent turn's totals. */
+.usage-trajectory { padding: 24px 0 8px; border-top: 1px solid var(--border); }
+.usage-trajectory .usage-section-head { margin-bottom: 14px; }
+.usage-call-turns { display: grid; margin: 0; padding: 0; list-style: none; }
+.usage-call-turns > li + li { border-top: 1px solid var(--border); }
+.usage-call-turns summary { display: grid; grid-template-columns: 10px 14px minmax(0, 1fr) minmax(0, auto) minmax(0, auto); align-items: center; gap: 10px; min-height: 42px; cursor: pointer; }
+.usage-call-turns summary::-webkit-details-marker { display: none; }
+.usage-call-chevron { color: var(--tertiary); transition: transform var(--dur-1) var(--ease); }
+.usage-call-turns details[open] .usage-call-chevron { transform: rotate(90deg); }
+.usage-call-turns summary strong { overflow: hidden; color: var(--ink); font-size: 12.5px; font-weight: 550; text-overflow: ellipsis; white-space: nowrap; }
+.usage-call-when, .usage-call-sum { overflow: hidden; color: var(--tertiary); font-size: 11px; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
+.usage-call-list { display: grid; margin: 0; padding: 0 0 12px 24px; list-style: none; }
+.usage-call-list li { display: grid; grid-template-columns: 18px minmax(0, 1.1fr) minmax(0, 1.4fr) minmax(0, auto) minmax(0, auto); align-items: baseline; gap: 10px; min-height: 24px; font-size: 11.5px; }
+.usage-call-step { color: var(--tertiary); font-size: 10.5px; font-variant-numeric: tabular-nums; text-align: right; }
+.usage-call-what { overflow: hidden; color: var(--ink); text-overflow: ellipsis; white-space: nowrap; }
+.usage-call-what em { margin-left: 6px; color: var(--tertiary); font-size: 10.5px; font-style: normal; }
+.usage-call-retry { margin-left: 6px; vertical-align: 1px; }
+.usage-call-tokens, .usage-call-time { overflow: hidden; color: var(--tertiary); font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
+.usage-call-stop { overflow: hidden; color: var(--secondary); text-overflow: ellipsis; white-space: nowrap; }
+
 @media (max-width: 980px) {
   .usage-details { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .usage-scroll { padding-inline: 24px; }
@@ -1009,6 +1029,8 @@ html[data-theme="light"] .usage-providers, html[data-theme="light"] .usage-detai
 .usage-topbar .usage-clear { margin-left: 8px; -webkit-app-region: no-drag; }
 .usage-embed .usage-scroll, .extensions-embed .extensions-scroll { flex: none; overflow: visible; padding: 0; }
 .usage-embed .usage-summary { grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); }
+/* The narrow pane keeps the model and the totals; the date is the first thing to go. */
+.usage-embed .usage-call-when { display: none; }
 .extensions-embed .extensions-section:first-child { padding-top: 0; }
 
 .extensions-section { padding: 22px 0 26px; border-bottom: 1px solid var(--border); }

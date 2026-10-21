@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { asLedger, compact, dayKey, EMPTY_LEDGER, groupUsage, ledgerSlices, providerOf, recordTurn, RECENT_DAYS, totalsSince, turnEntry, type UsageTurn } from "./usageLedger";
-import type { Thread } from "./types";
+import { asLedger, compact, dayKey, EMPTY_LEDGER, groupUsage, ledgerSlices, MAX_CALL_TURNS, MAX_TURN_CALLS, providerOf, recordTurn, RECENT_DAYS, totalsSince, turnEntry, type UsageTurn } from "./usageLedger";
+import type { ModelCall, Thread } from "./types";
 
 const DAY = 86_400_000;
 const NOW = new Date(2026, 9, 21, 15).getTime();
@@ -19,6 +19,19 @@ const turn = (partial: Partial<UsageTurn> = {}): UsageTurn => ({
   threadId: "s1",
   workspace: "/repo",
   tools: { bash: 2 },
+  ...partial,
+});
+
+const call = (partial: Partial<ModelCall> = {}): ModelCall => ({
+  at: NOW - 3_600_000,
+  providerId: "anthropic",
+  modelId: "anthropic/claude-sonnet-5",
+  inputTokens: 900,
+  cachedTokens: 0,
+  outputTokens: 120,
+  stopReason: "end_turn",
+  durationMs: 4_000,
+  toolCalls: 1,
   ...partial,
 });
 
@@ -72,6 +85,15 @@ describe("ledger", () => {
     expect(ledger).toEqual(EMPTY_LEDGER);
   });
 
+  it("keeps per-call detail only for the newest turns", () => {
+    const count = MAX_CALL_TURNS + 4;
+    const turns = Array.from({ length: count }, (_, index) => turn({ key: `t${index}`, at: NOW - (count - index) * 60_000, calls: [call()] }));
+    const ledger = compact({ version: 1, turns, days: [] }, NOW);
+    expect(ledger.turns).toHaveLength(count);
+    expect(ledger.turns.slice(0, 4).every((entry) => entry.calls === undefined)).toBe(true);
+    expect(ledger.turns.slice(4).every((entry) => entry.calls?.length === 1)).toBe(true);
+  });
+
   it("trusts nothing malformed from storage", () => {
     expect(asLedger(null)).toEqual(EMPTY_LEDGER);
     expect(asLedger({ version: 2, turns: [turn()] })).toEqual(EMPTY_LEDGER);
@@ -79,6 +101,18 @@ describe("ledger", () => {
     expect(ledger.turns).toHaveLength(2);
     expect(ledger.turns[1]).toMatchObject({ inputTokens: 0, tools: {} });
     expect(ledger.days).toEqual([]);
+  });
+
+  it("reads stored calls field by field, and no more of them than it keeps", () => {
+    const many = Array.from({ length: MAX_TURN_CALLS + 3 }, (_, index) => call({ at: index }));
+    const ledger = asLedger({ version: 1, days: [], turns: [
+      { ...turn({ key: "a" }), calls: [{ at: 1 }, "nope", call({ inputTokens: -5, attempt: 1 })] },
+      { ...turn({ key: "b" }), calls: [] },
+      { ...turn({ key: "c" }), calls: many },
+    ] });
+    expect(ledger.turns[0].calls).toEqual([call({ inputTokens: 0 })]);
+    expect(ledger.turns[1].calls).toBeUndefined();
+    expect(ledger.turns[2].calls).toEqual(many.slice(-MAX_TURN_CALLS));
   });
 
   it("totals by provider, largest first", () => {
@@ -114,6 +148,12 @@ describe("turnEntry", () => {
 
   it("counts cached prompt tokens as input, and says how many were cached", () => {
     expect(turnEntry(thread({ turnStats: { turnId: "t1", durationMs: 1, inputTokens: 20, cachedTokens: 80_000, outputTokens: 40 } }), NOW)).toMatchObject({ inputTokens: 80_020, cachedTokens: 80_000 });
+  });
+
+  it("carries the turn's own calls, bounded to a whole trajectory", () => {
+    const calls = Array.from({ length: MAX_TURN_CALLS + 3 }, (_, index) => call({ at: index }));
+    expect(turnEntry(thread({ turnCalls: calls }), NOW)?.calls).toEqual(calls.slice(-MAX_TURN_CALLS));
+    expect(turnEntry(thread({ turnCalls: [] }), NOW)?.calls).toBeUndefined();
   });
 
   it("skips a turn with nothing to count", () => {

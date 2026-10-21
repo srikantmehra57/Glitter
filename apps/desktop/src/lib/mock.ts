@@ -1,4 +1,4 @@
-import type { AgentInfo, Model } from "./types";
+import type { AgentInfo, Model, ModelCall } from "./types";
 import type { GitReview, GitReviewRequest, GitSnapshot, Thread, ThreadWorktree, TranscriptItem, WorkspaceFile } from "./types";
 import { parseUnifiedDiff } from "./diff";
 import { dayKey, type UsageDay, type UsageLedger, type UsageTurn } from "./usageLedger";
@@ -437,7 +437,34 @@ export function mockUsageLedger(at = Date.now()): UsageLedger {
       const scale = 0.45 + noise(n + 5) * 1.3;
       const used: Record<string, number> = {};
       for (let tool = 0; tool < 1 + Math.floor(noise(n + 9) * 4); tool += 1) used[tools[(n + tool) % tools.length]] = 1 + Math.floor(noise(n + tool) * 3);
-      turns.push({ key: `preview:${n}`, at: when, agentId: mix.agentId, providerId: mix.providerId, modelId: mix.modelId, effort: efforts[n % efforts.length], inputTokens: Math.round(mix.input * scale), cachedTokens: Math.round(mix.input * scale * mix.cached), outputTokens: Math.round(mix.output * scale), estimated: false, durationMs: Math.round((40 + noise(n + 11) * 900) * 1000), threadId: `preview-thread-${n % 9}`, workspace: n % 3 ? "/Users/you/code/muse" : "/Users/you/code/site", tools: used });
+      const entry: UsageTurn = { key: `preview:${n}`, at: when, agentId: mix.agentId, providerId: mix.providerId, modelId: mix.modelId, effort: efforts[n % efforts.length], inputTokens: Math.round(mix.input * scale), cachedTokens: Math.round(mix.input * scale * mix.cached), outputTokens: Math.round(mix.output * scale), estimated: false, durationMs: Math.round((40 + noise(n + 11) * 900) * 1000), threadId: `preview-thread-${n % 9}`, workspace: n % 3 ? "/Users/you/code/muse" : "/Users/you/code/site", tools: used };
+      // Only the Harness reports its own calls, so only its turns carry a trajectory.
+      if (entry.agentId === "harness") {
+        const count = 1 + Math.floor(noise(n + 13) * 4);
+        const calls: ModelCall[] = [];
+        let elapsed = 0;
+        for (let call = 0; call < count; call += 1) {
+          // Later calls carry the whole history, so they are the expensive ones.
+          const share = (call + 1) / ((count * (count + 1)) / 2);
+          const durationMs = Math.round(entry.durationMs * share);
+          calls.push({
+            at: when - entry.durationMs + elapsed,
+            providerId: entry.providerId,
+            modelId: entry.modelId ?? "",
+            ...(entry.effort ? { effort: entry.effort } : {}),
+            inputTokens: Math.round(entry.inputTokens * share),
+            // The first call has no cache to read yet.
+            cachedTokens: call ? Math.round(entry.cachedTokens * share) : 0,
+            outputTokens: Math.round(entry.outputTokens * share),
+            stopReason: call === count - 1 ? "end_turn" : "tool_use",
+            durationMs,
+            toolCalls: call === count - 1 ? 0 : 1 + Math.floor(noise(n + call) * 3),
+          });
+          elapsed += durationMs;
+        }
+        entry.calls = calls;
+      }
+      turns.push(entry);
     }
   }
   const days: UsageDay[] = [];

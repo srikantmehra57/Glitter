@@ -5,7 +5,7 @@ import { isTauri } from "./format";
 import { log } from "./logger";
 import { MOCK_FILES, MOCK_GIT, MOCK_MODELS, MOCK_THREADS, mockGitReview, mockThreads, mockWorkspaceFile, mockWorktree } from "./mock";
 import type { DiagnosticsSnapshot, EditorChoice, ThemeMode } from "./types";
-import type { AgentId, AgentIdentity, AgentSessionConfig, ApprovalRequest, CliUpdateOutcome, CliUpdateStatus, ContextUsage, Detection, DroppedFile, EnterpriseStatus, GitBranch, GoalState, PlanItem, PullRequest, GitReview, GitReviewRequest, GitSnapshot, SessionConfig, SessionMetadata, SnapshotRestore, ThreadWorktree, TokenUsage, TranscriptItem, TurnSnapshot, UserInputRequest, WorkspaceFile, WorktreeRemoval, PluginDetail, PluginEntry, SkillDetail, SkillEntry } from "./types";
+import type { AgentId, AgentIdentity, AgentSessionConfig, ApprovalRequest, CliUpdateOutcome, CliUpdateStatus, ContextUsage, Detection, DroppedFile, EnterpriseStatus, GitBranch, GoalState, ModelCall, PlanItem, PullRequest, GitReview, GitReviewRequest, GitSnapshot, SessionConfig, SessionMetadata, SnapshotRestore, ThreadWorktree, TokenUsage, TranscriptItem, TurnSnapshot, UserInputRequest, WorkspaceFile, WorktreeRemoval, PluginDetail, PluginEntry, SkillDetail, SkillEntry } from "./types";
 
 /**
  * The payload each bridge event carries, declared once here instead of being
@@ -33,6 +33,8 @@ export interface BridgeEventPayloads {
   approvalResolved: { sessionId?: string; approvalId: string };
   agentConfig: { sessionId: string; config: AgentSessionConfig };
   sessionFacts: { sessionId: string; plan?: PlanItem[]; goal?: GoalState | null; context?: ContextUsage | null; usage?: TokenUsage | null; branch?: string | null };
+  /** One model call the Harness made in the running turn. The app keeps them as that turn's trajectory. */
+  modelCall: { sessionId: string; turnId: string; call: ModelCall };
   /** `turnEnded`: the questions ended the turn (Harness), so the thread is idle until they are answered. */
   userInputs: { sessionId: string; requests: UserInputRequest[]; turnEnded?: boolean };
   item: { sessionId: string; item: TranscriptItem };

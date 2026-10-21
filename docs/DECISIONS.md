@@ -834,3 +834,24 @@ must respect. Don't log routine changes here; they belong in git history and
   sees one ordinary question with the plan as the Approve option's preview.
 - **Not done:** The model cannot enter Plan mode on its own, and Plan mode has
   no exception for writing a plan file; the plan travels in the tool call.
+
+### Per-call usage is emitted, not logged
+
+- **Date:** 2026-10-22
+- **Decision:** Each model call the harness makes emits a `modelCall` event
+  carrying its own tokens, cached share, finish reason, duration, tool count
+  and — only on a retry — which attempt landed. The session log keeps no
+  per-call copy. The app's usage ledger is the only durable record: one `calls`
+  array beside the turn the calls belong to.
+- **Why:** The session log already stores the running totals a resumed session
+  needs, and the ledger already owns accounting — totals, tools and durations
+  are counted there as each turn finishes. A per-call breakdown in the log
+  would be a second copy of numbers nothing in the harness reads back: history
+  is rebuilt from messages, never from usage.
+- **Bounds:** The ledger keeps at most 80 calls for one turn (a turn stops at 80
+  steps, so that is a whole trajectory) and keeps detail for the newest 25
+  turns; older turns keep their totals. Both bounds are re-applied when a stored
+  ledger is read, because stored JSON is untrusted.
+- **Consequences:** Trajectory detail is app-local and recent. A client that is
+  not this app sees the events pass but has nothing to read back later, and an
+  agent other than Harness reports totals only, so its turns have no trajectory.

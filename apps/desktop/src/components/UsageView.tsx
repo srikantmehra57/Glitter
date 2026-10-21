@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState, type CSSProperties, type ComponentType } from "react";
-import { Clock3, FilePenLine, FileText, LoaderCircle, RotateCcw, Search, Terminal, Trash2, Wrench } from "lucide-react";
+import { ChevronRight, Clock3, FilePenLine, FileText, LoaderCircle, RotateCcw, Search, Terminal, Trash2, Wrench } from "lucide-react";
 import { useAppStore } from "../lib/store";
-import { formatResetIn, relativeTime, usageWindowLabel, windowPercent } from "../lib/format";
+import { formatDuration, formatResetIn, humanizeStopReason, relativeTime, usageWindowLabel, windowPercent } from "../lib/format";
 import { mockUsageLedger } from "../lib/mock";
 import { PROVIDERS } from "../lib/providers";
 import { groupUsage, ledgerSlices, type UsageGroup, type UsageSlice } from "../lib/usageLedger";
-import { AGENT_LABELS, agentEnabled, type AgentId } from "../lib/types";
+import { AGENT_LABELS, agentEnabled, type AgentId, type ModelCall } from "../lib/types";
 import { AgentMark } from "./AgentPicker";
 
 type Period = "today" | "week" | "overview";
@@ -21,6 +21,8 @@ const PERIODS: { id: Period; label: string }[] = [
 const DAY = 86_400_000;
 /** Providers that get their own colour; the rest share "Other". */
 const COLOR_SLOTS = 5;
+/** Turns the trajectory lists. The ledger keeps detail for more; the page stays readable. */
+const TRAJECTORY_TURNS = 6;
 const compactNumber = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 });
 const formatTokens = (value: number) => value ? compactNumber.format(Math.round(value)) : "0";
 const startOfDay = (date: Date) => new Date(date.getFullYear(), date.getMonth(), date.getDate());
@@ -253,6 +255,56 @@ function ProviderBreakdown({ rows, total }: { rows: ProviderRow[]; total: number
   );
 }
 
+/** The exact counts behind one call's compact row. */
+const callTokens = (call: ModelCall) => `${call.inputTokens.toLocaleString()} input${call.cachedTokens ? `, ${call.cachedTokens.toLocaleString()} of it cached` : ""} · ${call.outputTokens.toLocaleString()} output tokens`;
+
+/** Each model call behind the recent turns' totals: what it sent, what came back, why it stopped. */
+function Trajectory({ turns, slots }: { turns: UsageSlice[]; slots: Map<string, number> }) {
+  return (
+    <section className="usage-trajectory" aria-labelledby="usage-trajectory-title">
+      <div className="usage-section-head">
+        <div><h2 id="usage-trajectory-title">Trajectory</h2><p>Each model call behind these totals, newest first</p></div>
+      </div>
+      {turns.length ? (
+        <ol className="usage-call-turns">
+          {turns.map((slice) => {
+            const calls = slice.calls ?? [];
+            const at = new Date(slice.at);
+            return (
+              <li key={`${slice.threadId ?? "turn"}:${slice.at}`}>
+                <details>
+                  <summary>
+                    <i className="usage-swatch" data-slot={slots.get(slice.providerId) ?? 0} aria-hidden="true" />
+                    <ChevronRight size={13} className="usage-call-chevron" aria-hidden="true" />
+                    <strong>{modelLabel(slice.modelId ?? "")}</strong>
+                    <span className="usage-call-when">{at.toLocaleDateString([], { month: "short", day: "numeric" })} · {at.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span>
+                    <span className="usage-call-sum">{plural(calls.length, "call")} · {formatTokens(tokensOf(slice))} tokens · {formatDuration(slice.durationMs)}</span>
+                  </summary>
+                  <ol className="usage-call-list">
+                    {calls.map((call, position) => (
+                      <li key={`${call.at}:${position}`}>
+                        <span className="usage-call-step">{position + 1}</span>
+                        <span className="usage-call-what">
+                          {modelLabel(call.modelId)}
+                          {call.effort ? <em>{call.effort}</em> : null}
+                          {call.attempt ? <span className="picker-tag usage-call-retry">attempt {call.attempt}</span> : null}
+                        </span>
+                        <span className="usage-call-tokens" title={callTokens(call)}>{formatTokens(call.inputTokens)} in · {formatTokens(call.outputTokens)} out{call.toolCalls ? ` · ${plural(call.toolCalls, "tool")}` : ""}</span>
+                        <span className="usage-call-stop">{humanizeStopReason(call.stopReason)}</span>
+                        <span className="usage-call-time">{formatDuration(call.durationMs)}</span>
+                      </li>
+                    ))}
+                  </ol>
+                </details>
+              </li>
+            );
+          })}
+        </ol>
+      ) : <p className="usage-empty">Harness turns list every call here. Other agents report totals only.</p>}
+    </section>
+  );
+}
+
 export function UsageView({ embedded = false }: { embedded?: boolean } = {}) {
   const stored = useAppStore((state) => state.usageLedger);
   const preview = useAppStore((state) => state.preview);
@@ -303,6 +355,7 @@ export function UsageView({ embedded = false }: { embedded?: boolean } = {}) {
   const longest = Math.max(0, ...individual.map((slice) => slice.durationMs));
   const threads = new Set(individual.map((slice) => slice.threadId).filter(Boolean)).size;
   const workspaces = new Set(individual.map((slice) => slice.workspace).filter(Boolean)).size;
+  const trajectory = individual.filter((slice) => slice.calls?.length).sort((a, b) => b.at - a.at).slice(0, TRAJECTORY_TURNS);
   const peak = Math.max(0, ...model.cells.map((entry) => entry.tokens));
   const mapStyle = { "--activity-columns": model.columns } as CSSProperties;
 
@@ -421,6 +474,7 @@ export function UsageView({ embedded = false }: { embedded?: boolean } = {}) {
             </dl>
           </section>
         </div>
+        <Trajectory turns={trajectory} slots={slots} />
         <p className="usage-note">
           <Clock3 size={12} aria-hidden />
           <span>Counted as each turn finishes, from the tokens each agent reports, and kept on this Mac.{estimated ? ` ≈ marks ${plural(estimated, "turn")} whose agent reported no counts; those are estimated from the reply.` : ""}</span>

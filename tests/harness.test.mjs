@@ -403,6 +403,52 @@ test('cached input counts in the context window, and the session keeps the count
   assert.equal(usage.totalTokens, 100524);
 });
 
+test('each model call reports its own tokens, finish reason and duration', async () => {
+  const root = await workspace();
+  const { fetchImpl } = anthropicStub([
+    () => toolReply('tu_traj', 'read_file', { path: 'hello.txt' }),
+    () => textReply('three lines'),
+  ]);
+  const { instance, events } = host(fetchImpl, new SessionStore(await mkdtemp(join(temporary, 'store-'))));
+  const { sessionId } = await instance.startSession({ workspaceRoot: root, modelId: 'anthropic/claude-sonnet-9' });
+  const { turnId } = await instance.sendTurn({ sessionId, text: 'read hello.txt' });
+  await until(events, ({ event }) => event === 'turnCompleted');
+  const calls = events.filter(({ event }) => event === 'modelCall').map(({ payload }) => payload);
+  assert.deepEqual(calls.map(({ turnId: own }) => own), [turnId, turnId], 'one per call, under the turn that made it');
+  assert.deepEqual(calls.map(({ call }) => [call.providerId, call.modelId, call.inputTokens, call.cachedTokens, call.outputTokens, call.stopReason, call.toolCalls]), [
+    ['anthropic', 'anthropic/claude-sonnet-9', 900, 0, 0, 'tool_use', 1],
+    ['anthropic', 'anthropic/claude-sonnet-9', 1200, 0, 9, 'end_turn', 0],
+  ]);
+  assert.ok(calls.every(({ call }) => Number.isFinite(call.at) && call.durationMs >= 0), 'each call carries its own wall time');
+  assert.ok(calls[0].call.at <= calls[1].call.at, 'calls are reported in the order they were made');
+  assert.equal(calls[0].call.attempt, undefined, 'a first attempt does not announce itself');
+});
+
+test('a cached call counts its cache in the input, and a retry says which attempt landed', async () => {
+  const root = await workspace();
+  let attempts = 0;
+  const fetchImpl = async (url) => {
+    if (String(url).endsWith('/models?limit=1000')) return Response.json({ data: [{ id: 'claude-sonnet-9' }] });
+    attempts += 1;
+    if (attempts === 1) return sse(textReply('half a repl').slice(0, 3));
+    return sse([
+      { type: 'message_start', message: { usage: { input_tokens: 20, cache_read_input_tokens: 100000, cache_creation_input_tokens: 500 } } },
+      { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'whole reply' } },
+      { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 4 } },
+    ]);
+  };
+  const { instance, events } = host(fetchImpl, new SessionStore(await mkdtemp(join(temporary, 'store-'))));
+  const { sessionId } = await instance.startSession({ workspaceRoot: root, modelId: 'anthropic/claude-sonnet-9' });
+  await instance.sendTurn({ sessionId, text: 'hi' });
+  await until(events, ({ event }) => event === 'turnCompleted', 8000);
+  const calls = events.filter(({ event }) => event === 'modelCall').map(({ payload }) => payload.call);
+  assert.equal(calls.length, 1, 'only the attempt that produced a reply is a call');
+  assert.equal(calls[0].attempt, 2);
+  assert.equal(calls[0].inputTokens, 100520, 'cached tokens are input');
+  assert.equal(calls[0].cachedTokens, 100500);
+});
+
 test('a reply cut off by the output limit does not run its tool call', async () => {
   const root = await workspace();
   const { calls, fetchImpl } = anthropicStub([

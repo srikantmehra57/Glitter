@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetStore, seedStore } from "../test/store";
 import { bindBridgeEvents, useAppStore } from "./store";
-import type { Thread } from "./types";
+import type { ModelCall, Thread } from "./types";
 
 const events = vi.hoisted(() => ({ handler: null as null | ((event: string, payload: unknown) => void) }));
 vi.mock("./bridge", async (original) => ({
@@ -28,6 +28,19 @@ const running = (): Thread => ({
   items: [{ itemId: "tool", kind: "toolCall", status: "completed", turnId: "t1", tool: "bash" }],
 });
 const completed = { sessionId: "h-session-1", turnId: "t1", outcome: { kind: "completed", params: { terminal: "completed" } } };
+const call = (partial: Partial<ModelCall> = {}): ModelCall => ({
+  at: Date.now() - 4_000,
+  providerId: "anthropic",
+  modelId: "anthropic/claude-sonnet-5",
+  effort: "high",
+  inputTokens: 900,
+  cachedTokens: 0,
+  outputTokens: 120,
+  stopReason: "end_turn",
+  durationMs: 4_000,
+  toolCalls: 0,
+  ...partial,
+});
 
 describe("usage ledger", () => {
   let unbind: () => void;
@@ -53,6 +66,24 @@ describe("usage ledger", () => {
     emit("sessionFacts", { sessionId: "h-session-1", usage: { promptTokens: 4_020, outputTokens: 640, cacheReadTokens: 90_000, cacheWriteTokens: 1_000, totalTokens: 95_660 } });
     emit("turnCompleted", completed);
     expect(useAppStore.getState().usageLedger.turns[0]).toMatchObject({ inputTokens: 91_020, cachedTokens: 91_000, outputTokens: 40 });
+  });
+
+  it("keeps the turn's own calls beside its totals", () => {
+    emit("modelCall", { sessionId: "h-session-1", turnId: "t1", call: call({ stopReason: "tool_use", outputTokens: 40, toolCalls: 1 }) });
+    emit("modelCall", { sessionId: "h-session-1", turnId: "t1", call: call({ stopReason: "end_turn", inputTokens: 1_400, outputTokens: 80 }) });
+    emit("sessionFacts", { sessionId: "h-session-1", usage: { promptTokens: 6_000, outputTokens: 1_000, totalTokens: 7_000 } });
+    emit("turnCompleted", completed);
+    expect(useAppStore.getState().usageLedger.turns[0].calls?.map((entry) => [entry.stopReason, entry.inputTokens, entry.outputTokens])).toEqual([["tool_use", 900, 40], ["end_turn", 1_400, 80]]);
+  });
+
+  it("starts the next turn's trajectory from nothing", () => {
+    emit("modelCall", { sessionId: "h-session-1", turnId: "t1", call: call() });
+    emit("turnStarted", { sessionId: "h-session-1", turnId: "t2", cause: "userInput" });
+    expect(useAppStore.getState().threads[0].turnCalls).toEqual([]);
+    emit("modelCall", { sessionId: "h-session-1", turnId: "t2", call: call({ stopReason: "tool_use" }) });
+    emit("sessionFacts", { sessionId: "h-session-1", usage: { promptTokens: 5_000, outputTokens: 800, totalTokens: 5_800 } });
+    emit("turnCompleted", { sessionId: "h-session-1", turnId: "t2", outcome: { kind: "completed", params: { terminal: "completed" } } });
+    expect(useAppStore.getState().usageLedger.turns.map((entry) => [entry.key, entry.calls?.length])).toEqual([["h-session-1:t2", 1]]);
   });
 
   it("updates the same entry when usage lands after the turn ended", () => {

@@ -3009,7 +3009,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         : undefined;
       const turnKey = keptOptimistic && thread?.pendingTurnKey ? thread.pendingTurnKey : uid();
       const userItem: TranscriptItem = keptOptimistic ?? { itemId: uid(), kind: "userMessage", status: "completed", text: text || payload, images, refs, optimistic: !get().preview, ...(get().preview ? { turnId: `preview-turn-${uid()}` } : {}) };
-      set({ threads: get().threads.map((item) => item.sessionId === sessionId ? { ...applyItem(item, userItem), status: "running", error: null, activeTurnId: get().preview ? userItem.turnId : null, cancelRequested: false, activity: "working", lastOutcome: undefined, turnStartedAt: Date.now(), turnStartOutput: item.usage?.outputTokens ?? 0, turnStartPrompt: item.usage?.promptTokens ?? 0, turnStartCache: cacheTokens(item.usage), turnStats: undefined, ...(options?.resetTaskState ? { plan: undefined, planAnchor: undefined, goal: null } : {}) } : item) });
+      set({ threads: get().threads.map((item) => item.sessionId === sessionId ? { ...applyItem(item, userItem), status: "running", error: null, activeTurnId: get().preview ? userItem.turnId : null, cancelRequested: false, activity: "working", lastOutcome: undefined, turnStartedAt: Date.now(), turnStartOutput: item.usage?.outputTokens ?? 0, turnStartPrompt: item.usage?.promptTokens ?? 0, turnStartCache: cacheTokens(item.usage), turnStats: undefined, turnCalls: [], ...(options?.resetTaskState ? { plan: undefined, planAnchor: undefined, goal: null } : {}) } : item) });
       try {
         if (get().preview) {
           const id = sessionId;
@@ -3853,7 +3853,7 @@ async function sendBusyTurn(sessionId: string, disposition: "queue" | "steer" | 
     if (disposition === "replace") {
       const userItem: TranscriptItem = keptOptimistic ?? { itemId: uid(), kind: "userMessage", status: "completed", text: text || payload, images, refs: state.contextRefs, optimistic: true };
       replaceItem = userItem;
-      patch({ ...applyItem(thread, userItem), error: null, activeTurnId: null, cancelRequested: false, activity: "working", lastOutcome: undefined, turnStartedAt: Date.now(), turnStartOutput: thread.usage?.outputTokens ?? 0, turnStartPrompt: thread.usage?.promptTokens ?? 0, turnStartCache: cacheTokens(thread.usage), turnStats: undefined });
+      patch({ ...applyItem(thread, userItem), error: null, activeTurnId: null, cancelRequested: false, activity: "working", lastOutcome: undefined, turnStartedAt: Date.now(), turnStartOutput: thread.usage?.outputTokens ?? 0, turnStartPrompt: thread.usage?.promptTokens ?? 0, turnStartCache: cacheTokens(thread.usage), turnStats: undefined, turnCalls: [] });
     }
     const result = await bridge<{ turnId: string; disposition?: string; deduped?: boolean }>("sendTurn", { sessionId, agentId: thread.agentId, text: payload, reasoningEffort: thread.config?.effort ?? state.defaultEffort, images: images.map(({ mediaType, base64Data }) => ({ mediaType, base64Data })), clientTurnId: turnKey, ifBusy: disposition, ...(skill ? { skill } : {}) });
     const latest = useAppStore.getState().threads.find((item) => item.sessionId === sessionId);
@@ -3906,7 +3906,7 @@ async function deliverApprovalFeedback(sessionId: string): Promise<void> {
       if (!live || live.cancelRequested || live.lastOutcome === "cancelled") throw new Error("Turn stopped. Feedback was not sent.");
       started = live.status !== "running";
       before = { status: live.status, activeTurnId: live.activeTurnId, lastOutcome: live.lastOutcome, activity: live.activity, turnStartedAt: live.turnStartedAt, turnStartOutput: live.turnStartOutput, turnStartPrompt: live.turnStartPrompt, turnStartCache: live.turnStartCache, turnStats: live.turnStats };
-      if (started) patch((current) => ({ ...current, status: "running", activeTurnId: null, lastOutcome: undefined, activity: "working", turnStartedAt: Date.now(), turnStartOutput: current.usage?.outputTokens ?? 0, turnStartPrompt: current.usage?.promptTokens ?? 0, turnStartCache: cacheTokens(current.usage), turnStats: undefined }));
+      if (started) patch((current) => ({ ...current, status: "running", activeTurnId: null, lastOutcome: undefined, activity: "working", turnStartedAt: Date.now(), turnStartOutput: current.usage?.outputTokens ?? 0, turnStartPrompt: current.usage?.promptTokens ?? 0, turnStartCache: cacheTokens(current.usage), turnStats: undefined, turnCalls: [] }));
       const result = await bridge<{ turnId: string; disposition?: string }>("sendTurn", {
         sessionId, agentId: live.agentId, text: feedback.text,
         ...(acceptsBusySend(live.agentId) ? { clientTurnId: feedback.id, ifBusy: "queue" as const } : {}),
@@ -4188,6 +4188,11 @@ export function bindBridgeEvents() {
       // Usage reported after the turn ended replaces that turn's estimate in the ledger.
       if (data.usage) recordUsage(useAppStore.getState, useAppStore.setState, data.sessionId);
     }
+    if (event === "modelCall") {
+      const data = payload as BridgeEventPayloads["modelCall"];
+      // The turn's own calls, gathered until it finishes and the ledger counts them.
+      update(data.sessionId, (thread) => ({ ...thread, turnCalls: [...(thread.turnCalls ?? []), data.call] }));
+    }
     if (event === "usageChanged") {
       const usage = asSubscriptionUsage(payload);
       if (usage) {
@@ -4309,7 +4314,7 @@ export function bindBridgeEvents() {
       const data = payload as BridgeEventPayloads["turnStarted"];
       update(data.sessionId, (thread) => {
         if (data.cause !== "userInput" && !(thread.queuedTurns ?? []).some((entry) => entry.turnId === data.turnId)) return thread;
-        return { ...thread, status: "running", activeTurnId: data.turnId, cancelRequested: false, activity: "working", lastOutcome: undefined, turnStartedAt: Date.now(), turnStartOutput: thread.usage?.outputTokens ?? 0, turnStartPrompt: thread.usage?.promptTokens ?? 0, turnStartCache: cacheTokens(thread.usage), turnStats: undefined, queuedTurns: (thread.queuedTurns ?? []).filter((entry) => entry.turnId !== data.turnId), notice: null };
+        return { ...thread, status: "running", activeTurnId: data.turnId, cancelRequested: false, activity: "working", lastOutcome: undefined, turnStartedAt: Date.now(), turnStartOutput: thread.usage?.outputTokens ?? 0, turnStartPrompt: thread.usage?.promptTokens ?? 0, turnStartCache: cacheTokens(thread.usage), turnStats: undefined, turnCalls: [], queuedTurns: (thread.queuedTurns ?? []).filter((entry) => entry.turnId !== data.turnId), notice: null };
       });
     }
     if (event === "turnCompleted") {

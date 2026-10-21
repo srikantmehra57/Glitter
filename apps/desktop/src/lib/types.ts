@@ -359,6 +359,27 @@ export type PlanItem = { id: string; text: string; status: PlanStatus; activeFor
 export type GoalState = { objective: string; currentWork?: string; nextWork?: string; percentComplete?: number; status?: string };
 export type ContextUsage = { usedTokens?: number; windowTokens?: number; pressure?: string; cacheReadTokens?: number; cacheWriteTokens?: number };
 export type TokenUsage = { promptTokens?: number; totalTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number };
+/**
+ * One model call inside a turn, as the harness reports it. A turn with tools
+ * makes several; the sequence is the turn's trajectory.
+ */
+export type ModelCall = {
+  at: number;
+  providerId: string;
+  modelId: string;
+  effort?: string;
+  /** Every prompt token this call sent, cached ones included. */
+  inputTokens: number;
+  /** The part of the input read from or written to a provider's prompt cache. */
+  cachedTokens: number;
+  outputTokens: number;
+  /** The provider's own finish reason: `end_turn`, `tool_use`, `max_tokens`, `stop`. */
+  stopReason?: string;
+  durationMs: number;
+  /** Present only on a retry, counting from 1. */
+  attempt?: number;
+  toolCalls: number;
+};
 /** Point-in-time subscription budget snapshot from `usage/read` / `usage/changed`. Percents may exceed 100. */
 export type UsageWindow = { usedPercent: number; resetsAtMs: number; windowDurationMins?: number };
 export type SubscriptionUsage = {
@@ -477,6 +498,8 @@ export type Thread = {
   turnStartCache?: number;
   /** Time and tokens the last finished turn took; input is undefined when the agent reports output only. */
   turnStats?: { turnId?: string; durationMs: number; outputTokens?: number; inputTokens?: number; cachedTokens?: number; estimated?: boolean };
+  /** The model calls made so far in the running turn; cleared when the next one starts. */
+  turnCalls?: ModelCall[];
   goal?: GoalState | null;
   context?: ContextUsage | null;
   usage?: TokenUsage | null;

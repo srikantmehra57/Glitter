@@ -206,6 +206,28 @@ export function humanizeGitStatus(status: string): string {
   return "Changed";
 }
 
+/** Both provider wires, one label each: Anthropic's names and OpenAI's for the same endings. */
+const STOP_REASONS: Record<string, string> = {
+  end_turn: "End turn",
+  stop: "Stopped",
+  stop_sequence: "Stop sequence",
+  tool_use: "Tool use",
+  tool_calls: "Tool use",
+  function_call: "Tool use",
+  max_tokens: "Cut off",
+  max_output_tokens: "Cut off",
+  length: "Cut off",
+  content_filter: "Filtered",
+  refusal: "Refusal",
+  pause_turn: "Paused",
+};
+
+/** A provider's finish reason in the app's own words. An unknown one reads as reported. */
+export function humanizeStopReason(reason?: string | null): string {
+  if (!reason) return "—";
+  return STOP_REASONS[reason] ?? reason.replaceAll("_", " ");
+}
+
 /** Shorten a `algo:hex` digest for display (`sha256:df5e43fed1bd…`); plain text truncates at 24 chars. */
 export function shortHash(value?: string | null): string {
   if (!value) return "";

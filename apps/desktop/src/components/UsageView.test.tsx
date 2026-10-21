@@ -51,6 +51,32 @@ describe("UsageView", () => {
     expect(screen.getByText(/≈ marks 1 turn whose agent reported no counts/)).toBeInTheDocument();
   });
 
+  it("lists every model call behind a recent Harness turn", () => {
+    const now = Date.now();
+    seed({ usageLedger: { version: 1, days: [], turns: [turn({ inputTokens: 2_300, cachedTokens: 900, outputTokens: 120, durationMs: 30_000, calls: [
+      { at: now - 90_000, providerId: "anthropic", modelId: "anthropic/claude-sonnet-5", effort: "high", inputTokens: 900, cachedTokens: 0, outputTokens: 40, stopReason: "tool_use", durationMs: 12_000, toolCalls: 2 },
+      { at: now - 60_000, providerId: "anthropic", modelId: "anthropic/claude-sonnet-5", effort: "high", inputTokens: 1_400, cachedTokens: 900, outputTokens: 80, stopReason: "end_turn", durationMs: 18_000, attempt: 2, toolCalls: 0 },
+    ] })] } });
+    render(<UsageView embedded />);
+    const card = screen.getByRole("region", { name: "Trajectory" });
+    const group = card.querySelector(".usage-call-turns > li") as HTMLElement;
+    expect(within(group).getByText("2 calls · 2.4K tokens · 30s")).toBeInTheDocument();
+    const rows = [...group.querySelectorAll(".usage-call-list > li")] as HTMLElement[];
+    expect(rows).toHaveLength(2);
+    expect(within(rows[0]).getByText("900 in · 40 out · 2 tools")).toBeInTheDocument();
+    expect(within(rows[0]).getByText("Tool use")).toBeInTheDocument();
+    expect(within(rows[0]).getByText("high")).toBeInTheDocument();
+    expect(within(rows[1]).getByText("attempt 2")).toBeInTheDocument();
+    expect(within(rows[1]).getByText("End turn")).toBeInTheDocument();
+    expect(within(rows[1]).getByText("1.4K in · 80 out")).toHaveAttribute("title", "1,400 input, 900 of it cached · 80 output tokens");
+  });
+
+  it("says what the trajectory needs when no turn carries calls", () => {
+    seed();
+    render(<UsageView embedded />);
+    expect(within(screen.getByRole("region", { name: "Trajectory" })).getByText("Harness turns list every call here. Other agents report totals only.")).toBeInTheDocument();
+  });
+
   it("shows nothing when nothing is recorded, rather than stale estimates", () => {
     seed({ usageLedger: { version: 1, turns: [], days: [] } });
     render(<UsageView embedded />);

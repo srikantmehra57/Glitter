@@ -1,4 +1,4 @@
-import type { AgentId, Thread } from "./types";
+import type { AgentId, ModelCall, Thread } from "./types";
 
 /**
  * A durable record of usage, kept by the app itself: one entry per finished
@@ -28,6 +28,8 @@ export type UsageTurn = {
   threadId: string;
   workspace: string;
   tools: Record<string, number>;
+  /** The turn's own model calls, newest turns only: the trajectory behind these totals. */
+  calls?: ModelCall[];
 };
 
 /** One day's totals for one agent, provider and model. */
@@ -54,6 +56,10 @@ export const RECENT_DAYS = 14;
 const MAX_TURNS = 4000;
 const MAX_DAY_AGE = 400;
 const DAY_MS = 86_400_000;
+/** Calls kept for one turn. The harness stops a turn at 80 steps, so this is a whole trajectory. */
+export const MAX_TURN_CALLS = 80;
+/** Turns whose calls are kept. Older turns keep their totals: per-call detail is only read for recent work. */
+export const MAX_CALL_TURNS = 25;
 
 export function dayKey(at: number): string {
   const date = new Date(at);
@@ -102,7 +108,10 @@ export function compact(ledger: UsageLedger, now = Date.now()): UsageLedger {
     days.set(key, total);
   });
   const oldest = dayKey(now - MAX_DAY_AGE * DAY_MS);
-  return { version: 1, turns: keep, days: [...days.values()].filter((day) => day.day >= oldest).sort((a, b) => a.day.localeCompare(b.day)) };
+  // `keep` is in time order, so only its tail stays detailed.
+  const detailedFrom = Math.max(0, keep.length - MAX_CALL_TURNS);
+  const turns = keep.map((turn, index) => (index < detailedFrom && turn.calls ? { ...turn, calls: undefined } : turn));
+  return { version: 1, turns, days: [...days.values()].filter((day) => day.day >= oldest).sort((a, b) => a.day.localeCompare(b.day)) };
 }
 
 /** Add or update one turn (a late usage report replaces the estimate), then compact. */
@@ -117,7 +126,7 @@ export function recordTurn(ledger: UsageLedger, turn: UsageTurn, now = Date.now(
  * to count. Tools are the turn's own tool calls; tokens are what the agent
  * reported (or the estimate `finishTurn` made when it reported none).
  */
-export function turnEntry(thread: Pick<Thread, "sessionId" | "agentId" | "config" | "turnStats" | "items" | "workspacePath" | "worktree">, at = Date.now()): UsageTurn | null {
+export function turnEntry(thread: Pick<Thread, "sessionId" | "agentId" | "config" | "turnStats" | "items" | "workspacePath" | "worktree" | "turnCalls">, at = Date.now()): UsageTurn | null {
   const stats = thread.turnStats;
   if (!stats?.turnId) return null;
   const tools: Record<string, number> = {};
@@ -145,12 +154,33 @@ export function turnEntry(thread: Pick<Thread, "sessionId" | "agentId" | "config
     threadId: thread.sessionId,
     workspace: thread.worktree?.path ?? thread.workspacePath,
     tools,
+    ...(thread.turnCalls?.length ? { calls: thread.turnCalls.slice(-MAX_TURN_CALLS) } : {}),
   };
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === "object" && !Array.isArray(value);
 const num = (value: unknown) => (typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0);
 const tools = (value: unknown) => Object.fromEntries(Object.entries(isRecord(value) ? value : {}).filter(([, count]) => typeof count === "number" && count > 0)) as Record<string, number>;
+/** A turn's stored calls, checked field by field and bounded; undefined when it has none. */
+const asCalls = (value: unknown): ModelCall[] | undefined => {
+  const calls = (Array.isArray(value) ? value : []).filter(isRecord)
+    .filter((call) => typeof call.providerId === "string" && typeof call.modelId === "string")
+    .slice(-MAX_TURN_CALLS)
+    .map((call): ModelCall => ({
+      at: num(call.at),
+      providerId: String(call.providerId),
+      modelId: String(call.modelId),
+      ...(typeof call.effort === "string" ? { effort: call.effort } : {}),
+      inputTokens: num(call.inputTokens),
+      cachedTokens: num(call.cachedTokens),
+      outputTokens: num(call.outputTokens),
+      ...(typeof call.stopReason === "string" ? { stopReason: call.stopReason } : {}),
+      durationMs: num(call.durationMs),
+      ...(num(call.attempt) > 1 ? { attempt: num(call.attempt) } : {}),
+      toolCalls: num(call.toolCalls),
+    }));
+  return calls.length ? calls : undefined;
+};
 
 /** A stored ledger, checked field by field: anything malformed is dropped rather than trusted. */
 export function asLedger(raw: unknown): UsageLedger {
@@ -170,6 +200,7 @@ export function asLedger(raw: unknown): UsageLedger {
     threadId: String(turn.threadId ?? ""),
     workspace: String(turn.workspace ?? ""),
     tools: tools(turn.tools),
+    calls: asCalls(turn.calls),
   }));
   const days = (Array.isArray(raw.days) ? raw.days : []).filter(isRecord).filter((day) => typeof day.day === "string" && /^\d{4}-\d{2}-\d{2}$/.test(day.day) && typeof day.agentId === "string" && typeof day.providerId === "string").map((day): UsageDay => ({
     day: String(day.day),
@@ -230,12 +261,14 @@ export type UsageSlice = {
   threadId?: string;
   workspace?: string;
   tools: Record<string, number>;
+  /** Only individual recent turns carry calls; a rolled-up day does not. */
+  calls?: ModelCall[];
 };
 
 export function ledgerSlices(ledger: UsageLedger): UsageSlice[] {
   return [
     ...ledger.days.map((day): UsageSlice => ({ at: dayStart(day.day), wholeDay: true, agentId: day.agentId, providerId: day.providerId, ...(day.modelId ? { modelId: day.modelId } : {}), inputTokens: day.inputTokens, cachedTokens: day.cachedTokens, outputTokens: day.outputTokens, turns: day.turns, estimatedTurns: day.estimatedTurns, durationMs: day.durationMs, tools: day.tools })),
-    ...ledger.turns.map((turn): UsageSlice => ({ at: turn.at, wholeDay: false, agentId: turn.agentId, providerId: turn.providerId, ...(turn.modelId ? { modelId: turn.modelId } : {}), ...(turn.effort ? { effort: turn.effort } : {}), inputTokens: turn.inputTokens, cachedTokens: turn.cachedTokens, outputTokens: turn.outputTokens, turns: 1, estimatedTurns: turn.estimated ? 1 : 0, durationMs: turn.durationMs, threadId: turn.threadId, workspace: turn.workspace, tools: turn.tools })),
+    ...ledger.turns.map((turn): UsageSlice => ({ at: turn.at, wholeDay: false, agentId: turn.agentId, providerId: turn.providerId, ...(turn.modelId ? { modelId: turn.modelId } : {}), ...(turn.effort ? { effort: turn.effort } : {}), inputTokens: turn.inputTokens, cachedTokens: turn.cachedTokens, outputTokens: turn.outputTokens, turns: 1, estimatedTurns: turn.estimated ? 1 : 0, durationMs: turn.durationMs, threadId: turn.threadId, workspace: turn.workspace, tools: turn.tools, ...(turn.calls ? { calls: turn.calls } : {}) })),
   ];
 }
 

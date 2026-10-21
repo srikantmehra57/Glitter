@@ -47,6 +47,11 @@ licence terms.
   only be allowed once, and the card says why.
 - When a Harness approval expires, the agent is told it expired, not that you
   denied it.
+- Settings → Usage has a Trajectory section: each model call behind your recent
+  Harness turns, with its input and output tokens, how long it took, why it
+  stopped and which attempt landed when one was retried. Other agents report
+  totals only, so their turns do not appear. Per-call detail is kept for the
+  newest 25 recorded turns; older ones keep their totals.
 - Settings → Diagnostics → Copy diagnostics now includes the app version,
   operating system and architecture, and the last 200 redacted lines from the
   app log. If the log cannot be read, the rest of the diagnostics are still

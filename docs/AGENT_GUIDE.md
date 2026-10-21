@@ -63,6 +63,7 @@ files (see the README's known limitations).
 | Harness skills: discovery, the catalog in the prompt, the `skill` tool, `/name` | `packages/glitter-bridge/src/harness/skills.ts`; the app side is `supportsSkills` in `store.ts` and `ExtensionsView.tsx` |
 | The plan review that ends Plan mode | `EXIT_PLAN_TOOL` and `planSettlement` in `harness/questions.ts`; `PlanReviewCard.tsx`, picked in `UserInputCards.tsx` |
 | Harness questions (`ask_user`): the tool, the durable pending question, answers | `packages/glitter-bridge/src/harness/questions.ts`; `parkQuestion`, `settleQuestion` and `respondUserInput` in `harness/host.ts` |
+| The usage record, its bounds, and the per-call Trajectory | `apps/desktop/src/lib/usageLedger.ts` (stored shape, compaction, `MAX_TURN_CALLS`), `UsageView.tsx`; Harness calls arrive as `modelCall` events and land in the entry's `calls` |
 | A harness tool, prompt section or hook | an `Extension` registered on `ExtensionRegistry` (`harness/registry.ts`); built-in tools are `BUILTIN_TOOLS` in `harness/tools.ts` |
 | Provider keys (BYOK) | `credentials.rs` (`provider_key_set`, `provider_keys_get`), Settings → Providers (`ProvidersPanel.tsx`, `lib/providers.ts`) |
 | Bridge request routing | `packages/glitter-bridge/src/index.ts` |

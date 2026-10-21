@@ -323,10 +323,10 @@ read-only; a guard denial survives a policy listener that says allow.
 
 ## Phase 5 — App parity
 
-**Status: in progress.** 5.1, 5.2 and 5.3 are done (2026-10-21, with the
-DECISIONS entries "Harness skills are folders it discovers each turn", "A
-Harness question ends the turn" and "Plan mode ends with a plan review");
-5.4 and 5.5 are not started.
+**Status: in progress.** 5.1, 5.2, 5.3 and 5.4 are done (2026-10-21 and
+2026-10-22, with the DECISIONS entries "Harness skills are folders it discovers
+each turn", "A Harness question ends the turn", "Plan mode ends with a plan
+review" and "Per-call usage is emitted, not logged"); 5.5 is not started.
 
 - [x] 5.1 `harness/skills.ts`: a skill is a folder with a `SKILL.md` whose
       frontmatter has `name` (the folder name when missing) and
@@ -367,6 +367,16 @@ Harness question ends the turn" and "Plan mode ends with a plan review");
       message, in the history and the transcript, and the model revises in
       Plan mode. Keep planning, or declining, settles the call and starts no
       turn: no model request is spent on a dismissed review.
+- [x] 5.4 The harness emits a `modelCall` per call it makes: provider, model,
+      effort, input tokens (cached included, the way the ledger counts them),
+      the cached share, output tokens, the provider's finish reason, duration,
+      how many tool calls the reply asked for, and — only on a retry — which
+      attempt landed. The app gathers them on the thread until the turn ends,
+      then stores them as that ledger entry's `calls`: at most 80 for one turn,
+      detailed for the newest 25 turns, and re-bounded when read back. Settings
+      → Usage shows them in a Trajectory section, recent turns that have calls,
+      newest first, each opening onto its call list. The harness session log
+      keeps no copy (see "Per-call usage is emitted, not logged").
 
 **Goal.** Give the harness the features the app already gives Muse.
 
@@ -384,7 +394,8 @@ agent-aware), `apps/desktop/src/components/UserInputCards.tsx`,
 `apps/desktop/src/components/UsageView.tsx`, `apps/desktop/src/lib/usageLedger.ts`.
 
 **Tests.** `apps/desktop/src/components/*.test.tsx` for each UI surface;
-`tests/harness.test.mjs` for the skill catalog and `ask_user`.
+`tests/harness.test.mjs` for the skill catalog, `ask_user` and the per-call
+usage a turn reports.
 
 **Exit.** The default agent can use a skill, ask a question, and be
 approved to leave plan mode.
