@@ -8,6 +8,8 @@ import { runGuards } from "./permission/guards.js";
 import { decide, type ApprovalMode, type Verdict } from "./permission/policy.js";
 import { TIERS, configuredProviders, effortTiers, providerSpec, resolveProvider, splitModelId, type ProviderCredentials, type ResolvedProvider } from "./providers.js";
 import { ExtensionRegistry, type HookEvents, type HookFailure, type HookName, type TurnContributions } from "./registry.js";
+import type { UserInputResponse } from "../protocol.js";
+import { ASK_USER_TOOL, questionRequest, settlement, type PendingQuestion, type Question } from "./questions.js";
 import { discoverSkills, expandInvocation, skillsExtension } from "./skills.js";
 import { SessionStore, type SessionMeta } from "./store.js";
 import { BUILTIN_EXTENSION, canonicalize, executeTool, executionMode, prepareTool, repeatReminder, scheduleToolCalls, type PresentationMeta, type ToolKind } from "./tools.js";
@@ -133,7 +135,12 @@ type Live = {
   /** Identical-call chain. A user message clears it. */
   repeatKey?: string;
   repeatCount: number;
+  /** The questions the last turn ended with, until the user settles them. */
+  question?: PendingQuestion;
 };
+
+/** One call's result. A call that asks the user also carries its questions and its transcript item. */
+type CallResult = { id: string; name: string; output: string; isError?: boolean; question?: Question[]; item?: Json };
 
 type HostLimits = {
   idleMs?: number;
@@ -163,6 +170,8 @@ export class HarnessHost {
     this.emit = emit;
     this.registry.register(BUILTIN_EXTENSION);
     this.registry.register(skillsExtension(this.homeDir));
+    // With no one to answer, the model is not offered a way to ask.
+    if (this.limits.approvalChannel !== false) this.registry.register({ id: "questions", tools: [ASK_USER_TOOL] });
   }
 
   /** The native shell injects the keychain's provider keys into every harness request. */
@@ -312,16 +321,18 @@ export class HarnessHost {
 
   async resumeSession(options: { sessionId: string; workspaceRoot: string; approvalMode?: string }) {
     const open = this.sessions.get(options.sessionId);
-    if (open) return { sessionId: options.sessionId, alreadyOpen: true, agentConfig: this.config(open) };
+    if (open) return { sessionId: options.sessionId, alreadyOpen: true, agentConfig: this.config(open), userInputs: this.openQuestions(open) };
     const meta = await this.store.meta(options.sessionId);
     if (!meta) throw new Error("This thread's history is no longer on this device.");
     if (meta.workspaceRoot !== options.workspaceRoot) throw new Error("That thread belongs to another workspace.");
-    const { messages, items } = await this.store.read(options.sessionId);
+    const { messages, items, question } = await this.store.read(options.sessionId);
     const live = this.track(meta, messages, options.approvalMode);
     // Replay the transcript exactly as it was recorded; nothing runs again.
-    for (const item of items) this.emit("item", { sessionId: options.sessionId, item: { ...item, status: item.status === "inProgress" ? "cancelled" : item.status } });
+    live.question = question;
+    // The call a pending question belongs to is still open: it completes when the question is answered.
+    for (const item of items) this.emit("item", { sessionId: options.sessionId, item: { ...item, status: item.status === "inProgress" && item.itemId !== question?.itemId ? "cancelled" : item.status } });
     this.emitUsage(live);
-    return { sessionId: options.sessionId, alreadyOpen: false, opening: { result: { session: { sessionId: options.sessionId, workspaceRoot: meta.workspaceRoot, modelId: meta.modelId ?? null } } }, agentConfig: this.config(live) };
+    return { sessionId: options.sessionId, alreadyOpen: false, opening: { result: { session: { sessionId: options.sessionId, workspaceRoot: meta.workspaceRoot, modelId: meta.modelId ?? null } } }, agentConfig: this.config(live), userInputs: this.openQuestions(live) };
   }
 
   async closeSession(options: { sessionId: string }) {
@@ -489,6 +500,8 @@ export class HarnessHost {
     try {
       live.turnId = request.turnId;
       if (request.effort && request.effort !== live.meta.effort) await this.changed(live, { effort: request.effort });
+      // An unanswered question is settled first, so its result sits ahead of this message.
+      await this.settleQuestion(live, { action: "superseded" });
       // A steer left over from the previous turn belongs ahead of this prompt.
       await this.flushSteering(live);
       live.messages.push(user);
@@ -754,6 +767,11 @@ export class HarnessHost {
             return this.runToolCall(live, contributions, calls[index], controller.signal, reminders[index]);
           },
         });
+        if (results.some((result) => result.question)) {
+          // The turn ends with the questions. Their answer completes this tool message in a new turn.
+          await this.parkQuestion(live, turnId, results);
+          break;
+        }
         const message: ChatMessage = { role: "tool", results };
         live.messages.push(message);
         await this.store.append(sessionId, [{ type: "message", message }]);
@@ -779,6 +797,8 @@ export class HarnessHost {
       // After the notice is cleared, or the warning would vanish with it.
       if (turn) this.reportHookFailures(turn, finished);
       this.emit("turnCompleted", { sessionId, turnId, outcome });
+      // After turnCompleted, which clears a thread's questions in the app. A queued message settles it at once.
+      if (live.question?.turnId === turnId) this.emit("userInputs", { sessionId, requests: [questionRequest(sessionId, live.question)], turnEnded: true });
       if (startNext) this.pump(live);
     }
   }
@@ -877,7 +897,7 @@ export class HarnessHost {
     }
   }
 
-  private async runToolCall(live: Live, turn: TurnContributions, call: ToolCall, signal: AbortSignal, reminder?: string): Promise<{ id: string; name: string; output: string; isError?: boolean }> {
+  private async runToolCall(live: Live, turn: TurnContributions, call: ToolCall, signal: AbortSignal, reminder?: string): Promise<CallResult> {
     const noted = (output: string) => this.withRepeat(output, reminder);
     const definition = turn.tools.get(call.name);
     if (!definition) {
@@ -931,6 +951,7 @@ export class HarnessHost {
     await this.hook(turn, "toolFinished", { context: turn.context, call: observed, outcome: result });
     const output = noted(result.output);
     const visible = noted(result.display ?? result.output);
+    if (result.question) return { id: call.id, name: call.name, output: "", question: result.question, item: base };
     if (result.plan) {
       this.emit("sessionFacts", { sessionId: live.meta.sessionId, plan: result.plan.map((todo, index) => ({ id: `plan-${index}`, text: todo.content, status: todo.status === "in_progress" ? "inProgress" : todo.status })) });
       return { id: call.id, name: call.name, output };
@@ -946,6 +967,73 @@ export class HarnessHost {
       ...(result.isError ? { failureReason: visible.split("\n")[0].slice(0, 300) } : {}),
     }, true);
     return { id: call.id, name: call.name, output, ...(result.isError ? { isError: true } : {}) };
+  }
+
+  /** The question this thread is waiting on, as the app's card renders it. */
+  private openQuestions(live: Live) {
+    return live.question ? [questionRequest(live.meta.sessionId, live.question)] : [];
+  }
+
+  /** Record that a turn ended asking the user. Only the first ask in a batch stands. */
+  private async parkQuestion(live: Live, turnId: string, results: CallResult[]) {
+    const asked = results.findIndex((result) => result.question);
+    const refusal = "Only one set of questions can wait at a time. Ask them together in one ask_user call.";
+    for (const [index, result] of results.entries()) {
+      if (index === asked || !result.question) continue;
+      if (result.item) this.emitItem(live, { ...result.item, status: "failed", failureReason: refusal, visibleOutput: refusal }, true);
+      results[index] = { id: result.id, name: result.name, output: refusal, isError: true };
+    }
+    const ask = results[asked];
+    const pending: PendingQuestion = {
+      userInputId: `q-${randomUUID()}`,
+      turnId,
+      callId: ask.id,
+      toolName: ask.name,
+      itemId: String(ask.item?.itemId ?? ""),
+      item: ask.item ?? {},
+      questions: ask.question ?? [],
+      results: results.map(({ id, name, output, isError }) => ({ id, name, output, ...(isError ? { isError } : {}) })),
+    };
+    live.question = pending;
+    // The open card is written too: in-progress items are not persisted, and a reopened thread must still show it.
+    await this.store.append(live.meta.sessionId, [{ type: "item", item: { ...pending.item, status: "inProgress" } }, { type: "question", question: pending }]);
+  }
+
+  /**
+   * Complete the pending question's tool message from how the user settled it.
+   * Throws, changing nothing, when the answers do not fit the questions.
+   */
+  private async settleQuestion(live: Live, response: UserInputResponse | { action: "superseded" }) {
+    const pending = live.question;
+    if (!pending) return;
+    const settled = settlement(pending, response);
+    const message: ChatMessage = { role: "tool", results: pending.results.map((result) => (result.id === pending.callId ? { id: result.id, name: result.name, output: settled.output } : result)) };
+    live.question = undefined;
+    live.messages.push(message);
+    await this.store.append(live.meta.sessionId, [{ type: "message", message }, { type: "questionSettled", userInputId: pending.userInputId }]);
+    this.emitItem(live, { ...pending.item, status: "completed", visibleOutput: settled.summary }, true);
+    this.emit("userInputs", { sessionId: live.meta.sessionId, requests: [] });
+  }
+
+  /** The user settled the question the last turn ended with: record it, then continue in a new turn. */
+  async respondUserInput(options: { sessionId: string; userInputId: string; response: UserInputResponse }) {
+    const live = this.requireLive(options.sessionId);
+    if (live.question?.userInputId !== options.userInputId) throw new Error("This question is no longer pending. Reopen the thread to refresh it.");
+    if (live.prompting) throw new Error(`${HARNESS_NAME} is still working. Answer when the turn ends.`);
+    // Claimed before the first await, so a message sent meanwhile queues behind this turn.
+    live.prompting = true;
+    try {
+      await this.settleQuestion(live, options.response);
+    } catch (error) {
+      live.prompting = false;
+      throw error;
+    }
+    const turnId = this.mintTurnId();
+    live.turnId = turnId;
+    this.resetRepeat(live);
+    this.emit("turnStarted", { sessionId: live.meta.sessionId, turnId, cause: "userInput" });
+    void this.runTurn(live, turnId);
+    return { status: "accepted" as const, userInputId: options.userInputId, turnId };
   }
 
   /**

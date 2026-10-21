@@ -1165,4 +1165,100 @@ test('a /skill the user types shows as typed and reaches the model expanded', as
   await assert.rejects(instance.sendTurn({ sessionId, text: '', skill: { selector: 'gone' } }), (error) => error.code === 'skillNotFound' && /no longer available/.test(error.message));
 });
 
+const databaseQuestion = { questions: [{ question: 'Which database?', header: 'Database', options: [{ label: 'Postgres' }, { label: 'SQLite', description: 'One file, no server.' }] }] };
+const indexOf = (events, predicate) => events.findIndex(predicate);
+
+test('ask_user ends the turn with a question, and the answer continues in a new turn', async () => {
+  const root = await workspace();
+  const { calls, fetchImpl } = anthropicStub([() => toolReply('a1', 'ask_user', databaseQuestion), () => textReply('Using Postgres.')]);
+  const { instance, events } = host(fetchImpl, new SessionStore(await mkdtemp(join(temporary, 'store-'))));
+  const { sessionId } = await instance.startSession({ workspaceRoot: root });
+  await instance.sendTurn({ sessionId, text: 'set up the data layer' });
+  const [first] = await settled(events, 1);
+  assert.equal(first.payload.outcome.params.terminal, 'completed', 'a question is not a failure');
+  assert.equal(calls.length, 1, 'no model call waits on the user');
+  const asked = indexOf(events, ({ event, payload }) => event === 'userInputs' && payload.requests.length);
+  assert.ok(asked > indexOf(events, ({ event }) => event === 'turnCompleted'), 'the question comes after turnCompleted, which clears questions in the app');
+  const request = events[asked].payload;
+  assert.equal(request.turnEnded, true);
+  assert.deepEqual(request.requests[0].questions, [{ id: 'q1', header: 'Database', question: 'Which database?', options: [{ label: 'Postgres' }, { label: 'SQLite', description: 'One file, no server.' }], selection: { mode: 'single' } }]);
+  const { userInputId } = request.requests[0];
+  await assert.rejects(instance.respondUserInput({ sessionId, userInputId, response: { action: 'answer', answers: [{ questionId: 'q1', selectedLabel: 'MySQL' }] } }), /Choose an option listed/);
+  await instance.respondUserInput({ sessionId, userInputId, response: { action: 'answer', answers: [{ questionId: 'q1', selectedLabel: 'Postgres', note: 'version 16' }] } });
+  const started = events.find(({ event }) => event === 'turnStarted');
+  assert.equal(started.payload.cause, 'userInput');
+  await settled(events, 2);
+  const result = calls[1].body.messages.at(-1).content[0];
+  assert.equal(result.tool_use_id, 'a1');
+  assert.equal(result.content, 'The user answered:\n- Which database?\n  Postgres (note: version 16)');
+  const card = events.filter(({ event, payload }) => event === 'item' && payload.item.tool === 'ask_user').at(-1).payload.item;
+  assert.equal(card.status, 'completed');
+  assert.equal(card.visibleOutput, 'Postgres (note: version 16)');
+  assert.deepEqual(events.filter(({ event }) => event === 'userInputs').at(-1).payload.requests, [], 'the card leaves once settled');
+  await assert.rejects(instance.respondUserInput({ sessionId, userInputId, response: { action: 'cancel' } }), /no longer pending/);
+});
+
+test('a pending question survives a restart, and a new message settles one left unanswered', async () => {
+  const root = await workspace();
+  const store = new SessionStore(await mkdtemp(join(temporary, 'store-')));
+  const first = anthropicStub([() => toolReply('a1', 'ask_user', databaseQuestion)]);
+  const before = host(first.fetchImpl, store);
+  const { sessionId } = await before.instance.startSession({ workspaceRoot: root });
+  await before.instance.sendTurn({ sessionId, text: 'set up the data layer' });
+  await settled(before.events, 1);
+  await before.instance.stop();
+  const { calls, fetchImpl } = anthropicStub([() => textReply('Explained, thanks.'), () => toolReply('a2', 'ask_user', databaseQuestion), () => textReply('Moving on.')]);
+  const after = host(fetchImpl, store);
+  const opened = await after.instance.resumeSession({ sessionId, workspaceRoot: root });
+  assert.equal(opened.userInputs.length, 1, 'the open question comes back with the thread');
+  const replayed = after.events.find(({ event, payload }) => event === 'item' && payload.item.tool === 'ask_user');
+  assert.equal(replayed.payload.item.status, 'inProgress', 'its call is still open, not cancelled');
+  await after.instance.respondUserInput({ sessionId, userInputId: opened.userInputs[0].userInputId, response: { action: 'clarify', text: 'Whatever the hosting supports.' } });
+  await settled(after.events, 1);
+  assert.match(calls[0].body.messages.at(-1).content[0].content, /did not choose an answer\. They wrote instead:\nWhatever the hosting supports\./);
+  // Asked again; this time the user types a new message instead of answering.
+  await after.instance.sendTurn({ sessionId, text: 'ask me later' });
+  await settled(after.events, 2);
+  await after.instance.sendTurn({ sessionId, text: 'just pick one' });
+  await settled(after.events, 3);
+  const last = calls[2].body.messages.at(-1).content;
+  assert.equal(last[0].tool_use_id, 'a2');
+  assert.match(last[0].content, /did not answer and sent a new message instead/);
+  assert.equal(last.at(-1).text, 'just pick one', 'the result sits ahead of the new message');
+  const reopened = await host(fetchImpl, store).instance.resumeSession({ sessionId, workspaceRoot: root });
+  assert.deepEqual(reopened.userInputs, [], 'a settled question does not come back');
+});
+
+test('ask_user refuses malformed questions and a second ask in one reply, and is absent with no one to answer', async () => {
+  const root = await workspace();
+  const twoAsks = () => [
+    { type: 'message_start', message: { usage: { input_tokens: 10 } } },
+    { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'x1', name: 'ask_user' } },
+    { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: JSON.stringify(databaseQuestion) } },
+    { type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: 'x2', name: 'ask_user' } },
+    { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: JSON.stringify(databaseQuestion) } },
+    { type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 4 } },
+  ];
+  const { calls, fetchImpl } = anthropicStub([
+    () => toolReply('bad', 'ask_user', { questions: [{ question: 'Which?', options: [{ label: 'Only one' }] }] }),
+    twoAsks,
+    () => textReply('ok'),
+  ]);
+  const { instance, events } = host(fetchImpl, new SessionStore(await mkdtemp(join(temporary, 'store-'))));
+  const { sessionId } = await instance.startSession({ workspaceRoot: root });
+  await instance.sendTurn({ sessionId, text: 'ask' });
+  await settled(events, 1);
+  assert.match(calls[1].body.messages.at(-1).content[0].content, /needs no options \(a free answer\) or 2 to 6 options/);
+  const request = events.find(({ event, payload }) => event === 'userInputs' && payload.requests.length).payload.requests[0];
+  assert.equal(request.toolCallId, 'x1');
+  await instance.respondUserInput({ sessionId, userInputId: request.userInputId, response: { action: 'cancel' } });
+  await settled(events, 2);
+  const results = calls[2].body.messages.at(-1).content;
+  assert.match(results[0].content, /declined to answer/);
+  assert.match(results[1].content, /Only one set of questions can wait at a time/);
+  const headless = host(anthropicStub([() => textReply('hi')]).fetchImpl, new SessionStore(await mkdtemp(join(temporary, 'store-'))), { approvalChannel: false });
+  const opened = await headless.instance.startSession({ workspaceRoot: root });
+  assert.equal(headless.instance.registry.snapshot({ sessionId: opened.sessionId, turnId: 't', workspaceRoot: root, mode: 'build' }).tools.has('ask_user'), false);
+});
+
 test.after(async () => { await rm(temporary, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });

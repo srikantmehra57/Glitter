@@ -21,6 +21,10 @@ licence terms.
   commands under the OS sandbox, follows the permission modes and Plan mode,
   asks through the usual approval cards, and keeps its threads on this Mac.
   Keys stay in the keychain and are sent only to their provider.
+- Harness can ask you questions. When it needs your decision it shows a
+  question card with the likely answers and stops; your answer, an explanation
+  or a decline lets it continue. An open question stays after a restart, and
+  sending a new message instead moves on without it.
 - Harness has skills. Put a folder with a `SKILL.md` (a `name` and a
   `description` in its frontmatter) in `.agents/skills` or `.glitter/skills`,
   in the workspace or in your home folder. Harness sees the list each turn,

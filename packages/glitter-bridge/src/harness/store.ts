@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { appendFile, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import type { PendingQuestion } from "./questions.js";
 import type { ChatMessage } from "./wire.js";
 
 /**
@@ -27,7 +28,13 @@ export type SessionMeta = {
   usage?: { promptTokens: number; outputTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number };
 };
 
-type Record_ = { type: "message"; message: ChatMessage } | { type: "item"; item: Record<string, unknown> } | { type: "toolStarted"; id: string };
+type Record_ =
+  | { type: "message"; message: ChatMessage }
+  | { type: "item"; item: Record<string, unknown> }
+  | { type: "toolStarted"; id: string }
+  /** A turn ended asking the user; `questionSettled` closes it. */
+  | { type: "question"; question: PendingQuestion }
+  | { type: "questionSettled"; userInputId: string };
 
 const SESSION_ID = /^h-[a-z0-9-]{8,64}$/;
 
@@ -113,9 +120,10 @@ export class SessionStore {
   }
 
   /** Messages for the model and items for the transcript. A torn last line (a crash mid-write) is skipped. */
-  async read(sessionId: string): Promise<{ messages: ChatMessage[]; items: Array<Record<string, unknown>> }> {
+  async read(sessionId: string): Promise<{ messages: ChatMessage[]; items: Array<Record<string, unknown>>; question?: PendingQuestion }> {
     const path = this.file(sessionId);
     if (!existsSync(path)) return { messages: [], items: [] };
+    let question: PendingQuestion | undefined;
     const messages: ChatMessage[] = [];
     const items = new Map<string, Record<string, unknown>>();
     const started = new Set<string>();
@@ -126,13 +134,15 @@ export class SessionStore {
       if (record.type === "message") messages.push(record.message);
       else if (record.type === "item" && typeof record.item.itemId === "string") items.set(record.item.itemId, record.item);
       else if (record.type === "toolStarted" && typeof record.id === "string") started.add(record.id);
+      else if (record.type === "question" && record.question) question = record.question;
+      else if (record.type === "questionSettled" && record.userInputId === question?.userInputId) question = undefined;
     }
     // A crash mid-tool leaves the assistant message without a result. The marker says the call had started.
     for (const message of messages) {
       if (message.role !== "assistant") continue;
       for (const call of message.toolCalls ?? []) if (started.has(call.id)) call.started = true;
     }
-    return { messages, items: [...items.values()] };
+    return { messages, items: [...items.values()], ...(question ? { question } : {}) };
   }
 
   remove(sessionId: string): Promise<void> {

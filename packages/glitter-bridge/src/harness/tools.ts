@@ -4,6 +4,7 @@ import { chmod, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promis
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { spawnIsolated, terminateTree } from "../isolation.js";
 import type { Subject } from "./permission/grants.js";
+import type { Question } from "./questions.js";
 import { dangerGuard } from "./permission/guards.js";
 import type { Extension } from "./registry.js";
 import type { ToolSchema } from "./wire.js";
@@ -26,6 +27,8 @@ export type ToolValue =
   | { kind: "diff"; path: string; oldText: string; newText: string; created?: boolean; replacements?: number }
   | { kind: "terminal"; command: string; stdout: string; exitCode: number; note?: string }
   | { kind: "plan"; plan: Array<{ content: string; status: string }> }
+  /** Questions for the user: the call waits for their answer, which ends the turn. */
+  | { kind: "question"; questions: Question[] }
   | { kind: "error"; message: string };
 
 /** Replayable card state. Pure: no I/O, no clock, no session. */
@@ -70,6 +73,8 @@ export type ToolOutcome = {
   path?: string;
   command?: string;
   plan?: Array<{ content: string; status: string }>;
+  /** Set when the call asks the user: the host ends the turn and completes the call from the answer. */
+  question?: Question[];
   continuation?: Continuation;
 };
 
@@ -345,6 +350,9 @@ export function render(value: ToolValue, continuation?: Continuation): string {
     case "plan":
       text = `Plan updated (${value.plan.filter((todo) => todo.status === "completed").length} of ${value.plan.length} done).`;
       break;
+    case "question":
+      text = "Waiting for the user's answer.";
+      break;
     case "error":
       text = value.message;
       break;
@@ -366,6 +374,8 @@ export function presentationMeta(value: ToolValue): PresentationMeta {
       return { kind: "terminal", command: value.command, exitCode: value.exitCode };
     case "plan":
       return { kind: "plan" };
+    case "question":
+      return { kind: "question" };
     case "error":
       return { kind: "error" };
   }
@@ -759,6 +769,7 @@ function pack(produced: { value: ToolValue; continuation?: Continuation }): Tool
     outcome.command = value.command;
     if (value.exitCode !== 0) outcome.isError = true;
   } else if (value.kind === "plan") outcome.plan = value.plan;
+  else if (value.kind === "question") outcome.question = value.questions;
   else if (value.kind !== "error") outcome.path = value.path;
   return outcome;
 }

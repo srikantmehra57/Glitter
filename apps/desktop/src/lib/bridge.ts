@@ -33,7 +33,8 @@ export interface BridgeEventPayloads {
   approvalResolved: { sessionId?: string; approvalId: string };
   agentConfig: { sessionId: string; config: AgentSessionConfig };
   sessionFacts: { sessionId: string; plan?: PlanItem[]; goal?: GoalState | null; context?: ContextUsage | null; usage?: TokenUsage | null; branch?: string | null };
-  userInputs: { sessionId: string; requests: UserInputRequest[] };
+  /** `turnEnded`: the questions ended the turn (Harness), so the thread is idle until they are answered. */
+  userInputs: { sessionId: string; requests: UserInputRequest[]; turnEnded?: boolean };
   item: { sessionId: string; item: TranscriptItem };
   approval: ApprovalRequest;
   approvalError: { sessionId?: string; approvalId: string; kind: string; error?: string };
@@ -45,7 +46,8 @@ export interface BridgeEventPayloads {
   turnError: { sessionId: string; turnId?: string; error?: string; code?: string };
   gapError: { sessionId: string; turnId?: string; error?: string; reason?: string; after?: string; next?: string };
   turnSnapshot: TurnSnapshot;
-  turnStarted: { sessionId: string; turnId: string };
+  /** `cause: "userInput"`: the agent continued on its own after a question was answered, not from the queue. */
+  turnStarted: { sessionId: string; turnId: string; cause?: "userInput" };
   turnCompleted: { sessionId: string; turnId: string; outcome: { kind: string; params?: { terminal?: string; reason?: string; error?: { kind?: string; message: string } } }; viewCursor?: string };
 }
 

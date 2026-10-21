@@ -4197,7 +4197,7 @@ export function bindBridgeEvents() {
     }
     if (event === "userInputs") {
       const data = payload as BridgeEventPayloads["userInputs"];
-      update(data.sessionId, (thread) => ({ ...thread, userInputs: data.requests, userInputVersion: (thread.userInputVersion ?? 0) + 1, unread: store.selectedSessionId !== data.sessionId, ...(data.requests.length ? { status: "running", activeTurnId: data.requests[0].turnId } : {}) }));
+      update(data.sessionId, (thread) => ({ ...thread, userInputs: data.requests, userInputVersion: (thread.userInputVersion ?? 0) + 1, unread: store.selectedSessionId !== data.sessionId, ...(data.requests.length && !data.turnEnded ? { status: "running", activeTurnId: data.requests[0].turnId } : {}) }));
     }
     if (event === "item") {
       const data = payload as BridgeEventPayloads["item"];
@@ -4308,7 +4308,7 @@ export function bindBridgeEvents() {
     if (event === "turnStarted") {
       const data = payload as BridgeEventPayloads["turnStarted"];
       update(data.sessionId, (thread) => {
-        if (!(thread.queuedTurns ?? []).some((entry) => entry.turnId === data.turnId)) return thread;
+        if (data.cause !== "userInput" && !(thread.queuedTurns ?? []).some((entry) => entry.turnId === data.turnId)) return thread;
         return { ...thread, status: "running", activeTurnId: data.turnId, cancelRequested: false, activity: "working", lastOutcome: undefined, turnStartedAt: Date.now(), turnStartOutput: thread.usage?.outputTokens ?? 0, turnStartPrompt: thread.usage?.promptTokens ?? 0, turnStartCache: cacheTokens(thread.usage), turnStats: undefined, queuedTurns: (thread.queuedTurns ?? []).filter((entry) => entry.turnId !== data.turnId), notice: null };
       });
     }

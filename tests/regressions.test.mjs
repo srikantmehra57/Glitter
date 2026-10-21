@@ -727,6 +727,26 @@ test('failed question response preserves pending questions; success removes only
   assert.deepEqual(store.getState().threads[0].userInputs.map(x => x.userInputId), ['q2']);
 });
 
+test('a question that ended the turn leaves the thread idle, and the answer turn shows it running', async () => {
+  const store = await frontendStore();
+  store.setState({ threads: [{ ...thread('s', '/a'), agentId: 'harness', lastTurnId: 't' }] });
+  globalThis.storeEvent('userInputs', { sessionId: 's', requests: [question()], turnEnded: true });
+  let current = store.getState().threads[0];
+  assert.equal(current.userInputs.length, 1);
+  assert.equal(current.status, 'idle', 'nothing is running while the question waits');
+  assert.equal(current.activeTurnId, undefined);
+  globalThis.storeEvent('turnStarted', { sessionId: 's', turnId: 't2' });
+  assert.equal(store.getState().threads[0].status, 'idle', 'an unknown turn that is not an answer is ignored, as before');
+  globalThis.storeEvent('turnStarted', { sessionId: 's', turnId: 't2', cause: 'userInput' });
+  current = store.getState().threads[0];
+  assert.equal(current.status, 'running');
+  assert.equal(current.activeTurnId, 't2');
+  // A Muse question arrives mid-turn and keeps marking the thread running.
+  store.setState({ threads: [thread('m', '/a')] });
+  globalThis.storeEvent('userInputs', { sessionId: 'm', requests: [question('q', 'm')] });
+  assert.equal(store.getState().threads[0].status, 'running');
+});
+
 const { UserInputRelay, observeNotifications } = await bundle('packages/glitter-bridge/src/user-input.ts');
 const notification = (method, params) => ({ jsonrpc: '2.0', method, params });
 test('question relay preserves simultaneous sessions and does not revive settled requests', () => {

@@ -61,6 +61,7 @@ files (see the README's known limitations).
 | The built-in harness agent | `packages/glitter-bridge/src/harness/` (providers, wire, tools, registry, store, host) |
 | Harness permissions: read-only commands, risky and blocked commands, thread grants | `packages/glitter-bridge/src/harness/permission/` (`classify.ts`, `danger.ts`, `grants.ts`, `policy.ts`, `guards.ts`, over the `shell.ts` reader) |
 | Harness skills: discovery, the catalog in the prompt, the `skill` tool, `/name` | `packages/glitter-bridge/src/harness/skills.ts`; the app side is `supportsSkills` in `store.ts` and `ExtensionsView.tsx` |
+| Harness questions (`ask_user`): the tool, the durable pending question, answers | `packages/glitter-bridge/src/harness/questions.ts`; `parkQuestion`, `settleQuestion` and `respondUserInput` in `harness/host.ts` |
 | A harness tool, prompt section or hook | an `Extension` registered on `ExtensionRegistry` (`harness/registry.ts`); built-in tools are `BUILTIN_TOOLS` in `harness/tools.ts` |
 | Provider keys (BYOK) | `credentials.rs` (`provider_key_set`, `provider_keys_get`), Settings → Providers (`ProvidersPanel.tsx`, `lib/providers.ts`) |
 | Bridge request routing | `packages/glitter-bridge/src/index.ts` |

@@ -797,6 +797,9 @@ async function dispatchHarness(method: string, params: Record<string, unknown>) 
       return harness.unqueueTurn({ sessionId, turnId: String(params.turnId ?? "") });
     case "listSkills":
       return harness.listSkills({ sessionId });
+    case "respondUserInput":
+      if (!params.response || typeof params.response !== "object") throw new Error("Question response is required.");
+      return harness.respondUserInput({ sessionId, userInputId: String(params.userInputId ?? ""), response: params.response as UserInputResponse });
     case "cancelTurn":
       return harness.cancelTurn({ sessionId });
     case "decideApproval":

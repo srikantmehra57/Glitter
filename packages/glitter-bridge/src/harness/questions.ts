@@ -1,0 +1,173 @@
+import type { UserInputAnswer, UserInputRequest, UserInputResponse } from "../protocol.js";
+import type { ToolDefinition } from "./tools.js";
+
+/**
+ * `ask_user`: the model asks the user one to four questions and the turn ends.
+ * The request is durable: it is written to the session log, survives a
+ * restart, and comes back to the app when the thread reopens. The answer is
+ * the call's result, and a new turn continues from it. Nothing waits in the
+ * meantime, so an unanswered question cannot hold a turn open; a new message
+ * from the user settles it instead.
+ */
+
+export type Question = {
+  question: string;
+  header: string;
+  options: Array<{ label: string; description?: string }>;
+  multiSelect: boolean;
+};
+
+/** A question waiting for the user, with the rest of its call batch, so the tool message can be completed later. */
+export type PendingQuestion = {
+  userInputId: string;
+  turnId: string;
+  callId: string;
+  toolName: string;
+  itemId: string;
+  /** The transcript item's identity fields, to complete it when the answer arrives. */
+  item: Record<string, unknown>;
+  questions: Question[];
+  /** Every result of the batch in model order; the question's own slot is filled on settlement. */
+  results: Array<{ id: string; name: string; output: string; isError?: boolean }>;
+};
+
+const MAX_QUESTIONS = 4;
+const MAX_OPTIONS = 6;
+const QUESTION_CHARS = 1000;
+const HEADER_CHARS = 40;
+const LABEL_CHARS = 120;
+const DESCRIPTION_CHARS = 400;
+const ANSWER_CHARS = 500;
+
+const text = (value: unknown) => (typeof value === "string" ? value.trim() : "");
+
+/** The questions in a call's arguments, or why they cannot be asked. */
+export function parseQuestions(input: Readonly<Record<string, unknown>>): { questions: Question[] } | { error: string } {
+  const raw = input.questions;
+  if (!Array.isArray(raw) || !raw.length) return { error: "questions must list at least one question." };
+  if (raw.length > MAX_QUESTIONS) return { error: `Ask at most ${MAX_QUESTIONS} questions at once.` };
+  const questions: Question[] = [];
+  for (const [index, entry] of raw.entries()) {
+    const item = entry && typeof entry === "object" ? entry as Record<string, unknown> : {};
+    const question = text(item.question);
+    if (!question) return { error: `Question ${index + 1} has no question text.` };
+    if (question.length > QUESTION_CHARS) return { error: `Question ${index + 1} is longer than ${QUESTION_CHARS} characters.` };
+    const header = text(item.header).slice(0, HEADER_CHARS);
+    const rawOptions = Array.isArray(item.options) ? item.options : [];
+    if (rawOptions.length === 1 || rawOptions.length > MAX_OPTIONS) return { error: `Question ${index + 1} needs no options (a free answer) or 2 to ${MAX_OPTIONS} options.` };
+    const options: Question["options"] = [];
+    const seen = new Set<string>();
+    for (const option of rawOptions) {
+      const record = option && typeof option === "object" ? option as Record<string, unknown> : {};
+      const label = text(record.label);
+      if (!label || label.length > LABEL_CHARS) return { error: `Every option of question ${index + 1} needs a label of 1 to ${LABEL_CHARS} characters.` };
+      if (seen.has(label.toLowerCase())) return { error: `Question ${index + 1} has two options labelled ${label}.` };
+      seen.add(label.toLowerCase());
+      const description = text(record.description).slice(0, DESCRIPTION_CHARS);
+      options.push(description ? { label, description } : { label });
+    }
+    questions.push({ question, header, options, multiSelect: item.multiSelect === true && options.length > 0 });
+  }
+  return { questions };
+}
+
+export const ASK_USER_TOOL: ToolDefinition = {
+  schema: {
+    name: "ask_user",
+    description: "Ask the user one to four questions when you cannot go on without their decision, and offer the likely answers as options. The turn ends with the questions; it continues when the user answers, with their answers as this call's result. The user can always write their own answer instead. Do not ask what you can find out with the other tools.",
+    parameters: {
+      type: "object",
+      properties: {
+        questions: {
+          type: "array",
+          minItems: 1,
+          maxItems: MAX_QUESTIONS,
+          items: {
+            type: "object",
+            properties: {
+              question: { type: "string", description: "The full question, ending with a question mark." },
+              header: { type: "string", description: "A label of a few words, such as Database or Scope." },
+              options: { type: "array", maxItems: MAX_OPTIONS, items: { type: "object", properties: { label: { type: "string" }, description: { type: "string", description: "What choosing it means." } }, required: ["label"] }, description: "Two to six answers to choose from. Leave it empty for a free answer." },
+              multiSelect: { type: "boolean", description: "True when more than one option may be chosen." },
+            },
+            required: ["question"],
+          },
+        },
+      },
+      required: ["questions"],
+    },
+  },
+  // Asking needs no approval: it changes nothing.
+  kind: "read",
+  validate: (_root, input) => {
+    const parsed = parseQuestions(input);
+    return "error" in parsed ? parsed.error : undefined;
+  },
+  run: (_root, input) => {
+    const parsed = parseQuestions(input);
+    if ("error" in parsed) return { value: { kind: "error", message: parsed.error } };
+    return { value: { kind: "question", questions: parsed.questions } };
+  },
+};
+
+/** The request the app's question card renders. Question ids are positional and stable. */
+export function questionRequest(sessionId: string, pending: PendingQuestion): UserInputRequest {
+  return {
+    sessionId,
+    turnId: pending.turnId,
+    userInputId: pending.userInputId,
+    itemId: pending.itemId,
+    toolCallId: pending.callId,
+    toolName: pending.toolName,
+    viewCursor: "",
+    questions: pending.questions.map((question, index) => ({
+      id: `q${index + 1}`,
+      header: question.header,
+      question: question.question,
+      options: question.options,
+      selection: question.multiSelect ? { mode: "multiple", minSelections: 1, maxSelections: question.options.length } : { mode: "single" },
+    })),
+  };
+}
+
+class AnswerError extends Error {}
+
+function answerLine(question: Question, answer: UserInputAnswer | undefined): string {
+  if (!answer) throw new AnswerError(`Answer every question: ${question.question}`);
+  const labels = new Set(question.options.map((option) => option.label));
+  let chosen: string;
+  if (typeof answer.freeText === "string") {
+    const free = answer.freeText.trim();
+    if (!free || free.length > ANSWER_CHARS) throw new AnswerError(`An answer must have 1 to ${ANSWER_CHARS} characters.`);
+    chosen = `In their own words: ${free}`;
+  } else if (question.multiSelect) {
+    const picked = answer.selectedLabels ?? [];
+    if (!picked.length || picked.some((label) => !labels.has(label))) throw new AnswerError(`Choose options listed for: ${question.question}`);
+    chosen = picked.join(", ");
+  } else {
+    if (!answer.selectedLabel || !labels.has(answer.selectedLabel)) throw new AnswerError(`Choose an option listed for: ${question.question}`);
+    chosen = answer.selectedLabel;
+  }
+  const note = typeof answer.note === "string" && answer.note.trim() ? ` (note: ${answer.note.trim().slice(0, ANSWER_CHARS)})` : "";
+  return `- ${question.question}\n  ${chosen}${note}`;
+}
+
+/**
+ * The call's result for each way the user can settle it: the model's text and
+ * a short line for the transcript. Throws when the answers do not fit the questions.
+ */
+export function settlement(pending: PendingQuestion, response: UserInputResponse | { action: "superseded" }): { output: string; summary: string; outcome: "answered" | "clarified" | "cancelled" | "superseded" } {
+  if (response.action === "answer") {
+    const lines = pending.questions.map((question, index) => answerLine(question, response.answers.find((answer) => answer.questionId === `q${index + 1}`)));
+    return { output: `The user answered:\n${lines.join("\n")}`, summary: lines.map((line) => line.split("\n  ")[1]).join(" · "), outcome: "answered" };
+  }
+  if (response.action === "clarify") {
+    const reply = response.text.trim();
+    if (!reply || reply.length > ANSWER_CHARS) throw new AnswerError(`An explanation must have 1 to ${ANSWER_CHARS} characters.`);
+    return { output: `The user did not choose an answer. They wrote instead:\n${reply}`, summary: `Explained: ${reply}`, outcome: "clarified" };
+  }
+  if (response.action === "cancel") {
+    return { output: "The user declined to answer. Go on with your best judgment and say what you assumed, or stop if you cannot.", summary: "Declined to answer", outcome: "cancelled" };
+  }
+  return { output: "The user did not answer and sent a new message instead. If that message answers the question, use it.", summary: "Not answered", outcome: "superseded" };
+}

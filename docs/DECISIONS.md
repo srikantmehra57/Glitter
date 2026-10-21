@@ -792,3 +792,26 @@ must respect. Don't log routine changes here; they belong in git history and
   sent, so a queued turn runs the skill as it was then. The transcript keeps
   what the user typed; the model receives the tool's own rendering. An unknown
   name fails with `skillNotFound`, which makes the app refresh its list.
+
+### A Harness question ends the turn
+
+- **Date:** 2026-10-21
+- **Decision:** The harness's `ask_user` tool does not block inside a turn the
+  way an approval does. A model reply that asks ends its turn: the question,
+  with the other results of the same batch, is written to the session log, and
+  the thread is idle with the question card showing. The answer becomes that
+  call's result and a new turn continues from it. Declining or explaining
+  continues too, with a result that says so, so the history stays valid.
+- **Why:** A question can wait for hours. Holding a turn, a provider stream
+  and an abort controller open for that long is fragile, and a 10-minute
+  expiry like approvals have would throw the question away. A logged question
+  survives a restart and reopens with the thread.
+- **No wedge:** Any new message from the user settles an unanswered question
+  first, with a result that says the user moved on, so the tool message always
+  precedes the next user message.
+- **App contract:** The `userInputs` event carries `turnEnded: true`, so the
+  store leaves the thread idle (a Muse question arrives mid-turn and still marks
+  it running), and the turn that continues after an answer is announced with
+  `turnStarted` and `cause: "userInput"`. The card is the existing
+  `UserInputCard`: answers, "Let me explain" and "Decline to answer" map onto
+  the same response shape Muse uses.

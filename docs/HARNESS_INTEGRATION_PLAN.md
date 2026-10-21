@@ -323,8 +323,9 @@ read-only; a guard denial survives a policy listener that says allow.
 
 ## Phase 5 — App parity
 
-**Status: in progress.** 5.1 is done (2026-10-21, with the DECISIONS entry
-"Harness skills are folders it discovers each turn"); 5.2–5.5 are not started.
+**Status: in progress.** 5.1 and 5.2 are done (2026-10-21, with the DECISIONS
+entries "Harness skills are folders it discovers each turn" and "A Harness
+question ends the turn"); 5.3–5.5 are not started.
 
 - [x] 5.1 `harness/skills.ts`: a skill is a folder with a `SKILL.md` whose
       frontmatter has `name` (the folder name when missing) and
@@ -341,6 +342,18 @@ read-only; a guard denial survives a policy listener that says allow.
       typed, the model gets the same `<skill_content>` rendering the tool
       returns. The composer, the slash menu and Extensions list Harness skills
       through `listSkills`.
+- [x] 5.2 `harness/questions.ts`: `ask_user` takes one to four questions, each
+      with no options (a free answer) or two to six, single or multiple
+      choice. A batch that asks ends the turn: the batch's other results and
+      the question are written to the session log as a `question` record, and
+      the app gets a `userInputs` event marked `turnEnded` after
+      `turnCompleted`, so the thread is idle while the card waits. Answering,
+      explaining ("Let me explain") or declining completes the tool message
+      and starts a new turn (`turnStarted` with `cause: "userInput"`). A new
+      message settles an unanswered question first, so nothing can wedge. The
+      question survives a restart and reopens with the thread. Only the first
+      ask in a reply stands; with no approval channel the tool is not offered.
+      The card is the existing `UserInputCard`; no new UI.
 
 **Goal.** Give the harness the features the app already gives Muse.
 
