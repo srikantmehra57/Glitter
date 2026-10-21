@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/spark.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Muse Code</title>
+    <style>
+      /* First paint follows the OS until settings hydrate (theme defaults to system). */
+      html, body, #root { height: 100%; margin: 0; }
+      @media (prefers-color-scheme: dark) {
+        html { color-scheme: dark; }
+        html, body, #root { background: #0A0A0B; color: #f2f2f2; }
+      }
+      @media (prefers-color-scheme: light) {
+        html { color-scheme: light; }
+        html, body, #root { background: #e6e6e6; color: #18181a; }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

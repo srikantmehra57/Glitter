@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <defs>
+    <linearGradient id="tile-dark" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2C2C30"/>
+      <stop offset="1" stop-color="#18181A"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="64" height="64" rx="14" fill="url(#tile-dark)"/>
+  <rect x="0.5" y="0.5" width="63" height="63" rx="13.5" fill="none" stroke="#FFFFFF" stroke-opacity="0.14" stroke-width="1"/>
+  <g transform="translate(9 9) scale(0.75)">
+  <!-- Ember tile cluster: an M drawn as two tile pillars and a rounded
+       downward wedge between them (|▽|). Pillars are two stacked tiles each;
+       the wedge's top edge sits flush with the pillar tops and its apex drops
+       into the gap between the lower tiles. -->
+  <defs>
+    <linearGradient id="ember-dark" x1="2" y1="12.5" x2="62" y2="51.5" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#E8730C"/>
+      <stop offset="0.52" stop-color="#F5A313"/>
+      <stop offset="1" stop-color="#FFD24A"/>
+    </linearGradient>
+    <linearGradient id="sheen-dark" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.22"/>
+      <stop offset="0.45" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <g fill="url(#ember-dark)">
+    <rect x="2" y="12.5" width="18" height="18" rx="5.5"/>
+    <rect x="2" y="33.5" width="18" height="18" rx="5.5"/>
+    <rect x="44" y="12.5" width="18" height="18" rx="5.5"/>
+    <rect x="44" y="33.5" width="18" height="18" rx="5.5"/>
+    <path d="M 28.458 12.500 L 35.542 12.500 A 4.0 4.0 0 0 1 39.356 17.705 L 35.814 28.921 A 4.0 4.0 0 0 1 28.186 28.921 L 24.644 17.705 A 4.0 4.0 0 0 1 28.458 12.500 Z"/>
+  </g>
+  <g fill="url(#sheen-dark)">
+    <rect x="2" y="12.5" width="18" height="18" rx="5.5"/>
+    <rect x="2" y="33.5" width="18" height="18" rx="5.5"/>
+    <rect x="44" y="12.5" width="18" height="18" rx="5.5"/>
+    <rect x="44" y="33.5" width="18" height="18" rx="5.5"/>
+    <path d="M 28.458 12.500 L 35.542 12.500 A 4.0 4.0 0 0 1 39.356 17.705 L 35.814 28.921 A 4.0 4.0 0 0 1 28.186 28.921 L 24.644 17.705 A 4.0 4.0 0 0 1 28.458 12.500 Z"/>
+  </g>
+</g>
+</svg>

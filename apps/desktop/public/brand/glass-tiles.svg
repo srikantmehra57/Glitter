@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 234" fill="none" role="img" aria-label="Frosted amber glass tiles">
+  <defs>
+    <linearGradient id="tileHot" x1="0" y1="0" x2="120" y2="120" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFC53D"/>
+      <stop offset="1" stop-color="#F59E0B"/>
+    </linearGradient>
+    <linearGradient id="tileDeep" x1="0" y1="0" x2="120" y2="120" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F59E0B"/>
+      <stop offset="1" stop-color="#D97706"/>
+    </linearGradient>
+    <linearGradient id="tilePale" x1="0" y1="0" x2="120" y2="120" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFE3A3"/>
+      <stop offset="1" stop-color="#FFC53D"/>
+    </linearGradient>
+    <radialGradient id="halo" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#F59E0B" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#F59E0B" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="soft" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="14"/>
+    </filter>
+    <filter id="frost" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="0.6"/>
+    </filter>
+  </defs>
+
+  <!-- warm halo behind the cluster -->
+  <ellipse cx="150" cy="117" rx="170" ry="120" fill="url(#halo)" filter="url(#soft)"/>
+
+  <!-- tile cluster, top-left -->
+  <g filter="url(#frost)">
+    <rect x="28" y="18" width="76" height="76" rx="20" fill="url(#tileHot)" opacity="0.92"/>
+    <rect x="110" y="18" width="76" height="76" rx="20" fill="url(#tilePale)" opacity="0.95"/>
+    <rect x="28" y="100" width="76" height="76" rx="20" fill="url(#tileDeep)" opacity="0.9"/>
+    <rect x="110" y="100" width="76" height="76" rx="20" fill="url(#tileHot)" opacity="0.95"/>
+    <rect x="192" y="100" width="76" height="76" rx="20" fill="url(#tilePale)" opacity="0.55"/>
+    <rect x="110" y="182" width="76" height="40" rx="20" fill="url(#tileDeep)" opacity="0.45"/>
+    <rect x="192" y="182" width="76" height="40" rx="20" fill="url(#tileHot)" opacity="0.35"/>
+  </g>
+
+  <!-- frosted sheen over the tiles -->
+  <g fill="#FFFFFF">
+    <rect x="28" y="18" width="76" height="34" rx="17" opacity="0.28"/>
+    <rect x="110" y="18" width="76" height="34" rx="17" opacity="0.35"/>
+    <rect x="28" y="100" width="76" height="34" rx="17" opacity="0.18"/>
+    <rect x="110" y="100" width="76" height="34" rx="17" opacity="0.28"/>
+  </g>
+
+  <!-- puzzle-link ribbon, right -->
+  <g transform="translate(-14 0)">
+  <path d="M292 30h34a26 26 0 0 1 26 26v22a20 20 0 0 0 20 20h6a26 26 0 0 1 26 26v44a26 26 0 0 1-26 26h-6a20 20 0 0 0-20 20v4a26 26 0 0 1-26 26h-78a26 26 0 0 1-26-26v-2a26 26 0 0 1 26-26h60a20 20 0 0 0 20-20v-42a20 20 0 0 0-20-20h-14a26 26 0 0 1-26-26V56a26 26 0 0 1 26-26Z"
+    fill="#FFFFFF" opacity="0.92"/>
+  <path d="M292 30h34a26 26 0 0 1 26 26v22a20 20 0 0 0 20 20h6a26 26 0 0 1 26 26v44a26 26 0 0 1-26 26h-6a20 20 0 0 0-20 20v4a26 26 0 0 1-26 26h-78a26 26 0 0 1-26-26v-2a26 26 0 0 1 26-26h60a20 20 0 0 0 20-20v-42a20 20 0 0 0-20-20h-14a26 26 0 0 1-26-26V56a26 26 0 0 1 26-26Z"
+    fill="url(#tilePale)" opacity="0.35"/>
+  </g>
+</svg>

@@ -1,0 +1,31 @@
+version: 2
+updates:
+  # Keeps the commit-SHA pins in workflows/ fresh.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown: { default-days: 7 }
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    cooldown: { default-days: 7 }
+    groups:
+      npm-minor-patch:
+        applies-to: version-updates
+        update-types: [minor, patch]
+    ignore:
+      # This exact pin moves with BRIDGE_SDK_VERSION in host.ts and its test.
+      - dependency-name: "@muse-code/sdk"
+  - package-ecosystem: cargo
+    directory: /apps/desktop/src-tauri
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    cooldown: { default-days: 7 }
+    groups:
+      cargo-minor-patch:
+        applies-to: version-updates
+        update-types: [minor, patch]

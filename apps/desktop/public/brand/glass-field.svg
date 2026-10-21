@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800" fill="none" preserveAspectRatio="xMidYMid slice" role="img" aria-label="Warm amber ambience">
+  <defs>
+    <radialGradient id="warmTL" cx="0.2" cy="0.15" r="0.55">
+      <stop offset="0" stop-color="#F59E0B" stop-opacity="0.5"/>
+      <stop offset="1" stop-color="#F59E0B" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="warmBR" cx="0.85" cy="0.9" r="0.5">
+      <stop offset="0" stop-color="#EA580C" stop-opacity="0.32"/>
+      <stop offset="1" stop-color="#EA580C" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="warmTC" cx="0.6" cy="0" r="0.4">
+      <stop offset="0" stop-color="#FFD66B" stop-opacity="0.4"/>
+      <stop offset="1" stop-color="#FFD66B" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="tiles" width="150" height="150" patternUnits="userSpaceOnUse">
+      <rect x="18" y="18" width="114" height="114" rx="30" fill="#FFFFFF" opacity="0.05"/>
+    </pattern>
+  </defs>
+  <rect width="1200" height="800" fill="url(#warmTL)"/>
+  <rect width="1200" height="800" fill="url(#warmBR)"/>
+  <rect width="1200" height="800" fill="url(#warmTC)"/>
+  <rect width="1200" height="800" fill="url(#tiles)"/>
+</svg>

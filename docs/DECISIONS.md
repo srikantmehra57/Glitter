@@ -1,0 +1,676 @@
+# Decisions
+
+These are the architectural decisions a new contributor needs to know about. Add
+an entry when you make a choice that's expensive to reverse or that later work
+must respect. Don't log routine changes here; they belong in git history and
+`CHANGELOG.md`.
+
+---
+
+### Suggestion turns cannot read the workspace
+
+- **Date:** 2026-10-15
+- **Decision:** Predictive suggestions run on a host that is not the user's
+  session host. The OS sandbox denies reading that workspace: seatbelt appends
+  a last-match `file-read-data` deny, and bubblewrap mounts an empty directory
+  over the project after the writable binds. The prompt carries file names,
+  the branch, uncommitted paths, and thread titles. The deny root is fixed at
+  spawn, so a different workspace restarts the quiet Muse host. Do not deny
+  `/`, the home directory, or temp, and do not re-allow a config path that
+  contains or sits inside the workspace.
+- **What stays unwrapped:** The interactive Muse host. An outer write sandbox
+  there prevents `sandbox_apply` in shell commands the user approves. The
+  quiet host disables write and shell, so wrapping only that process is safe.
+  ACP suggestions use their own host: its cwd is the temp directory, and the
+  workspace is not a write root. Windows has no seatbelt or bubblewrap; the
+  cwd and the omitted path are the best effort there.
+- **Failure:** If the quiet host cannot start under the deny, the empty state
+  keeps the static tiles.
+
+### Agent catalogs and Contributor routing follow the current CLI protocol
+
+- **Date:** 2026-10-13
+- **Decision:** ACP models come from the agent's initialization metadata or
+  session config options. OpenCode v2's interactive `models` command is not a
+  catalog API. Before a user thread exists, create a prompt-free session in
+  the confined temporary directory, then close it if the agent supports closing.
+  Share concurrent discovery requests, invalidate on a new process and force
+  discovery on Rescan. Keep authentication errors visible and preserve the
+  usable catalog if a refresh fails.
+- **Contributor routing:** Muse subscriber Contributor mode is a CLI setting,
+  separate from a model ID. An explicit choice in Settings → Models becomes
+  `--contributor-mode on|off` when the host restarts. No choice means no flag,
+  preserving the user's CLI preference. Do not synthesize Contributor variants
+  from base rows or silently enable training consent. Keep actual legacy
+  pay-as-you-go Contributor rows and selections supported.
+- **Sources:** [OpenCode ACP configuration](https://dev.opencode.ai/v2/docs/cli/acp/)
+  and [Muse CLI changelog](https://dev.meta.ai/docs/muse-code/changelog).
+
+### Markdown export is a projection of the Muse session log
+
+- **Date:** 2026-10-12
+- **Decision:** "Export Markdown" runs `muse export` and renders a readable
+  transcript from that document (export schema 1). It is not a second copy of
+  the session, and it is not the full log.
+- **What it keeps:** messages, thought text the host recorded in the clear,
+  tool calls, approvals and run outcomes that are not a plain completion.
+  Share-safe and raw follow the same flag as the JSON export.
+- **What it leaves out:** encrypted reasoning blobs, and every other event.
+  The header says the file is not the full export. A schema other than 1 is
+  refused; the JSON export is the way to keep that document. A log over 64 MiB
+  is refused for the same reason.
+
+### The terminal pane is a deliberate exception to "the renderer is untrusted"
+
+- **Date:** 2026-10-12
+- **Decision:** The app has an integrated terminal: the user's login shell on
+  a PTY, started in a granted folder, with keystrokes sent from the webview.
+  The owner chose this knowing the cost below.
+- **What it changes:** Every other native command authorizes what it is asked
+  to do. A terminal cannot: whatever the renderer writes to it runs as the
+  user. Code running in the webview can therefore open a terminal and execute
+  arbitrary commands, which the earlier model ruled out. The webview renders
+  agent output and repository content, so the protections that remain matter
+  more than before: the strict CSP (no remote or inline script), text-only
+  rendering of agent output, and the strict span adapter for highlighted code.
+- **Limits that still hold:** a terminal starts only in a folder with a live
+  grant, as the user's own shell with the user's environment (the API key is
+  in the keychain, not the environment). At most eight are open. Each write is
+  capped at 64 KB. Terminal ids are unguessable. A terminal ends, with the
+  process group it leads, when its pane closes, when its grant or worktree is
+  revoked, and when the app shuts down.
+- **"Disable shell" turns it off.** The setting is a promise about the app, not
+  only about the agent. The renderer hides the terminal when it is on, and the
+  native side refuses `terminal_open` after a host start that carried
+  `disableShell`. The native check follows the host's posture because settings
+  live in the renderer; before any host has started, only the renderer's check
+  applies.
+- **Dependencies:** `portable-pty` 0.9 (MIT) for the PTY, since the standard
+  library has none and the crate covers macOS, Linux and Windows ConPTY; and
+  `@xterm/xterm` 6 with `@xterm/addon-fit` (MIT) for rendering, since a
+  terminal emulator is not something to hand-write. The renderer is a lazy
+  chunk loaded on first use, so the main bundle does not grow.
+- **Not built:** multiple tabs, a shell that survives the pane closing,
+  scrollback persistence, and links from terminal output.
+
+### One shortcut table drives the key handler, the labels and the native menu
+
+- **Date:** 2026-10-12
+- **Decision:** `lib/shortcuts.ts` lists every rebindable action with its
+  default chord (a platform modifier, optional Shift and Alt, and a physical
+  key code). The key handler looks a pressed chord up in it, tooltips and the
+  palette read their labels from it, and Settings stores only the user's
+  overrides. A shortcut handled anywhere else cannot be rebound or shown.
+- **Native menu:** in the desktop shell the menu owns the chords of its own
+  items and consumes the key before the webview, so the handler skips those
+  there and the menu event runs the action. When an override touches a menu
+  item, the renderer sends the new accelerators and `set_menu_shortcuts`
+  rebuilds the menu. It accepts only the menu ids this app forwards and a
+  closed accelerator grammar; the menu's structure and labels are fixed.
+- **Not rebindable:** text entry keys, approval keys, Esc, ⌘1–9, Ctrl+Tab and
+  ⌘G. They are either positional or tied to what has focus, and rebinding onto
+  them, or onto cut, copy, paste, undo, quit, close, hide and minimize, is
+  refused.
+
+### Preferences save at once; host settings wait for a restart
+
+- **Date:** 2026-10-12
+- **Decision:** Settings no longer batches every edit behind Save changes.
+  Theme, accent, notifications, defaults, agent visibility, the editor choice
+  and custom commands are committed as they change. The settings the Muse host
+  is constructed with (`ephemeralSessions`, `disableWrite`, `disableShell`,
+  `sandboxNetwork`, `museAuthMode`, `museApiKey`, `museBin`) stay in the
+  dialog's draft until "Save & restart connection", because applying one means
+  restarting the host. Cancel discards only those. The list is `RESTART_KEYS`
+  in `SettingsModal.tsx`; a new host-construction setting belongs in it.
+- **Reason:** One dialog had three saving models (Save, an immediate toggle,
+  Save & restart). The split now follows a real difference: whether the change
+  costs a restart.
+- **Editor choice:** the renderer stores an editor id. `open_path` maps the id
+  to a program through a closed native list and refuses anything else, so the
+  renderer never names a program or a path to one.
+- **Custom commands** are prompt text stored with the settings. Choosing one
+  inserts its text into the composer, where the user sees and can edit exactly
+  what will be sent; nothing is expanded at send time and there is no second
+  command format beside the CLI's skills.
+
+### Workspace tools read through grants, and network git runs as the user
+
+- **Date:** 2026-10-12
+- **File viewer:** `read_workspace_file` takes a grant and a workspace-relative
+  path. The path must be relative with no `..`, must resolve canonically inside
+  the grant root (so a symlink cannot leave it), must be a regular file, and
+  may not pass through a `.git` directory, lexically or after resolving
+  symlinks, because git metadata can hold credentials. The read stops at
+  256 KB; a file with a NUL byte in its first 8 KB is reported as binary and
+  not returned. The viewer is read-only: there is no write command, and
+  editing stays with the agent and the user's editor. Ignored files such as
+  `.env` can be viewed when asked for by path. The agent in the same workspace
+  can already read them, so refusing here would protect nothing.
+- **Branches:** `git_switch` accepts a name only after `git check-ref-format
+  --branch` (which also refuses a leading dash), switches only to an existing
+  local branch, and creates only a name that does not exist. Uncommitted
+  changes are left to git: they come along, or the switch is refused and
+  nothing moves.
+- **Push and pull requests:** `git_push` and `git_pull_request` run `git` and
+  the user's `gh` with the user's environment, so their credential helper, SSH
+  agent and `gh` login apply. The app never reads, stores or asks for a git
+  credential. Prompts are disabled (`GIT_TERMINAL_PROMPT=0`, SSH batch mode,
+  `GH_PROMPT_DISABLED`) and each call is bounded at two minutes, so a missing
+  credential fails instead of hanging. Push targets the branch's upstream, or
+  publishes to `origin` (or the only remote); it never force-pushes and never
+  takes a remote or refspec from the renderer. A pull request link is passed
+  to the renderer only when it is http(s). The UI confirms before each push.
+- **Pull** is fast-forward only (`git pull --ff-only --no-rebase`). A diverged
+  branch or a conflicting local edit is refused with nothing changed; merging
+  and rebasing stay with the user's git.
+- **No background network:** pull request status is read only when the user
+  pushes, creates or refreshes. Nothing polls GitHub.
+- **Line comments** are renderer-only. They are kept per thread in session
+  memory and sent through the normal send or steer path as text; there is no protocol
+  field for them.
+
+### A worktree thread gets a derived grant, not a wider one
+
+- **Date:** 2026-10-12
+- **Decision:** A new Muse thread can start in its own git worktree: a linked
+  worktree of the workspace repository on a new `muse/<id>` branch, stored under
+  the app data directory in `worktrees/<digest of the repository root>/<id>`.
+  `git_worktree_create` takes the workspace grant and an optional base, creates
+  the worktree, and mints a grant for its root. The thread's session, snapshots,
+  Changes, review, file index and opened files all use that grant. The thread
+  still belongs to its workspace in the sidebar.
+- **Why a derived grant is safe:** It is the one grant not minted by the folder
+  picker. Its root is a directory the command itself just created inside the
+  app's own store, for a repository the caller already holds a grant for. The
+  renderer names neither the path nor the branch. A grant on a subfolder of a
+  repository is refused, because a worktree checks out the whole repository and
+  would expose the subfolder's siblings. Worktrees do not nest.
+- **Removal:** `git_worktree_remove` accepts only grants rooted at worktree
+  depth inside the store, so it can never delete a folder the user opened. It
+  discards the worktree with its uncommitted files (the UI confirms first and
+  names the branch) and revokes the grant. The branch is deleted only when
+  another ref still reaches its tip, so no commit is lost; otherwise it is kept
+  and the user is told. The branch name is read from the repository's own
+  worktree table, not from files inside the worktree, which an agent can rewrite.
+  A worktree goes with its last thread: forks share their source's worktree.
+- **Revoking the workspace:** Removing a workspace revokes its worktree grants
+  with it. Worktrees with nothing uncommitted are removed; ones that still hold
+  changes stay on disk for the user to recover with git, since removing a
+  workspace from the sidebar never asked to discard work.
+- **Listing:** The CLI files a worktree session under the worktree's root, so a
+  workspace listing does not return it. The renderer keeps each thread's
+  worktree record in session memory and lists each worktree through its own
+  grant, which also binds its sessions natively. Only sessions with a record
+  become threads. A stale or forged record gains nothing: the grant id still
+  has to be live in the native table.
+- **Handoff:** `git_worktree_handoff` applies a worktree's net changes (its
+  commits plus staged, unstaged and new files since the merge base with the
+  workspace's HEAD) to the workspace folder as uncommitted edits. The patch is
+  built through a throwaway index, so the worktree's index and files are not
+  touched, and it is carried as raw bytes so files in any encoding survive.
+  `git apply --check` runs first: either the whole patch lands or nothing in
+  the workspace changes. Nothing is staged, committed, merged or removed. The
+  destination is found natively from the worktree's own grant and must still
+  be granted; the renderer names no path. Patches over 20 MB are refused.
+- **Limits:** A worktree starts from a commit, so uncommitted changes in the
+  workspace folder do not come along, and the repository needs at least one
+  commit. Ignored files (dependencies, build output, `.env`) are not copied.
+  Workspace trust is a host-wide setting and is not re-prompted per worktree.
+  Handoff applies changes as a patch, not a merge, so the worktree's commit
+  history stays on its branch.
+
+### Review scopes are separate from working-tree mutations
+
+- **Date:** 2026-10-12
+- **Decision:** All changes keeps the existing working-tree snapshot and its
+  discard controls. The Diff selector also offers Staged (HEAD → index),
+  Unstaged (index → worktree plus new files), Branch (merge-base of a chosen
+  base and HEAD → HEAD), and Last turn (the owning thread's latest finished
+  turn's saved before → after trees). Branch resolves both revisions once;
+  uncommitted edits and changes unique to the base branch are excluded.
+- **Native boundary:** `git_review` takes a grant and a strict request with a
+  closed scope enum. Last turn additionally requires the owning session and
+  opaque snapshot id, with grant/root/session/state/expiry checks. Read access
+  is checked again before returning. Last turn works without a workspace Git
+  repository and stays immutable after Undo or subsequent file edits. It has
+  no fallback to HEAD or an older turn when the requested state is missing.
+- **Bounds and reuse:** Metadata and patches share the existing capped Git
+  reader (1.5 MB per output), with at most 2,000 scoped files. Unstaged uses the
+  existing untracked preview limits and skip reasons. Ordinary reads remove
+  ambient Git repository/index overrides, disable fsmonitor and use
+  `--no-optional-locks`; saved-tree reads use the private snapshot environment.
+  The workspace index, refs and files are not modified.
+- **UI ordering:** Scope results and errors belong to a workspace path, grant,
+  thread, scope, base and saved-state identity. Navigation, new requests and
+  Git mutations supersede pending answers. Scope changes clear file tabs;
+  opening a path from Changes returns to All changes. Other scope views are
+  read-only because the existing discard/hunk operations act on the combined
+  worktree diff. Copy/export use the displayed patch; Open current file
+  explicitly opens its present workspace path.
+
+### Message edits fork at the preceding canonical turn
+
+- **Date:** 2026-10-12
+- **Decision:** Muse edits use the inclusive MSP `lastTurnId` cut for the turn
+  before the edited prompt, then send the revised prompt and its attachments in
+  the new session. Local groupings, missing history and extra prompts inside a
+  turn cannot stand in for a canonical boundary. A first message requires
+  exhausted history and starts an empty session: the pinned SDK has no
+  empty-history fork cut. Its provenance says **Edited from**, rather than
+  asserting that the CLI created a history fork. ACP retains append/resend.
+- **Ordering:** Fork/resume returns the canonical items it emitted while
+  attaching; the renderer seeds the new row from that response because item
+  events can precede row registration. Its canonical order is reconciled with
+  partial early streams while preserving newer item contents. An explicit cut acknowledgement and
+  usable history are required before a revised prompt is sent. Create retries
+  reuse `clientRequestId`, and failed sends keep the fork draft. A completed
+  edit retires its create retry; editing the source again creates a new fork.
+  Navigation or grant replacement during the operation keeps the edit as a
+  draft without selecting, resetting files or sending in another workspace.
+- **Files:** Reset files too is opt-in and confirmed. Create the fork first,
+  then reuse B1's native restore for the edited turn only, then select and send.
+  A conflicting restore sends nothing. This does not reset every later turn:
+  unrelated later changes remain, while later edits to an affected file can
+  block its restore. No transcript truncation or new native file command is
+  introduced, and the source thread’s composer draft remains separate.
+
+### Turn file states use a private native Git object store
+
+- **Date:** 2026-10-12
+- **Context:** Restoring a receipt's paths from HEAD destroys edits made before
+  or after the turn and cannot be reapplied. File restoration also crosses the
+  native workspace-grant boundary.
+- **Decision:** Rust captures the workspace immediately before an authorized
+  `sendTurn` enters the bridge and captures its end state before forwarding the
+  trusted terminal event. Raw file bytes and executable bits live in a private
+  bare repository under app-data `turn-snapshots`; an independent disposable
+  index builds the trees. The workspace index, HEAD and refs never move. This
+  also works in non-git folders, without creating a workspace repository.
+  Private [`info/attributes` overrides](https://git-scm.com/docs/gitattributes)
+  disable content conversions for capture and restore, preserving CRLF, ident
+  expansions and encoded/binary bytes. Files in the before tree remain eligible
+  for the end capture even when ignore rules change during the turn.
+- **Restore:** Grant, canonical root, session and opaque snapshot id must all
+  match. Undo requires every affected file to match the end state; Reapply
+  requires the before state. Both preflight the full contents and modes and use
+  [Git's checked index apply](https://git-scm.com/docs/git-apply) against the
+  private index, so normal conflicts refuse the entire restore. Unrelated
+  later edits remain. A saved intent reconciles an interrupted restore after
+  relaunch; mixed states disable restoration and retain the saved objects for
+  inspection. Disk failures and process termination cannot guarantee atomic
+  writes across several filesystem paths.
+- **Bounds:** 2,000 files, 2 MiB per file, 32 MiB per tree, an 8-second scan
+  budget checked between files, 10 seconds per Git subprocess and 1 MiB of
+  metadata per record. Git workspaces
+  include tracked and non-ignored untracked paths; non-git scans include
+  dotfiles and skip `.git` and the file index's build/dependency directories.
+  Symlinks, submodules, special files, non-UTF-8 paths and backslash filenames
+  disable Undo. Snapshot metadata returns when a thread opens; saved contents
+  reach the renderer only as bounded, explicitly requested review patches.
+  Storage is private
+  to the OS account, expires after seven days, and retains at most 100 completed
+  records (active records remain until a terminal event; excess runs do not
+  capture file contents). Thread deletion removes its refs and collects objects.
+- **Lifecycle:** Queued, external, overlapping or disconnected turns never get
+  a baseline captured after work begins. Failed/cancelled turns can restore
+  changes when both states were captured. Retry keys reuse the original baseline.
+  Active work and user shells block restores in overlapping workspace roots;
+  deletion and stopping notices do not assert a process has already stopped.
+  Shell or other-app edits made during the turn cannot be separated from agent
+  edits, which the confirmation explains. Older history has no destructive
+  fallback. Message rewind reuses this restore; Last turn review reads its
+  saved trees without restoring them.
+- **Reason:** One restore mechanism covers binary, created, deleted and mode-only
+  changes without a new dependency, replacing HEAD-based discard with reversible
+  workspace state while preserving the CLI as the source of thread history.
+
+### The app has its own agent harness
+
+- **Date:** 2026-10-21
+- **Context:** Depending on installed agent CLIs made the app fragile: Grok
+  and Homebrew updates broke binary pins, OpenCode Zen accounts rejected free
+  models, and every agent needed its own sign-in. The product is moving from a
+  GUI for Muse Code to an independent agent harness.
+- **Decision:** The bridge hosts a built-in agent (`harness/`) that calls model
+  providers directly with the user's own keys (Anthropic, any OpenAI-compatible
+  API, local servers) and runs its own tool loop. This supersedes "The CLI is the
+  engine" for that agent; Muse and the ACP agents remain supported clients.
+- **Constraints kept:**
+  - Provider keys live in the OS keychain (`credentials.rs`); the renderer sees
+    masks only. Native code injects keys into harness requests alone, and a
+    custom endpoint's URL is stored with its key so a key cannot be redirected.
+  - Tools resolve every path inside the workspace after following symlinks. The
+    shell runs under the same OS write sandbox and minimal environment as ACP
+    agents, so it never sees provider keys.
+  - Edits and commands follow the app's permission modes (read only, ask,
+    auto-review, unrestricted) and Plan mode, through the existing approval cards.
+  - Sessions are the harness's own JSONL files in the app data folder.
+- **Consequences:** The app now owns agent behaviour for this agent: the
+  system prompt, tool set, retries, context trimming and provider quirks are
+  ours to maintain. Effort support per model follows published families
+  (`effortTiers`), since providers do not report it.
+
+### A tool result is three channels, and the model pages what does not fit
+
+- **Date:** 2026-10-21
+- **Decision:** Each harness tool returns a typed value. `render()` is the only
+  text the model reads. `presentationMeta()` is pure card state persisted on
+  the transcript item, so a write's before/after redraws without reading the
+  file again. A truncated read, search or listing carries `next_offset`, the
+  unit (`line`, `match` or `file`) and the tool call that fetches the next
+  slice. Output past the inline budget is written under `.muse/tool-output`
+  in the workspace (mode 0600, directory 0700, a single encoded filename) and
+  replaced with a receipt that says how to search it and that the receipt is
+  not evidence. If that write fails, the inline result stays. The turn only
+  does this when a read tool is available, which the built-in set always is.
+- **Parallelism:** A tool runs beside other tools only when
+  `isConcurrencySafe` is exactly true (`read_file`, `list_files`, `grep`).
+  Anything else, including an unknown name, runs alone after the pool is idle.
+  Results are committed in the model's call order. A call that never started
+  because the turn was stopped still gets a result, so the history stays valid.
+- **Repeats:** The same tool and the same deep key-sorted arguments are one
+  chain. The second, fifth and eighth calls add a labelled harness note to
+  the result. The call still runs. A user message, including a steer, clears
+  the chain.
+- **Provider errors:** `ProviderError` carries a code (`RATE_LIMIT`,
+  `CONTEXT_WINDOW_EXCEEDED`, `MISSING_CREDENTIAL`, `INVALID_CREDENTIAL`,
+  `EMPTY_RESPONSE`, and the transport codes). Retries follow the code. A
+  missing key and a rejected key stay different, and a context-window overflow
+  is not retried. The two-minute retry budget is unchanged.
+- **Saved output stays scratch:** the folder holds a `.gitignore` of `*`, so
+  saved output never appears in git status or the review as a project change.
+  `read_file` is never saved this way, because it is how saved output is read
+  back: a single line longer than its budget is cut there with a note, and
+  paging goes on from the next line. A receipt keeps the paging instruction of
+  the slice it replaced, since the artifact holds that slice only.
+- **A stream must end:** a provider stream that closes with no frame is
+  `EMPTY_RESPONSE`, and one that closes without its end marker (Anthropic's
+  stop reason or `message_stop`, OpenAI's `finish_reason` or `[DONE]`) is
+  `STREAM_CLOSED`. Both are retried inside the same budget; a partial reply is
+  never taken as the answer. A stop by the user still keeps what arrived.
+- **Not in this decision:** a tool registry, permission scopes, and any new
+  bridge verb. Cards read `presentation` on the existing item. Saved output is
+  read back with `read_file`.
+
+### The CLI is the engine; the app is a client
+
+- **Superseded in part (2026-10-21):** still true for Muse and the ACP agents;
+  the built-in harness above runs its own loop.
+
+- **Date:** 2026-09-18
+- **Context:** Muse already has a complete agent runtime and a session protocol
+  (MSP, served by `muse serve`).
+- **Decision:** The desktop app runs no models and executes no tools itself. It
+  drives the official CLI and shows what the CLI reports.
+- **Reason:** One source of truth for sessions, approvals and billing, and CLI
+  upgrades reach the app without a rewrite.
+- **Consequences:** Features depend on what the protocol exposes. The UI must
+  not invent state, such as fake chain-of-thought or a local copy of history.
+
+### Tauri 2 with the system webview, not Electron
+
+- **Date:** 2026-09-18
+- **Decision:** Native shell in Rust (Tauri 2). The UI renders in the OS webview.
+- **Reason:** A small footprint, and a native trust boundary separate from the
+  web content.
+- **Consequences:** UI code must work in WebKit (macOS), WebView2 (Windows) and
+  WebKitGTK (Linux). Privileged work goes into Rust commands.
+
+### A separate Node bridge built on the official SDK
+
+- **Date:** 2026-09-18
+- **Decision:** MSP is spoken by `packages/muse-bridge`, a Node process that uses
+  `@muse-code/sdk` and talks to the shell over NDJSON on stdio. It isn't
+  reimplemented in Rust.
+- **Reason:** The SDK is the supported client. Reimplementing the protocol would
+  drift from it.
+- **Consequences:** The app ships its own Node runtime (the `muse-node` sidecar).
+  The SDK is pinned exactly, and moving the pin is a deliberate change. It was
+  re-pinned from 0.1.1 to 1.3.0 on 2026-09-21 to match the CLI's schema.
+
+### The renderer is untrusted
+
+- **Date:** 2026-09-20
+- **Context:** The webview renders agent output, repository content and tool
+  output, all of which are attacker-influenced.
+- **Decision:** The native shell authorizes every privileged operation itself:
+  - an allowlist of bridge verbs, each with a typed DTO
+  - (one exception, recorded above: the terminal pane, whose input the native
+    side cannot authorize)
+  - workspace grants minted only by the native folder picker (plus grants
+    derived for app-made worktrees of an already granted repository) and stored
+    in the OS keyring
+  - session and approval ownership bound from bridge traffic
+  - the API key held natively, with the renderer seeing only a mask
+- **Reason:** A compromised renderer must not be able to reach arbitrary paths,
+  sessions or credentials.
+- **Consequences:** Every new capability needs a native command or DTO. Folders
+  added before grants existed have to be re-opened once through the picker.
+
+### Release builds verify their own bridge
+
+- **Date:** 2026-09-20
+- **Decision:** `build.rs` bakes the SHA-256 of the bridge bundle into the binary.
+  Release builds refuse a script that doesn't match, and they never use the
+  user's Node.
+- **Reason:** Stops script swapping and PATH or `NODE_OPTIONS` hijacking.
+- **Consequences:** Any change to the bridge requires rebuilding the shell.
+  `MUSE_BRIDGE_SCRIPT` works in debug builds only.
+
+### Third-party agents are opt-in and isolated
+
+- **Date:** 2026-09-21
+- **Decision:** ACP agents (OpenCode, Grok, Gemini CLI, Qwen Code, Goose) are off
+  by default. Before one is enabled:
+  - the user gives informed consent, stored in the keyring
+  - the binary is pinned by digest
+  - it runs with a filtered environment and a confined working directory
+  - it runs under an OS write sandbox where one is available
+- **Reason:** These are third-party binaries running with the user's identity.
+- **Consequences:** Only Muse, OpenCode and Grok are marked verified. The others
+  are labeled experimental in `packages/muse-bridge/src/agents.ts`.
+
+### Muse owns its shell sandbox
+
+- **Date:** 2026-10-12
+- **Decision:** Start `muse serve` directly with a filtered environment and a
+  temporary working directory. Keep shell, write and network posture flags,
+  workspace trust and session approval modes under the existing CLI protocol.
+  ACP agents retain their separate OS isolation and consent requirements.
+- **Reason:** Applying the desktop's outer write sandbox makes Muse's nested
+  shell sandbox fail with `sandbox_apply: Operation not permitted` on macOS.
+  The outer wrapper also restricts approved escalation and Unrestricted sessions.
+- **Consequences:** Host diagnostics report `cli-managed`, which identifies the
+  sandbox owner without claiming an active session is sandboxed. This does not
+  pass `--disable-sandbox`, disable approvals or retry failed commands outside
+  Muse's permission policy. Restart the connection after updating the app.
+
+### The Mac Dock icon follows system appearance
+
+- **Date:** 2026-10-12
+- **Decision:** Keep one SVG spark source and generate light/dark native icon
+  assets with `npm run icons`. Update the running Dock icon through AppKit on
+  `RunEvent::Ready` and the main window's `ThemeChanged` event, on the main thread.
+  The interface SVG follows its containing document's color scheme.
+- **Reason:** The interface can use an explicit theme while the Dock belongs
+  to macOS. Keeping these choices separate preserves both expectations.
+- **Consequences:** No renderer command or new webview permission is needed.
+  The inactive Finder/launcher icon uses the generated light bundle icon;
+  the running app selects its Dock appearance without changing OS preferences.
+
+### One store, merged streaming
+
+- **Date:** 2026-09-21
+- **Decision:** All renderer state lives in one Zustand store. Stream deltas are
+  merged per animation frame, in the bridge and again in the store. Components
+  subscribe through narrow `useShallow` selectors, and long replies re-render
+  only the block being written.
+- **Reason:** Per-token `setState` re-rendered the whole window while streaming.
+- **Consequences:** `store.ts` is large; splitting it is open work (see the
+  README's known limitations). Use selectors, not whole-store subscriptions.
+
+### Permission vocabulary matches the CLI
+
+- **Date:** 2026-09-21
+- **Decision:** Approval modes are labeled as the CLI labels them: Read only,
+  Ask me, Auto-review, Unrestricted. "Unrestricted" (`allowAll`) can be set per
+  thread but not as the global default. A saved `allowAll` default falls back to
+  prompting.
+- **Reason:** Users move between the CLI and the app, and an unrestricted
+  default is too easy to forget about.
+
+### Settings persistence is atomic and native
+
+- **Date:** 2026-09-22
+- **Context:** The store plugin saves with truncate-and-write, so a crash
+  mid-save could destroy every draft and thread title.
+- **Decision:** `muse-desktop.json` is written by the native
+  `persist_store_atomic` command: temp file, then rename, with a `.bak` kept. An
+  unreadable file is quarantined as `.corrupt`, and the backup is restored. A
+  banner shows when persistence fails.
+
+### One running instance
+
+- **Date:** 2026-10-18
+- **Context:** The workspace-grant table in the keyring and `muse-desktop.json`
+  settings document are whole-table writes. Two instances make those writes
+  last-writer-wins, silently dropping grants or settings.
+- **Decision:** Register the official Tauri single-instance plugin first. Its
+  platform mechanisms are a Unix socket on macOS, D-Bus on Linux, and a named
+  mutex on Windows.
+- **Tradeoff:** Snap and Flatpak packaging would need a D-Bus slot declaration.
+
+### No public build until it is signed
+
+- **Date:** 2026-09-22
+- **Decision:** Artifacts stay unsigned, internal builds until there's a Developer
+  ID or Authenticode certificate and notarization. No auto-updater ships
+  without a signing key to verify its payloads.
+- **Consequences:** See [RELEASING.md](RELEASING.md) for the preconditions and
+  the six-manifest version bump.
+
+### Durable docs only
+
+- **Date:** 2026-10-04
+- **Context:** Audit reports, QA notes and plans from earlier work had built up
+  at the root and in `docs/muse-desktop-audit/`, with conflicting test counts and
+  status claims.
+- **Decision:** They were removed. Lasting content was folded into `docs/`
+  (architecture, development, design system, releasing, this log). Progress
+  reports and plans don't get committed.
+
+### Syntax colouring via highlight.js core, not a theme engine
+
+- **Date:** 2026-10-11
+- **Context:** C2 needs readable code in diffs, approval previews and Markdown.
+  Options were the all-language highlight.js bundle, a wasm-based
+  highlighter, or the bare core with a picked grammar list.
+- **Decision:** `highlight.js@11.12.0` core only. Twenty named grammars load
+  lazily per root language (each on an isolated `newInstance()` engine with
+  its finite sublanguage closure pre-registered), never `highlightAuto` and
+  never the root package. The raw output HTML is re-parsed into offset spans
+  by a strict adapter that accepts only `<span class>`/escaped-text grammar
+  and rejects anything else — decoded text must reproduce the source exactly.
+  Tokens map to four theme-aware `--syntax-*` colours we own; sources over
+  64Ki UTF-16 code units (or lines over 4096 chars), unknown languages and
+  any failure render plain, debounced at 120ms with a bounded result LRU. The
+  seam (`lib/syntax.ts` + `components/SyntaxCode.tsx`) is shared so a future
+  file viewer reuses it.
+- **Reason:** Smallest correct surface for the trust boundary — no foreign
+  markup or class names ever reach React, and lazy chunks keep the main
+  bundle free of highlighter code.
+- **Consequences:** New languages mean extending the alias map plus a new
+  dynamic grammar loader entry in `lib/syntax.ts` — never eager imports. Sublanguage cycles
+  (js↔xml) require the visited-set closure — never recursive await chains.
+
+### A closed surface lingers for its exit; it is never kept open for it
+
+- **Date:** 2026-10-12
+- **Decision:** Exit animations do not delay closing. When a dialog, menu or
+  section closes, the app's state, focus, inertness and the dialog `close`
+  event change at once. Only the pixels stay: `usePresence`
+  (`lib/presence.ts`) keeps the element mounted for one exit with a `closing`
+  class, and `useModalDialog` calls `close()` immediately and marks the dialog
+  `data-closing`, which the stylesheet uses to keep the now non-modal dialog
+  drawn, with a spread shadow standing in for the backdrop.
+- **Reason:** Keeping a modal open while it fades leaves the app behind it
+  inert, so a command that moves focus as it closes the palette (Find in
+  thread, Search threads) loses that focus. Delaying the store change would
+  also make every caller wait on an animation.
+- **Consequences:** A dialog component must draw from the last value it was
+  given (`useRetained`), because the store has already cleared it. The
+  programmatic `close()` swallows its own `close` event; without that, the
+  event arrives after the store has moved on and would dismiss a dialog that
+  reopened in the meantime (two confirmations in a row). Reduced motion, and
+  any environment without `matchMedia`, skips the linger entirely.
+
+### Frost & Ember: glass chrome, solid reading surfaces, ember accent
+
+- **Date:** 2026-10-13
+- **Decision:** The visual identity is Frost & Ember: a matte grey canvas with
+  frosted glass for chrome only (sidebar, composer, popovers, dialogs) while
+  transcripts, code and diffs always sit on solid surfaces. New installations
+  default to the `system` theme (Frost light / Smoke dark) and the `ember`
+  accent; a saved theme or accent is never touched. Popovers and menus fill
+  with near-opaque `--glass-strong` (.97 light / .95 dark) because a popover
+  nested inside another backdrop-filtered surface cannot blur what is behind
+  it — the fill must carry the obscuring. The website shares the identity but
+  drops the dotted Array display font for General Sans at light weight.
+- **Reason:** Nested `backdrop-filter` is a hard platform limit, so translucency
+  cannot be the only obscuring mechanism in menus that open over the composer.
+  System-default theme and an ember default accent apply only where no saved
+  preference exists, keeping upgrades invisible to existing users.
+- **Consequences:** Reading surfaces (transcript, code, diffs) must never get a
+  translucent fill. `EmberTiles` artwork is decorative, static, `aria-hidden`,
+  and needs a solid-fallback path when `backdrop-filter` is unavailable or
+  `prefers-reduced-transparency` is set. The icon generator contract is fixed:
+  the mark's inner SVG is embedded at 0.75 scale on an `rx=14` app-icon tile,
+  light and dark.
+
+### The Mac window is transparent over a sidebar material
+
+- **Date:** 2026-10-13
+- **Decision:** On macOS the main window is created transparent with the system
+  `sidebar` material behind the webview (`transparent` and `windowEffects` in
+  `tauri.conf.json`, `macOSPrivateApi` and the `macos-private-api` feature of
+  `tauri`). The page decides how much of it shows: the shell, the one surface
+  behind the sidebar and the gutter around the main panel, is painted at the
+  opacity `lib/theme.ts` resolves from the Appearance settings, and everything
+  else stays opaque. The window takes the interface's light or dark appearance
+  through `set_window_appearance`, which sets it on the `NSWindow` only.
+- **Reason:** A translucent sidebar needs something behind the page, and
+  WKWebView only stops drawing its own background through a private key
+  (`drawsBackground`), which Tauri gates behind that flag. The material follows
+  the window's appearance, so an explicit Light or Dark theme on the opposite
+  system setting would otherwise put dark glass under light text. Setting the
+  appearance on the window, not the application, leaves `NSApp` following
+  macOS, which is what the Dock icon reads (see the Dock icon decision).
+- **Consequences:** The app cannot ship through the Mac App Store while the
+  flag is on; distribution is a notarized download, as planned. The browser
+  preview keeps an opaque window and shows no translucency setting, where `?material` in a dev build turns
+  the control on for design work. The sidebar no longer has a glass fill or a
+  backdrop blur of its own, which amends the Frost & Ember decision: glass is
+  for the composer, popovers and dialogs. Reduced transparency, a translucency
+  of zero, or no material keep the shell fully opaque. Nothing but the shell
+  may be see-through: reading surfaces stay solid.
+
+### macOS is the only platform
+
+- **Date:** 2026-10-21
+- **Decision:** Muse Code is built, tested and shipped for macOS 13 or later
+  only. CI runs on macOS alone, and the bundle targets are `.app` and `.dmg`.
+  There are no Windows or Linux builds or installers.
+- **Reason:** The app leans on macOS throughout (the window material, the
+  Keychain, the seatbelt sandbox for agents), and a single platform is what
+  can be verified and supported. Keeping Linux CI meant working around runner
+  limits, such as AppArmor refusing bubblewrap its user namespaces, for a
+  version that would not ship.
+- **Consequences:** The Windows and Linux code paths were removed from the
+  source on the same date: bubblewrap isolation, Windows Job Objects (native
+  and in the bridge), `.exe`/`.cmd` binary lookup, Windows shells, Windows
+  environment variables in the child-env allowlists, Windows and Linux install
+  directories in binary search, and the Windows and Linux Node runtimes in the
+  sidecar script. The keyring and single-instance dependencies are macOS-only.
+  Earlier decisions that mention those platforms describe how the code was
+  written, not what ships.

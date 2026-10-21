@@ -1,0 +1,92 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  # Muse Code ships for macOS only (docs/DECISIONS.md, "macOS is the only platform").
+  test:
+    name: tests (macos)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: apps/desktop/src-tauri
+          cache-on-failure: true
+      # generate_context! bakes frontendDist at compile time, so the web
+      # bundle must exist before cargo builds — even for tests.
+      - name: Build web + bridge bundles
+        run: npm ci && npm run build:bridge && npm run build:ui
+      - name: Renderer chunks stay split
+        run: node scripts/check-chunks.mjs
+      # tauri-build hard-fails when the externalBin file is absent, even
+      # though debug/test builds spawn ambient node and never run the
+      # staged runtime. Stage it exactly like a release build does.
+      - name: Stage bridge sidecar
+        run: npm run build:sidecar -w @muse/bridge
+      # RELEASING.md counts the website build among the verify gates; a
+      # broken site used to ship undetected.
+      - name: Build website
+        run: npm run build:website
+      - name: Node tests
+        run: npm test
+        # A leaked handle once kept acp.test.mjs alive for hours; bound the
+        # step so a hang can never burn a full job window again.
+        timeout-minutes: 20
+      - name: DOM component tests
+        run: npm run test:ui
+      - name: Typecheck
+        run: npm run typecheck
+      # `npm run verify` runs these as release gates; CI has to actually run them.
+      - name: Version manifests agree
+        run: npm run check:versions
+      - name: Dependency advisories
+        run: npm audit --audit-level=high
+      - name: Colour contrast (WCAG AA)
+        run: npm run check:contrast
+      - name: Accessibility sweep
+        run: npm run check:a11y
+      - name: Native tests (incl. mock-app shell e2e)
+        run: npm run test:native
+      - name: Clippy
+        run: cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets --no-deps -- -D warnings
+
+  package-macos:
+    name: package (macos, unsigned)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: apps/desktop/src-tauri
+          cache-on-failure: true
+      - run: npm ci
+      - name: Build unsigned .app
+        run: npm run build
+      # Clean-host approximation: the packaged sidecar launches with a scrubbed
+      # PATH (no ambient Node, no credentials), the bundled bridge digest must
+      # be baked into the binary (script-swap rejection), and the sidecar must
+      # be a regular file.
+      - name: Verify packaged bundle
+        run: node scripts/verify-macos-package.mjs
+      - name: Upload unsigned bundle
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: muse-code-desktop-macos-unsigned
+          path: "apps/desktop/src-tauri/target/release/bundle/macos/Muse Code.app"

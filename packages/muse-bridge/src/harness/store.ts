@@ -1,0 +1,145 @@
+import { existsSync } from "node:fs";
+import { appendFile, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import type { ChatMessage } from "./wire.js";
+
+/**
+ * The harness owns its sessions, so it keeps them: one append-only JSONL file
+ * per session (the model-facing messages and the transcript items the app
+ * renders), plus a small index for listing. The native shell points
+ * `MUSE_HARNESS_DIR` at the app's data folder; files are written 0600.
+ */
+
+export type SessionMeta = {
+  sessionId: string;
+  workspaceRoot: string;
+  title: string | null;
+  createdAt: string;
+  updatedAt: string;
+  modelId?: string;
+  effort?: string;
+  mode?: string;
+  /**
+   * Tokens this session has used so far, as the providers reported them.
+   * `promptTokens` is uncached input. Cache reads and writes are disjoint from it.
+   */
+  usage?: { promptTokens: number; outputTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number };
+};
+
+type Record_ = { type: "message"; message: ChatMessage } | { type: "item"; item: Record<string, unknown> } | { type: "toolStarted"; id: string };
+
+const SESSION_ID = /^h-[a-z0-9-]{8,64}$/;
+
+export function harnessDir(): string {
+  return process.env.MUSE_HARNESS_DIR || join(homedir(), ".muse-code", "harness");
+}
+
+export class SessionStore {
+  private index: Map<string, SessionMeta> | null = null;
+  private writes: Promise<unknown> = Promise.resolve();
+
+  constructor(private readonly root = harnessDir()) {}
+
+  private get sessionsDir() { return join(this.root, "sessions"); }
+  private get indexFile() { return join(this.root, "index.json"); }
+  private file(sessionId: string) {
+    if (!SESSION_ID.test(sessionId)) throw new Error("Invalid session id.");
+    return join(this.sessionsDir, `${sessionId}.jsonl`);
+  }
+
+  /** Writes run one at a time, in order, so a record never interleaves with another. */
+  private serial<T>(work: () => Promise<T>): Promise<T> {
+    const run = this.writes.then(work, work);
+    this.writes = run.catch(() => {});
+    return run;
+  }
+
+  private async load(): Promise<Map<string, SessionMeta>> {
+    if (this.index) return this.index;
+    const index = new Map<string, SessionMeta>();
+    try {
+      const raw = JSON.parse(await readFile(this.indexFile, "utf8")) as SessionMeta[];
+      for (const meta of Array.isArray(raw) ? raw : []) if (meta && SESSION_ID.test(meta.sessionId)) index.set(meta.sessionId, meta);
+    } catch { /* first run, or an unreadable index: start empty */ }
+    this.index = index;
+    return index;
+  }
+
+  private async saveIndex() {
+    const index = await this.load();
+    await mkdir(this.root, { recursive: true, mode: 0o700 });
+    const temporary = `${this.indexFile}.${process.pid}.tmp`;
+    await writeFile(temporary, JSON.stringify([...index.values()]), { mode: 0o600 });
+    await rename(temporary, this.indexFile);
+  }
+
+  async list(workspaceRoot?: string): Promise<SessionMeta[]> {
+    const index = await this.load();
+    return [...index.values()]
+      .filter((meta) => !workspaceRoot || meta.workspaceRoot === workspaceRoot)
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  }
+
+  async meta(sessionId: string): Promise<SessionMeta | undefined> {
+    return (await this.load()).get(sessionId);
+  }
+
+  create(meta: SessionMeta): Promise<void> {
+    return this.serial(async () => {
+      (await this.load()).set(meta.sessionId, meta);
+      await mkdir(this.sessionsDir, { recursive: true, mode: 0o700 });
+      await writeFile(this.file(meta.sessionId), "", { mode: 0o600, flag: "a" });
+      await this.saveIndex();
+    });
+  }
+
+  update(sessionId: string, patch: Partial<Omit<SessionMeta, "sessionId" | "workspaceRoot" | "createdAt">>): Promise<void> {
+    return this.serial(async () => {
+      const index = await this.load();
+      const meta = index.get(sessionId);
+      if (!meta) return;
+      index.set(sessionId, { ...meta, ...patch, updatedAt: new Date().toISOString() });
+      await this.saveIndex();
+    });
+  }
+
+  append(sessionId: string, records: Record_[]): Promise<void> {
+    if (!records.length) return Promise.resolve();
+    return this.serial(async () => {
+      await mkdir(this.sessionsDir, { recursive: true, mode: 0o700 });
+      await appendFile(this.file(sessionId), records.map((record) => `${JSON.stringify(record)}\n`).join(""), { mode: 0o600 });
+    });
+  }
+
+  /** Messages for the model and items for the transcript. A torn last line (a crash mid-write) is skipped. */
+  async read(sessionId: string): Promise<{ messages: ChatMessage[]; items: Array<Record<string, unknown>> }> {
+    const path = this.file(sessionId);
+    if (!existsSync(path)) return { messages: [], items: [] };
+    const messages: ChatMessage[] = [];
+    const items = new Map<string, Record<string, unknown>>();
+    const started = new Set<string>();
+    for (const line of (await readFile(path, "utf8")).split("\n")) {
+      if (!line.trim()) continue;
+      let record: Record_;
+      try { record = JSON.parse(line) as Record_; } catch { continue; }
+      if (record.type === "message") messages.push(record.message);
+      else if (record.type === "item" && typeof record.item.itemId === "string") items.set(record.item.itemId, record.item);
+      else if (record.type === "toolStarted" && typeof record.id === "string") started.add(record.id);
+    }
+    // A crash mid-tool leaves the assistant message without a result. The marker says the call had started.
+    for (const message of messages) {
+      if (message.role !== "assistant") continue;
+      for (const call of message.toolCalls ?? []) if (started.has(call.id)) call.started = true;
+    }
+    return { messages, items: [...items.values()] };
+  }
+
+  remove(sessionId: string): Promise<void> {
+    return this.serial(async () => {
+      (await this.load()).delete(sessionId);
+      await rm(this.file(sessionId), { force: true });
+      await this.saveIndex();
+    });
+  }
+}

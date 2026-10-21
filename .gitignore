@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+target/
+apps/desktop/src-tauri/gen/
+apps/desktop/src-tauri/binaries/
+*.tsbuildinfo
+
+# Environment and local overrides
+.env
+.env.*
+!.env.example
+*.local
+
+# Logs, caches, test output
+*.log
+.cache/
+coverage/
+test-results/
+playwright-report/
+
+# Editors and OS
+.DS_Store
+.vscode/
+.idea/
+
+# Local tooling and scratch output (not part of the project)
+.tooling/
+.superdesign/
+.audit/
+brag-output/
