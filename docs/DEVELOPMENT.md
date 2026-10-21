@@ -12,13 +12,13 @@
 Install the Muse CLI with `curl -fsSL https://dev.meta.ai/install.sh | sh`,
 then sign in with `muse` and `/login`.
 
-Development and builds need a Mac: Muse Code ships for macOS only.
+Development and builds need a Mac: Glitter ships for macOS only.
 
 ## Setup
 
 ```bash
 npm install          # all three workspaces; esbuild's binary ships in its optional platform package
-npm run build:bridge # packages/muse-bridge/dist/index.js, needed by the native shell
+npm run build:bridge # packages/glitter-bridge/dist/index.js, needed by the native shell
 ```
 
 If npm skipped optional packages and the esbuild binary is missing, run
@@ -60,9 +60,9 @@ The native tests need the web bundle, because `tauri::generate_context!` embeds
 `frontendDist` at compile time, and tauri-build requires the `externalBin`
 sidecar file to exist even though debug builds spawn ambient Node instead of
 the staged runtime. On a fresh checkout run `npm run build:bridge && npm run build:ui`
-and stage the sidecar — `npm run build:sidecar -w @muse/bridge` (downloads Node
+and stage the sidecar — `npm run build:sidecar -w @glitter/bridge` (downloads Node
 from nodejs.org), or create an empty placeholder file
-`apps/desktop/src-tauri/binaries/muse-node-<host triple>` (`rustc -vV` prints
+`apps/desktop/src-tauri/binaries/glitter-node-<host triple>` (`rustc -vV` prints
 the triple; append `.exe` on Windows) — before `npm run test:native`.
 
 ### Linting
@@ -92,14 +92,14 @@ doesn't render identically block-by-block.
 - **Renderer.** In `npm run dev`, open devtools from the webview context menu.
   `logger.ts` writes redacted lines to the console (debug lines only in dev) and
   to the native app log.
-- **Native and bridge logs.** macOS: `~/Library/Logs/com.musecode.desktop/muse-desktop.log`
+- **Native and bridge logs.** macOS: `~/Library/Logs/com.glitter.desktop/glitter.log`
   and `security-audit.log` (approval decisions only). You can also use Settings →
   Diagnostics → **Open logs**. Bridge stderr is redacted and prefixed
-  `[muse-bridge]`.
-- **Bridge on its own.** `node packages/muse-bridge/dist/index.js` reads
+  `[glitter-bridge]`.
+- **Bridge on its own.** `node packages/glitter-bridge/dist/index.js` reads
   NDJSON requests on stdin: `{"id":"1","method":"ping","params":{}}`.
   `scripts/measure-cold-start.mjs` is a minimal driver to start from.
-- **Debug-only bridge override.** Debug builds honor `MUSE_BRIDGE_SCRIPT=/abs/path.js`.
+- **Debug-only bridge override.** Debug builds honor `GLITTER_BRIDGE_SCRIPT=/abs/path.js`.
   Release builds ignore it and verify the baked digest.
 
 ## Environment variables
@@ -110,9 +110,9 @@ None are required. Optional ones:
 |---|---|---|
 | `META_API_KEY` | bridge (`detect.ts`) | Counted as an available API key for Muse auth detection. The app's own key lives in the keychain. |
 | `TAURI_DEV_HOST` | `apps/desktop/vite.config.ts` | Dev server host for device or remote debugging |
-| `MUSE_BRIDGE_SCRIPT` | native, debug builds only | Use a different bridge script |
-| `MUSE_TEST_GRANTS_ACCOUNT` | native tests | Keyring account name for test grants |
-| `MUSE_WORK_CEILING_MS` | bridge | Test seam for the per-verb queue ceiling. May only shorten it, never lengthen it, so it cannot weaken the guard in a real session. |
+| `GLITTER_BRIDGE_SCRIPT` | native, debug builds only | Use a different bridge script |
+| `GLITTER_TEST_GRANTS_ACCOUNT` | native tests | Keyring account name for test grants |
+| `GLITTER_WORK_CEILING_MS` | bridge | Test seam for the per-verb queue ceiling. May only shorten it, never lengthen it, so it cannot weaken the guard in a real session. |
 | `MUSE_BIN` | `scripts/live-muse-smoke.mjs` | Absolute path to a `muse` binary |
 | `BASE`, `CHROMIUM_PATH`, `GPU_ARGS` | `apps/website/scripts/verify-site.mjs` | Target URL and browser for the site check |
 | `APPLE_*` | `tauri build` | Signing and notarization, see [RELEASING.md](RELEASING.md). CI secrets only, never committed. |
@@ -126,7 +126,7 @@ None are required. Optional ones:
 2. Put pure logic in a `lib/*.ts` module with no React or Tauri imports, so
    `tests/` can bundle and test it directly.
 3. If the feature needs a new agent capability, add the bridge verb in
-   `packages/muse-bridge/src/index.ts` (and `host.ts` / `acp.ts`). Then add it to
+   `packages/glitter-bridge/src/index.ts` (and `host.ts` / `acp.ts`). Then add it to
    `BRIDGE_METHODS` and a typed DTO in `dto.rs`, add a `bridge.ts` wrapper, and
    add the mock answer in `bridge.ts` / `mock.ts` so `dev:ui` keeps working.
 4. If it needs OS access (files, git, processes, dialogs), add a dedicated
@@ -148,7 +148,7 @@ the app also needs a row in `THIRD_PARTY_NOTICES.md`. Rust crates go in
 1. Add the field and its default to `Settings` and `DEFAULT_SETTINGS` in
    `apps/desktop/src/lib/types.ts`.
 2. Persisted fields go through `settingsPersistence.ts`. Secrets go to the
-   keychain via a native command, never into `muse-desktop.json`.
+   keychain via a native command, never into `glitter.json`.
 3. If the setting changes how the host starts, it's a `startHost` parameter and
    needs a DTO field in `dto.rs`.
 4. Add it to the matching section of `SettingsModal.tsx`.

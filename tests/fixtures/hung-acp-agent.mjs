@@ -7,9 +7,9 @@ const send = (message) => process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0
 let pendingPrompt = null;
 let grandchild = null;
 
-if (process.env.MUSE_TEST_PID_FILE) {
+if (process.env.GLITTER_TEST_PID_FILE) {
   grandchild = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
-  try { writeFileSync(process.env.MUSE_TEST_PID_FILE, String(grandchild.pid)); } catch { /* test observes absence */ }
+  try { writeFileSync(process.env.GLITTER_TEST_PID_FILE, String(grandchild.pid)); } catch { /* test observes absence */ }
 }
 
 createInterface({ input: process.stdin }).on("line", (line) => {

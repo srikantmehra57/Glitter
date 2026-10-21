@@ -1,13 +1,13 @@
 [package]
-name = "muse-code-desktop"
+name = "glitter"
 version = "0.1.0"
-description = "Desktop command center for Muse Code"
-authors = ["Muse Code Desktop"]
+description = "Glitter, a desktop coding-agent app with its own agent harness"
+authors = ["Glitter contributors"]
 edition = "2021"
 rust-version = "1.77.2"
 
 [lib]
-name = "muse_code_desktop_lib"
+name = "glitter_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 # The crate defines no doctests, but `cargo test` still compiles one through
 # rustdoc — pure overhead here, and load-flaky (intermittent E0463 "can't find

@@ -29,9 +29,9 @@ export class MuseHost {
   async start(...args) {
     this.startCalls += 1;
     this.startArgs = args;
-    const delay = Number(process.env.MUSE_TEST_SLOW_START ?? 0);
+    const delay = Number(process.env.GLITTER_TEST_SLOW_START ?? 0);
     if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
-    if (process.env.MUSE_TEST_JUMP_WALL_CLOCK) {
+    if (process.env.GLITTER_TEST_JUMP_WALL_CLOCK) {
       const now = Date.now;
       Date.now = () => now() + 3_600_000;
     }
@@ -44,7 +44,7 @@ export class MuseHost {
     return { stopped: true };
   }
   async listModels() {
-    if (process.env.MUSE_TEST_HANG_MODELS) return new Promise(() => {});
+    if (process.env.GLITTER_TEST_HANG_MODELS) return new Promise(() => {});
     return { models: [] };
   }
   async suggest(options) {
@@ -88,11 +88,11 @@ export class LoginFlow {
 const replacements = { './host.js': hostStub, './acp.js': acpStub, './agents.js': agentsStub, './login.js': loginStub };
 const outfile = join(temporary, 'bridge.mjs');
 await build({
-  entryPoints: [resolve('packages/muse-bridge/src/index.ts')],
+  entryPoints: [resolve('packages/glitter-bridge/src/index.ts')],
   bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'silent',
   plugins: [{ name: 'test-boundaries', setup(builder) {
     builder.onResolve({ filter: /.*/ }, ({ path }) => Object.hasOwn(replacements, path) ? { path, namespace: 'test-boundary' } : undefined);
-    builder.onLoad({ filter: /.*/, namespace: 'test-boundary' }, ({ path }) => ({ contents: replacements[path], loader: 'ts', resolveDir: resolve('packages/muse-bridge/src') }));
+    builder.onLoad({ filter: /.*/, namespace: 'test-boundary' }, ({ path }) => ({ contents: replacements[path], loader: 'ts', resolveDir: resolve('packages/glitter-bridge/src') }));
   } }],
 });
 
@@ -188,7 +188,7 @@ test('suggest does not send a turn when host start uses up the budget', async ()
     const response = await bridge.request('suggest', { workspaceRoot: '/repo', prompt: 'x', timeoutMs: 30 });
     assert.equal(response.ok, false);
     assert.match(response.error, /timed out/i);
-  }, { MUSE_TEST_SLOW_START: '80' });
+  }, { GLITTER_TEST_SLOW_START: '80' });
 });
 
 test('suggest elapsed budget is unaffected by a wall-clock jump', async () => {
@@ -196,7 +196,7 @@ test('suggest elapsed budget is unaffected by a wall-clock jump', async () => {
     const response = await bridge.request('suggest', { workspaceRoot: '/repo', prompt: 'x', timeoutMs: 5000 });
     assert.equal(response.ok, true);
     assert.equal(response.result.text, '[]');
-  }, { MUSE_TEST_JUMP_WALL_CLOCK: '1' });
+  }, { GLITTER_TEST_JUMP_WALL_CLOCK: '1' });
 });
 
 test('suggest requires a workspace root', async () => {
@@ -222,7 +222,7 @@ test('suggest never waits behind a wedged session verb', async () => {
     const response = await bridge.request('suggest', { workspaceRoot: '/repo', prompt: 'x' });
     assert.equal(response.ok, true);
     assert.equal(response.result.text, '[]');
-  }, { MUSE_TEST_HANG_MODELS: '1' });
+  }, { GLITTER_TEST_HANG_MODELS: '1' });
 });
 
 test('suggest routes to the named ACP agent and leaves the muse hosts alone', async () => {

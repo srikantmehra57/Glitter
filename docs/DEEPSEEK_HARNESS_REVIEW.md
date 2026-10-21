@@ -3,7 +3,7 @@
 DeepSeek Harness (`deepseek-ai/deepseek-harness`, MIT) is `dsh` — an
 everything-is-a-plugin agent harness built on [Cordis](https://github.com/cordiverse/cordis).
 This document reverse-engineers it and assesses what belongs in *our* harness
-(`packages/muse-bridge/src/harness`).
+(`packages/glitter-bridge/src/harness`).
 
 It is a design review, not an implementation plan. Every claim was read in the
 dsh source, not inferred from its docs. This is one of four harness reviews. The others are
@@ -66,7 +66,7 @@ The three concepts that carry the design:
 | `packages/client` (the web UI) | 699 | 90,235 |
 | `packages/extensions` (runtime self-modification) | 34 | 21,982 |
 
-Ours: `packages/muse-bridge/src` is 6,984 lines, of which the harness is
+Ours: `packages/glitter-bridge/src` is 6,984 lines, of which the harness is
 1,469.
 
 **This is the headline number.** dsh's *entire agent core* is 14,571 lines —
@@ -353,7 +353,7 @@ first cause wins for that activity".
 Ours: `harness/host.ts:328` throws "still working on the previous message".
 The store already speaks a disposition (`queue` / `steer` / `replace`) and
 the bridge already passes `ifBusy` for Muse — the harness branch just drops
-it (`packages/muse-bridge/src/index.ts:772`). This is the cheapest feature in
+it (`packages/glitter-bridge/src/index.ts:772`). This is the cheapest feature in
 the whole review: make the harness accept a queued message.
 
 **B6 — Provider failure codes, not prose.**
@@ -399,7 +399,7 @@ The one subtlety worth copying: the catalog is **re-published, not
 appended**, and the message says "This complete catalog replaces every
 earlier available-skills list in this session". Appending would leave stale
 skill names in the model's head forever. Ours has no skills at all, and
-MuseCode's `ExtensionsView` is Muse-CLI-backed — so the app's *default*
+Glitter's `ExtensionsView` is Muse-CLI-backed — so the app's *default*
 agent has no skills today.
 
 **B9 — MCP with an all-or-nothing generation swap.**

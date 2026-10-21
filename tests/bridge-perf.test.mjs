@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-const temporary = await mkdtemp(join(tmpdir(), 'muse-bridge-perf-'));
+const temporary = await mkdtemp(join(tmpdir(), 'glitter-bridge-perf-'));
 // Non-temp fake HOME: agent resolution refuses binaries that live under /tmp.
 const fakeHome = join(process.cwd(), 'tests', 'fixtures', `perf-home-${process.pid}`);
 after(async () => {
@@ -34,7 +34,7 @@ const delay = (ms) => new Promise((done) => setTimeout(done, ms));
 // ─── delta coalescing ────────────────────────────────────────────────────────
 
 test('deltas for one item and field merge into a single frame', async () => {
-  const { queueDelta, flushDeltas } = await bundle('packages/muse-bridge/src/output.ts');
+  const { queueDelta, flushDeltas } = await bundle('packages/glitter-bridge/src/output.ts');
   const frames = await captureStdout(async () => {
     for (const piece of ['Hel', 'lo, ', 'wor', 'ld']) assert.equal(queueDelta({ sessionId: 's', itemId: 'i', field: 'text', delta: piece }), true);
     flushDeltas();
@@ -44,7 +44,7 @@ test('deltas for one item and field merge into a single frame', async () => {
 });
 
 test('a pending delta is written before any other frame, so order never changes', async () => {
-  const { queueDelta, writeFrame } = await bundle('packages/muse-bridge/src/output.ts');
+  const { queueDelta, writeFrame } = await bundle('packages/glitter-bridge/src/output.ts');
   const frames = await captureStdout(async () => {
     queueDelta({ sessionId: 's', itemId: 'i', field: 'text', delta: 'before' });
     writeFrame('{"type":"event","event":"turnCompleted"}\n');
@@ -57,7 +57,7 @@ test('a pending delta is written before any other frame, so order never changes'
 });
 
 test('different items and fields stay separate, in the order they first appeared', async () => {
-  const { queueDelta, flushDeltas } = await bundle('packages/muse-bridge/src/output.ts');
+  const { queueDelta, flushDeltas } = await bundle('packages/glitter-bridge/src/output.ts');
   const frames = await captureStdout(async () => {
     queueDelta({ sessionId: 's', itemId: 'a', field: 'text', delta: '1' });
     queueDelta({ sessionId: 's', itemId: 'b', field: 'text', delta: '2' });
@@ -73,7 +73,7 @@ test('different items and fields stay separate, in the order they first appeared
 });
 
 test('deltas flush on their own within a frame, and a large burst does not wait', async () => {
-  const { queueDelta } = await bundle('packages/muse-bridge/src/output.ts');
+  const { queueDelta } = await bundle('packages/glitter-bridge/src/output.ts');
   const frames = await captureStdout(async (seen) => {
     queueDelta({ sessionId: 's', itemId: 'i', field: 'text', delta: 'tick' });
     assert.equal(seen.length, 0, 'held, not written synchronously');
@@ -86,7 +86,7 @@ test('deltas flush on their own within a frame, and a large burst does not wait'
 });
 
 test('multibyte text and newlines survive the merge byte for byte', async () => {
-  const { queueDelta, flushDeltas } = await bundle('packages/muse-bridge/src/output.ts');
+  const { queueDelta, flushDeltas } = await bundle('packages/glitter-bridge/src/output.ts');
   const frames = await captureStdout(async () => {
     queueDelta({ sessionId: 's', itemId: 'i', field: 'text', delta: 'héllo\n' });
     queueDelta({ sessionId: 's', itemId: 'i', field: 'text', delta: '日本語 🎉 "quoted"\\' });
@@ -99,7 +99,7 @@ test('multibyte text and newlines survive the merge byte for byte', async () => 
 });
 
 test('payloads that are not the plain delta shape are refused and pass through untouched', async () => {
-  const { queueDelta, flushDeltas } = await bundle('packages/muse-bridge/src/output.ts');
+  const { queueDelta, flushDeltas } = await bundle('packages/glitter-bridge/src/output.ts');
   const frames = await captureStdout(async () => {
     for (const odd of [null, undefined, 'text', {}, { sessionId: 's', itemId: 'i' }, { sessionId: 's', itemId: 'i', delta: 5 }, { sessionId: 's', itemId: 'i', field: 7, delta: 'x' }]) {
       assert.equal(queueDelta(odd), false);
@@ -112,7 +112,7 @@ test('payloads that are not the plain delta shape are refused and pass through u
 // ─── version probes ──────────────────────────────────────────────────────────
 
 test('probe answers are kept per file identity and dropped when the file changes', async () => {
-  const { cachedProbe, rememberProbe, forgetProbes } = await bundle('packages/muse-bridge/src/probe-cache.ts');
+  const { cachedProbe, rememberProbe, forgetProbes } = await bundle('packages/glitter-bridge/src/probe-cache.ts');
   const file = join(temporary, 'probe-target');
   await writeFile(file, 'one');
   assert.equal(cachedProbe(file), undefined, 'nothing is known yet');
@@ -135,7 +135,7 @@ test('probe answers are kept per file identity and dropped when the file changes
 });
 
 test('a failed probe is remembered only briefly, a successful one for longer', async () => {
-  const { cachedProbe, rememberProbe } = await bundle('packages/muse-bridge/src/probe-cache.ts');
+  const { cachedProbe, rememberProbe } = await bundle('packages/glitter-bridge/src/probe-cache.ts');
   const file = join(temporary, 'probe-ttl');
   await writeFile(file, 'x');
   const now = performance.now();
@@ -156,7 +156,7 @@ test('agent detection probes each CLI once and answers repeat scans from memory'
   const realHome = process.env.HOME;
   process.env.HOME = fakeHome;
   try {
-    const { detectAgents } = await bundle('packages/muse-bridge/src/agents.ts');
+    const { detectAgents } = await bundle('packages/glitter-bridge/src/agents.ts');
     const probes = async () => (await readFile(counter, 'utf8').catch(() => '')).split('\n').filter(Boolean).length;
     const first = await detectAgents(null, null, 'auto');
     const opencode = first.find((agent) => agent.id === 'opencode');
@@ -175,7 +175,7 @@ test('agent detection probes each CLI once and answers repeat scans from memory'
 // ─── framing fast path ───────────────────────────────────────────────────────
 
 test('whole frames inside one chunk and frames split across chunks decode identically', async () => {
-  const { LineFrames } = await bundle('packages/muse-bridge/src/framing.ts');
+  const { LineFrames } = await bundle('packages/glitter-bridge/src/framing.ts');
   const text = ['{"a":1}', '{"b":"é日本"}', '', '{"c":[1,2,3]}'].map((line) => `${line}\n`).join('');
   const bytes = Buffer.from(text);
   const whole = [];

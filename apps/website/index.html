@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#0A0A0B" />
     <meta
       name="description"
-      content="Muse Code Desktop is an open-source desktop app for Muse and other coding agent CLIs like OpenCode, Grok and Gemini CLI."
+      content="Glitter is an open-source desktop app for coding agents: Muse and other agent CLIs like OpenCode, Grok and Gemini CLI."
     />
     <link rel="icon" type="image/svg+xml" href="/spark.svg" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -17,13 +17,13 @@
       href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500&display=swap"
       rel="stylesheet"
     />
-    <title>Muse Code Desktop</title>
+    <title>Glitter</title>
     <script>
-      // Apply the stored theme before first paint (localStorage muse-site-theme).
+      // Apply the stored theme before first paint (localStorage glitter-site-theme).
       (function () {
         var stored = null;
         try {
-          stored = JSON.parse(localStorage.getItem("muse-site-theme") || "null");
+          stored = JSON.parse(localStorage.getItem("glitter-site-theme") || "null");
         } catch (e) {}
         var theme =
           stored && stored.theme
@@ -53,9 +53,9 @@
     <!-- nav -->
     <header class="nav" id="nav">
       <div class="nav-pill">
-        <a class="brand" href="#top" aria-label="Muse Code — back to top">
+        <a class="brand" href="#top" aria-label="Glitter — back to top">
           <img src="/spark.svg" width="24" height="24" alt="" />
-          <span>muse<span class="brand-dim">code</span></span>
+          <span>glitter</span>
         </a>
         <div class="nav-mid">
         <nav class="nav-links" aria-label="Sections">
@@ -108,15 +108,15 @@
         </div>
         <div class="hero-grid">
           <h1 id="hero-title" class="hero-title" data-split>
-            <span class="line">Muse Code <em class="grad">Desktop</em></span>
+            <span class="line"><em class="grad">Glitter</em></span>
           </h1>
           <div class="hero-side">
             <p class="lede" data-reveal>
-              A desktop app for Muse and other coding agents like OpenCode, Grok and Gemini CLI. Chat with your agent,
+              A desktop app for coding agents: Muse, OpenCode, Grok, Gemini CLI and more. Chat with your agent,
               approve commands and review changes in one window.
             </p>
             <div class="actions" data-reveal>
-              <a class="btn btn-primary magnetic" href="https://github.com/srikantmehra57/Glitter/releases/download/v0.1.0/Muse-Code_0.1.0_aarch64.dmg">
+              <a class="btn btn-primary magnetic" href="https://github.com/srikantmehra57/Glitter/releases/download/v0.1.0/Glitter_0.1.0_aarch64.dmg">
                 <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M16.37 12.6c-.02-2.3 1.88-3.4 1.96-3.46-1.07-1.56-2.73-1.78-3.32-1.8-1.41-.14-2.76.83-3.47.83-.72 0-1.82-.81-3-.79-1.54.02-2.96.9-3.76 2.28-1.6 2.78-.41 6.9 1.15 9.16.76 1.1 1.67 2.34 2.86 2.3 1.15-.05 1.58-.74 2.97-.74s1.78.74 3 .72c1.24-.02 2.02-1.12 2.78-2.23.87-1.28 1.23-2.52 1.25-2.58-.03-.01-2.4-.92-2.42-3.69zM14.1 5.84c.63-.77 1.06-1.83.94-2.89-.91.04-2.01.61-2.66 1.37-.58.67-1.1 1.76-.96 2.8 1.01.08 2.05-.51 2.68-1.28z"/></svg>
                 Download for macOS
               </a>
@@ -128,7 +128,7 @@
         <figure class="hero-video" data-reveal style="--d: 3">
           <div class="window-glow" aria-hidden="true"></div>
           <div class="window-frame">
-            <div class="window-bar" aria-hidden="true"><i></i><i></i><i></i><span>Muse Code</span></div>
+            <div class="window-bar" aria-hidden="true"><i></i><i></i><i></i><span>Glitter</span></div>
             <div class="hero-video-view">
               <video
                 id="launch-video"
@@ -140,7 +140,7 @@
                 loop
                 playsinline
                 preload="metadata"
-                aria-label="A 24-second tour of Muse Code Desktop: a prompt is typed in a new thread, the app window is shown, a terminal command is approved, reasoning effort is set to Max, and the terminal, worktrees and command palette appear."
+                aria-label="A 24-second tour of Glitter: a prompt is typed in a new thread, the app window is shown, a terminal command is approved, reasoning effort is set to Max, and the terminal, worktrees and command palette appear."
               ></video>
               <button type="button" class="video-sound" id="launch-sound" aria-pressed="false">
                 <svg class="ico-muted" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4z"/><path d="m22 9-6 6M16 9l6 6"/></svg>
@@ -173,10 +173,10 @@
             <figure class="window" id="window">
               <div class="window-glow" aria-hidden="true"></div>
               <div class="window-frame">
-                <div class="window-bar" aria-hidden="true"><i></i><i></i><i></i><span>Muse Code</span></div>
+                <div class="window-bar" aria-hidden="true"><i></i><i></i><i></i><span>Glitter</span></div>
                 <div class="window-view" id="window-view">
                   <div class="window-zoom" id="window-zoom">
-                    <img id="shot-a" decoding="async" src="/shots/app-dark-ember.webp" srcset="/shots/app-dark-ember@1x.webp 1440w, /shots/app-dark-ember.webp 2880w" sizes="(max-width: 1200px) 100vw, 1200px" width="1440" height="900" alt="The Muse Code desktop app: workspace threads on the left, an agent run in the middle, and the changes review dock on the right." />
+                    <img id="shot-a" decoding="async" src="/shots/app-dark-ember.webp" srcset="/shots/app-dark-ember@1x.webp 1440w, /shots/app-dark-ember.webp 2880w" sizes="(max-width: 1200px) 100vw, 1200px" width="1440" height="900" alt="The Glitter desktop app: workspace threads on the left, an agent run in the middle, and the changes review dock on the right." />
                     <img id="shot-b" decoding="async" src="/shots/app-dark-ember.webp" width="1440" height="900" alt="" aria-hidden="true" />
                     <span class="spot" id="spot" aria-hidden="true"></span>
                   </div>
@@ -215,8 +215,8 @@
         <div class="bento">
           <article class="card" data-reveal>
             <figure class="card-shot">
-              <img class="t-dark" loading="lazy" decoding="async" src="/shots/welcome-card-dark.webp" srcset="/shots/welcome-card-dark@1x.webp 596w, /shots/welcome-card-dark.webp 1192w" sizes="(max-width: 640px) 90vw, 360px" width="596" height="586" alt="A new thread in Muse Code: ember tile art, the question “What should we build in Muse Code?” and four starting points." />
-              <img class="t-light" loading="lazy" decoding="async" src="/shots/welcome-card-light.webp" srcset="/shots/welcome-card-light@1x.webp 596w, /shots/welcome-card-light.webp 1192w" sizes="(max-width: 640px) 90vw, 360px" width="596" height="586" alt="A new thread in Muse Code: ember tile art, the question “What should we build in Muse Code?” and four starting points." />
+              <img class="t-dark" loading="lazy" decoding="async" src="/shots/welcome-card-dark.webp" srcset="/shots/welcome-card-dark@1x.webp 596w, /shots/welcome-card-dark.webp 1192w" sizes="(max-width: 640px) 90vw, 360px" width="596" height="586" alt="A new thread in Glitter: ember tile art, the question “What should we build next?” and four starting points." />
+              <img class="t-light" loading="lazy" decoding="async" src="/shots/welcome-card-light.webp" srcset="/shots/welcome-card-light@1x.webp 596w, /shots/welcome-card-light.webp 1192w" sizes="(max-width: 640px) 90vw, 360px" width="596" height="586" alt="A new thread in Glitter: ember tile art, the question “What should we build next?” and four starting points." />
             </figure>
             <div class="card-copy">
               <h3>New thread</h3>
@@ -259,7 +259,7 @@
 
           <article class="card" data-reveal>
             <div class="mini-term" aria-hidden="true">
-              <p class="mini-term-bar"><b>Terminal</b><span>~/Muse Code</span><kbd>⌘J</kbd></p>
+              <p class="mini-term-bar"><b>Terminal</b><span>~/Glitter</span><kbd>⌘J</kbd></p>
               <p><i>$</i> npm test --silent</p>
               <p class="mini-term-out">28 tests passed</p>
               <p><i>$</i> git status --short</p>
@@ -284,10 +284,10 @@
           </article>
 
           <article class="card card-native" data-reveal>
-            <div class="pipe" aria-label="React UI, then Tauri native shell, then muse-bridge, then muse serve">
+            <div class="pipe" aria-label="React UI, then Tauri native shell, then glitter-bridge, then muse serve">
               <span class="pipe-node">React UI</span><span class="pipe-link"><i></i></span>
               <span class="pipe-node">Tauri 2</span><span class="pipe-link"><i></i></span>
-              <span class="pipe-node">muse-bridge</span><span class="pipe-link"><i></i></span>
+              <span class="pipe-node">glitter-bridge</span><span class="pipe-link"><i></i></span>
               <span class="pipe-node pipe-end">muse serve</span>
             </div>
             <div class="card-copy">
@@ -321,7 +321,7 @@
           <div class="orbit-hub" aria-hidden="true">
             <span class="orbit-ring"></span>
             <img src="/spark.svg" width="44" height="44" alt="" />
-            <span class="orbit-hub-name">Muse Code<br />Desktop</span>
+            <span class="orbit-hub-name">Glitter</span>
           </div>
           <ul class="orbit-nodes" aria-label="Supported agent CLIs">
             <li class="orbit-node" style="--a:0"><span class="agent-ico"><img src="/spark.svg" width="18" height="18" alt="" /></span><span class="agent-name">Muse</span><span class="agent-badge b-default">Default</span></li>
@@ -407,7 +407,7 @@
             </header>
 
             <div class="run-panel glass">
-              <div class="run-panel-bar" aria-hidden="true"><span class="live"></span><span>Muse Code</span><span class="run-crumb-sep">›</span><b>Command center layout</b></div>
+              <div class="run-panel-bar" aria-hidden="true"><span class="live"></span><span>Glitter</span><span class="run-crumb-sep">›</span><b>Command center layout</b></div>
               <div class="run-col" id="run-col">
                 <span class="run-rail" aria-hidden="true"><i id="run-rail-fill"></i></span>
 
@@ -479,7 +479,7 @@
           <figure class="monitor" id="monitor" data-reveal>
             <div class="monitor-glow" aria-hidden="true"></div>
             <div class="monitor-frame">
-              <img id="theme-a" decoding="async" loading="lazy" src="/shots/app-dark-ember.webp" srcset="/shots/app-dark-ember@1x.webp 1440w, /shots/app-dark-ember.webp 2880w" sizes="(max-width: 860px) 100vw, 720px" width="1440" height="900" alt="The Muse Code app in the selected theme and accent." />
+              <img id="theme-a" decoding="async" loading="lazy" src="/shots/app-dark-ember.webp" srcset="/shots/app-dark-ember@1x.webp 1440w, /shots/app-dark-ember.webp 2880w" sizes="(max-width: 860px) 100vw, 720px" width="1440" height="900" alt="The Glitter app in the selected theme and accent." />
               <img id="theme-b" decoding="async" src="/shots/app-dark-ember.webp" width="1440" height="900" alt="" aria-hidden="true" />
             </div>
           </figure>
@@ -518,7 +518,7 @@
             <h3>Download the app</h3>
             <p class="note">Beta for Apple silicon Macs. It isn't notarized yet, so the first time, right-click the app and choose Open.</p>
             <div class="actions">
-              <a class="btn btn-primary magnetic" href="https://github.com/srikantmehra57/Glitter/releases/download/v0.1.0/Muse-Code_0.1.0_aarch64.dmg">Download for macOS <span aria-hidden="true">↓</span></a>
+              <a class="btn btn-primary magnetic" href="https://github.com/srikantmehra57/Glitter/releases/download/v0.1.0/Glitter_0.1.0_aarch64.dmg">Download for macOS <span aria-hidden="true">↓</span></a>
               <a class="btn btn-ghost magnetic" href="https://github.com/srikantmehra57/Glitter#develop" target="_blank" rel="noreferrer">Build from source <span aria-hidden="true">↗</span></a>
             </div>
             <p class="req mono">Requires the <code>muse</code> CLI and git. Building from source needs Node 24 and Rust.</p>
@@ -527,14 +527,14 @@
 
         <div class="finale">
           <h2 class="finale-title" data-split>Free and <em class="grad">open source</em></h2>
-          <a class="btn btn-primary btn-lg magnetic" href="https://github.com/srikantmehra57/Glitter/releases/download/v0.1.0/Muse-Code_0.1.0_aarch64.dmg">Download for macOS <span aria-hidden="true">↓</span></a>
+          <a class="btn btn-primary btn-lg magnetic" href="https://github.com/srikantmehra57/Glitter/releases/download/v0.1.0/Glitter_0.1.0_aarch64.dmg">Download for macOS <span aria-hidden="true">↓</span></a>
         </div>
       </section>
     </main>
 
     <footer class="footer" data-scene="0 0 -1.6 1.4 0.32 0.3">
       <div class="footer-row">
-        <p>An independent desktop client for Muse Code. Not affiliated with Meta.</p>
+        <p>An independent desktop app for coding agents. Not affiliated with Meta.</p>
         <nav class="footer-links" aria-label="Footer">
           <a href="https://github.com/srikantmehra57/Glitter" target="_blank" rel="noreferrer">Source ↗</a>
           <a href="https://github.com/srikantmehra57/Glitter/releases" target="_blank" rel="noreferrer">Releases ↗</a>
@@ -542,7 +542,7 @@
           <a href="#top">Back to top ↑</a>
         </nav>
       </div>
-      <p class="wordmark" aria-hidden="true">muse code</p>
+      <p class="wordmark" aria-hidden="true">glitter</p>
     </footer>
 
 

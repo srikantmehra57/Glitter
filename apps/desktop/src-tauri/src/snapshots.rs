@@ -15,6 +15,10 @@ const OUTPUT_BYTES: u64 = 96 * 1024 * 1024;
 const METADATA_BYTES: usize = 1024 * 1024;
 const RETENTION_SECONDS: u64 = 7 * 24 * 60 * 60;
 const RECORD_LIMIT: usize = 100;
+/// Pins each snapshot's trees in the private store. Builds named Muse Code
+/// pinned under `refs/muse`; those refs are still deleted with their records.
+const REF_PREFIX: &str = "refs/glitter";
+const LEGACY_REF_PREFIX: &str = "refs/muse";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -415,7 +419,7 @@ impl Snapshots {
     fn pin(&self, record: &Record) -> Result<(), String> {
         for (name, tree) in [("before", &record.before), ("after", &record.after)] {
             if let Some(tree) = tree {
-                self.git(&record.root, &["update-ref", &format!("refs/muse/{}/{name}", record.info.snapshot_id), tree], &[])?;
+                self.git(&record.root, &["update-ref", &format!("{REF_PREFIX}/{}/{name}", record.info.snapshot_id), tree], &[])?;
             }
         }
         self.save(record)
@@ -937,8 +941,10 @@ impl Snapshots {
         if let Some(record) = self.records.get(id) {
             // Storage commands run from storage even if the old workspace vanished.
             let root = self.dir.clone().ok_or("Snapshot storage is unavailable.")?;
-            for name in ["before", "after"] {
-                self.git(&root, &["update-ref", "-d", &format!("refs/muse/{id}/{name}")], &[])?;
+            for prefix in [REF_PREFIX, LEGACY_REF_PREFIX] {
+                for name in ["before", "after"] {
+                    self.git(&root, &["update-ref", "-d", &format!("{prefix}/{id}/{name}")], &[])?;
+                }
             }
             let _ = std::fs::remove_file(root.join("records").join(format!("{}.json", record.info.snapshot_id)));
         }
@@ -1380,16 +1386,22 @@ mod tests {
         f.begin("s1", "t1");
         f.write("a.txt", b"after\n");
         let info = f.end("s1", "t1");
+        let pinned = format!("refs/glitter/{}/before", info.snapshot_id);
+        let legacy = format!("refs/muse/{}/before", info.snapshot_id);
+        assert!(f.store.git(&f.root, &["show-ref", &pinned], &[]).is_ok());
+        // A store moved over from Muse Code still holds refs under the old prefix.
+        f.store.git(&f.root, &["update-ref", &legacy, &pinned], &[]).unwrap();
         f.store.forget("grant", "s1").unwrap();
         assert!(f.store.list("grant", &f.root, "s1").is_empty());
-        assert!(f.store.git(&f.root, &["show-ref", &format!("refs/muse/{}/before", info.snapshot_id)], &[]).is_err());
+        assert!(f.store.git(&f.root, &["show-ref", &pinned], &[]).is_err());
+        assert!(f.store.git(&f.root, &["show-ref", &legacy], &[]).is_err());
         f.begin("s1", "t2");
         f.write("a.txt", b"new turn\n");
         let expired = f.end("s1", "t2");
         f.store.records.get_mut(&expired.snapshot_id).unwrap().info.created_at = now() - RETENTION_SECONDS - 1;
         f.store.prune().unwrap();
         assert!(f.store.list("grant", &f.root, "s1").is_empty());
-        assert!(f.store.git(&f.root, &["show-ref", &format!("refs/muse/{}/after", expired.snapshot_id)], &[]).is_err());
+        assert!(f.store.git(&f.root, &["show-ref", &format!("refs/glitter/{}/after", expired.snapshot_id)], &[]).is_err());
     }
 
     #[test]

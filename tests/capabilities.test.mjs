@@ -19,7 +19,7 @@ test('main window grants the exact minimal plugin surface', () => {
     // data-tauri-drag-region: dragging and native double-click maximize/restore.
     'core:window:allow-start-dragging',
     'core:window:allow-internal-toggle-maximize',
-    // LazyStore get/set/save/entries (+ implicit load) on muse-desktop.json. `entries` is what
+    // LazyStore get/set/save/entries (+ implicit load) on glitter.json. `entries` is what
     // the atomic writer serializes: without it every save fails with "not allowed by ACL".
     'store:allow-load',
     'store:allow-get',

@@ -282,7 +282,7 @@ describe("prompt history and agent capabilities", () => {
     seedWorkspace({ agentId: "opencode" });
     seedStore({ theme: "light" });
     const view = render(<Composer />);
-    expect(useAppStore.getState().confirmDialog).toMatchObject({ title: "OpenCode capabilities in Muse Code", confirmLabel: "Don’t show again" });
+    expect(useAppStore.getState().confirmDialog).toMatchObject({ title: "OpenCode capabilities in Glitter", confirmLabel: "Don’t show again" });
     expect(screen.queryByText(/threads can’t be forked or exported/)).toBeNull();
     await act(async () => useAppStore.getState().resolveConfirm(true));
     expect(useAppStore.getState().hideAgentCapabilities).toBe(true);

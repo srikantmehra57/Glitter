@@ -7,14 +7,23 @@ picture, [DEVELOPMENT.md](DEVELOPMENT.md) the commands, and
 
 ## What this is
 
-Muse Code Desktop is an independent, MIT-licensed desktop GUI for Meta's
-`muse` coding-agent CLI. It can also drive a few third-party agent CLIs over
-ACP. Users open a workspace folder, chat with the agent in threads, approve or
-deny its tool calls, set the model and reasoning effort, and review the
-resulting git changes. All agent work is done by the CLI. The app is the client.
+Glitter is an independent, MIT-licensed desktop app for coding agents. It
+began as Muse Code Desktop, a GUI for Meta's `muse` coding-agent CLI, and can
+also drive a few third-party agent CLIs over ACP. Users open a workspace folder,
+chat with the agent in threads, approve or deny its tool calls, set the model
+and reasoning effort, and review the resulting git changes. For Muse and the
+ACP agents, all agent work is done by the CLI and the app is the client.
+
+**Naming.** The product is Glitter. "Muse" (and "Muse Code", Meta's name for
+its CLI and subscription) names Meta's agent and everything that talks to it:
+the Muse agent, `host.ts`, `museBin`/`museApiKey`, auth and detection copy,
+`@muse-code/sdk`. Keep those as they are and use Glitter for the app itself.
+Builds before the rename used the bundle id `com.musecode.desktop`; `legacy.rs`
+carries their data over (see "The product is called Glitter" in
+[DECISIONS.md](DECISIONS.md)).
 
 **Direction.** The app is becoming an independent agent harness. Its built-in
-Harness agent (`packages/muse-bridge/src/harness`) calls model providers with
+Harness agent (`packages/glitter-bridge/src/harness`) calls model providers with
 the user's own keys and runs its own tool loop, so no agent CLI has to be
 installed; Muse and the ACP agents stay supported alongside it. See "The app
 has its own agent harness" in [DECISIONS.md](DECISIONS.md). The next milestones
@@ -45,16 +54,17 @@ files (see the README's known limitations).
 | Validation for a bridge method | `apps/desktop/src-tauri/src/dto.rs` + `BRIDGE_METHODS` in `lib.rs` |
 | Executable or agent binary trust | `apps/desktop/src-tauri/src/exec.rs` |
 | Keychain | `apps/desktop/src-tauri/src/credentials.rs` |
+| Carrying a Muse Code install over (data, logs, keychain, old worktrees) | `apps/desktop/src-tauri/src/legacy.rs`, `legacy_worktree_store` in `lib.rs` |
 | Native permissions granted to the webview | `apps/desktop/src-tauri/capabilities/default.json` |
-| Muse protocol behavior | `packages/muse-bridge/src/host.ts` |
-| Third-party (ACP) agents | `packages/muse-bridge/src/acp.ts`, registry in `agents.ts` |
-| The built-in harness agent | `packages/muse-bridge/src/harness/` (providers, wire, tools, store, host) |
+| Muse protocol behavior | `packages/glitter-bridge/src/host.ts` |
+| Third-party (ACP) agents | `packages/glitter-bridge/src/acp.ts`, registry in `agents.ts` |
+| The built-in harness agent | `packages/glitter-bridge/src/harness/` (providers, wire, tools, store, host) |
 | Provider keys (BYOK) | `credentials.rs` (`provider_key_set`, `provider_keys_get`), Settings → Providers (`ProvidersPanel.tsx`, `lib/providers.ts`) |
-| Bridge request routing | `packages/muse-bridge/src/index.ts` |
-| Child-process isolation, redaction | `packages/muse-bridge/src/isolation.ts`, `redaction.ts` |
-| Types shared by the bridge and UI | `packages/muse-bridge/src/protocol.ts` |
+| Bridge request routing | `packages/glitter-bridge/src/index.ts` |
+| Child-process isolation, redaction | `packages/glitter-bridge/src/isolation.ts`, `redaction.ts` |
+| Types shared by the bridge and UI | `packages/glitter-bridge/src/protocol.ts` |
 | Node or DOM tests | `tests/*.test.mjs`, `apps/desktop/src/components/*.test.tsx` |
-| Release and verification scripts | `scripts/`, `packages/muse-bridge/scripts/` |
+| Release and verification scripts | `scripts/`, `packages/glitter-bridge/scripts/` |
 | Marketing site | `apps/website/` (independent of the app) |
 | Harness work in progress | [HARNESS_INTEGRATION_PLAN.md](HARNESS_INTEGRATION_PLAN.md) — phased plan; [HARNESS_REVIEWS.md](HARNESS_REVIEWS.md) — what the four reviewed harnesses do and why |
 

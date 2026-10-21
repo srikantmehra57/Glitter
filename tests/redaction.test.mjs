@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 const dir = await mkdtemp(join(tmpdir(), 'muse-redaction-'));
-await build({ entryPoints: [resolve('packages/muse-bridge/src/redaction.ts')], bundle: true, platform: 'node', format: 'esm', outfile: join(dir, 'redaction.mjs'), logLevel: 'silent' });
+await build({ entryPoints: [resolve('packages/glitter-bridge/src/redaction.ts')], bundle: true, platform: 'node', format: 'esm', outfile: join(dir, 'redaction.mjs'), logLevel: 'silent' });
 const { DiagnosticRedactor, DiagnosticLines, diagnosticEvent, REDACTED, DIAGNOSTIC_LIMIT } = await import(pathToFileURL(join(dir, 'redaction.mjs')));
 // Finish both bundles before registering tests. Otherwise Node can finish the
 // first group and remove the directory while the logger bundle is still writing.

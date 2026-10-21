@@ -4,7 +4,7 @@ ZCode (`zai-org/ZCode`, Apache-2.0) is Z.ai's coding-agent harness: an Electron
 workbench, a web client, a backend and — the part that matters here — a full
 agent runtime in `apps/zcode-cli`. This document is a reverse-engineering of that
 runtime and an assessment of what belongs in *our* harness
-(`packages/muse-bridge/src/harness`).
+(`packages/glitter-bridge/src/harness`).
 
 It is a design review, not an implementation plan. Every claim below was read
 in the ZCode source, not inferred from its docs.
@@ -36,7 +36,7 @@ carries the combined ranking.
 | `packages/contracts` (provider-neutral types) | | 22,963 |
 | `packages/adapters` (AI-SDK provider layer) | | 55,156 |
 
-Ours, for scale: `packages/muse-bridge/src` is 6,984 lines, of which the harness
+Ours, for scale: `packages/glitter-bridge/src` is 6,984 lines, of which the harness
 is 1,469 (`host.ts` 630, `wire.ts` 337, `tools.ts` 270, `store.ts` 135,
 `providers.ts` 97).
 
@@ -291,7 +291,7 @@ whole queue; we need the harness to stop throwing and to accept a queued
 message.
 
 **B6 — Skills and MCP for the harness.**
-This is the largest capability gap and it is not a harness bug: MuseCode's
+This is the largest capability gap and it is not a harness bug: Glitter's
 `ExtensionsView` (skills, plugins, MCP) is entirely Muse-CLI-backed
 (`host.ts:831` calls `skill/list` on the Muse connection). A user who picks the
 built-in Harness agent loses all of it, and the Harness is the app's

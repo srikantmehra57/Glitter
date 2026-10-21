@@ -429,7 +429,7 @@ async function* streamOpenAi(request: ChatRequest): AsyncGenerator<StreamEvent> 
     ...effortField(providerId, model, request.effort),
   };
   const headers: Record<string, string> = request.provider.apiKey ? { authorization: `Bearer ${request.provider.apiKey}` } : {};
-  if (providerId === "openrouter") headers["x-title"] = "Muse Code";
+  if (providerId === "openrouter") headers["x-title"] = "Glitter";
   const response = await post(request, `${request.provider.root}/chat/completions`, headers, body);
   type PromptDetails = { cached_tokens?: number };
   let text = "";

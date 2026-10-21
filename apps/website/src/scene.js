@@ -2,7 +2,7 @@
 // page scrolls: the tile mark, a floor of light, a galaxy, the effort ring, a
 // run helix and a sphere. Each <[data-scene]> element names its form and framing:
 //   data-scene="shape x y scale opacity effortGain"
-// Exposes window.museScene { setEffort(t), refreshPalette(), stats(), setPaused(b) }.
+// Exposes window.glitterScene { setEffort(t), refreshPalette(), stats(), setPaused(b) }.
 import * as THREE from "three";
 
 const SHAPES = 6;
@@ -240,7 +240,7 @@ export function initScene() {
     stats: () => ({ fps: 0, count: 0, frames: 0 }),
     setPaused: () => {},
   };
-  window.museScene = api;
+  window.glitterScene = api;
 
   let renderer;
   try {
@@ -545,7 +545,7 @@ export function initScene() {
   });
   window.addEventListener("resize", resize);
   window.addEventListener("scroll", () => (dirty = true), { passive: true });
-  window.addEventListener("muse:theme", () => requestAnimationFrame(refreshPalette));
+  window.addEventListener("glitter:theme", () => requestAnimationFrame(refreshPalette));
   reduced.addEventListener("change", () => {
     if (reduced.matches) uniforms.uIntro.value = 1;
     dirty = true;

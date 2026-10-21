@@ -1,6 +1,6 @@
 # Harness integration plan
 
-A phased plan to bring the built-in harness (`packages/muse-bridge/src/harness`)
+A phased plan to bring the built-in harness (`packages/glitter-bridge/src/harness`)
 up to what the four reviewed harnesses do, and to close the gap between the
 harness and the rest of the app.
 
@@ -38,7 +38,7 @@ independently shippable.
 - **User-visible changes** go in `CHANGELOG.md` under `[Unreleased]`.
 - **Architectural changes** (Phases 2, 3, 7) get a `docs/DECISIONS.md` entry.
 - **UI phases** follow the build/install workflow in `AGENTS.md`: build, then
-  replace `/Applications/Muse Code.app`, then trash the bundle copy.
+  replace `/Applications/Glitter.app`, then trash the bundle copy.
 - Phases 1–3 are **harness-only**: no protocol change, no new dependency, no
   UI change. That keeps them fast to review and safe to land.
 
@@ -102,8 +102,8 @@ no UI, no protocol change.
 | 1.7 | Honor the `ifBusy` disposition the store already sends: queue, steer, replace | dsh, Pi, ZCode | The composer already offers "Queue a follow-up"; the harness throws "still working" | 100 lines |
 | 1.8 | Add a total elapsed cap to retries, and a first-event watchdog (separate from the idle watchdog) | MiniMax | 3 min × 3 attempts with no total bound; a provider that accepts and hangs costs 9 minutes | 60 lines |
 
-**Files.** `packages/muse-bridge/src/harness/{wire.ts,host.ts,tools.ts}`,
-`packages/muse-bridge/src/index.ts` (pass `ifBusy`), `apps/desktop/src/lib/types.ts`
+**Files.** `packages/glitter-bridge/src/harness/{wire.ts,host.ts,tools.ts}`,
+`packages/glitter-bridge/src/index.ts` (pass `ifBusy`), `apps/desktop/src/lib/types.ts`
 (usage shape), `apps/desktop/src/components/Composer.tsx` (chip).
 
 **Tests.** Extend `tests/harness.test.mjs`:

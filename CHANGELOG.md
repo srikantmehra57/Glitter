@@ -1,6 +1,7 @@
 # Changelog
 
-All notable changes to Muse Code Desktop are recorded here. The format follows
+All notable changes to Glitter (called Muse Code Desktop before the rename) are
+recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
@@ -26,7 +27,18 @@ licence terms.
 
 ### Changed
 
-- Muse Code is now macOS only. The Windows installers (NSIS and MSI) are no
+- The app is now called **Glitter**. The window, menus, Dock name, About and
+  Settings say Glitter; "Muse" and "Muse Code" remain only where they mean
+  Meta's CLI, agent and subscription. The bundle identifier is now
+  `com.glitter.desktop`, so the data folder, log folder and keychain service
+  moved. On first launch Glitter moves a Muse Code install's settings, threads,
+  built-in harness sessions, turn snapshots, logs, API key, provider keys,
+  workspace grants and agent pins across, and deletes the old keychain entries
+  once the new ones read back. macOS may ask once per entry before Glitter can
+  read it. Existing worktrees stay in Muse Code's data folder and keep working
+  there; new worktrees use `glitter/` branches. Quit Muse Code before you
+  first open Glitter, and move `/Applications/Muse Code.app` to the Trash.
+- Glitter is now macOS only. The Windows installers (NSIS and MSI) are no
   longer built, and CI tests on macOS alone.
 - The model picker opens straight to the models: one click opens it, one
   click picks a model and closes it. Agents are tabs in its header instead of a

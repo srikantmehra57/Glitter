@@ -7,7 +7,7 @@ export type ThinkingOrbStyle = (typeof THINKING_ORBS)[number];
 /** Which credential pays for a session: the Muse Code subscription sign-in, or a metered API key. */
 export type AuthSource = "subscription" | "apiKey";
 export type AuthMode = "auto" | AuthSource;
-import type { UserInputRequest, UserInputResponse, UserInputAnswer } from "../../../../packages/muse-bridge/src/protocol";
+import type { UserInputRequest, UserInputResponse, UserInputAnswer } from "../../../../packages/glitter-bridge/src/protocol";
 export type { UserInputRequest, UserInputResponse, UserInputAnswer };
 
 import type { ShortcutOverrides } from "./shortcuts";

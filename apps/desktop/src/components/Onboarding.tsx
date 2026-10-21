@@ -75,15 +75,15 @@ export function Onboarding() {
   if (!mounted) return null;
   return <dialog ref={dialog} className="hero" aria-labelledby="onboarding-title" onCancel={(event) => { event.preventDefault(); setDismissed(true); }}>
     <EmberTiles />
-    <div className="brand" style={{ paddingLeft: 0 }}><img src="/spark.svg" alt="" /><span>Muse Code</span></div>
+    <div className="brand" style={{ paddingLeft: 0 }}><img src="/spark.svg" alt="" /><span>Glitter</span></div>
     <h2 id="onboarding-title">
       {browserPreview ? "This tab cannot see the Muse CLI"
         : needsAuth ? "Connect your Muse account"
         : needsProject ? "Open a workspace"
-        : "Welcome to Muse Code"}
+        : "Welcome to Glitter"}
     </h2>
     <p>
-      {browserPreview ? "The browser preview never talks to your local Muse CLI, even if the CLI is installed. Use the Muse Code desktop window for live detection, or explore the interface here."
+      {browserPreview ? "The browser preview never talks to your local Muse CLI, even if the CLI is installed. Use the Glitter desktop window for live detection, or explore the interface here."
         : needsAuth ? "The Muse CLI is installed but has no credential yet. Use the Muse Code subscription you signed into with the CLI, or pay per token with an API key."
         : needsProject ? "The Muse CLI is connected. Open a workspace, then start a thread."
         : "This independent desktop client uses your installed Muse CLI. Install the Muse CLI or set a custom binary path in Settings."}

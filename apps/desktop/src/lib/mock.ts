@@ -82,14 +82,14 @@ const inspectItems: TranscriptItem[] = [
     kind: "agentMessage",
     status: "completed",
     turnId: "turn-1",
-    text: "Implemented the command-center shell: sidebar threads, an agent timeline, and a per-file review dock.\n\n## What changed\n\nThe layout now follows a **workspace → thread → run** model. `App.tsx` only composes the shell; state lives in `lib/store.ts` and streams from the bridge over NDJSON.\n\n### Layers\n\n- **UI** (`apps/desktop/src/components/`) — `Sidebar.tsx`, `ThreadView.tsx`, `AgentTimeline.tsx`, `Composer.tsx`, and `ReviewDock.tsx`. Each renders store state; none talk to the bridge directly.\n- **State** (`lib/store.ts`) — a zustand store holding workspaces, threads, the composer draft, and git status. Selectors like `currentThread` keep renders scoped.\n- **Bridge** (`packages/muse-bridge/`) — hosts `@muse-code/sdk` over `muse serve` stdio and forwards session events as NDJSON lines.\n\n### Data flow\n\n1. The composer calls `sendPrompt`, which writes a `userMessage` item and opens a turn.\n2. Bridge events fold into `thread.items` — tool calls, reasoning, and agent messages stream in order.\n3. `AgentTimeline` groups items into runs and renders steps, plans, and the final reply.\n\n```ts\nconst thread = useAppStore(currentThread);\nconst send = useAppStore((s) => s.sendPrompt);\nawait send({ resetTaskState: true });\n```\n\n| Surface | File | Renders |\n|---|---|---|\n| Timeline | `AgentTimeline.tsx` | Steps, plans, receipts |\n| Composer | `Composer.tsx` | Draft, attachments, effort |\n| Review | `ReviewDock.tsx` | Changed files, diffs |\n\n> Threads persist across launches, and an interrupted run is labeled rather than silently dropped.\n\nNext up:\n\n- [ ] Streaming diffs in the review dock\n- [ ] Plan pinning during long runs",
+    text: "Implemented the command-center shell: sidebar threads, an agent timeline, and a per-file review dock.\n\n## What changed\n\nThe layout now follows a **workspace → thread → run** model. `App.tsx` only composes the shell; state lives in `lib/store.ts` and streams from the bridge over NDJSON.\n\n### Layers\n\n- **UI** (`apps/desktop/src/components/`) — `Sidebar.tsx`, `ThreadView.tsx`, `AgentTimeline.tsx`, `Composer.tsx`, and `ReviewDock.tsx`. Each renders store state; none talk to the bridge directly.\n- **State** (`lib/store.ts`) — a zustand store holding workspaces, threads, the composer draft, and git status. Selectors like `currentThread` keep renders scoped.\n- **Bridge** (`packages/glitter-bridge/`) — hosts `@muse-code/sdk` over `muse serve` stdio and forwards session events as NDJSON lines.\n\n### Data flow\n\n1. The composer calls `sendPrompt`, which writes a `userMessage` item and opens a turn.\n2. Bridge events fold into `thread.items` — tool calls, reasoning, and agent messages stream in order.\n3. `AgentTimeline` groups items into runs and renders steps, plans, and the final reply.\n\n```ts\nconst thread = useAppStore(currentThread);\nconst send = useAppStore((s) => s.sendPrompt);\nawait send({ resetTaskState: true });\n```\n\n| Surface | File | Renders |\n|---|---|---|\n| Timeline | `AgentTimeline.tsx` | Steps, plans, receipts |\n| Composer | `Composer.tsx` | Draft, attachments, effort |\n| Review | `ReviewDock.tsx` | Changed files, diffs |\n\n> Threads persist across launches, and an interrupted run is labeled rather than silently dropped.\n\nNext up:\n\n- [ ] Streaming diffs in the review dock\n- [ ] Plan pinning during long runs",
   },
 ];
 
 export const MOCK_THREADS: Thread[] = [
   {
     sessionId: "preview-1",
-    workspacePath: "/Users/you/Muse Code",
+    workspacePath: "/Users/you/Glitter",
     title: "Command center layout",
     updatedAt: now,
     status: "idle",
@@ -116,7 +116,7 @@ export const MOCK_THREADS: Thread[] = [
   },
   {
     sessionId: "preview-2",
-    workspacePath: "/Users/you/Muse Code",
+    workspacePath: "/Users/you/Glitter",
     title: "Wire muse serve",
     updatedAt: new Date(Date.now() - 3600_000).toISOString(),
     status: "running",
@@ -162,7 +162,7 @@ export const MOCK_THREADS: Thread[] = [
         status: "completed",
         turnId: "turn-live",
         tool: "read_file",
-        args: '{"path":"packages/muse-bridge/src/host.ts"}',
+        args: '{"path":"packages/glitter-bridge/src/host.ts"}',
         durationMs: 90,
         visibleOutput: "export async function startHost() { … }",
       },
@@ -218,7 +218,7 @@ export const MOCK_THREADS: Thread[] = [
   },
   {
     sessionId: "preview-3",
-    workspacePath: "/Users/you/Muse Code",
+    workspacePath: "/Users/you/Glitter",
     title: "Interrupted auth refresh",
     updatedAt: new Date(Date.now() - 7200_000).toISOString(),
     status: "error",
@@ -270,7 +270,7 @@ export const MOCK_GIT: GitSnapshot = {
   files: [
     { path: "apps/desktop/src/App.tsx", status: " M", added: 24, removed: 6 },
     { path: "apps/desktop/src/styles.css", status: "M ", added: 180, removed: 0 },
-    { path: "packages/muse-bridge/src/host.ts", status: "M ", added: 96, removed: 0 },
+    { path: "packages/glitter-bridge/src/host.ts", status: "M ", added: 96, removed: 0 },
     { path: "docs/review-plan.md", status: "??", added: 4, removed: 0 },
     { path: "dist/bundle.bin", status: "??", added: 0, removed: 0, previewSkipped: "binary" },
   ],
@@ -311,7 +311,7 @@ new file mode 100644
 };
 
 /** Demo file index: the changed files from `MOCK_GIT` plus a few neighbours. */
-export const MOCK_FILES = ["README.md", "apps/desktop/src/App.tsx", "apps/desktop/src/styles.css", "apps/desktop/src/lib/store.ts", "apps/desktop/src/components/Composer.tsx", "package.json", "packages/muse-bridge/src/host.ts", "packages/muse-bridge/src/index.ts"];
+export const MOCK_FILES = ["README.md", "apps/desktop/src/App.tsx", "apps/desktop/src/styles.css", "apps/desktop/src/lib/store.ts", "apps/desktop/src/components/Composer.tsx", "package.json", "packages/glitter-bridge/src/host.ts", "packages/glitter-bridge/src/index.ts"];
 
 /** Demo file contents for the viewer; nothing is read from disk. */
 export function mockWorkspaceFile(path: string): WorkspaceFile {
@@ -325,7 +325,7 @@ export function mockWorkspaceFile(path: string): WorkspaceFile {
 /** A demo worktree record; nothing is created on disk. */
 export function mockWorktree(base: string): Omit<ThreadWorktree, "workspaceId"> & { warning?: string } {
   const name = Math.random().toString(16).slice(2, 10).padEnd(8, "0");
-  return { grantId: `preview-worktree-${name}`, path: `/Users/you/Library/Application Support/Muse Code/worktrees/${name}`, branch: `muse/${name}`, base: base || MOCK_GIT.branch };
+  return { grantId: `preview-worktree-${name}`, path: `/Users/you/Library/Application Support/com.glitter.desktop/worktrees/${name}`, branch: `glitter/${name}`, base: base || MOCK_GIT.branch };
 }
 
 /** Each preview scope has distinct, explicitly demo data; no native reads. */
@@ -338,8 +338,8 @@ export function mockGitReview(request: GitReviewRequest): GitReview {
   }
   const patch = (path: string, before: string, after: string) => `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -1 +1 @@\n-${before}\n+${after}\n`;
   if (request.scope === "staged") return {
-    files: [{ path: "apps/desktop/src/styles.css", status: "M", added: 1, removed: 1 }, { path: "packages/muse-bridge/src/host.ts", status: "M", added: 1, removed: 1 }],
-    diff: patch("apps/desktop/src/styles.css", ".surface { color: var(--ink); }", ".surface { color: var(--ink); background: var(--surface-2); }") + patch("packages/muse-bridge/src/host.ts", "const history = [];", "const history = opening.items;"), truncated: false,
+    files: [{ path: "apps/desktop/src/styles.css", status: "M", added: 1, removed: 1 }, { path: "packages/glitter-bridge/src/host.ts", status: "M", added: 1, removed: 1 }],
+    diff: patch("apps/desktop/src/styles.css", ".surface { color: var(--ink); }", ".surface { color: var(--ink); background: var(--surface-2); }") + patch("packages/glitter-bridge/src/host.ts", "const history = [];", "const history = opening.items;"), truncated: false,
   };
   if (request.scope === "lastTurn") {
     const snapshot = Object.values(MOCK_THREADS.find((thread) => thread.sessionId === request.sessionId)?.snapshots ?? {}).find((item) => item.snapshotId === request.snapshotId);

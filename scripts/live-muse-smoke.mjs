@@ -12,7 +12,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
-const bridgeScript = join(root, "packages/muse-bridge/dist/index.js");
+const bridgeScript = join(root, "packages/glitter-bridge/dist/index.js");
 const museBin = process.env.MUSE_BIN && process.env.MUSE_BIN.includes("/") ? process.env.MUSE_BIN : undefined;
 const sendPrompt = process.argv.includes("--send");
 

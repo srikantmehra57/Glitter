@@ -20,7 +20,7 @@ const { normalizeDockWidth, dockWidthBounds, clampDockWidth, sidebarWidthFor, si
 const { composePrompt, shortHash, threadStatusLines, worktreeRemovalNote } = await bundle('apps/desktop/src/lib/format.ts');
 const { classifyError, describeError, authRequired, isGrantError } = await bundle('apps/desktop/src/lib/errors.ts');
 const { SessionMemoryPersistence, normalizeMemory, normalizeDraft, persistableDrafts, rememberPrompt, SESSION_MEMORY_VERSION } = await bundle('apps/desktop/src/lib/sessionMemory.ts');
-const { resolveMuseBin } = await bundle('packages/muse-bridge/src/detect.ts');
+const { resolveMuseBin } = await bundle('packages/glitter-bridge/src/detect.ts');
 const { agentEnabled, DEFAULT_ENABLED_AGENTS, DEFAULT_SETTINGS, skillScopeArg } = await bundle('apps/desktop/src/lib/types.ts');
 const { settingsFields } = await bundle('apps/desktop/src/lib/settingsPersistence.ts');
 const { resolveTheme, shellOpacity, normalizeTranslucency } = await bundle('apps/desktop/src/lib/theme.ts');
@@ -192,7 +192,7 @@ test('session memory round-trips titles and archives without secrets', async () 
 
 test('draft image bytes never enter the settings document, but their references do', async () => {
   // ENG-DATA-003/ENG-PERF-002: four 10 MiB attachments as base64 push
-  // muse-desktop.json past the 48 MiB IPC limit and freeze ALL persistence.
+  // glitter.json past the 48 MiB IPC limit and freeze ALL persistence.
   const image = { mediaType: 'image/png', base64Data: 'a'.repeat(1024), name: 'shot.png' };
   const saved = {};
   const persistence = new SessionMemoryPersistence({

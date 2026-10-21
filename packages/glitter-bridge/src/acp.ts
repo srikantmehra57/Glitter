@@ -319,7 +319,7 @@ export class AcpAgentHost {
         this.init = await conn.request<Json>("initialize", {
           protocolVersion: 1,
           clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
-          clientInfo: { name: "muse_code_desktop", title: "Muse Code Desktop", version: "0.1.0" },
+          clientInfo: { name: "glitter", title: "Glitter", version: "0.1.0" },
         }, options?.initializeTimeoutMs ?? 30000);
         this.catalog = null;
         this.catalogModes = null;

@@ -3,8 +3,8 @@ use objc2_app_kit::{NSApplication, NSImage};
 use objc2_foundation::NSData;
 use tauri::{AppHandle, Runtime, Theme};
 
-const LIGHT: &[u8] = include_bytes!("../icons/muse-light.png");
-const DARK: &[u8] = include_bytes!("../icons/muse-dark.png");
+const LIGHT: &[u8] = include_bytes!("../icons/glitter-light.png");
+const DARK: &[u8] = include_bytes!("../icons/glitter-dark.png");
 
 /// The Dock follows macOS appearance independently of the webview's UI theme.
 pub fn update<R: Runtime>(app: &AppHandle<R>, theme: Theme) {
@@ -19,7 +19,7 @@ pub fn update<R: Runtime>(app: &AppHandle<R>, theme: Theme) {
         };
         let data = NSData::with_bytes(bytes);
         let Some(image) = NSImage::initWithData(NSImage::alloc(), &data) else {
-            crate::native_log("warn", "app_icon.decode_failed", "could not decode the bundled Muse app icon");
+            crate::native_log("warn", "app_icon.decode_failed", "could not decode the bundled app icon");
             return;
         };
         // AppKit requires the application icon to be changed on the main thread.

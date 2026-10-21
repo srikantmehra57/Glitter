@@ -1,6 +1,6 @@
 # Production readiness
 
-Audit of Muse Code Desktop against a 111-item production-readiness checklist,
+Audit of Glitter against a 111-item production-readiness checklist,
 done on 2026-10-18 at `d6b4725` (branch `audit/fixes-round-1`). Every item has a
 status, its evidence, and the action taken. Re-run this review before the first
 public release and whenever the app gains a server, a hosted website, or
@@ -20,7 +20,7 @@ single-flight (#35), monotonic bridge clocks (#60), and the diagnostics bundle
 | Hosting / deploy target | End-user Macs (macOS 13+) as `.app`/`.dmg`. Windows and Linux are out of scope (DECISIONS: "macOS is the only platform"). **No signed or published build exists yet.** The website has no hosting config in the repo. |
 | Sync / async | Streaming events from the CLI; bounded in-process queues. No brokers, cron servers, or background workers. |
 | External services | `api.meta.ai` (Muse CLI release channel check), `nodejs.org` (build time only), the user's git remotes and `gh` (user-initiated). Model traffic goes through the CLI, not the app. |
-| Data stores | One JSON settings document (`muse-desktop.json`), the OS keychain (API key, workspace grants, agent digest pins, ACP consent), a private git object store for per-turn file snapshots, and logs. Session history is owned by the CLI. No database. |
+| Data stores | One JSON settings document (`glitter.json`), the OS keychain (API key, workspace grants, agent digest pins, ACP consent), a private git object store for per-turn file snapshots, and logs. Session history is owned by the CLI. No database. |
 | Auth | The CLI's `muse login` device-code flow, or an API key kept in the keychain. The app has no user accounts. |
 | Exposure | User-facing, local only. No listener, no public API, no webhooks, no file uploads to a server, no payments. |
 | Scale | One user per install. Load is one person's agent sessions. |
@@ -264,14 +264,14 @@ session store. Revisit #39–46 only if the app ever adds SQLite or a server.
 | `dc795bd` | Single-instance guard (`tauri-plugin-single-instance` 2.4.1, which fits the locked Tauri 2.11.5; 2.5.x would have forced Tauri 2.12 builds only 4 days old) | A second instance overwrote the whole grant table and settings document (lost updates). | See the single-instance evidence below. |
 | this file | Audit, runbook, postmortem template | Items #109–111. | — |
 
-**Single-instance evidence** (installed `/Applications/Muse Code.app`, built
+**Single-instance evidence** (installed `/Applications/Glitter.app`, built
 from `dc795bd`):
 
 ```text
-open                        → main PID 50614 (+ muse-node sidecar 50649)
+open                        → main PID 50614 (+ glitter-node sidecar 50649)
 open -n                     → main PID still 50614, no second main process
 direct second launch        → exit 0 after 0.07 s (PID 50660)
-muse-desktop.log            → 1792309060620  info  app.second_instance  focused the running window
+glitter.log            → 1792309060620  info  app.second_instance  focused the running window
                               1792309071499  info  app.second_instance  focused the running window
 ```
 
@@ -337,7 +337,7 @@ rebuilt bundle.
       Run workflow).
 - [ ] **CI failure notifications reach the owner**: GitHub → Settings →
       Notifications → Actions → "Send notifications for failed workflows only".
-- [ ] **Gatekeeper on a second Mac**, after signing (`spctl -a -vv "/Applications/Muse Code.app"`
+- [ ] **Gatekeeper on a second Mac**, after signing (`spctl -a -vv "/Applications/Glitter.app"`
       reports `source=Notarized Developer ID`).
 - [ ] **Website, once hosted**: HTTPS with HSTS
       (`curl -sI https://<site> | grep -i strict-transport`), long-lived cache
@@ -364,7 +364,7 @@ npm run build                      # .app in apps/desktop/src-tauri/target/relea
 node scripts/verify-macos-package.mjs
 ```
 
-Then follow AGENTS.md: quit Muse Code, move `/Applications/Muse Code.app` to
+Then follow AGENTS.md: quit Glitter, move `/Applications/Glitter.app` to
 the Trash, `ditto` the new bundle into `/Applications`, move the build-folder
 bundles to the Trash, and launch the installed copy.
 
@@ -381,14 +381,14 @@ pre-flight, then publish.
    grant table and agent pins in the keychain have the same shape across
    versions.
 3. If a release corrupted settings, quitting the app and restarting triggers
-   `repair_store_files`, which restores `muse-desktop.json.bak`.
+   `repair_store_files`, which restores `glitter.json.bak`.
 
 **Check health.**
 
 - In the app: Settings → Diagnostics (CLI found, auth, schema compatibility,
   sandbox posture).
-- Processes: `pgrep -fl "Muse Code.app/Contents/MacOS"` (exactly one) and
-  `pgrep -fl muse-node` (the bridge).
+- Processes: `pgrep -fl "Glitter.app/Contents/MacOS"` (exactly one) and
+  `pgrep -fl glitter-node` (the bridge).
 - CLI: `muse --version` and `muse config status`.
 - Live probe when a CLI is available: `node scripts/live-muse-smoke.mjs`.
 
@@ -396,12 +396,12 @@ pre-flight, then publish.
 
 | Log | macOS |
 |---|---|
-| App log (renderer and native events, bridge stderr) | `~/Library/Logs/com.musecode.desktop/muse-desktop.log` (+ `.previous.log`) |
-| Security audit (approval decisions) | `~/Library/Logs/com.musecode.desktop/security-audit.log` (+ `.previous.log`) |
-| Settings | `~/Library/Application Support/com.musecode.desktop/muse-desktop.json` (+ `.bak`) |
+| App log (renderer and native events, bridge stderr) | `~/Library/Logs/com.glitter.desktop/glitter.log` (+ `.previous.log`) |
+| Security audit (approval decisions) | `~/Library/Logs/com.glitter.desktop/security-audit.log` (+ `.previous.log`) |
+| Settings | `~/Library/Application Support/com.glitter.desktop/glitter.json` (+ `.bak`) |
 
 Lines are TSV: `epoch-ms  level  event  detail`. For example,
-`rg 'bridge\.|grants\.|pins\.' ~/Library/Logs/com.musecode.desktop/muse-desktop.log`
+`rg 'bridge\.|grants\.|pins\.' ~/Library/Logs/com.glitter.desktop/glitter.log`
 shows the bridge and keychain history. The log is already redacted, but read it
 before attaching it to a public issue.
 

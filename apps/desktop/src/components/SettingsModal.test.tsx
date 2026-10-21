@@ -48,7 +48,7 @@ describe("settings navigation", () => {
     fireEvent.click(screen.getByRole("button", { name: "Copy diagnostics" }));
     await vi.waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
 
-    expect(copied.startsWith(`Muse Desktop ${desktopPackage.version}\nOS: macOS arm64\n`)).toBe(true);
+    expect(copied.startsWith(`Glitter ${desktopPackage.version}\nOS: macOS arm64\n`)).toBe(true);
     expect(copied).toContain("Recent log (last 2 lines, redacted):");
     expect(copied).toContain("100\tinfo\tbridge.stderr\tconnected");
     expect(copied).toContain("101\twarn\tgit.push\tfailed");

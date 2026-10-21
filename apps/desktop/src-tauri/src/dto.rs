@@ -70,7 +70,7 @@ enum AgentId {
     Gemini,
     Qwen,
     Goose,
-    /// The app's own agent (`packages/muse-bridge/src/harness`).
+    /// The app's own agent (`packages/glitter-bridge/src/harness`).
     Harness,
 }
 

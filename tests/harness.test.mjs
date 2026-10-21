@@ -9,11 +9,11 @@ import { pathToFileURL } from 'node:url';
 const temporary = await mkdtemp(join(tmpdir(), 'muse-harness-'));
 const outfile = join(temporary, 'harness.mjs');
 await writeFile(join(temporary, 'entry.ts'), `
-export { HarnessHost, retryBudgetOpen } from ${JSON.stringify(resolve('packages/muse-bridge/src/harness/host.ts'))};
-export { SessionStore } from ${JSON.stringify(resolve('packages/muse-bridge/src/harness/store.ts'))};
-export { confine, globRegex, runTool, scheduleToolCalls, encodeSegment } from ${JSON.stringify(resolve('packages/muse-bridge/src/harness/tools.ts'))};
-export { isTruncatedStop, repairHistory, classifyProviderFailure } from ${JSON.stringify(resolve('packages/muse-bridge/src/harness/wire.ts'))};
-export { effortTiers, resolveProvider } from ${JSON.stringify(resolve('packages/muse-bridge/src/harness/providers.ts'))};
+export { HarnessHost, retryBudgetOpen } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/host.ts'))};
+export { SessionStore } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/store.ts'))};
+export { confine, globRegex, runTool, scheduleToolCalls, encodeSegment } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/tools.ts'))};
+export { isTruncatedStop, repairHistory, classifyProviderFailure } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/wire.ts'))};
+export { effortTiers, resolveProvider } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/providers.ts'))};
 `);
 await build({ entryPoints: [join(temporary, 'entry.ts')], bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'silent' });
 const { HarnessHost, SessionStore, confine, globRegex, runTool, scheduleToolCalls, encodeSegment, repairHistory, isTruncatedStop, retryBudgetOpen, effortTiers, resolveProvider, classifyProviderFailure } = await import(pathToFileURL(outfile).href);
@@ -509,7 +509,7 @@ test('a tool that started and never recorded a result tells the model not to ret
 test('the UI, the bridge and the native keychain agree on the provider list', async () => {
   const ids = (source, pattern) => [...source.matchAll(pattern)].map((match) => match[1]);
   const ui = ids(await readFile(resolve('apps/desktop/src/lib/providers.ts'), 'utf8'), /\{ id: "([a-z]+)"/g);
-  const bridge = ids(await readFile(resolve('packages/muse-bridge/src/harness/providers.ts'), 'utf8'), /\{ id: "([a-z]+)", name:/g);
+  const bridge = ids(await readFile(resolve('packages/glitter-bridge/src/harness/providers.ts'), 'utf8'), /\{ id: "([a-z]+)", name:/g);
   const native = (await readFile(resolve('apps/desktop/src-tauri/src/credentials.rs'), 'utf8')).match(/PROVIDER_IDS: &\[&str\] = &\[([^\]]+)\]/)[1].match(/"([a-z]+)"/g).map((id) => id.slice(1, -1));
   assert.deepEqual(ui, bridge);
   assert.deepEqual(native, bridge);

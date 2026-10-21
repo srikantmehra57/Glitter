@@ -7,6 +7,33 @@ must respect. Don't log routine changes here; they belong in git history and
 
 ---
 
+### The product is called Glitter
+
+- **Date:** 2026-10-21
+- **Context:** The app began as Muse Code Desktop, a GUI for Meta's `muse`
+  CLI, and has grown into an independent agent harness. "Muse Code" is also
+  Meta's own name for that CLI and its subscription.
+- **Decision:** The app, its packages (`glitter`, `@glitter/desktop`,
+  `@glitter/bridge`, `@glitter/website`), the bridge folder
+  (`packages/glitter-bridge`), the Node sidecar (`glitter-node`), the crate
+  (`glitter`) and the bundle identifier (`com.glitter.desktop`) are named
+  Glitter. "Muse" and "Muse Code" stay wherever they name Meta's CLI, agent,
+  SDK or subscription.
+- **Migration:** The identifier named the app data and log folders and the
+  keychain service. On first launch `legacy.rs` moves a Muse Code install's
+  settings document (renamed `glitter.json`), harness threads, turn snapshots
+  and logs across, copies each keychain entry to the new service before
+  deleting the old one, and leaves a marker so later launches skip it; a failed
+  step is retried next launch. Worktrees are not moved: their paths live in
+  each repository's git metadata, in the grants and in every agent CLI's own
+  session store, which the app cannot rewrite. They stay in the old data
+  folder, the worktree commands accept that folder as a second store
+  (`legacy_worktree_store`), and it is removed once its last worktree is.
+  Their `muse/` branches and `refs/muse/` snapshot refs are still cleaned up.
+- **Consequences:** macOS may ask once per keychain entry before Glitter can
+  read what Muse Code saved. Running Muse Code and Glitter side by side is not
+  supported.
+
 ### Suggestion turns cannot read the workspace
 
 - **Date:** 2026-10-15
@@ -174,8 +201,9 @@ must respect. Don't log routine changes here; they belong in git history and
 
 - **Date:** 2026-10-12
 - **Decision:** A new Muse thread can start in its own git worktree: a linked
-  worktree of the workspace repository on a new `muse/<id>` branch, stored under
-  the app data directory in `worktrees/<digest of the repository root>/<id>`.
+  worktree of the workspace repository on a new `glitter/<id>` branch
+  (`muse/<id>` before the rename), stored under the app data directory in
+  `worktrees/<digest of the repository root>/<id>`.
   `git_worktree_create` takes the workspace grant and an optional base, creates
   the worktree, and mints a grant for its root. The thread's session, snapshots,
   Changes, review, file index and opened files all use that grant. The thread
@@ -420,12 +448,12 @@ must respect. Don't log routine changes here; they belong in git history and
 ### A separate Node bridge built on the official SDK
 
 - **Date:** 2026-09-18
-- **Decision:** MSP is spoken by `packages/muse-bridge`, a Node process that uses
+- **Decision:** MSP is spoken by `packages/glitter-bridge`, a Node process that uses
   `@muse-code/sdk` and talks to the shell over NDJSON on stdio. It isn't
   reimplemented in Rust.
 - **Reason:** The SDK is the supported client. Reimplementing the protocol would
   drift from it.
-- **Consequences:** The app ships its own Node runtime (the `muse-node` sidecar).
+- **Consequences:** The app ships its own Node runtime (the `glitter-node` sidecar).
   The SDK is pinned exactly, and moving the pin is a deliberate change. It was
   re-pinned from 0.1.1 to 1.3.0 on 2026-09-21 to match the CLI's schema.
 
@@ -456,7 +484,7 @@ must respect. Don't log routine changes here; they belong in git history and
   user's Node.
 - **Reason:** Stops script swapping and PATH or `NODE_OPTIONS` hijacking.
 - **Consequences:** Any change to the bridge requires rebuilding the shell.
-  `MUSE_BRIDGE_SCRIPT` works in debug builds only.
+  `GLITTER_BRIDGE_SCRIPT` works in debug builds only.
 
 ### Third-party agents are opt-in and isolated
 
@@ -469,7 +497,7 @@ must respect. Don't log routine changes here; they belong in git history and
   - it runs under an OS write sandbox where one is available
 - **Reason:** These are third-party binaries running with the user's identity.
 - **Consequences:** Only Muse, OpenCode and Grok are marked verified. The others
-  are labeled experimental in `packages/muse-bridge/src/agents.ts`.
+  are labeled experimental in `packages/glitter-bridge/src/agents.ts`.
 
 ### Muse owns its shell sandbox
 
@@ -525,7 +553,7 @@ must respect. Don't log routine changes here; they belong in git history and
 - **Date:** 2026-09-22
 - **Context:** The store plugin saves with truncate-and-write, so a crash
   mid-save could destroy every draft and thread title.
-- **Decision:** `muse-desktop.json` is written by the native
+- **Decision:** `glitter.json` is written by the native
   `persist_store_atomic` command: temp file, then rename, with a `.bak` kept. An
   unreadable file is quarantined as `.corrupt`, and the backup is restored. A
   banner shows when persistence fails.
@@ -533,7 +561,7 @@ must respect. Don't log routine changes here; they belong in git history and
 ### One running instance
 
 - **Date:** 2026-10-18
-- **Context:** The workspace-grant table in the keyring and `muse-desktop.json`
+- **Context:** The workspace-grant table in the keyring and `glitter.json`
   settings document are whole-table writes. Two instances make those writes
   last-writer-wins, silently dropping grants or settings.
 - **Decision:** Register the official Tauri single-instance plugin first. Its
@@ -658,7 +686,7 @@ must respect. Don't log routine changes here; they belong in git history and
 ### macOS is the only platform
 
 - **Date:** 2026-10-21
-- **Decision:** Muse Code is built, tested and shipped for macOS 13 or later
+- **Decision:** Glitter is built, tested and shipped for macOS 13 or later
   only. CI runs on macOS alone, and the bundle targets are `.app` and `.dmg`.
   There are no Windows or Linux builds or installers.
 - **Reason:** The app leans on macOS throughout (the window material, the

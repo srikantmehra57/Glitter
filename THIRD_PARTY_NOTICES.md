@@ -1,6 +1,6 @@
 # Third-party notices
 
-Muse Code Desktop redistributes third-party code. The license texts below are
+Glitter redistributes third-party code. The license texts below are
 summarized for attribution; the authoritative full texts ship with each
 dependency (`node_modules/<pkg>/LICENSE`) and, for the Node runtime, at
 <https://github.com/nodejs/node/blob/main/LICENSE>.
@@ -12,14 +12,14 @@ Meta's separately distributed CLI.
 
 | Component | Version | License | Notes |
 |---|---|---|---|
-| Node.js runtime | 26.8.2 | MIT (OpenJS Foundation) | Staged as the `muse-node` sidecar by `packages/muse-bridge/scripts/stage-sidecar.mjs`; only `bin/node` is extracted from the official archive |
-| `@muse-code/sdk` | 1.3.0 | MIT — © Meta Platforms, Inc. and affiliates | Bundled into `muse-bridge/dist/index.js` |
+| Node.js runtime | 26.8.2 | MIT (OpenJS Foundation) | Staged as the `glitter-node` sidecar by `packages/glitter-bridge/scripts/stage-sidecar.mjs`; only `bin/node` is extracted from the official archive |
+| `@muse-code/sdk` | 1.3.0 | MIT — © Meta Platforms, Inc. and affiliates | Bundled into `glitter-bridge/dist/index.js` |
 | `react`, `react-dom` | 19.x | MIT — © Meta Platforms, Inc. and affiliates | Compiled into the webview bundle |
 | `react-markdown` | 10.1.0 | MIT | Compiled into the webview bundle |
 | `remark-gfm` | 4.0.1 | MIT | Compiled into the webview bundle |
 | `zustand` | 5.x | MIT — © 2019 Paul Henschel | Compiled into the webview bundle |
 | `@tauri-apps/api` | 2.11.1 | Apache-2.0 OR MIT | IPC and event bindings for the native shell; compiled into the webview bundle |
-| `@tauri-apps/plugin-store` | 2.4.5 | MIT OR Apache-2.0 | Persists settings, drafts, and session memory (`muse-desktop.json`); compiled into the webview bundle |
+| `@tauri-apps/plugin-store` | 2.4.5 | MIT OR Apache-2.0 | Persists settings, drafts, and session memory (`glitter.json`); compiled into the webview bundle |
 | `@tauri-apps/plugin-notification` | 2.4.0 | MIT OR Apache-2.0 | Turn and approval notifications through the OS; compiled into the webview bundle |
 | `lucide-react` | 0.544.0 | ISC — © Cole Bemis and contributors | Icons compiled into the webview bundle |
 | `thinking-orbs` | 0.3.1 | MIT — © 2026 Jakub Antalik | Compiled into the webview bundle |
@@ -64,7 +64,7 @@ crate sources in the local cargo registry.
 
 No third-party fonts are bundled or remotely loaded. The UI uses system font
 stacks (`SF`/`system-ui`). The app icon derives from the in-repo
-`docs/brand/muse-mark.svg`; `npm run icons` generates the public marks and native icons.
+`docs/brand/glitter-mark.svg`; `npm run icons` generates the public marks and native icons.
 
 ## License texts
 

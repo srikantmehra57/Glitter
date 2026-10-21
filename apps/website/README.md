@@ -1,6 +1,6 @@
-# Muse Code website
+# Glitter website
 
-Marketing site for the Muse Code desktop app: a single page in the app's Frost & Ember identity (Smoke by default,
+Marketing site for the Glitter desktop app: a single page in the app's Frost & Ember identity (Smoke by default,
 Frost as the light theme), set in General Sans from Fontshare with Geist Mono for code, and one three.js particle
 system running behind the content. This workspace does not modify the desktop application's UI or native build.
 
@@ -14,7 +14,7 @@ npm run build:website  # emits apps/website/dist
 
 ## Sections
 
-- **Hero**: "Muse Code Desktop", download/source actions and quick facts, over the particle spark.
+- **Hero**: "Glitter", download/source actions and quick facts, over the particle spark.
   The nav carries the site's dark/light toggle (a colour sweep from the button).
 - **Inside the app** (tour): a pinned, scroll-driven tour of a real screenshot (`public/shots/app-*.webp`).
   While it is pinned the nav's section links give way to the tour stops (Threads, Timeline,
@@ -24,12 +24,12 @@ npm run build:website  # emits apps/website/dist
   theme; the terminal and the process pipeline are drawn. A ruled sheet under the grid lists the smaller
   features.
 - **Use your own agent**: the agent CLIs the app drives (Muse by default; OpenCode and Grok
-  verified; Gemini CLI, Qwen Code and Goose experimental, per `packages/muse-bridge/src/agents.ts`)
+  verified; Gemini CLI, Qwen Code and Goose experimental, per `packages/glitter-bridge/src/agents.ts`)
   around a hub, plus subscription-or-own-key, ACP and mid-thread switching. Marks are copied from
   `apps/desktop/public/agents`.
 - **Reasoning effort**: a working rebuild of the composer's effort gauge (thin track, a pill handle that
   names the tier, a dashed mark at the model's starting tier, the two ends as shortcuts). It drives the
-  particle ring's turbulence and heat via `window.museScene.setEffort(t)`.
+  particle ring's turbulence and heat via `window.glitterScene.setEffort(t)`.
 - **A sample run**: a scroll-scrubbed timeline rebuilt from the app's preview thread, with an interactive
   approval card (receipts only; nothing executes).
 - **Themes**: a compact product preview. Its dark/light switch and nine accent swatches (Ember,
@@ -41,7 +41,7 @@ npm run build:website  # emits apps/website/dist
 ## The scene
 
 `src/scene.js` renders about 26k additive points (14k on narrow screens) on a fixed layer. Every
-point stores a position for six forms: the Muse spark (the logo from `public/spark.svg`, in
+point stores a position for six forms: the Glitter spark (the logo from `public/spark.svg`, in
 volume), a wave floor, a galaxy, the effort ring, a run helix and a sphere. Each element with
 `data-scene="shape x y scale opacity effortGain"` names its form and framing, and the shader
 morphs between neighbours as you scroll, with per-particle stagger and a noise burst mid-morph.
@@ -51,10 +51,10 @@ It pauses when the tab is hidden or via the bottom-right toggle, and renders onl
 reduced motion. It halves density and resolution if the GPU sustains under 30 fps, and falls back
 to a CSS glow when WebGL is unavailable. Scrolling uses Lenis, except under reduced motion.
 
-Visual check (after `npm run preview -w @muse/website`):
+Visual check (after `npm run preview -w @glitter/website`):
 
 ```sh
-GPU_ARGS="--use-angle=metal --enable-gpu" node apps/website/scripts/verify-site.mjs /tmp/muse-site-shots
+GPU_ARGS="--use-angle=metal --enable-gpu" node apps/website/scripts/verify-site.mjs /tmp/glitter-site-shots
 ```
 
 ## Screenshots

@@ -1,5 +1,5 @@
 // Two separate looks:
-//  • the site's own dark/light theme — toggled from the nav, persisted, broadcast as "muse:theme"
+//  • the site's own dark/light theme — toggled from the nav, persisted, broadcast as "glitter:theme"
 //    (the site keeps the default Ember accent);
 //  • the product preview in the themes section — its own dark/light + nine accents, which only
 //    restyle the screenshot.
@@ -16,7 +16,7 @@ export const ACCENTS = [
   { id: "teal", label: "Sea Glass", hex: "#96CECA" },
 ];
 
-const KEY = "muse-site-theme";
+const KEY = "glitter-site-theme";
 const SITE_ACCENT = "ember";
 
 export function currentLook() {
@@ -31,7 +31,7 @@ export function applyTheme({ theme }) {
     localStorage.setItem(KEY, JSON.stringify({ theme }));
   } catch {}
   document.querySelector('meta[name="theme-color"]')?.setAttribute("content", theme === "light" ? "#E6E6E6" : "#0A0A0B");
-  window.dispatchEvent(new CustomEvent("muse:theme", { detail: { theme, accent: SITE_ACCENT } }));
+  window.dispatchEvent(new CustomEvent("glitter:theme", { detail: { theme, accent: SITE_ACCENT } }));
 }
 
 /* nav toggle — one solid layer in the next theme's colour grows from the button, the theme flips
@@ -83,7 +83,7 @@ function initSiteToggle() {
       busy = false;
     }
   });
-  window.addEventListener("muse:theme", label);
+  window.addEventListener("glitter:theme", label);
 }
 
 /* product preview */
@@ -138,7 +138,7 @@ function initPreview() {
     const done = () => {
       incoming.style.opacity = "1";
       outgoing.style.opacity = "0";
-      incoming.alt = "The Muse Code app in the selected theme and accent.";
+      incoming.alt = "The Glitter app in the selected theme and accent.";
       incoming.removeAttribute("aria-hidden");
       outgoing.alt = "";
       outgoing.setAttribute("aria-hidden", "true");
@@ -184,7 +184,7 @@ function initPreview() {
   });
 
   // until the visitor picks a preview theme, the preview follows the site
-  window.addEventListener("muse:theme", (event) => {
+  window.addEventListener("glitter:theme", (event) => {
     if (!themeTouched) set({ theme: event.detail.theme });
   });
 

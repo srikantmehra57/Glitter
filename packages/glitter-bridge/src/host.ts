@@ -335,8 +335,8 @@ export class MuseHost {
       spawned = await Promise.race([
         handshake.initialize({
           clientInfo: {
-            name: "muse_code_desktop",
-            title: "Muse Code Desktop",
+            name: "glitter",
+            title: "Glitter",
             version: VERSION,
           },
           capabilities: { requestedCapabilities: [...REQUESTED_CAPABILITIES] },

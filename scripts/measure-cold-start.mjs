@@ -15,7 +15,7 @@ const temporary = await mkdtemp(join(tmpdir(), "muse-cold-"));
 const outfile = join(temporary, "bridge.mjs");
 try {
   await build({
-    entryPoints: [resolve("packages/muse-bridge/src/index.ts")],
+    entryPoints: [resolve("packages/glitter-bridge/src/index.ts")],
     bundle: true,
     platform: "node",
     format: "esm",

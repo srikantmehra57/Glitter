@@ -1,23 +1,28 @@
-# Muse Code Desktop
+# Glitter
 
 [![CI](https://github.com/srikantmehra57/Glitter/actions/workflows/ci.yml/badge.svg)](https://github.com/srikantmehra57/Glitter/actions/workflows/ci.yml)
 [![License](https://img.shields.io/github/license/srikantmehra57/Glitter)](LICENSE)
 
-A native desktop app for running the Muse Code agent CLI. You chat with the
-agent, approve its commands, set reasoning effort, and review its changes in one
-window.
+A native desktop app for coding agents. You chat with the agent, approve its
+commands, set reasoning effort, and review its changes in one window.
 
 > [!IMPORTANT]
-> This is an independent open-source project, not affiliated with Meta. It needs
-> the official `muse` CLI and a Muse Code subscription or API key.
+> This is an independent open-source project, not affiliated with Meta. The Muse
+> agent needs Meta's official `muse` CLI and a Muse Code subscription or API key.
 
 ## Overview
 
-Muse Code Desktop is for developers who use the Muse Code CLI and want a focused
-GUI for long agent sessions. The CLI runs everything: models, tools, sessions
-and billing. The app starts `muse serve`, streams what the agent is doing, and
-sends your decisions back to it. It can also drive a few third-party agent CLIs
+Glitter is for developers who want a focused GUI for long agent sessions. Its
+built-in Harness agent calls the model provider you choose with your own API
+key and runs its own tools, so no agent CLI has to be installed. Glitter also
+drives external agent CLIs: Meta's `muse` CLI, which runs its own models,
+tools, sessions and billing while the app starts `muse serve`, streams what the
+agent is doing and sends your decisions back, and a few third-party agent CLIs
 over the Agent Client Protocol (ACP).
+
+Glitter was called Muse Code Desktop until the rename. On first launch it moves
+an existing install's settings, threads, snapshots, logs and keychain entries
+across; see [Upgrading from Muse Code Desktop](#upgrading-from-muse-code-desktop).
 
 **Status: beta (0.1.0), unreleased.** The app is complete enough for daily use,
 and every automated gate passes. It is built for macOS 13 or later only; there
@@ -84,7 +89,7 @@ apps/
 │   └── src-tauri/         Rust shell: commands, IPC validation, grants, packaging config
 └── website/               Marketing site (independent of the app)
 packages/
-└── muse-bridge/           Node bridge: Muse (MSP) and ACP hosts, isolation, redaction
+└── glitter-bridge/        Node bridge: Muse (MSP) and ACP hosts, built-in harness, isolation, redaction
 tests/                     Node test suite and fixtures (fake agents, stub bridge)
 scripts/                   Release and verification scripts
 docs/                      Architecture, development, agent guide, decisions, design, releasing
@@ -186,11 +191,33 @@ Removing the app doesn't delete its local data.
 
 | Data | Location |
 |---|---|
-| Settings and workspace metadata | `~/Library/Application Support/com.musecode.desktop/muse-desktop.json` |
-| Application and security logs | `~/Library/Logs/com.musecode.desktop/` |
-| Credentials and workspace grants | Keychain service `com.musecode.desktop` |
+| Settings and workspace metadata | `~/Library/Application Support/com.glitter.desktop/glitter.json` |
+| Built-in harness threads, turn snapshots and worktrees | `~/Library/Application Support/com.glitter.desktop/` |
+| Application and security logs | `~/Library/Logs/com.glitter.desktop/` |
+| Credentials and workspace grants | Keychain service `com.glitter.desktop` |
 
-Session history stays in the Muse CLI's own data directory.
+Session history for the Muse CLI and ACP agents stays in each CLI's own data
+directory.
+
+## Upgrading from Muse Code Desktop
+
+The app's bundle identifier changed from `com.musecode.desktop` to
+`com.glitter.desktop`, which renames its data folder, log folder and keychain
+service. Quit Muse Code before you first open Glitter. On that first launch
+Glitter:
+
+- moves the settings file (renamed `glitter.json`), built-in harness threads and
+  turn snapshots into its own data folder, and the logs into its log folder;
+- copies each keychain entry (API key, provider keys, workspace grants, agent
+  pins, ACP consent) to the new service, then deletes the old one. macOS may ask
+  once per entry whether Glitter can read it; choose **Always Allow**.
+
+Worktrees made by Muse Code stay in
+`~/Library/Application Support/com.musecode.desktop/worktrees/`, because git and
+each agent's session history record their paths. They keep working, and the old
+folder is removed once the last of them is. Their branches keep the `muse/`
+prefix; new worktrees use `glitter/`. A step that fails is retried on the next
+launch. Move `/Applications/Muse Code.app` to the Trash afterwards.
 
 ## Documentation
 

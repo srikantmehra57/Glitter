@@ -59,18 +59,18 @@ const READ_ONLY_TABS: SettingsTab[] = ["Extensions", "Threads", "Usage", "Diagno
 
 const TAB_COPY: Record<SettingsTab, string> = {
   General: "Preferences that apply across the app.",
-  Agents: "Choose which local coding agents are available in Muse.",
+  Agents: "Choose which local coding agents are available in Glitter.",
   Providers: "Add your own keys for model providers. The built-in Harness agent uses them directly.",
   Extensions: "Skills, MCP servers, and plugins available to Muse.",
   Threads: "Choose how far back the sidebar lists, and clean up archived threads.",
-  Theme: "Choose the theme, accent color, sidebar and thinking orb used in Muse.",
+  Theme: "Choose the theme, accent color, sidebar and thinking orb used in Glitter.",
   Models: "Set the model and reasoning defaults for new threads.",
   Account: "Choose which Muse credential pays for your sessions.",
   Permissions: "Choose how Muse works, and how locked down its host runs.",
   Usage: "Tokens across every agent and provider, kept on this Mac.",
-  Shortcuts: "Move around Muse without leaving the keyboard.",
+  Shortcuts: "Move around Glitter without leaving the keyboard.",
   Diagnostics: "A quick look at the health of this local app.",
-  About: "Version and privacy details for Muse Code.",
+  About: "Version and privacy details for Glitter.",
 };
 
 const ACCENTS: Array<{ id: AccentColor; label: string; hex: string }> = [
@@ -166,7 +166,7 @@ function ThemePanel({ draft, onChange }: { draft: Settings; onChange: (patch: Pa
   ];
   return <div className="theme-panel">
     <section className="theme-section" aria-labelledby="interface-mode-title">
-      <div className="settings-card-heading"><h4 id="interface-mode-title">Interface theme</h4><p>Follow your system, or keep Muse light or dark.</p></div>
+      <div className="settings-card-heading"><h4 id="interface-mode-title">Interface theme</h4><p>Follow your system, or keep Glitter light or dark.</p></div>
       <div className="theme-choice-grid" role="radiogroup" aria-label="Interface mode">
         {choices.map(({ id, label, description, icon: Icon }) => <button key={id} type="button" role="radio" aria-checked={draft.theme === id} className={`theme-choice ${draft.theme === id ? "selected" : ""}`} onClick={() => onChange({ theme: id })}>
           <span className={`theme-preview theme-preview-${id}`} aria-hidden="true"><span className="theme-preview-sidebar"><i /><i /><i /></span><span className="theme-preview-main"><i /><i /><span /><i /></span></span>
@@ -637,7 +637,7 @@ export function SettingsModal() {
       snapshotError = error instanceof Error ? error.message : String(error);
     }
     const lines = [
-      `Muse Desktop ${APP_VERSION}`,
+      `Glitter ${APP_VERSION}`,
       snapshot ? `OS: ${snapshot.os} ${snapshot.arch}` : "OS: unknown",
       `Muse CLI: ${s.detection?.version ?? "unknown"}`,
       `CLI path: ${s.detection?.path ?? "not detected"}`,
@@ -667,7 +667,7 @@ export function SettingsModal() {
   };
   return <dialog ref={dialog} className="modal settings-dialog" aria-labelledby="settings-title" aria-hidden={!s.settingsOpen} onCancel={(event) => { event.preventDefault(); discardAndClose(); }} onClose={() => s.setSettingsOpen(false)} onClick={(event) => { if (event.target === event.currentTarget) { const r = event.currentTarget.getBoundingClientRect(); if (event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom) discardAndClose(); } }}>
     <nav className="settings-nav" aria-label="Settings categories">
-      <div className="settings-brand"><img src="/spark.svg" alt="" width="24" height="24" /><span>Muse Code</span></div>
+      <div className="settings-brand"><img src="/spark.svg" alt="" width="24" height="24" /><span>Glitter</span></div>
       <h2 id="settings-title">Settings</h2>
       <div className="search-field settings-search"><Search size={13} aria-hidden="true" /><input aria-label="Search settings" placeholder="Find a setting…" value={search} onChange={(event) => setSearch(event.target.value)} />{search ? <button type="button" className="search-clear" aria-label="Clear settings search" onClick={() => setSearch("")}><X size={12} /></button> : null}</div>
       <div ref={navRef} className="settings-nav-groups">
@@ -677,7 +677,7 @@ export function SettingsModal() {
         })}
         {!visibleTabs.length ? <p className="settings-search-empty" role="status">No settings found. Try “theme” or “model”.</p> : null}
       </div>
-      <div className="settings-version"><span>Muse Code</span><span>Desktop {APP_VERSION}</span></div>
+      <div className="settings-version"><span>Glitter</span><span>Desktop {APP_VERSION}</span></div>
     </nav>
     <div className="settings-main">
       <button type="button" className="icon-btn settings-close" aria-label="Close settings" data-tooltip-align="end" data-tooltip="Close" onClick={discardAndClose}><X size={16} /></button>
@@ -821,7 +821,7 @@ export function SettingsModal() {
                 className="ghost-btn small"
                 onClick={() => {
                   const count = s.threads.filter((thread) => thread.archived).length;
-                  void s.confirm({ title: `Delete ${count} archived thread${count === 1 ? "" : "s"} from Muse Code?`, body: ["They are removed from Muse Code. The sessions stay on the agent CLI and cannot be brought back into this list.", worktreeRemovalNote(s.threads, s.threads.filter((thread) => thread.archived).map((thread) => thread.sessionId))].filter(Boolean).join(" "), confirmLabel: "Delete all", danger: true }).then((ok) => {
+                  void s.confirm({ title: `Delete ${count} archived thread${count === 1 ? "" : "s"} from Glitter?`, body: ["They are removed from Glitter. The sessions stay on the agent CLI and cannot be brought back into this list.", worktreeRemovalNote(s.threads, s.threads.filter((thread) => thread.archived).map((thread) => thread.sessionId))].filter(Boolean).join(" "), confirmLabel: "Delete all", danger: true }).then((ok) => {
                     if (!ok) return;
                     for (const thread of s.threads.filter((item) => item.archived)) s.deleteThread(thread.sessionId);
                   });
@@ -846,7 +846,7 @@ export function SettingsModal() {
                     type="button"
                     className="ghost-btn small"
                     onClick={() => {
-                      void s.confirm({ title: `Delete “${thread.title}” from Muse Code?`, body: worktreeRemovalNote(s.threads, [thread.sessionId]) || undefined, confirmLabel: "Delete", danger: true }).then((ok) => { if (ok) s.deleteThread(thread.sessionId); });
+                      void s.confirm({ title: `Delete “${thread.title}” from Glitter?`, body: worktreeRemovalNote(s.threads, [thread.sessionId]) || undefined, confirmLabel: "Delete", danger: true }).then((ok) => { if (ok) s.deleteThread(thread.sessionId); });
                     }}
                   >
                     <Trash2 size={11} />Delete
@@ -887,14 +887,14 @@ export function SettingsModal() {
         </div> : null}
         {tab === "About" ? <div className="about">
             <div className="settings-card">
-              <div className="about-identity"><span className="about-mark"><img src="/spark.svg" alt="" /></span><div><h4>Muse Code</h4><span className="about-version" title={s.detection?.path ?? undefined}>Desktop {APP_VERSION} · Muse CLI {s.detection?.version ? shortCliVersion(s.detection.version) : "not detected"}</span></div></div>
+              <div className="about-identity"><span className="about-mark"><img src="/spark.svg" alt="" /></span><div><h4>Glitter</h4><span className="about-version" title={s.detection?.path ?? undefined}>Desktop {APP_VERSION} · Muse CLI {s.detection?.version ? shortCliVersion(s.detection.version) : "not detected"}</span></div></div>
               <SettingRow label={<span className="setting-label">CLI updates</span>} help={cliUpdateSummary(s)}>
                 {s.cliUpdate?.available ? <button type="button" className="primary accent" disabled={s.cliUpdating || s.cliUpdateLoading} onClick={() => void s.updateCli()}>{s.cliUpdating ? "Updating…" : `Update to ${shortCliVersion(s.cliUpdate.latest)}`}</button> : null}
               <button type="button" className="ghost-btn small" disabled={s.cliUpdateLoading || s.cliUpdating || !s.detection?.found} onClick={() => void s.refreshCliUpdate(true)}>{s.cliUpdateLoading ? "Checking…" : "Check for updates"}</button>
               </SettingRow>
             </div>
             <div className="settings-card-heading"><h4>Your local coding companion</h4></div>
-            <p>Unofficial local command center for Muse Code. Not affiliated with Meta.</p>
+            <p>Independent local command center for coding agents. Not affiliated with Meta.</p>
             <div className="settings-card-heading"><h4>Privacy &amp; your data</h4></div>
             <p>Muse stays the engine. This app is a GUI over your installed CLI: it sends prompts and workspace context to the local Muse process, which in turn uses its configured model service under that provider&apos;s data policy.</p>
           </div> : null}

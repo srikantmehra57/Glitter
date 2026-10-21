@@ -701,7 +701,7 @@ export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) 
       preview: (id) => { setMenu(null); void store().openPreview(id); },
       remove: (row) => {
         setMenu(null);
-        void store().confirm({ title: `Delete “${row.title}”?`, body: ["It is removed from Muse Code. This cannot be undone.", worktreeRemovalNote(store().threads, [row.sessionId])].filter(Boolean).join(" "), confirmLabel: "Delete", danger: true }).then((ok) => { if (ok) store().deleteThread(row.sessionId); });
+        void store().confirm({ title: `Delete “${row.title}”?`, body: ["It is removed from Glitter. This cannot be undone.", worktreeRemovalNote(store().threads, [row.sessionId])].filter(Boolean).join(" "), confirmLabel: "Delete", danger: true }).then((ok) => { if (ok) store().deleteThread(row.sessionId); });
       },
       dragStart: (event, id) => { draggingId.current = id; setDragging(id); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", id); },
       dragOver: (event, row) => {
@@ -775,7 +775,7 @@ export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) 
       </div>
 
       <div className="sidebar-identity">
-        <div><span className="wordmark">Muse Code</span></div>
+        <div><span className="wordmark">Glitter</span></div>
       </div>
 
       <nav className="sidebar-nav" aria-label="Primary">

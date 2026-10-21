@@ -1,3 +1,3 @@
 fn main() {
-    muse_code_desktop_lib::run()
+    glitter_lib::run()
 }

@@ -14,13 +14,13 @@ async function bundle(entry, replacements = {}) {
   await build({ entryPoints: [resolve(entry)], bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'silent',
     plugins: [{ name: 'test-boundaries', setup(builder) {
       builder.onResolve({ filter: /.*/ }, ({ path }) => Object.hasOwn(replacements, path) ? { path, namespace: 'test-boundary' } : undefined);
-      builder.onLoad({ filter: /.*/, namespace: 'test-boundary' }, ({ path }) => ({ contents: replacements[path], loader: 'ts', resolveDir: resolve('packages/muse-bridge/src') }));
+      builder.onLoad({ filter: /.*/, namespace: 'test-boundary' }, ({ path }) => ({ contents: replacements[path], loader: 'ts', resolveDir: resolve('packages/glitter-bridge/src') }));
     } }],
   });
   return import(pathToFileURL(outfile).href);
 }
 
-const { authPresent, detectMuse, museEnv, normalizeAuthMode, subscriptionAccount } = await bundle('packages/muse-bridge/src/detect.ts');
+const { authPresent, detectMuse, museEnv, normalizeAuthMode, subscriptionAccount } = await bundle('packages/glitter-bridge/src/detect.ts');
 
 /** Runs `body` against a home directory that may or may not hold a `muse /login` credential. */
 async function withHome(signedIn, body, contents = '{"account":"test"}') {
@@ -104,9 +104,9 @@ async function fakeHost() {
       return { initialize: async () => ({ child: { exit: new Promise(() => {}) }, connection, initializeResult: { serverInfo: {}, sessionDurability: 'durable' } }) };
     },
   };
-  const { MuseHost } = await bundle('packages/muse-bridge/src/host.ts', {
+  const { MuseHost } = await bundle('packages/glitter-bridge/src/host.ts', {
     '@muse-code/sdk': 'export const spawnMspConnection=(...args)=>globalThis.fakeAuthSdk.spawn(...args); export const MuseClient=class{constructor(){}async close(){}}; export const readSessionDurability=()=>({kind:"durable"}); export const EXPECTED_SCHEMA_FINGERPRINT="sha256:fake-pin";',
-    './detect.js': `export * from ${JSON.stringify(resolve('packages/muse-bridge/src/detect.ts'))}; export const resolveMuseBin=()=>"/fake/muse";`,
+    './detect.js': `export * from ${JSON.stringify(resolve('packages/glitter-bridge/src/detect.ts'))}; export const resolveMuseBin=()=>"/fake/muse";`,
   });
   return { host: new MuseHost(), spawns };
 }

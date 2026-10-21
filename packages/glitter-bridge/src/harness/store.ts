@@ -8,7 +8,7 @@ import type { ChatMessage } from "./wire.js";
  * The harness owns its sessions, so it keeps them: one append-only JSONL file
  * per session (the model-facing messages and the transcript items the app
  * renders), plus a small index for listing. The native shell points
- * `MUSE_HARNESS_DIR` at the app's data folder; files are written 0600.
+ * `GLITTER_HARNESS_DIR` at the app's data folder; files are written 0600.
  */
 
 export type SessionMeta = {
@@ -32,7 +32,7 @@ type Record_ = { type: "message"; message: ChatMessage } | { type: "item"; item:
 const SESSION_ID = /^h-[a-z0-9-]{8,64}$/;
 
 export function harnessDir(): string {
-  return process.env.MUSE_HARNESS_DIR || join(homedir(), ".muse-code", "harness");
+  return process.env.GLITTER_HARNESS_DIR || join(homedir(), ".glitter", "harness");
 }
 
 export class SessionStore {

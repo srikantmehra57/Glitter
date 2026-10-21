@@ -71,7 +71,7 @@ describe("ConfirmDialog", () => {
   it("uses compact confirm chrome with equally weighted footer buttons", async () => {
     render(<ConfirmDialog />);
     const title = "Delete “clicking on workspace is buggy and laggy, it lag…”?";
-    const pending = useAppStore.getState().confirm({ title, body: "It is removed from Muse Code. This cannot be undone.", confirmLabel: "Delete", danger: true });
+    const pending = useAppStore.getState().confirm({ title, body: "It is removed from Glitter. This cannot be undone.", confirmLabel: "Delete", danger: true });
     const dialog = await screen.findByRole("dialog");
     // Narrow confirm width, not the 560px preview chrome.
     expect(dialog).toHaveClass("confirm-dialog");

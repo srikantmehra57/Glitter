@@ -7,7 +7,7 @@ import { join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 
 /**
- * Wire-protocol tests for the bridge entrypoint (`packages/muse-bridge/src/index.ts`):
+ * Wire-protocol tests for the bridge entrypoint (`packages/glitter-bridge/src/index.ts`):
  * JSON-line framing, method routing between the Muse host and ACP agents, and
  * session-ownership tracking. The entrypoint is bundled with stubbed hosts and
  * driven over stdio like the Tauri backend drives the real bridge.
@@ -20,7 +20,7 @@ const hostStub = `
 export class MuseHost {
   detect() { return { found: true, via: 'muse' }; }
   status() { return { running: true, via: 'muse' }; }
-  async readUsage() { return process.env.MUSE_TEST_HANG_USAGE ? new Promise(() => {}) : { usage: 'muse-usage' }; }
+  async readUsage() { return process.env.GLITTER_TEST_HANG_USAGE ? new Promise(() => {}) : { usage: 'muse-usage' }; }
   async start() { return { server: 'muse-server' }; }
   async stop() { return { stopped: 'muse' }; }
   async listSessions() { return { sessions: [{ sessionId: 'muse-listed' }] }; }
@@ -30,7 +30,7 @@ export class MuseHost {
   async sendTurn(options) {
     // A wedged submit acknowledgement: the queue ceiling in index.ts is what
     // stops this parking the session's queue slot forever.
-    if (process.env.MUSE_TEST_HANG_SUBMIT) return new Promise(() => {});
+    if (process.env.GLITTER_TEST_HANG_SUBMIT) return new Promise(() => {});
     if (options.text === 'throw-credential') throw new Error('Authorization: Bearer CANARY-DISPATCH');
     if (options.text === 'throw-known-key') throw new Error('rejected CANARY-KNOWN-KEY');
     if (options.text === 'throw-string') throw 'plain-string-boom';
@@ -111,11 +111,11 @@ export class LoginFlow {
 const replacements = { './host.js': hostStub, './acp.js': acpStub, './agents.js': agentsStub, './login.js': loginStub };
 const outfile = join(temporary, 'bridge.mjs');
 await build({
-  entryPoints: [resolve('packages/muse-bridge/src/index.ts')],
+  entryPoints: [resolve('packages/glitter-bridge/src/index.ts')],
   bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'silent',
   plugins: [{ name: 'test-boundaries', setup(builder) {
     builder.onResolve({ filter: /.*/ }, ({ path }) => Object.hasOwn(replacements, path) ? { path, namespace: 'test-boundary' } : undefined);
-    builder.onLoad({ filter: /.*/, namespace: 'test-boundary' }, ({ path }) => ({ contents: replacements[path], loader: 'ts', resolveDir: resolve('packages/muse-bridge/src') }));
+    builder.onLoad({ filter: /.*/, namespace: 'test-boundary' }, ({ path }) => ({ contents: replacements[path], loader: 'ts', resolveDir: resolve('packages/glitter-bridge/src') }));
   } }],
 });
 
@@ -589,7 +589,7 @@ test('a verb that never answers releases its queue slot instead of blocking the 
     const settled = await guarded;
     assert.equal(settled.ok, false);
     assert.match(settled.error, /result is unknown/, 'the renderer needs the unknown-result wording to keep the turn retryable');
-  }, { MUSE_WORK_CEILING_MS: '150', MUSE_TEST_HANG_USAGE: '1' });
+  }, { GLITTER_WORK_CEILING_MS: '150', GLITTER_TEST_HANG_USAGE: '1' });
 });
 
 
@@ -607,7 +607,7 @@ test('a wedged send acknowledgement is bounded instead of freezing the session',
     const settled = await guarded;
     assert.equal(settled.ok, false);
     assert.match(settled.error, /result is unknown/);
-  }, { MUSE_WORK_CEILING_MS: '150', MUSE_TEST_HANG_SUBMIT: '1' });
+  }, { GLITTER_WORK_CEILING_MS: '150', GLITTER_TEST_HANG_SUBMIT: '1' });
 });
 
 test('a long-running turn is never cut by the ceiling', async () => {
@@ -616,7 +616,7 @@ test('a long-running turn is never cut by the ceiling', async () => {
     // sendTurn awaits the turn to completion, so its duration is the agent's.
     const sent = await bridge.request('sendTurn', { sessionId: 'muse-owned', text: 'go' });
     assert.equal(sent.ok, true);
-  }, { MUSE_WORK_CEILING_MS: '1' });
+  }, { GLITTER_WORK_CEILING_MS: '1' });
 });
 
 // The bridge holds one SDK session per open thread and nothing else ever drops

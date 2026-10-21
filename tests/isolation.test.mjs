@@ -10,7 +10,7 @@ import { pathToFileURL } from 'node:url';
 
 const temporary = await mkdtemp(join(tmpdir(), 'muse-isolation-'));
 const outfile = join(temporary, 'isolation.mjs');
-await build({ entryPoints: [resolve('packages/muse-bridge/src/isolation.ts')], bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'silent' });
+await build({ entryPoints: [resolve('packages/glitter-bridge/src/isolation.ts')], bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'silent' });
 const {
   filterChildEnv, confinedCwd, approvalAlive, approvalExpiry, approvalExpiryMono, describeIsolation, HOST_QUEUE_LIMIT,
   buildSeatbeltProfile, wrapSandboxedCommand, sandboxBackend, ensureDirectories, terminateTree,

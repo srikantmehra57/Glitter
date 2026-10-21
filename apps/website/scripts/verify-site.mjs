@@ -1,10 +1,10 @@
-// Headless visual pass over the site. Start `npm run preview -w @muse/website` first.
+// Headless visual pass over the site. Start `npm run preview -w @glitter/website` first.
 //   node apps/website/scripts/verify-site.mjs [outDir]
 import { chromium } from "playwright";
 import { mkdir } from "node:fs/promises";
 
 const BASE = process.env.BASE ?? "http://127.0.0.1:4174";
-const OUT = process.argv[2] ?? "/tmp/muse-site-shots";
+const OUT = process.argv[2] ?? "/tmp/glitter-site-shots";
 await mkdir(OUT, { recursive: true });
 
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH, args: (process.env.GPU_ARGS ?? "--use-angle=swiftshader --enable-unsafe-swiftshader").split(" ") });
@@ -13,7 +13,7 @@ const errors = [];
 async function open({ width = 1440, height = 900, theme = "dark", accent = "blue" } = {}) {
   const context = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: 1, colorScheme: theme });
   await context.addInitScript(
-    ([t, a]) => localStorage.setItem("muse-site-theme", JSON.stringify({ theme: t, accent: a })),
+    ([t, a]) => localStorage.setItem("glitter-site-theme", JSON.stringify({ theme: t, accent: a })),
     [theme, accent],
   );
   const page = await context.newPage();

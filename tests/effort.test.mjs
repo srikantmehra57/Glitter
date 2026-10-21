@@ -15,7 +15,7 @@ async function bundle(entry) {
 }
 
 const { clampTier, tiersFor, defaultTier, isPeak, modelFor, withUnlistedModels, isFastModel, VOCABULARY } = await bundle('apps/desktop/src/lib/effort.ts');
-const { annotateEfforts } = await bundle('packages/muse-bridge/src/efforts.ts');
+const { annotateEfforts } = await bundle('packages/glitter-bridge/src/efforts.ts');
 const { stepFromItem } = await bundle('apps/desktop/src/lib/agent.ts');
 
 test('Muse models top out at max; ultra only behind the experimental flag', () => {

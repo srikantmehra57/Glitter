@@ -1,4 +1,4 @@
-import { diagnostics } from "../../../../packages/muse-bridge/src/redaction";
+import { diagnostics } from "../../../../packages/glitter-bridge/src/redaction";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { isTauri } from "./format";
@@ -498,7 +498,7 @@ export async function repairStoreDocument(): Promise<StoreRepair> {
 export type PickedFolder = { path: string; grantId: string; warning?: string };
 
 export async function pickFolder(): Promise<PickedFolder | null> {
-  if (!isTauri()) return { path: "/Users/you/Muse Code", grantId: "preview" };
+  if (!isTauri()) return { path: "/Users/you/Glitter", grantId: "preview" };
   try {
     const picked = await invoke<{ path?: string; grantId?: string; warning?: string }>("pick_folder");
     if (!picked?.path || !picked.grantId) return null;
