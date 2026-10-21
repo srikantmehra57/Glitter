@@ -1046,7 +1046,7 @@ html[data-theme="light"] .usage-providers, html[data-theme="light"] .usage-detai
   align-items: center;
   gap: 6px;
   min-width: 0;
-  padding: 0 12px 0 8px;
+  padding: 0 20px;
   background: var(--surface);
   border-left: 1px solid var(--border);
   -webkit-app-region: drag;
