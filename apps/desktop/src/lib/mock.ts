@@ -366,6 +366,7 @@ export const MOCK_AGENTS: AgentInfo[] = [
   { id: "gemini", name: "Gemini CLI", protocol: "acp", found: false, path: null, version: null, verified: false, signIn: "" },
   { id: "qwen", name: "Qwen Code", protocol: "acp", found: false, path: null, version: null, verified: false, signIn: "" },
   { id: "goose", name: "Goose", protocol: "acp", found: false, path: null, version: null, verified: false, signIn: "" },
+  { id: "cline", name: "Cline CLI", protocol: "acp", found: false, path: null, version: null, verified: false, signIn: "" },
 ];
 
 const zen = (id: string, name: string, input: string, output: string, efforts: Model["reasoningEfforts"] = [], context = 200000): Model =>
@@ -377,6 +378,7 @@ export const MOCK_AGENT_MODELS: Record<string, Model[]> = {
     { modelId: "anthropic/claude-haiku-4-5", displayLabel: "Claude Haiku 4.5", providerId: "anthropic", description: "Anthropic", contextLimit: 200000, reasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"], defaultReasoningEffort: "medium", effortSource: "host" },
     { modelId: "openai/gpt-5.5", displayLabel: "gpt-5.5", providerId: "openai", description: "OpenAI", contextLimit: 400000, reasoningEfforts: ["minimal", "low", "medium", "high"], defaultReasoningEffort: "medium", effortSource: "host" },
     { modelId: "nvidia/moonshotai/kimi-k2.6", displayLabel: "moonshotai/kimi-k2.6", providerId: "nvidia", description: "NVIDIA NIM", contextLimit: null, reasoningEfforts: [], effortSource: "host" },
+    { modelId: "cline/anthropic/claude-sonnet-5.5", displayLabel: "anthropic/claude-sonnet-5.5", providerId: "cline", description: "Cline API", contextLimit: 200000, reasoningEfforts: [], effortSource: "host" },
     { modelId: "ollama/qwen3-coder", displayLabel: "qwen3-coder", providerId: "ollama", description: "Ollama", contextLimit: null, reasoningEfforts: [], effortSource: "host" },
   ],
   opencode: [

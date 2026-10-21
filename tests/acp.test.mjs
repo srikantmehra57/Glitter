@@ -9,7 +9,7 @@ import { pathToFileURL } from 'node:url';
 const temporary = await mkdtemp(join(tmpdir(), 'muse-acp-'));
 const outfile = join(temporary, 'acp.mjs');
 await build({ entryPoints: [resolve('packages/glitter-bridge/src/acp.ts')], bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'silent' });
-const { AcpAgentHost, fatalProviderError, zenFreeModel, fallbackOpencodeModel, modelIdsFromError } = await import(pathToFileURL(outfile).href);
+const { AcpAgentHost, fatalProviderError, zenFreeModel, fallbackOpencodeModel, modelIdsFromError, modelOption } = await import(pathToFileURL(outfile).href);
 
 test('rate limits and disabled models are fatal provider errors', () => {
   assert.equal(fatalProviderError('mimo-v2.5-free: Rate limit exceeded. Please try again later.'), true);
@@ -43,6 +43,29 @@ function fakeAgent(agentId = 'fake', flags = []) {
   });
   return { host, events };
 }
+
+/** Cline files its provider picker under the `model` category beside the model list. */
+const clineConfig = [
+  { id: 'provider', category: 'model', type: 'select', currentValue: 'cline', options: [{ value: 'cline', name: 'Cline Usage-Billing' }, { value: 'cline-pass', name: 'ClinePass' }] },
+  { id: 'model', category: 'model', type: 'select', currentValue: 'anthropic/claude-sonnet-5.5', options: [{ value: 'anthropic/claude-sonnet-5.5', name: 'Claude Sonnet 5.5' }, { value: 'openai/gpt-5.6', name: 'GPT-5.6' }] },
+  { id: 'mode', category: 'mode', type: 'select', currentValue: 'act', options: [{ value: 'plan', name: 'Plan' }, { value: 'act', name: 'Act' }] },
+];
+
+test('a provider picker filed under the model category is not mistaken for the model list', () => {
+  assert.equal(modelOption(clineConfig)?.id, 'model', 'the option named model wins');
+  assert.equal(modelOption([{ id: 'picked', category: 'model', options: [] }])?.id, 'picked', 'the category is the fallback');
+  assert.equal(modelOption([]), undefined);
+  const host = new AcpAgentHost({ id: 'cline', name: 'Cline CLI', protocol: 'acp', bins: [], acpArgs: [], verified: false, signIn: '' }, process.execPath, () => {});
+  const models = host.modelsFromConfig(clineConfig);
+  assert.deepEqual(models.map((model) => model.modelId), ['anthropic/claude-sonnet-5.5', 'openai/gpt-5.6']);
+  assert.deepEqual(models.filter((model) => model.isActive).map((model) => model.modelId), ['anthropic/claude-sonnet-5.5']);
+  assert.equal(models[0].providerId, 'anthropic', 'the vendor behind the model names the provider');
+  host.track('s-1', '/repo', clineConfig);
+  const config = host.sessionConfig('s-1');
+  assert.equal(config.modelId, 'anthropic/claude-sonnet-5.5');
+  assert.equal(config.mode, 'act');
+  assert.deepEqual(config.modes.map((mode) => mode.value), ['plan', 'act']);
+});
 
 const until = async (events, predicate) => {
   for (let i = 0; i < 200 && !events.some(predicate); i++) await new Promise((r) => setTimeout(r, 10));

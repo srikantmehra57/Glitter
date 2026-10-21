@@ -49,8 +49,8 @@ export const SETTINGS_TABS = ["General", "Agents", "Providers", "Extensions", "T
 export type SettingsTab = (typeof SETTINGS_TABS)[number];
 
 /** `harness` is the app's own agent: it calls model providers with the user's keys (Settings → Providers). */
-export type AgentId = "harness" | "muse" | "opencode" | "grok" | "gemini" | "qwen" | "goose";
-export const AGENT_IDS: AgentId[] = ["harness", "muse", "opencode", "grok", "gemini", "qwen", "goose"];
+export type AgentId = "harness" | "muse" | "opencode" | "grok" | "gemini" | "qwen" | "goose" | "cline";
+export const AGENT_IDS: AgentId[] = ["harness", "muse", "opencode", "grok", "gemini", "qwen", "goose", "cline"];
 export const AGENT_LABELS: Record<AgentId, string> = {
   harness: "Harness",
   muse: "Muse",
@@ -59,6 +59,7 @@ export const AGENT_LABELS: Record<AgentId, string> = {
   gemini: "Gemini CLI",
   qwen: "Qwen Code",
   goose: "Goose",
+  cline: "Cline CLI",
 };
 /** OpenCode is off until the user turns it on — Zen free models fail on many accounts. */
 export const DEFAULT_ENABLED_AGENTS: Record<AgentId, boolean> = {
@@ -69,6 +70,7 @@ export const DEFAULT_ENABLED_AGENTS: Record<AgentId, boolean> = {
   gemini: false,
   qwen: false,
   goose: false,
+  cline: false,
 };
 export function agentEnabled(settings: { enabledAgents?: Partial<Record<AgentId, boolean>> }, id: AgentId): boolean {
   return settings.enabledAgents?.[id] ?? DEFAULT_ENABLED_AGENTS[id];

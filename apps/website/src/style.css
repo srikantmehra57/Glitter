@@ -723,7 +723,9 @@ html[data-theme="light"] .mini-term { background: #F1F1F1; }
 @keyframes spin { to { transform: rotate(1turn); } }
 .orbit-nodes { list-style: none; margin: 0; padding: 0; }
 .orbit-node {
-  --ang: calc(var(--a) * 60deg - 90deg);
+  /* The step between agents comes from the node count, so the ring keeps its
+     shape when one is added. */
+  --ang: calc(var(--a) * var(--orbit-step, 60deg) - 90deg);
   position: absolute;
   left: calc(50% + cos(var(--ang)) * 41%);
   top: calc(50% + sin(var(--ang)) * 40%);

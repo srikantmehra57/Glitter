@@ -43,6 +43,7 @@ const PROVIDER_ENV: Record<string, (key: string) => boolean> = {
   gemini: (key) => key === "GEMINI_API_KEY" || key === "GOOGLE_API_KEY" || key === "GOOGLE_GENAI_API_KEY" || key.startsWith("GEMINI_"),
   qwen: (key) => key === "DASHSCOPE_API_KEY" || key === "QWEN_API_KEY" || key.startsWith("QWEN_") || key.startsWith("DASHSCOPE_"),
   goose: (key) => key.startsWith("GOOSE_"),
+  cline: (key) => key.startsWith("CLINE_"),
 };
 
 export type IsolationReport = {
@@ -146,6 +147,7 @@ function agentConfigDirs(agentId: string): string[] {
   if (agentId === "gemini") return scoped("gemini", ".gemini");
   if (agentId === "qwen") return scoped("qwen", ".qwen");
   if (agentId === "goose") return scoped("goose");
+  if (agentId === "cline") return scoped("cline", ".cline");
   if (agentId === "muse") return [join(home, ".muse"), join(home, ".config", "muse"), join(home, "Library", "Application Support", "muse")];
   return [];
 }
@@ -262,7 +264,7 @@ export function spawnIsolated(
 ): IsolatedSpawn {
   const cwd = options.cwd ?? confinedCwd(options.workspace);
   const env = { ...filterChildEnv(options.env ?? process.env, options.agentId), NODE_NO_WARNINGS: "1" };
-  const knownAgent = Boolean(options.agentId && ["muse", "opencode", "grok", "gemini", "qwen", "goose", "harness"].includes(options.agentId));
+  const knownAgent = Boolean(options.agentId && ["muse", "opencode", "grok", "gemini", "qwen", "goose", "cline", "harness"].includes(options.agentId));
   // Known agents are sandboxed even without a workspace: a session-less start
   // (model listing before any thread is open) still confines writes to the
   // agent's config and temp roots, never the whole user account.

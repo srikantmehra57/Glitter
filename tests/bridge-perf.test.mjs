@@ -162,7 +162,7 @@ test('agent detection probes each CLI once and answers repeat scans from memory'
     const opencode = first.find((agent) => agent.id === 'opencode');
     assert.equal(opencode.found, true);
     assert.equal(opencode.version, '9.8.7');
-    assert.equal(first.map((agent) => agent.id).join(), 'harness,muse,opencode,grok,gemini,qwen,goose', 'the agent order is stable, the built-in agent first');
+    assert.equal(first.map((agent) => agent.id).join(), 'harness,muse,opencode,grok,gemini,qwen,goose,cline', 'the agent order is stable, the built-in agent first');
     assert.equal(await probes(), 1);
     const again = await detectAgents(null, null, 'auto');
     assert.equal(again.find((agent) => agent.id === 'opencode').version, '9.8.7');

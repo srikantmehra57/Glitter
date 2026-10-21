@@ -51,9 +51,28 @@ licence terms.
   operating system and architecture, and the last 200 redacted lines from the
   app log. If the log cannot be read, the rest of the diagnostics are still
   copied.
+- **Cline CLI** can be driven as an agent. Install it with `npm i -g cline`,
+  sign in with `cline auth`, then turn it on in Settings → Agents. Glitter
+  starts it in ACP mode, shows its messages, tool calls and approval prompts,
+  and keeps its sessions on this Mac. Like every other third-party agent it is
+  off until you enable it and agree to run it outside the OS sandbox.
+- **Cline API** can be a Harness provider. Add a Cline API key in Settings →
+  Providers and the models behind it — Anthropic, OpenAI, Google, DeepSeek and
+  the rest — appear in the composer under their own badge. The key stays in
+  the keychain and goes only to Cline.
 
 ### Changed
 
+- The model picker gives each harness provider its own badge. Anthropic, OpenAI,
+  xAI and the rest are no longer grouped under a Harness tab; choosing a badge
+  lists only that provider's models. Muse and the other agent CLIs stay their
+  own badges.
+- The sidebar is a session list. New thread, search, and filters for live
+  threads and threads that need you sit where the Glitter wordmark was. The
+  foot is Settings and usage counted on this Mac. The Muse subscription
+  meter appears there, and at the top of Usage, only while the Muse agent is
+  enabled. The account name and the Ready status are gone. Offline,
+  sign-in, and a missing agent are the only status the sidebar shows.
 - The app is now called **Glitter**. The window, menus, Dock name, About and
   Settings say Glitter; "Muse" and "Muse Code" remain only where they mean
   Meta's CLI, agent and subscription. The bundle identifier is now

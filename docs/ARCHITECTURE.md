@@ -18,7 +18,7 @@ flowchart LR
   Shell["Native shell<br/>Rust + Tauri 2<br/>apps/desktop/src-tauri"]
   Bridge["Bridge<br/>Node, bundled runtime<br/>packages/glitter-bridge"]
   Muse["muse serve<br/>(MSP)"]
-  ACP["ACP agent CLIs<br/>opencode, grok, gemini, qwen, goose"]
+  ACP["ACP agent CLIs<br/>opencode, grok, gemini, qwen, goose, cline"]
   Providers["Model providers<br/>Anthropic, OpenAI-compatible,<br/>local servers"]
   OS[("OS keychain<br/>app data · logs<br/>git · dialogs")]
 

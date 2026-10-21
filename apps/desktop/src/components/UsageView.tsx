@@ -5,7 +5,7 @@ import { formatResetIn, relativeTime, usageWindowLabel, windowPercent } from "..
 import { mockUsageLedger } from "../lib/mock";
 import { PROVIDERS } from "../lib/providers";
 import { groupUsage, ledgerSlices, type UsageGroup, type UsageSlice } from "../lib/usageLedger";
-import { AGENT_LABELS, type AgentId } from "../lib/types";
+import { AGENT_LABELS, agentEnabled, type AgentId } from "../lib/types";
 import { AgentMark } from "./AgentPicker";
 
 type Period = "today" | "week" | "overview";
@@ -256,7 +256,9 @@ function ProviderBreakdown({ rows, total }: { rows: ProviderRow[]; total: number
 export function UsageView({ embedded = false }: { embedded?: boolean } = {}) {
   const stored = useAppStore((state) => state.usageLedger);
   const preview = useAppStore((state) => state.preview);
-  const museFound = useAppStore((state) => state.agents.some((agent) => agent.id === "muse" && agent.found));
+  // The plan meter is Meta's subscription. It stays off unless Muse itself is on,
+  // so a disabled Muse CLI does not pin the page to a host that is not running.
+  const museOn = useAppStore((state) => state.preview || (agentEnabled(state, "muse") && state.agents.some((agent) => agent.id === "muse" && agent.found)));
   const confirm = useAppStore((state) => state.confirm);
   const clearUsageHistory = useAppStore((state) => state.clearUsageHistory);
   const [period, setPeriod] = useState<Period>("overview");
@@ -342,7 +344,7 @@ export function UsageView({ embedded = false }: { embedded?: boolean } = {}) {
       )}
 
       <div className="usage-scroll">
-        {museFound || preview ? <PlanUsage now={nowMs} /> : null}
+        {museOn ? <PlanUsage now={nowMs} /> : null}
         <section className="usage-summary" aria-label="Usage summary">
           <div><span>Tokens</span><strong>{approx}{formatTokens(total)}</strong></div>
           <div title={cached ? `${formatTokens(cached)} of it from prompt caches` : undefined}><span>Input</span><strong>{formatTokens(input)}</strong></div>

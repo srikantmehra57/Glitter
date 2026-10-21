@@ -62,7 +62,12 @@ function runShortcut(id: ShortcutId) {
     case "zoom-reset": state.zoomBy(0); break;
     case "new-thread": void state.newThread(); break;
     case "find": findInThread(); break;
-    case "search-threads": focusThreadSearch(); break;
+    case "search-threads": {
+      // The field lives in the sidebar, so a collapsed sidebar opens before focus lands.
+      if (state.sidebarCollapsed) state.setSidebarCollapsed(false);
+      window.setTimeout(focusThreadSearch, 0);
+      break;
+    }
     case "next-thread": void state.selectAdjacentThread(1); break;
     case "previous-thread": void state.selectAdjacentThread(-1); break;
     case "attention": void state.selectNextAttentionThread(); break;

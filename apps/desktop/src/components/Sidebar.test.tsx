@@ -92,8 +92,7 @@ describe("Sidebar", () => {
     render(<Sidebar />);
     expect(screen.queryByText("Deploy notes")).toBeNull();
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "Search threads" }));
-    await user.type(await screen.findByRole("textbox", { name: "Search threads" }), "deploy");
+    await user.type(screen.getByRole("textbox", { name: "Search threads" }), "deploy");
     await screen.findByText("Deploy notes");
     expect(screen.queryByText("Alpha")).toBeNull();
     expect(loadWorkspaceThreads).toHaveBeenCalledWith("w2");
@@ -162,13 +161,12 @@ describe("Sidebar", () => {
     mount();
     expect(screen.getAllByRole("listitem")).toHaveLength(2);
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "Search threads" }));
-    await user.type(await screen.findByRole("textbox", { name: "Search threads" }), "reconcil");
+    await user.type(screen.getByRole("textbox", { name: "Search threads" }), "reconcil");
     await screen.findByText("Alpha");
     expect(screen.queryByText("Beta")).toBeNull();
   });
 
-  it("does not claim 'No agent CLI found' before detection has answered", () => {
+  it("does not claim 'No agent CLI found' before detection has answered", async () => {
     seed([]);
     seedStore({ detectionChecked: false, detection: null, agents: [] });
     render(<Sidebar />);
@@ -179,12 +177,16 @@ describe("Sidebar", () => {
     act(() => { useAppStore.setState({ detectionChecked: true }); });
     expect(screen.getByText("No agent CLI found")).toBeInTheDocument();
     expect(screen.getByText("No threads yet")).toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole("button", { name: "No agent CLI found" }));
+    expect(useAppStore.getState().settingsOpen).toBe(true);
+    expect(useAppStore.getState().settingsTab).toBe("Agents");
   });
 
-  it("opens an account menu from the footer, with usage on demand", async () => {
+  it("opens usage from the footer when a reading exists, and does not show an account name or Ready", async () => {
     seed([]);
     seedStore({
       detection: { found: true, path: "/bin/muse", version: "Muse Code 3.14.3", authenticated: true, method: "auth.json", accountName: "Ada" },
+      agents: [{ id: "muse", name: "Muse", protocol: "msp", found: true, path: "/bin/muse", version: "3.14.3", verified: true, signIn: "", authenticated: true }],
       subscriptionUsage: {
         observedAtMs: Date.now(),
         tier: "pro",
@@ -194,33 +196,54 @@ describe("Sidebar", () => {
     });
     render(<Sidebar />);
     const user = userEvent.setup();
-    expect(screen.queryByRole("status", { name: "Subscription usage" })).not.toBeInTheDocument();
-    const account = screen.getByRole("button", { name: "Account menu, Ada" });
-    expect(account.closest(".sidebar-bottom")).not.toBeNull();
-    await user.click(account);
-    const menu = screen.getByRole("menu", { name: "Account" });
-    const usage = within(menu).getByRole("menuitem", { name: /Usage/ });
-    expect(usage).toHaveTextContent("42% used");
+    expect(screen.queryByText("Ada")).not.toBeInTheDocument();
+    expect(screen.queryByText("Ready")).not.toBeInTheDocument();
+    expect(screen.queryByText("Glitter")).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Usage" })).not.toBeInTheDocument();
+    const usage = screen.getByRole("button", { name: "Usage" });
+    expect(usage.closest(".sidebar-bottom")).not.toBeNull();
     await user.click(usage);
-    const meter = within(menu).getByRole("status", { name: "Subscription usage" });
+    const card = screen.getByRole("dialog", { name: "Usage" });
+    expect(within(card).getByText("No turns yet today")).toBeInTheDocument();
+    const meter = within(card).getByRole("status", { name: "Subscription usage" });
     expect(within(meter).getByText("42%")).toBeInTheDocument();
     expect(within(meter).getByText("18%")).toBeInTheDocument();
-    await user.click(within(menu).getByRole("menuitem", { name: "Appearance" }));
-    expect(screen.queryByRole("menu", { name: "Account" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Settings" }));
+    expect(screen.queryByRole("dialog", { name: "Usage" })).not.toBeInTheDocument();
     expect(useAppStore.getState().settingsOpen).toBe(true);
-    expect(useAppStore.getState().settingsTab).toBe("Theme");
   });
 
-  it("keeps New thread, Extensions, Usage and Settings out of the sidebar's rows; the account menu still opens Settings", async () => {
+  it("puts New thread and Settings in the sidebar, and leaves Extensions to Settings", async () => {
     seed([]);
     render(<Sidebar />);
-    // New threads start from each workspace's row, so outside preview there is no primary nav at all.
     expect(screen.queryByRole("navigation", { name: "Primary" })).not.toBeInTheDocument();
-    for (const name of ["Extensions", "Usage", "Settings"]) expect(screen.queryByRole("button", { name })).not.toBeInTheDocument();
-    const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: /Account menu/ }));
-    await user.click(within(screen.getByRole("menu", { name: "Account" })).getByRole("menuitem", { name: /Settings/ }));
+    expect(screen.getByRole("button", { name: "New thread" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Extensions" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Usage" })).toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole("button", { name: "Settings" }));
     expect(useAppStore.getState().settingsOpen).toBe(true);
+  });
+
+  it("filters the list to running threads and to ones that need you", async () => {
+    seedTwo([
+      thread("a", { status: "running", title: "Running one" }),
+      thread("b", { title: "Idle one" }),
+      thread("z", { workspacePath: "/other", title: "Blocked", status: "running", pendingApproval: approval("z") }),
+    ]);
+    render(<Sidebar />);
+    const user = userEvent.setup();
+    expect(screen.getByRole("button", { name: "Live 2" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Needs you 1" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Live 2" }));
+    expect(screen.getByText("Running one")).toBeInTheDocument();
+    expect(screen.queryByText("Idle one")).toBeNull();
+    expect(screen.getByText("Blocked")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Needs you 1" }));
+    expect(screen.queryByText("Running one")).toBeNull();
+    expect(screen.getByText("Blocked")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "All" }));
+    expect(screen.getByText("Idle one")).toBeInTheDocument();
+    expect(screen.queryByText("Blocked")).toBeNull();
   });
 
   it("collapses from its own button", async () => {
@@ -242,17 +265,25 @@ describe("Sidebar", () => {
     expect(screen.getByRole("button", { name: "Show sidebar" })).toBe(toggle);
   });
 
-  it("closes the account menu on Escape and on an outside click", async () => {
+  it("closes usage on Escape and on an outside click", async () => {
     seed([]);
+    seedStore({
+      subscriptionUsage: {
+        observedAtMs: Date.now(),
+        tier: "pro",
+        window: { usedPercent: 10, resetsAtMs: Date.now() + 60 * 60_000, windowDurationMins: 300 },
+        weekly: { usedPercent: 4, resetsAtMs: Date.now() + 3 * 24 * 60 * 60_000 },
+      },
+    });
     render(<Sidebar />);
     const user = userEvent.setup();
-    const account = screen.getByRole("button", { name: /Account menu/ });
-    await user.click(account);
+    const usage = screen.getByRole("button", { name: /Usage/ });
+    await user.click(usage);
     await user.keyboard("{Escape}");
-    expect(screen.queryByRole("menu", { name: "Account" })).not.toBeInTheDocument();
-    await user.click(account);
-    expect(screen.getByRole("menu", { name: "Account" })).toBeInTheDocument();
-    await waitFor(async () => { await user.click(document.body); expect(screen.queryByRole("menu", { name: "Account" })).not.toBeInTheDocument(); });
+    expect(screen.queryByRole("dialog", { name: "Usage" })).not.toBeInTheDocument();
+    await user.click(usage);
+    expect(screen.getByRole("dialog", { name: "Usage" })).toBeInTheDocument();
+    await waitFor(async () => { await user.click(document.body); expect(screen.queryByRole("dialog", { name: "Usage" })).not.toBeInTheDocument(); });
   });
 
   it("shows the CLI update row with release notes when an update is available", async () => {

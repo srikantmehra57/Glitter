@@ -1,7 +1,7 @@
 import { memo, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type DragEvent, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { Archive, ChevronRight, ChevronsUpDown, CircleUser, Download, FileText, Folder, FolderOpen, Gauge, GitBranch, GitFork, Keyboard, LoaderCircle, LogOut, MoreHorizontal, Palette, PanelLeft, Pencil, Pin, PinOff, Plus, RotateCcw, ScanSearch, Search, Settings, ShieldCheck, SquarePen, Trash2, X } from "lucide-react";
-import { formatResetIn, needsAttention, relativeTime, shortCliVersion, threadMatches, usageWindowLabel, windowPercent, worktreeRemovalNote } from "../lib/format";
+import { Archive, ChevronRight, Download, FileText, Folder, FolderOpen, Gauge, GitBranch, GitFork, LoaderCircle, LogOut, MoreHorizontal, PanelLeft, Pencil, Pin, PinOff, Plus, RotateCcw, ScanSearch, Search, Settings, ShieldCheck, SquarePen, Trash2, X } from "lucide-react";
+import { formatResetIn, formatTokens, needsAttention, relativeTime, shortCliVersion, threadMatches, usageWindowLabel, windowPercent, worktreeRemovalNote } from "../lib/format";
 import { exportThread, shortcutText } from "../lib/commands";
 import { activeWorkspace, currentWorkspace, readyAgents, useAppStore } from "../lib/store";
 import { threadChangeCounts } from "../lib/agent";
@@ -12,6 +12,7 @@ import { EXIT_FAST_MS, usePresence } from "../lib/presence";
 const SIDEBAR_EXIT_MS = 240;
 import { sidebarWidthBounds, sidebarWidthFor, subscribeResize } from "../lib/reviewLayout";
 import { Collapse } from "./Presence";
+import { totalsSince } from "../lib/usageLedger";
 import { agentEnabled, type AgentId, type CliUpdateOutcome, type CliUpdateStatus, type SettingsTab, type SubscriptionUsage, type Thread, type Workspace } from "../lib/types";
 
 /**
@@ -160,7 +161,7 @@ function UsageCard({ usage, now, refreshing, onRefresh }: { usage: SubscriptionU
   );
 }
 
-/** The subscription meter and its empty, loading and error states. Shown from the account menu. */
+/** The subscription meter and its empty, loading and error states. Shown from the sidebar's Usage control. */
 export function AccountUsage() {
   const usage = useAppStore((state) => state.subscriptionUsage);
   const loading = useAppStore((state) => state.subscriptionUsageLoading);
@@ -187,22 +188,69 @@ export function AccountUsage() {
   );
 }
 
-/** The account menu's Usage row: the busier window at a glance, the full card on demand. */
-function AccountUsageItem() {
+/** Local midnight, so the sidebar chip matches the Usage view's Today. */
+function startOfToday(now: number): number {
+  const date = new Date(now);
+  date.setHours(0, 0, 0, 0);
+  return date.getTime();
+}
+
+/**
+ * Glitter's own usage, beside Settings. The chip is today's tokens, counted
+ * on this Mac across every agent. Meta's subscription meter is added only
+ * while the Muse agent is enabled and a reading exists.
+ */
+function SidebarUsage() {
   const usage = useAppStore((state) => state.subscriptionUsage);
+  const ledger = useAppStore((state) => state.usageLedger);
+  const museOn = useAppStore((state) => agentEnabled(state, "muse") && state.agents.some((agent) => agent.id === "muse" && agent.found));
   const [open, setOpen] = useState(false);
+  const pop = usePresence(open, EXIT_FAST_MS);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = () => setOpen(false);
+    const timer = window.setTimeout(() => document.addEventListener("click", close), 0);
+    return () => { window.clearTimeout(timer); document.removeEventListener("click", close); };
+  }, [open]);
   const now = Date.now();
-  const current = usage ? [windowPercent(usage.window.usedPercent, usage.window.resetsAtMs, now), windowPercent(usage.weekly.usedPercent, usage.weekly.resetsAtMs, now)].filter((value): value is number => value != null) : [];
-  const peak = current.length ? Math.round(Math.max(...current)) : null;
+  const today = totalsSince(ledger, startOfToday(now), now);
+  const chip = today.tokens > 0 ? `${today.estimated ? "≈" : ""}${formatTokens(today.tokens)}` : null;
+  const close = () => { setOpen(false); buttonRef.current?.focus(); };
+  const openAll = () => {
+    setOpen(false);
+    useAppStore.getState().setSettingsOpen(true, "Usage");
+  };
   return (
-    <>
-      <button type="button" role="menuitem" aria-expanded={open} onClick={() => setOpen(!open)}>
-        <Gauge size={13} />Usage
-        {peak != null ? <span className={`menu-hint fade-hint${open ? " hidden" : ""}`} aria-hidden={open || undefined}>{peak}% used</span> : null}
-        <ChevronRight size={12} className={`caret ${open ? "open" : ""}`} aria-hidden="true" />
+    <div className="usage-wrap" onKeyDown={(event) => { if (event.key === "Escape" && open) { event.preventDefault(); close(); } }}>
+      <button
+        ref={buttonRef}
+        type="button"
+        className="nav-row"
+        aria-label={chip ? `Usage, ${chip} tokens today` : "Usage"}
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <Gauge size={15} />
+        <span aria-hidden="true">Usage</span>
+        {chip ? <em className="usage-chip">{chip}</em> : null}
       </button>
-      <Collapse open={open}>{() => <AccountUsage />}</Collapse>
-    </>
+      {pop.mounted ? (
+        <div className={`usage-anchor${pop.closing ? " closing" : ""}`} onClick={(event) => event.stopPropagation()}>
+          <div className="usage-pop sidebar-usage usage-local" role="dialog" aria-label="Usage">
+            <div className="usage-head">
+              <span className="usage-title">Usage</span>
+            </div>
+            <div className="usage-row">
+              <div className="usage-row-head"><span>Today</span><span className="usage-pct">{chip ?? "0"}</span></div>
+              <div className="usage-sub">{today.turns === 0 ? "No turns yet today" : `${today.turns === 1 ? "1 turn" : `${today.turns} turns`} on this Mac`}</div>
+            </div>
+            <button type="button" className="ghost-btn small" onClick={(event) => { event.stopPropagation(); openAll(); }}>All usage</button>
+            {museOn && usage ? <AccountUsage /> : null}
+          </div>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -261,7 +309,7 @@ function CliUpdateCard({ status, updating, checking, error, result, checkedAt, c
  * and Escape or a Tab taken from an item closes it. `close` hands focus back to
  * the opener — the item that had focus is about to unmount, and without the
  * hand-off the key would leave the keyboard on <body>. Nested content that is
- * not a menu item (the account menu's usage card) keeps normal Tab traversal.
+ * not a menu item (an expanded export group) keeps normal Tab traversal.
  */
 function menuKeys(event: ReactKeyboardEvent<HTMLElement>, close: () => void) {
   const items = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('[role="menuitem"]:not(:disabled)'));
@@ -564,12 +612,9 @@ export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) 
   const workspace = useAppStore(currentWorkspace);
   const [menu, setMenu] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
-  const [searching, setSearching] = useState(false);
   const [updateOpen, setUpdateOpen] = useState(false);
-  const [accountOpen, setAccountOpen] = useState(false);
-  const accountPop = usePresence(accountOpen, EXIT_FAST_MS);
-  const accountRef = useRef<HTMLButtonElement>(null);
-  const accountMenuRef = useRef<HTMLDivElement>(null);
+  /** Which sessions the list shows. All is the workspace tree; the other two are the orchestrator's view of work in flight. */
+  const [filter, setFilter] = useState<"all" | "live" | "attention">("all");
   const updatePop = usePresence(updateOpen, EXIT_FAST_MS);
   const railPop = usePresence(s.sidebarCollapsed, EXIT_FAST_MS);
   // The sidebar stays drawn while its column closes, clipped to it and fading, so
@@ -596,7 +641,7 @@ export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) 
 
   // Typing in the search box stays instant; the list catches up a beat later.
   const search = useDeferredValue(s.threadSearch);
-  const visible = useMemo(() => {
+  const listed = useMemo(() => {
     // Content search reads the threads themselves, only while a search is active.
     const threads = search ? new Map(useAppStore.getState().threads.map((thread) => [thread.sessionId, thread])) : null;
     return rows
@@ -606,27 +651,37 @@ export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) 
       .slice()
       .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.order - a.order);
   }, [rows, search, s.enabledAgents]);
+  // Live is a turn in progress. Needs you is a turn blocked on an approval or an answer.
+  const visible = useMemo(() => {
+    if (filter === "live") return listed.filter((row) => row.status === "running");
+    if (filter === "attention") return listed.filter((row) => row.attention);
+    return listed;
+  }, [listed, filter]);
+  const liveCount = listed.reduce((count, row) => count + (row.status === "running" ? 1 : 0), 0);
+  const attentionCount = listed.reduce((count, row) => count + (row.attention ? 1 : 0), 0);
   const threadsFor = (item: Workspace) => visible.filter((row) => row.workspacePath === item.path);
   // Collapsed workspaces still flag a blocked thread, or it would sit unseen.
   const attentionPaths = useMemo(() => new Set(rows.filter((row) => row.attention && !row.archived && agentEnabled(s, row.agentId ?? "muse")).map((row) => row.workspacePath)), [rows, s.enabledAgents]);
   const archivedCount = useMemo(() => rows.filter((row) => row.archived).length, [rows]);
-  // A search shows matches in collapsed workspaces without touching their saved
-  // expansion; the caret on such a group only hides it until the search ends.
+  // A search or a status filter shows matches in collapsed workspaces without
+  // touching their saved expansion; the caret on such a group only hides it
+  // until the narrowing ends.
   const [hiddenInSearch, setHiddenInSearch] = useState<string[]>([]);
+  const narrowing = Boolean(search) || filter !== "all";
 
   useEffect(() => {
     if (s.selectedWorkspaceId) setExpanded((ids) => ids.includes(s.selectedWorkspaceId!) ? ids : [...ids, s.selectedWorkspaceId!]);
   }, [s.selectedWorkspaceId]);
 
-  // Workspaces never expanded have no threads listed yet, so the first search lists them.
+  // Workspaces never expanded have no threads listed yet, so the first search or filter lists them.
   useEffect(() => {
-    if (!search) { setHiddenInSearch([]); return; }
+    if (!narrowing) { setHiddenInSearch([]); return; }
     for (const item of s.workspaces) {
       if (loaded.current.has(item.id)) continue;
       loaded.current.add(item.id);
       if (item.id !== s.selectedWorkspaceId) void s.loadWorkspaceThreads(item.id);
     }
-  }, [search, s.workspaces]);
+  }, [narrowing, s.workspaces, s.selectedWorkspaceId, s.loadWorkspaceThreads]);
 
   // An expanded workspace fills its own list; the selected one is already
   // loading through selectWorkspace, so mark it instead of listing twice.
@@ -652,23 +707,6 @@ export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) 
     const timer = window.setTimeout(() => document.addEventListener("click", close), 0);
     return () => { window.clearTimeout(timer); document.removeEventListener("click", close); };
   }, [updateOpen]);
-
-  useEffect(() => {
-    if (!accountOpen) return;
-    const close = () => setAccountOpen(false);
-    const timer = window.setTimeout(() => document.addEventListener("click", close), 0);
-    return () => { window.clearTimeout(timer); document.removeEventListener("click", close); };
-  }, [accountOpen]);
-
-  // The account menu is a role="menu": opening lands focus on its first item.
-  useEffect(() => {
-    if (accountOpen) accountMenuRef.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
-  }, [accountOpen]);
-
-  const closeAccountMenu = () => {
-    setAccountOpen(false);
-    accountRef.current?.focus();
-  };
 
   // Dragging reorders within one workspace and one pin group; the dropped list
   // is handed to the store verbatim so what you see is what gets saved. The
@@ -729,19 +767,20 @@ export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) 
     };
   }, []);
 
-  const showSearch = searching || Boolean(s.threadSearch);
-  // The field grows in and out instead of shoving the list down a row in one frame.
-  const searchPop = usePresence(showSearch);
   const ready = readyAgents(s);
-  const accountName = s.detection?.accountName || s.detection?.accountEmail || "Local account";
   const installed = s.agents.filter((agent) => agent.found);
   // Until detection has answered, "no agent found" would be a claim we cannot make yet.
   const checking = !s.detectionChecked && !s.preview;
-  const status = s.preview ? "Preview · demo data" : checking ? "Checking agents…" : s.offline ? "Offline" : ready.length ? "Ready" : installed.length ? "Sign in needed" : "No agent CLI found";
-  const statusTone = s.preview || checking ? "idle" : s.offline || !installed.length ? "bad" : ready.length ? "good" : "warn";
+  // A healthy connection says nothing. The row exists only while something blocks work.
+  const alert: { tone: "idle" | "warn" | "bad"; label: string; tab?: SettingsTab } | null = s.preview ? null
+    : checking ? { tone: "idle", label: "Checking agents…" }
+    : s.offline ? { tone: "bad", label: "Offline" }
+    : ready.length ? null
+    : installed.length ? { tone: "warn", label: "Sign in needed", tab: "Account" }
+    : { tone: "bad", label: "No agent CLI found", tab: "Agents" };
   const statusTitle = installed.map((agent) => `${agent.name}${agent.version ? ` ${agent.version}` : ""} — ${agent.path}`).join("\n") || undefined;
   const newThread = () => { onOpenThreads?.(); void s.newThread(); };
-  const openSettings = (tab?: SettingsTab) => { setAccountOpen(false); s.setSettingsOpen(true, tab); };
+  const openSettings = (tab?: SettingsTab) => { s.setSettingsOpen(true, tab); };
   const updateAvailable = !s.preview && s.cliUpdate?.available === true && Boolean(s.cliUpdate.latest);
 
   return (
@@ -770,22 +809,16 @@ export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) 
       </div>
       {sidebarPop.mounted ? <aside id="sidebar-navigation" className={`sidebar${sidebarPop.closing ? " closing" : ""}`} aria-hidden={sidebarPop.closing || undefined} inert={sidebarPop.closing}>
       <div className="drag" data-tauri-drag-region />
-      <div className="sidebar-top">
-        <button className="icon-btn" aria-label="Search threads" data-tooltip={`Search threads  ${shortcutText("search-threads")}`} aria-pressed={showSearch} onClick={() => { setSearching(true); window.setTimeout(() => document.getElementById("thread-search")?.focus(), 0); }}><Search size={15} /></button>
-      </div>
+      {/* Clears the title bar. Session tools start below the window controls. */}
+      <div className="sidebar-top" />
 
-      <div className="sidebar-identity">
-        <div><span className="wordmark">Glitter</span></div>
-      </div>
-
-      {s.preview ? (
-        <nav className="sidebar-nav" aria-label="Primary">
-          <button className="nav-row" onClick={() => void s.exitPreview()}><LogOut size={15} /><span>Exit preview</span></button>
-        </nav>
-      ) : null}
-
-      {searchPop.mounted ? (
-        <div className={`reveal${searchPop.closing ? " closing" : ""}`}><div>
+      {/* The list is the product. Start a session, find one, or narrow to work in flight. */}
+      <div className="sidebar-tools">
+        <button type="button" className="nav-row new-thread" aria-label="New thread" disabled={s.starting || !workspace} onClick={newThread}>
+          <SquarePen size={15} />
+          <span aria-hidden="true">New thread</span>
+          <kbd aria-hidden="true">{shortcutText("new-thread")}</kbd>
+        </button>
         <label className="search-field">
           <Search size={13} aria-hidden="true" />
           <input
@@ -794,13 +827,22 @@ export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) 
             placeholder="Search threads"
             aria-label="Search threads"
             onChange={(event) => s.setThreadSearch(event.target.value)}
-            onBlur={() => { if (!s.threadSearch) setSearching(false); }}
-            onKeyDown={(event) => { if (event.key === "Escape") { s.setThreadSearch(""); setSearching(false); (event.target as HTMLInputElement).blur(); } }}
+            onKeyDown={(event) => { if (event.key === "Escape") { s.setThreadSearch(""); (event.target as HTMLInputElement).blur(); } }}
           />
           {s.threadSearch ? <button type="button" className="search-clear" aria-label="Clear search" onClick={() => s.setThreadSearch("")}><X size={12} /></button> : null}
         </label>
-        </div></div>
-      ) : <input id="thread-search" className="visually-hidden" aria-label="Search threads" tabIndex={-1} onFocus={() => { setSearching(true); window.setTimeout(() => document.getElementById("thread-search")?.focus(), 0); }} readOnly />}
+        <div className="segmented thread-filter" role="group" aria-label="Show threads">
+          <button type="button" aria-pressed={filter === "all"} onClick={() => setFilter("all")}>All</button>
+          <button type="button" aria-pressed={filter === "live"} onClick={() => setFilter("live")}>Live{liveCount ? <> <span className="count">{liveCount}</span></> : null}</button>
+          <button type="button" aria-pressed={filter === "attention"} onClick={() => setFilter("attention")}>Needs you{attentionCount ? <> <span className="count">{attentionCount}</span></> : null}</button>
+        </div>
+      </div>
+
+      {s.preview ? (
+        <nav className="sidebar-nav" aria-label="Primary">
+          <button type="button" className="nav-row exit-preview" onClick={() => void s.exitPreview()}><LogOut size={15} /><span>Exit preview</span></button>
+        </nav>
+      ) : null}
 
       <div className="section-label">
         <span>Workspaces</span>
@@ -820,12 +862,19 @@ export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) 
         {s.workspaces.map((item) => {
           const active = item.id === s.selectedWorkspaceId;
           const open = isOpen(item.id);
-          const matches = open || search ? threadsFor(item) : [];
-          const searchHit = !open && Boolean(search) && (matches.length > 0 || s.threadsLoading.includes(item.id));
-          const shown = open || (searchHit && !hiddenInSearch.includes(item.id));
+          const matches = threadsFor(item);
+          const loadingList = s.threadsLoading.includes(item.id);
+          // Folders with nothing in this search or filter drop out. The selected one stays, so its empty note has a home.
+          if (narrowing && !active && matches.length === 0 && !(Boolean(search) && loadingList)) {
+            lists.current[item.path] = [];
+            return null;
+          }
+          // A collapsed workspace opens for this search or filter only.
+          const searchHit = !open && narrowing && (matches.length > 0 || (Boolean(search) && loadingList));
+          const shown = (open && (!narrowing || active || matches.length > 0 || (Boolean(search) && loadingList))) || (searchHit && !hiddenInSearch.includes(item.id));
           const threads = shown ? matches : [];
           lists.current[item.path] = threads;
-          const reorderable = !s.threadSearch;
+          const reorderable = !s.threadSearch && filter === "all";
           return (
             <div key={item.id} className={`workspace-group ${active ? "active" : ""}`}>
               <div className={`workspace-row ${active ? "active" : ""} ${shown ? "open" : ""}`}>
@@ -899,9 +948,12 @@ export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) 
                   ))}
                   {!threads.length ? (
                     <div className="tree-note">
-                      {s.threadsLoading.includes(item.id) || (checking && !s.threadSearch)
+                      {loadingList || (checking && !narrowing)
                         ? <span className="tree-loading"><LoaderCircle size={12} className="spin" aria-hidden="true" />Loading threads…</span>
-                        : s.threadSearch ? "No matching threads" : "No threads yet"}
+                        : s.threadSearch ? "No matching threads"
+                        : filter === "live" ? "No running threads"
+                        : filter === "attention" ? "Nothing needs you"
+                        : "No threads yet"}
                     </div>
                   ) : null}
                 </div>
@@ -937,36 +989,28 @@ export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) 
             onClose={() => setUpdateOpen(false)}
           /> : null}
         </div> : null}
-        <div className="sidebar-foot" onKeyDown={(event) => { if (event.key === "Escape" && accountOpen) { event.preventDefault(); closeAccountMenu(); } }}>
-          <button
-            ref={accountRef}
-            type="button"
-            className="account"
-            aria-haspopup="menu"
-            aria-expanded={accountOpen}
-            aria-label={`Account menu, ${accountName}`}
-            onClick={() => setAccountOpen((open) => !open)}
-            onKeyDown={(event) => {
-              if (event.key === "ArrowDown" && !accountOpen) { event.preventDefault(); setAccountOpen(true); }
-            }}
-          >
-            <img src="/spark.svg" alt="" className="account-mark" />
-            <span className="account-copy">
-              <span className="account-name">{accountName}</span>
-              <span className={`account-status ${statusTone}`} title={statusTitle}><i aria-hidden="true" />{status}</span>
-            </span>
-            <ChevronsUpDown size={13} className="account-caret" aria-hidden="true" />
-          </button>
-          {accountPop.mounted ? (
-            <div ref={accountMenuRef} className={`menu account-menu${accountPop.closing ? " closing" : ""}`} role="menu" aria-label="Account" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => menuKeys(event, closeAccountMenu)}>
-              {!s.preview ? <AccountUsageItem /> : null}
-              <button type="button" role="menuitem" onClick={() => openSettings("Theme")}><Palette size={13} />Appearance</button>
-              <button type="button" role="menuitem" onClick={() => openSettings("Shortcuts")}><Keyboard size={13} />Keyboard shortcuts</button>
-              <button type="button" role="menuitem" onClick={() => openSettings("Account")}><CircleUser size={13} />Account</button>
-              <div className="menu-sep" />
-              <button type="button" role="menuitem" onClick={() => openSettings()}><Settings size={13} />Settings<span className="menu-hint">{shortcutText("settings")}</span></button>
-            </div>
+        <div className="sidebar-foot">
+          {alert ? (
+            alert.tab ? (
+              <button type="button" className={`sidebar-alert ${alert.tone}`} title={statusTitle} onClick={() => openSettings(alert.tab)}>
+                <i aria-hidden="true" />
+                <span>{alert.label}</span>
+              </button>
+            ) : (
+              <div className={`sidebar-alert ${alert.tone}`} role="status" title={statusTitle}>
+                <i aria-hidden="true" />
+                <span>{alert.label}</span>
+              </div>
+            )
           ) : null}
+          <div className="sidebar-utilities">
+            <button type="button" className="nav-row" aria-label="Settings" onClick={() => openSettings()}>
+              <Settings size={15} />
+              <span aria-hidden="true">Settings</span>
+              <kbd aria-hidden="true">{shortcutText("settings")}</kbd>
+            </button>
+            {!s.preview ? <SidebarUsage /> : null}
+          </div>
         </div>
       </div>
       {!s.sidebarCollapsed ? <SidebarResize /> : null}

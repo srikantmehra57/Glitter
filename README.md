@@ -43,8 +43,8 @@ are no Windows or Linux versions. No signed build has been published yet; see [K
 - **Changes dock.** Changed files and unified diffs from git. Stage, commit,
   and discard files or single hunks.
 - **Agents.** Muse by default. OpenCode and Grok are verified. Gemini CLI, Qwen
-  Code and Goose are experimental. All third-party agents are off until you
-  enable them, and you can switch agents mid-thread.
+  Code, Goose and Cline CLI are experimental. All third-party agents are off
+  until you enable them, and you can switch agents mid-thread.
 - **Account.** In-app `muse login`, or an API key stored in the OS keychain.
   Choose subscription, API key or automatic billing.
 - **Extensions and usage.** Manage skills, plugins and MCP servers, and see
@@ -177,7 +177,8 @@ Coding agents should start with [AGENTS.md](AGENTS.md).
 - **Coverage gaps.** Native dialogs (folder picker, save panel) and a live,
   authenticated end-to-end session aren't covered by automated tests;
   `scripts/live-muse-smoke.mjs` is a manual check.
-- **Experimental agents.** Gemini CLI, Qwen Code and Goose aren't verified.
+- **Experimental agents.** Gemini CLI, Qwen Code, Goose and Cline CLI aren't
+  verified.
 - **Large modules.** `apps/desktop/src/lib/store.ts` (~4.4k lines) and
   `src-tauri/src/lib.rs` (~7.4k lines, tests included) hold most of the logic.
   The startup script is the app itself. The terminal and syntax highlighter

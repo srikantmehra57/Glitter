@@ -75,6 +75,16 @@ test('agent seatbelt stays write-scoped to the workspace and the agent config', 
   assert.match(profile, /\(allow default\)/);
 });
 
+test('a Cline child gets its own key, and its own config directory is writable', () => {
+  const env = filterChildEnv({ PATH: '/usr/bin', CLINE_API_KEY: 'cline-key', CLINE_MODEL: 'anthropic/claude-sonnet-5.5', OPENAI_API_KEY: 'openai-key' }, 'cline');
+  assert.equal(env.CLINE_API_KEY, 'cline-key');
+  assert.equal(env.CLINE_MODEL, 'anthropic/claude-sonnet-5.5');
+  assert.equal('OPENAI_API_KEY' in env, false, 'another provider\'s key stays out');
+  const profile = buildSeatbeltProfile('agent', 'cline', ['/work/repo']);
+  assert.match(profile, /\.cline/);
+  assert.doesNotMatch(profile, /subpath "[^"]*\/\.config"/, 'does not grant all of ~/.config');
+});
+
 test('muse seatbelt denies system paths and still allows temp and /usr/local', () => {
   const profile = buildSeatbeltProfile('muse', 'muse');
   assert.match(profile, /subpath "\/usr"\)/);

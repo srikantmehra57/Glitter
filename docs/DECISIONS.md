@@ -493,8 +493,8 @@ must respect. Don't log routine changes here; they belong in git history and
 ### Third-party agents are opt-in and isolated
 
 - **Date:** 2026-09-21
-- **Decision:** ACP agents (OpenCode, Grok, Gemini CLI, Qwen Code, Goose) are off
-  by default. Before one is enabled:
+- **Decision:** ACP agents (OpenCode, Grok, Gemini CLI, Qwen Code, Goose, Cline
+  CLI) are off by default. Before one is enabled:
   - the user gives informed consent, stored in the keyring
   - the binary is pinned by digest
   - it runs with a filtered environment and a confined working directory

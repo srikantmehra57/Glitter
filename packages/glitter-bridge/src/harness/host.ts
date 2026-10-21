@@ -68,15 +68,29 @@ const RECENT_MESSAGES = 8;
 function contextWindow(providerId: string, model: string, listed?: number | null): number | null {
   if (listed) return listed;
   const id = model.toLowerCase();
-  if (providerId === "anthropic") return 200_000;
-  if (providerId === "openai") return /gpt-5/.test(id) ? 400_000 : /gpt-4\.1/.test(id) ? 1_047_576 : /^o\d/.test(id) ? 200_000 : /gpt-4o/.test(id) ? 128_000 : null;
-  if (providerId === "google") return /gemini/.test(id) ? 1_048_576 : null;
-  if (providerId === "xai") return /grok-4/.test(id) ? 256_000 : /grok-3/.test(id) ? 131_072 : null;
-  if (providerId === "deepseek") return 128_000;
+  // A gateway's catalog names each model `vendor/model`, so the vendor decides
+  // and what follows the slash is the model the vendor knows it by. Cline
+  // writes xAI as `x-ai` and prefixes a rolling alias with `~`.
+  const slash = id.indexOf("/");
+  const gateway = providerId === "cline" && slash > 0;
+  const vendor = (gateway ? id.slice(0, slash) : providerId).replace(/^~/, "");
+  const name = gateway ? id.slice(slash + 1) : id;
+  const family = vendor === "x-ai" ? "xai" : vendor;
+  if (family === "anthropic") return 200_000;
+  if (family === "openai") return /gpt-5/.test(name) ? 400_000 : /gpt-4\.1/.test(name) ? 1_047_576 : /^o\d/.test(name) ? 200_000 : /gpt-4o/.test(name) ? 128_000 : null;
+  if (family === "google") return /gemini/.test(name) ? 1_048_576 : null;
+  if (family === "xai") return /grok-4/.test(name) ? 256_000 : /grok-3/.test(name) ? 131_072 : null;
+  if (family === "deepseek") return 128_000;
   return null;
 }
 
 const NOT_CHAT = /embed|whisper|tts|dall-e|davinci|babbage|moderation|image|audio|realtime|transcribe|search|imagen|veo|aqa|guard|safety|reward|rerank|parse|nvclip|detector|computer-use|sora/i;
+/**
+ * Rows in Cline's catalog that are not chat. `:batch` has no chat-completions
+ * route. Lyria generates music and Nano Banana generates images. The picker
+ * must not offer a model a turn would fail on.
+ */
+const NOT_CLINE_CHAT = /:batch$|nano-banana|lyria/i;
 
 /**
  * Every way an approval request can end. Each reaches the model as its own
@@ -235,7 +249,7 @@ export class HarnessHost {
     const rows = Array.isArray(data) ? data as Json[] : [];
     return rows.map((row): HarnessModel | null => {
       const raw = typeof row.id === "string" ? row.id.replace(/^models\//, "") : "";
-      if (!raw || NOT_CHAT.test(raw)) return null;
+      if (!raw || NOT_CHAT.test(raw) || (provider.id === "cline" && NOT_CLINE_CHAT.test(raw))) return null;
       const pricing = row.pricing as { prompt?: string; completion?: string } | undefined;
       const perMillion = (value?: string) => value != null && Number.isFinite(Number(value)) ? String(Math.round(Number(value) * 1_000_000 * 1000) / 1000) : null;
       const tiers = effortTiers(provider.id, raw);
@@ -260,7 +274,10 @@ export class HarnessHost {
     let pick: HarnessModel | undefined;
     for (const pattern of preferences) {
       const hits = models.filter((model) => pattern.test(model.modelId));
-      if (hits.length) { pick = hits.sort((a, b) => b.modelId.localeCompare(a.modelId, undefined, { numeric: true }))[0]; break; }
+      // A gateway's `~vendor/…-latest` alias is a pointer, not a release. Prefer a named model when one matches.
+      const named = hits.filter((model) => !model.modelId.includes("/~"));
+      const pool = named.length ? named : hits;
+      if (pool.length) { pick = pool.sort((a, b) => b.modelId.localeCompare(a.modelId, undefined, { numeric: true }))[0]; break; }
     }
     return models.map((model) => ({ ...model, isDefault: model === pick }));
   }

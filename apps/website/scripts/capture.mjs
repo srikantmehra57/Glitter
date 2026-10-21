@@ -29,9 +29,8 @@ const FREEZE_CSS =
   "*{animation:none!important;transition:none!important;caret-color:transparent!important}";
 // Preview-mode-only chrome that should not appear in product shots.
 const PREVIEW_HIDE_CSS = [
-  ".sidebar-nav .nav-row:nth-child(2)", // "Exit preview" row
+  ".exit-preview", // "Exit preview" row
   ".regrant-btn", // "Re-open" pill beside the workspace
-  ".account-status", // "Preview · demo data" footer line
   ".settings-connection", // "Preview mode" in the Settings footer
   ".jump-latest", // scroll affordance left over from the scripted scroll-to-top
 ]

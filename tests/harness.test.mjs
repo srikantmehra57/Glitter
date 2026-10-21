@@ -321,6 +321,39 @@ test('NVIDIA NIM lists its chat models and runs a tool-call turn over the OpenAI
   assert.match(failed.payload.outcome.params.error.message, /NVIDIA NIM returned 403: Authorization failed\. Check the key/, 'a problem+json error reads as its detail');
 });
 
+test('the Cline API lists its models and keeps each vendor prefix in the request', async () => {
+  const root = await workspace();
+  const requests = [];
+  const fetchImpl = async (url, init) => {
+    if (String(url) === 'https://api.cline.bot/api/v1/models') {
+      return Response.json({ object: 'list', data: ['anthropic/claude-sonnet-5.5', 'anthropic/claude-sonnet-5.5:batch', 'openai/gpt-5.6', 'x-ai/grok-4.7', '~anthropic/claude-sonnet-latest', 'google/lyria-3-pro-preview', 'google/gemini-nano-banana-2.1', 'minimax/minimax-m3.1-flash:free', 'openai/text-embedding-3-large'].map((id) => ({ id, object: 'model', owned_by: id.split('/')[0] })) });
+    }
+    const body = JSON.parse(init.body);
+    requests.push({ url: String(url), headers: init.headers, body });
+    return sse([{ choices: [{ delta: { content: 'There is hello.txt.' }, finish_reason: 'stop' }] }, '[DONE]']);
+  };
+  const events = [];
+  const instance = new HarnessHost((event, payload) => events.push({ event, payload }), new SessionStore(await mkdtemp(join(temporary, 'store-'))), fetchImpl);
+  instance.setCredentials({ cline: { key: 'sk-cline-test' } });
+  const listed = await instance.listModels();
+  assert.deepEqual(listed.models.map((model) => model.modelId).sort(), ['cline/anthropic/claude-sonnet-5.5', 'cline/minimax/minimax-m3.1-flash:free', 'cline/openai/gpt-5.6', 'cline/x-ai/grok-4.7', 'cline/~anthropic/claude-sonnet-latest'], 'the batch tier, the embedding model and the media models are left out');
+  assert.equal(listed.models.find((model) => model.isDefault)?.modelId, 'cline/anthropic/claude-sonnet-5.5', 'the default is a chat model, not a batch tier');
+  assert.equal(listed.models.find((model) => model.modelId === 'cline/anthropic/claude-sonnet-5.5').contextLimit, 200000, 'the window follows the vendor behind the model');
+  assert.equal(listed.models.find((model) => model.modelId === 'cline/x-ai/grok-4.7').contextLimit, 256000, 'Cline writes xAI as x-ai');
+  assert.equal(listed.models.find((model) => model.modelId === 'cline/~anthropic/claude-sonnet-latest').contextLimit, 200000, 'a rolling alias still names its vendor');
+  assert.deepEqual(listed.models.find((model) => model.modelId === 'cline/anthropic/claude-sonnet-5.5').reasoningEfforts, [], 'Cline documents no reasoning effort');
+
+  const { sessionId } = await instance.startSession({ workspaceRoot: root, modelId: 'cline/anthropic/claude-sonnet-5.5' });
+  await instance.sendTurn({ sessionId, text: 'list text files' });
+  await until(events, ({ event }) => event === 'turnCompleted');
+  assert.equal(requests[0].url, 'https://api.cline.bot/api/v1/chat/completions');
+  assert.equal(requests[0].headers.authorization, 'Bearer sk-cline-test');
+  assert.equal(requests[0].body.model, 'anthropic/claude-sonnet-5.5', 'the vendor prefix reaches Cline, the provider prefix does not');
+  assert.equal(requests[0].body.reasoning_effort, undefined, 'Cline documents no reasoning effort, so none is sent');
+  assert.equal(requests[0].body.stream_options, undefined, 'Cline answers usage without being asked');
+  assert.equal(events.filter(({ payload }) => payload.item?.kind === 'agentMessage').at(-1).payload.item.text, 'There is hello.txt.');
+});
+
 test('a rate-limited call is retried, and an unconfigured provider fails with what to do', async () => {
   const root = await workspace();
   let attempts = 0;

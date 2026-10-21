@@ -277,7 +277,8 @@ the app session, with a persisted "Don’t show again" choice. The model picker'
 header has a Capabilities action to reopen the dialog at any time.
 
 The model picker opens above the composer and stays within the window. It
-holds the agent switcher, a scrollable catalog with provider groups, search
+holds the agent switcher, and for the built-in harness one badge per provider
+instead of a Harness tab. The catalog lists that badge's models, with search
 when there are more than six models, and the contributor disclosures; one
 click on a row picks it and closes.
 
@@ -452,12 +453,16 @@ carries no accent colour.
 
 The sidebar has no fill, blur or edge of its own: it sits on the shell, so the
 accent tint and the window's translucency reach it. The main pane is opaque and
-takes neither. The sidebar's rows
-are the workspaces and their threads, then the account button; each workspace
-row starts a new thread in that workspace from its own button;
-Settings and its pages open from the account menu, the shortcut or the palette.
-The list scrolls vertically only — never sideways — and a thread name that does
-not fit rolls to its tail on hover instead of leaving a scrollbar.
+takes neither. The sidebar is the session list. Under the title bar it offers
+New thread, a search field, and a filter for all threads, live ones, or ones
+that need you, then the workspaces and their threads. Each workspace row starts
+a thread in that workspace. The foot holds Settings and usage counted on
+this Mac. The Muse subscription meter is included only while the Muse agent
+is enabled. Offline, sign-in, and
+a missing agent each get a row above that foot while they last. Appearance,
+shortcuts and account live in Settings. The list scrolls vertically only —
+never sideways — and a thread name that does not fit rolls to its tail on
+hover instead of leaving a scrollbar.
 
 The welcome state sits on the main panel itself, with a sans eyebrow and a
 display heading in a column up to 540px wide. Its suggestion tiles — a 2×2

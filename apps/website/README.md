@@ -24,7 +24,8 @@ npm run build:website  # emits apps/website/dist
   theme; the terminal and the process pipeline are drawn. A ruled sheet under the grid lists the smaller
   features.
 - **Use your own agent**: the agent CLIs the app drives (Muse by default; OpenCode and Grok
-  verified; Gemini CLI, Qwen Code and Goose experimental, per `packages/glitter-bridge/src/agents.ts`)
+  verified; Gemini CLI, Qwen Code, Goose and Cline CLI experimental, per
+  `packages/glitter-bridge/src/agents.ts`)
   around a hub, plus subscription-or-own-key, ACP and mid-thread switching. Marks are copied from
   `apps/desktop/public/agents`.
 - **Reasoning effort**: a working rebuild of the composer's effort gauge (thin track, a pill handle that

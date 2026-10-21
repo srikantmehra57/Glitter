@@ -33,8 +33,8 @@ const NAV_GROUPS: Array<{ label: string; tabs: SettingsTab[] }> = [
 const TAB_LABELS: Partial<Record<SettingsTab, string>> = { Theme: "Appearance", Models: "Models & reasoning", Permissions: "Permissions & safety", Shortcuts: "Keyboard shortcuts" };
 const SEARCH_TERMS: Partial<Record<SettingsTab, string>> = {
   General: "notifications alerts editor vscode cursor zed intellij custom commands slash macros",
-  Agents: "opencode grok gemini qwen goose third-party sandbox isolation binary harness",
-  Providers: "api key byok bring your own anthropic claude openai gpt google gemini openrouter xai grok deepseek groq mistral nvidia nim ollama lm studio local custom endpoint",
+  Agents: "opencode grok gemini qwen goose cline third-party sandbox isolation binary harness",
+  Providers: "api key byok bring your own anthropic claude openai gpt google gemini openrouter cline xai grok deepseek groq mistral nvidia nim ollama lm studio local custom endpoint",
   Theme: "light dark system accent color sidebar tint translucent translucency transparency thinking orb animation", Models: "default effort model provider reasoning contributor subscription", Account: "sign in out subscription api key credential binary path connection",
   Permissions: "approval sandbox network shell file writes ephemeral read only ask auto review unrestricted", Threads: "archive restore delete history", Extensions: "skills mcp servers plugins import",
   Shortcuts: "keybindings hotkeys remap",
@@ -746,7 +746,7 @@ export function SettingsModal() {
           <label className="settings-callout isolation-consent">
             <input type="checkbox" checked={draft.acpUnisolatedConsent === true} onChange={(event) => {
               const acpUnisolatedConsent = event.target.checked;
-              const enabledAgents = acpUnisolatedConsent ? draft.enabledAgents : { ...DEFAULT_ENABLED_AGENTS, ...draft.enabledAgents, opencode: false, grok: false, gemini: false, qwen: false, goose: false };
+              const enabledAgents = acpUnisolatedConsent ? draft.enabledAgents : { ...DEFAULT_ENABLED_AGENTS, ...draft.enabledAgents, opencode: false, grok: false, gemini: false, qwen: false, goose: false, cline: false };
               edit({ acpUnisolatedConsent, enabledAgents, ...(acpUnisolatedConsent || draft.defaultAgentId === "muse" || !draft.defaultAgentId ? {} : { defaultAgentId: undefined }) });
             }} />
             <span>Third-party agents are <strong>not OS-sandboxed</strong>. They inherit a minimal environment and the selected workspace, but can still read this account. I understand and want to enable them.</span>

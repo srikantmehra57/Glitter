@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { asLedger, compact, dayKey, EMPTY_LEDGER, groupUsage, ledgerSlices, providerOf, recordTurn, RECENT_DAYS, turnEntry, type UsageTurn } from "./usageLedger";
+import { asLedger, compact, dayKey, EMPTY_LEDGER, groupUsage, ledgerSlices, providerOf, recordTurn, RECENT_DAYS, totalsSince, turnEntry, type UsageTurn } from "./usageLedger";
 import type { Thread } from "./types";
 
 const DAY = 86_400_000;
@@ -20,6 +20,18 @@ const turn = (partial: Partial<UsageTurn> = {}): UsageTurn => ({
   workspace: "/repo",
   tools: { bash: 2 },
   ...partial,
+});
+
+describe("totalsSince", () => {
+  it("counts today's turns and a rolled-up day, and skips yesterday", () => {
+    const start = new Date(2026, 9, 21, 0, 0, 0, 0).getTime();
+    const ledger = {
+      version: 1 as const,
+      turns: [turn({ at: NOW, outputTokens: 50, estimated: true }), turn({ key: "y", at: start - 60_000, outputTokens: 9_000 })],
+      days: [{ day: "2026-10-21", agentId: "harness" as const, providerId: "anthropic", turns: 2, estimatedTurns: 0, inputTokens: 100, cachedTokens: 0, outputTokens: 40, durationMs: 0, tools: {} }],
+    };
+    expect(totalsSince(ledger, start, NOW)).toEqual({ tokens: 1_190, turns: 3, estimated: true });
+  });
 });
 
 describe("providerOf", () => {

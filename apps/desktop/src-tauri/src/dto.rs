@@ -70,6 +70,7 @@ enum AgentId {
     Gemini,
     Qwen,
     Goose,
+    Cline,
     /// The app's own agent (`packages/glitter-bridge/src/harness`).
     Harness,
 }

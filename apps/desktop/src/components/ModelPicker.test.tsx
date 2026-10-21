@@ -146,6 +146,50 @@ it("leaves an empty catalog recoverable, and points the built-in harness at its 
   expect(onManageProviders).toHaveBeenCalled();
 });
 
+it("gives each harness provider its own badge and lists only that provider's models", () => {
+  const models: Model[] = [
+    { modelId: "anthropic/claude-sonnet", providerId: "anthropic", displayLabel: "Claude Sonnet" },
+    { modelId: "openai/gpt-5", providerId: "openai", displayLabel: "GPT-5" },
+    { modelId: "xai/grok-4", providerId: "xai", displayLabel: "Grok 4" },
+  ];
+  const agents: AgentInfo[] = [
+    { id: "harness", name: "Harness", protocol: "native", found: true, authenticated: true, path: null, version: null, verified: true, signIn: "" },
+    { id: "grok", name: "Grok", protocol: "acp", found: true, path: "/bin/grok", version: "1", verified: true, signIn: "" },
+  ];
+  render(<ModelPicker models={models} agentId="harness" agents={agents} value={modelKey(models[0])} loading={false} disabled={false} onChange={vi.fn()} onAgentChange={vi.fn()} onRescan={async () => {}} />);
+  const trigger = screen.getByRole("button", { name: "Model" });
+  expect(trigger.querySelector(".agent-mark.harness")).toBeNull();
+  expect(trigger.querySelector(".agent-mark.anthropic")).not.toBeNull();
+  fireEvent.click(trigger);
+  expect(screen.queryByRole("tab", { name: "Harness" })).toBeNull();
+  expect(screen.getByRole("tab", { name: "Anthropic" })).toHaveAttribute("aria-selected", "true");
+  expect(screen.getByRole("tab", { name: "OpenAI" })).toHaveAttribute("aria-selected", "false");
+  expect(screen.getByRole("tab", { name: "xAI" })).toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: "Grok" })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: /Claude Sonnet/ })).toBeInTheDocument();
+  expect(screen.queryByRole("option", { name: /GPT-5/ })).toBeNull();
+  expect(screen.queryByRole("option", { name: /Grok 4/ })).toBeNull();
+  fireEvent.click(screen.getByRole("tab", { name: "OpenAI" }));
+  expect(screen.getByRole("tab", { name: "OpenAI" })).toHaveAttribute("aria-selected", "true");
+  expect(screen.getByRole("option", { name: /GPT-5/ })).toBeInTheDocument();
+  expect(screen.queryByRole("option", { name: /Claude Sonnet/ })).toBeNull();
+});
+
+it("keeps the Cline API badge distinct from the Cline CLI agent", () => {
+  const models: Model[] = [
+    { modelId: "cline/anthropic/claude-sonnet-5.5", providerId: "cline", displayLabel: "claude-sonnet-5.5", description: "Cline API" },
+  ];
+  const agents: AgentInfo[] = [
+    { id: "harness", name: "Harness", protocol: "native", found: true, authenticated: true, path: null, version: null, verified: true, signIn: "" },
+    { id: "cline", name: "Cline CLI", protocol: "acp", found: true, path: "/bin/cline", version: "1", verified: false, signIn: "" },
+  ];
+  render(<ModelPicker models={models} agentId="harness" agents={agents} value={modelKey(models[0])} loading={false} disabled={false} onChange={vi.fn()} onAgentChange={vi.fn()} onRescan={async () => {}} />);
+  fireEvent.click(screen.getByRole("button", { name: "Model" }));
+  expect(screen.getByRole("tab", { name: "Cline API" })).toHaveAttribute("aria-selected", "true");
+  expect(screen.getByRole("tab", { name: "Cline CLI" })).toHaveAttribute("aria-selected", "false");
+  expect(screen.getByRole("option", { name: /claude-sonnet-5.5/ })).toBeInTheDocument();
+});
+
 it("lists a fast variant as its own row, tagged Fast, and marks it on the trigger when chosen", () => {
   const models: Model[] = [
     { modelId: "grok-4.7", displayLabel: "Grok 4.7", providerId: "grok" },

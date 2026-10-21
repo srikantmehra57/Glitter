@@ -5,8 +5,9 @@ import { Check, ChevronDown, Info, KeyRound, Search, X, Zap } from "lucide-react
 import { isFastModel } from "../lib/effort";
 import { humanizeModelLabel } from "../lib/format";
 import { menuPosition } from "../lib/menuPosition";
+import { PROVIDERS } from "../lib/providers";
 import { AGENT_LABELS, type AgentId, type AgentInfo, type Model } from "../lib/types";
-import { AgentMark, AgentTabs } from "./AgentPicker";
+import { AgentMark, AgentTabs, ProviderMark } from "./AgentPicker";
 
 export function modelKey(model: { modelId: string; providerId?: string }) {
   return JSON.stringify([model.providerId ?? "", model.modelId]);
@@ -32,11 +33,22 @@ function unlistedNote(names: string[]) {
   return `${names.join(" and ")} ${many ? "are" : "is"} not in the current model list. ${many ? "They stay" : "It stays"} here because this thread or your default model uses ${many ? "them" : "it"}.`;
 }
 
-const PROVIDERS: Record<string, string> = { opencode: "OpenCode Zen", openrouter: "OpenRouter", meta: "Meta", grok: "xAI", xai: "xAI", anthropic: "Anthropic", openai: "OpenAI", google: "Google Gemini", deepseek: "DeepSeek", groq: "Groq", mistral: "Mistral", nvidia: "NVIDIA NIM", ollama: "Ollama", lmstudio: "LM Studio", custom: "Custom endpoint" };
+const PROVIDER_NAMES: Record<string, string> = { opencode: "OpenCode Zen", meta: "Meta", grok: "xAI" };
 
 function providerName(id?: string) {
   if (!id) return "Models";
-  return PROVIDERS[id] ?? id.charAt(0).toUpperCase() + id.slice(1);
+  return PROVIDERS.find((provider) => provider.id === id)?.name ?? PROVIDER_NAMES[id] ?? id.charAt(0).toUpperCase() + id.slice(1);
+}
+
+/** Providers in Settings order, then any id the catalog adds. */
+function providerIds(models: Model[]): string[] {
+  const ids = [...new Set(models.map((model) => model.providerId).filter((id): id is string => Boolean(id)))];
+  const order = PROVIDERS.map((provider) => provider.id);
+  return ids.sort((a, b) => {
+    const ia = order.indexOf(a);
+    const ib = order.indexOf(b);
+    return (ia < 0 ? order.length : ia) - (ib < 0 ? order.length : ib) || a.localeCompare(b);
+  });
 }
 
 function isFree(model: Model) {
@@ -91,25 +103,33 @@ export function ModelPicker({ models, agentId, agents = [], agentDisabled, value
   const pop = usePresence(open, EXIT_FAST_MS);
   const [active, setActive] = useState(0);
   const [query, setQuery] = useState("");
+  const [pinnedProvider, setPinnedProvider] = useState<string | null>(null);
   const [position, setPosition] = useState<ReturnType<typeof menuPosition> | null>(null);
   const selected = models.find((model) => modelKey(model) === value);
   const agentName = agents.find((agent) => agent.id === agentId)?.name ?? AGENT_LABELS[agentId];
+  const harnessProviders = agentId === "harness" ? providerIds(models) : [];
+  const pinned = pinnedProvider && harnessProviders.includes(pinnedProvider) ? pinnedProvider : undefined;
+  const activeProvider = pinned ?? (selected?.providerId && harnessProviders.includes(selected.providerId) ? selected.providerId : harnessProviders[0]);
+  const chipProvider = agentId === "harness" ? (selected?.providerId && harnessProviders.includes(selected.providerId) ? selected.providerId : activeProvider) : undefined;
+  const listedProvider = open ? activeProvider : chipProvider;
+  const sourceName = listedProvider ? providerName(listedProvider) : agentName;
   const selectionLocked = disabled || loading || applying;
   const searchable = models.length > 6;
-  // The selected provider comes first, without changing ordering on hover.
+  // One provider at a time. The badge picks it; the list does not nest providers under Harness.
   const visible = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    const matches = models.filter((model) => !needle || `${model.modelId} ${modelName(model)} ${providerName(model.providerId)}`.toLowerCase().includes(needle));
+    const pool = activeProvider ? models.filter((model) => model.providerId === activeProvider) : models;
+    const matches = pool.filter((model) => !needle || `${model.modelId} ${modelName(model)} ${providerName(model.providerId)}`.toLowerCase().includes(needle));
     const order = [...new Set([selected?.providerId, ...matches.map((model) => model.providerId)])];
     return matches.slice().sort((a, b) => {
       const unavailable = Number(Boolean(a.unavailable)) - Number(Boolean(b.unavailable));
       return unavailable || order.indexOf(a.providerId) - order.indexOf(b.providerId);
     });
-  }, [models, query, selected?.providerId]);
+  }, [models, query, selected?.providerId, activeProvider]);
   const selectedIndex = visible.findIndex((model) => modelKey(model) === value);
   const activeIndex = Math.max(0, Math.min(active, visible.length - 1));
   const unlisted = models.filter((model) => model.unlisted);
-  const grouped = new Set(models.map((item) => item.providerId)).size > 1;
+  const grouped = new Set(visible.map((item) => item.providerId)).size > 1;
   const contains = (target: Node | null) => Boolean(root.current?.contains(target) || panel.current?.contains(target));
 
   useEffect(() => {
@@ -146,7 +166,8 @@ export function ModelPicker({ models, agentId, agents = [], agentDisabled, value
     (searchable ? search.current : items.current[activeIndex])?.focus();
   }, [open, loading, agentId, searchable, disabled, position !== null]);
 
-  useEffect(() => { setQuery(""); setActive(0); }, [agentId]);
+  useEffect(() => { setQuery(""); setActive(0); setPinnedProvider(null); }, [agentId]);
+  useEffect(() => { if (!open) setPinnedProvider(null); }, [open]);
   useEffect(() => {
     if (!open) return;
     // Scroll the catalog only; scrollIntoView can move the anchor's thread.
@@ -183,14 +204,14 @@ export function ModelPicker({ models, agentId, agents = [], agentDisabled, value
         aria-expanded={open}
         aria-controls={pop.mounted ? dialogId : undefined}
         aria-label="Model"
-        aria-description={`${agentName} · ${label}`}
+        aria-description={`${sourceName} · ${label}`}
         disabled={disabled}
         onClick={() => { if (open) setOpen(false); else openPanel(); }}
         onKeyDown={(event) => {
           if (event.key === "ArrowUp" || event.key === "ArrowDown") { event.preventDefault(); openPanel(); }
         }}
       >
-        <AgentMark id={agentId} size={16} />
+        {chipProvider ? <ProviderMark id={chipProvider} size={16} /> : <AgentMark id={agentId} size={16} />}
         <span className="picker-value">{label}</span>
         {selected && isFastModel(selected) ? <Zap size={12} className="model-fast" aria-label="Fast" /> : null}
         <ChevronDown size={12} className="select-chevron" data-open={open || undefined} aria-hidden="true" />
@@ -217,14 +238,17 @@ export function ModelPicker({ models, agentId, agents = [], agentDisabled, value
           <div className="model-picker-head">
             {onAgentChange && onRescan ? (
               <AgentTabs
-                agents={agents}
+                agents={harnessProviders.length ? agents.filter((agent) => agent.id !== "harness") : agents}
                 value={agentId}
                 disabled={Boolean(agentDisabled || disabled || applying)}
                 onChange={onAgentChange}
                 onRescan={onRescan}
                 onShowCapabilities={onShowCapabilities ? () => { close(); onShowCapabilities(); } : undefined}
+                providers={harnessProviders.map((id) => ({ id, name: providerName(id) }))}
+                providerId={activeProvider}
+                onProviderChange={(id) => { setPinnedProvider(id); setQuery(""); setActive(0); }}
               />
-            ) : <span className="model-picker-title"><AgentMark id={agentId} size={14} />{agentName}</span>}
+            ) : <span className="model-picker-title">{chipProvider ? <ProviderMark id={chipProvider} size={14} /> : <AgentMark id={agentId} size={14} />}{chipProvider ? providerName(chipProvider) : agentName}</span>}
             <button type="button" className="icon-btn" aria-label="Close model picker" onClick={close}><X size={13} aria-hidden="true" /></button>
           </div>
           {searchable ? <label className="picker-search model-picker-search">
@@ -237,7 +261,7 @@ export function ModelPicker({ models, agentId, agents = [], agentDisabled, value
               aria-controls={listId}
               aria-activedescendant={visible.length ? `${listId}-${activeIndex}` : undefined}
               value={query}
-              placeholder={`Search ${agentName} models`}
+              placeholder={`Search ${sourceName} models`}
               aria-label="Search models"
               disabled={disabled || loading}
               onChange={(event) => { setQuery(event.target.value); setActive(0); }}
@@ -251,7 +275,7 @@ export function ModelPicker({ models, agentId, agents = [], agentDisabled, value
           </label> : null}
           <div className="model-catalog">
             <div id={listId} role="listbox" aria-label="Model" aria-busy={Boolean(loading || applying)}>
-              {loading ? <p className="picker-empty" role="status">Loading {agentName} models…</p> : !visible.length ? <p className="picker-empty">{query ? `No models match “${query}”.` : agentId === "harness" ? "No models yet. Add a provider key to see its models." : "No models available. Rescan agents to try again."}</p> : null}
+              {loading ? <p className="picker-empty" role="status">Loading {sourceName} models…</p> : !visible.length ? <p className="picker-empty">{query ? `No models match “${query}”.` : agentId === "harness" ? "No models yet. Add a provider key to see its models." : "No models available. Rescan agents to try again."}</p> : null}
               {visible.map((model, index) => {
                 const price = costParts(model.cost);
                 const contributor = CONTRIBUTOR.test(model.modelId);

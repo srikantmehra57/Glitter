@@ -12,7 +12,7 @@ import { cachedProbe, rememberProbe } from "./probe-cache.js";
  * are ever spawned — detection never runs arbitrary paths.
  */
 /** `harness` is the app's own agent (see harness/host.ts): no binary, no ACP. */
-export type AgentId = "muse" | "opencode" | "grok" | "gemini" | "qwen" | "goose" | "harness";
+export type AgentId = "muse" | "opencode" | "grok" | "gemini" | "qwen" | "goose" | "cline" | "harness";
 
 export type AgentSpec = {
   id: Exclude<AgentId, "harness">;
@@ -47,6 +47,7 @@ export const AGENTS: AgentSpec[] = [
   { id: "gemini", name: "Gemini CLI", protocol: "acp", bins: ["gemini"], acpArgs: ["--experimental-acp"], verified: false, signIn: "Run `gemini` once in a terminal to sign in." },
   { id: "qwen", name: "Qwen Code", protocol: "acp", bins: ["qwen"], acpArgs: ["--experimental-acp"], verified: false, signIn: "Run `qwen` once in a terminal to sign in." },
   { id: "goose", name: "Goose", protocol: "acp", bins: ["goose"], acpArgs: ["acp"], verified: false, signIn: "Run `goose configure` in a terminal." },
+  { id: "cline", name: "Cline CLI", protocol: "acp", bins: ["cline"], acpArgs: ["--acp"], verified: false, signIn: "Run `cline auth` in a terminal, then Rescan." },
 ];
 
 export function agentSpec(id: string): AgentSpec {

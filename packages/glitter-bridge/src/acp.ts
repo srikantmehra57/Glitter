@@ -207,6 +207,16 @@ function modelBare(modelId: string) {
   return modelId.includes("/") ? modelId.slice(modelId.indexOf("/") + 1) : modelId;
 }
 
+/**
+ * The option that lists the models. Cline offers a provider picker under the
+ * `model` category beside the model list itself, so the option named `model`
+ * wins and the category is only the fallback for agents that name it
+ * differently.
+ */
+export function modelOption(config: AcpConfigOption[]): AcpConfigOption | undefined {
+  return config.find((item) => item.id === "model") ?? config.find((item) => item.category === "model");
+}
+
 function modelOk(modelId: string, blocked: Set<string>) {
   const bare = modelBare(modelId);
   return !zenFreeModel(modelId) && !blocked.has(modelId) && !blocked.has(bare);
@@ -423,7 +433,7 @@ export class AcpAgentHost {
   }
 
   private modelsFromConfig(config: AcpConfigOption[]): AcpModel[] {
-    const option = config.find((item) => item.category === "model" || item.id === "model");
+    const option = modelOption(config);
     const effort = config.find((item) => item.category === "thought_level");
     const efforts = effort?.options?.map((item) => tierOf(item.value)).filter((tier): tier is string => Boolean(tier));
     return (option?.options ?? []).filter((item) => typeof item.value === "string" && item.value.length > 0).map((item) => {
@@ -535,7 +545,7 @@ export class AcpAgentHost {
       const conn = this.conn;
       const probe = this.probe;
       if (!conn || !probe) return null;
-      const model = probe.config.find((item) => item.category === "model");
+      const model = modelOption(probe.config);
       if (!model) return null;
       const result = await conn.request<Json>("session/set_config_option", { sessionId: probe.sessionId, configId: model.id, value: modelId }, 15000);
       if (Array.isArray(result?.configOptions)) probe.config = result.configOptions as AcpConfigOption[];
@@ -586,7 +596,7 @@ export class AcpAgentHost {
     const session = this.sessions.get(sessionId);
     const pick = (category: string) => session?.config.find((item) => item.category === category);
     return {
-      modelId: pick("model")?.currentValue,
+      modelId: modelOption(session?.config ?? [])?.currentValue,
       effort: tierOf(pick("thought_level")?.currentValue ?? "") ?? undefined,
       mode: pick("mode")?.currentValue,
       modes: pick("mode")?.options ?? [],
@@ -655,7 +665,7 @@ export class AcpAgentHost {
 
   async setModel(options: { sessionId: string; modelId: string }) {
     const session = this.sessions.get(options.sessionId);
-    const option = session?.config.find((item) => item.category === "model");
+    const option = modelOption(session?.config ?? []);
     if (option) return this.setOption(options.sessionId, option.id, options.modelId);
     await this.requireConn().request("session/set_model", { sessionId: options.sessionId, modelId: options.modelId }, 30000);
     return { status: "accepted" };

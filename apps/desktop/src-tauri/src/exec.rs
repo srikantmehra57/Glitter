@@ -250,6 +250,12 @@ pub const AGENTS: &[AgentSpec] = &[
         bins: &["goose"],
         dirs: &[],
     },
+    AgentSpec {
+        id: "cline",
+        name: "Cline CLI",
+        bins: &["cline"],
+        dirs: &[],
+    },
 ];
 
 pub fn agent_spec(id: &str) -> Option<&'static AgentSpec> {

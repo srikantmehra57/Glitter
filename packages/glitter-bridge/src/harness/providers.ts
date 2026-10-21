@@ -27,6 +27,7 @@ export const PROVIDERS: ProviderSpec[] = [
   { id: "openai", name: "OpenAI", wire: "openai", baseUrl: "https://api.openai.com/v1" },
   { id: "google", name: "Google Gemini", wire: "openai", baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai" },
   { id: "openrouter", name: "OpenRouter", wire: "openai", baseUrl: "https://openrouter.ai/api/v1" },
+  { id: "cline", name: "Cline API", wire: "openai", baseUrl: "https://api.cline.bot/api/v1" },
   { id: "xai", name: "xAI", wire: "openai", baseUrl: "https://api.x.ai/v1" },
   { id: "deepseek", name: "DeepSeek", wire: "openai", baseUrl: "https://api.deepseek.com/v1" },
   { id: "groq", name: "Groq", wire: "openai", baseUrl: "https://api.groq.com/openai/v1" },
@@ -93,6 +94,9 @@ export function effortTiers(providerId: string, model: string): Tier[] {
   if (providerId === "openrouter") {
     return /(^|\/)(o\d|gpt-5)|claude-(3-7|sonnet-4|opus-4|[a-z]+-[4-9])|gemini-(2\.5|[3-9])|deepseek-r1|grok-3-mini|qwq|reasoning|thinking/.test(id) ? ["low", "medium", "high"] : [];
   }
+  // Cline's API documents no reasoning-effort parameter. Sending one it does
+  // not accept would fail the call, so its models show no effort picker.
+  if (providerId === "cline") return [];
   return [];
 }
 

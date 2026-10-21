@@ -67,6 +67,16 @@ describe("UsageView", () => {
     expect(confirm).toHaveBeenCalledWith(expect.objectContaining({ title: "Clear usage history?", danger: true }));
   });
 
+  it("hides the Muse subscription card when Muse is installed but turned off", () => {
+    seed({
+      agents: [{ id: "muse", name: "Muse", protocol: "msp", found: true, path: "/bin/muse", version: "1.3.0", verified: true, signIn: "", authenticated: true }],
+      enabledAgents: { muse: false },
+    });
+    render(<UsageView embedded />);
+    expect(screen.queryByRole("region", { name: "Muse subscription" })).toBeNull();
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
   it("hides the Muse subscription card unless Muse is installed", () => {
     seed();
     render(<UsageView embedded />);

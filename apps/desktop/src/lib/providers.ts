@@ -24,6 +24,7 @@ export const PROVIDERS: ProviderEntry[] = [
   { id: "openai", name: "OpenAI", detail: "GPT and reasoning models.", placeholder: "sk-…", keyUrl: "https://platform.openai.com/api-keys" },
   { id: "google", name: "Google Gemini", detail: "Gemini models, with a key from Google AI Studio.", placeholder: "AIza…", keyUrl: "https://aistudio.google.com/apikey" },
   { id: "openrouter", name: "OpenRouter", detail: "Hundreds of models from many labs behind one key.", placeholder: "sk-or-…", keyUrl: "https://openrouter.ai/settings/keys" },
+  { id: "cline", name: "Cline API", detail: "Anthropic, OpenAI, Google and more behind one Cline key.", placeholder: "sk-…", keyUrl: "https://app.cline.bot/dashboard/account" },
   { id: "xai", name: "xAI", detail: "Grok models through the xAI API.", placeholder: "xai-…", keyUrl: "https://console.x.ai/" },
   { id: "deepseek", name: "DeepSeek", detail: "DeepSeek chat and reasoner models.", placeholder: "sk-…", keyUrl: "https://platform.deepseek.com/api_keys" },
   { id: "groq", name: "Groq", detail: "Open models on fast inference hardware.", placeholder: "gsk_…", keyUrl: "https://console.groq.com/keys" },

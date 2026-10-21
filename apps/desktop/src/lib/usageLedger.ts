@@ -187,6 +187,31 @@ export function asLedger(raw: unknown): UsageLedger {
   return { version: 1, turns, days };
 }
 
+/**
+ * Tokens and turns whose time falls in `[from, now]`. Day totals count when
+ * their calendar day does, so a rolled-up day is not missed before midday.
+ */
+export function totalsSince(ledger: UsageLedger, from: number, now = Date.now()): { tokens: number; turns: number; estimated: boolean } {
+  const startDay = dayKey(from);
+  const endDay = dayKey(now);
+  let tokens = 0;
+  let turns = 0;
+  let estimated = false;
+  for (const turn of ledger.turns) {
+    if (turn.at < from || turn.at > now) continue;
+    tokens += turn.inputTokens + turn.outputTokens;
+    turns += 1;
+    estimated = estimated || turn.estimated;
+  }
+  for (const day of ledger.days) {
+    if (day.day < startDay || day.day > endDay) continue;
+    tokens += day.inputTokens + day.outputTokens;
+    turns += day.turns;
+    estimated = estimated || day.estimatedTurns > 0;
+  }
+  return { tokens, turns, estimated };
+}
+
 /** One countable slice for the Usage view: a recent turn, or an older day's total. */
 export type UsageSlice = {
   at: number;

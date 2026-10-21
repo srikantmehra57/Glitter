@@ -142,8 +142,11 @@ document.querySelectorAll("[data-split]").forEach((el) => {
     return n;
   };
   svg.append(el("ellipse", { class: "orbit-ellipse", cx: 50, cy: 50, rx: 41, ry: 40 }));
+  // One agent per slice of the ring: the step follows the node count.
+  const step = nodes.length ? 360 / nodes.length : 60;
+  document.querySelector(".orbit-nodes")?.style.setProperty("--orbit-step", `${step}deg`);
   nodes.forEach((node, i) => {
-    const a = ((Number(getComputedStyle(node).getPropertyValue("--a")) * 60 - 90) * Math.PI) / 180;
+    const a = ((Number(getComputedStyle(node).getPropertyValue("--a")) * step - 90) * Math.PI) / 180;
     const x = 50 + Math.cos(a) * 41;
     const y = 50 + Math.sin(a) * 40;
     const d = `M50 50 L${x.toFixed(2)} ${y.toFixed(2)}`;
