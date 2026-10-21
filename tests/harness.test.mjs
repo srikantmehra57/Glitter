@@ -1261,4 +1261,62 @@ test('ask_user refuses malformed questions and a second ask in one reply, and is
   assert.equal(headless.instance.registry.snapshot({ sessionId: opened.sessionId, turnId: 't', workspaceRoot: root, mode: 'build' }).tools.has('ask_user'), false);
 });
 
+const plan = '1. Add `db.ts`.\n2. Wire it in `app.ts`.';
+const toolNames = (body) => body.tools.map((tool) => tool.name);
+
+test('Plan mode ends with a plan review, and approval turns it off before the next turn', async () => {
+  const root = await workspace();
+  const { calls, fetchImpl } = anthropicStub([
+    () => toolReply('p1', 'exit_plan_mode', { plan }),
+    () => toolReply('w1', 'write_file', { path: 'db.ts', content: 'export {};\n' }),
+    () => textReply('Built.'),
+  ]);
+  const { instance, events } = host(fetchImpl, new SessionStore(await mkdtemp(join(temporary, 'store-'))));
+  const { sessionId } = await instance.startSession({ workspaceRoot: root, mode: 'plan', approvalMode: 'onRequest' });
+  await instance.sendTurn({ sessionId, text: 'plan the data layer' });
+  await settled(events, 1);
+  assert.ok(toolNames(calls[0].body).includes('exit_plan_mode'), 'offered in Plan mode');
+  assert.match(calls[0].body.system.map((block) => block.text).join('\n'), /present it with exit_plan_mode/);
+  const request = events.find(({ event, payload }) => event === 'userInputs' && payload.requests.length).payload.requests[0];
+  assert.deepEqual(request.intent, { kind: 'planReview', plan });
+  assert.deepEqual(request.questions[0].options.map((option) => option.label), ['Approve', 'Keep planning'], 'a client without the review card still gets a named choice');
+  assert.equal(request.questions[0].options[0].preview.content, plan);
+  await instance.respondUserInput({ sessionId, userInputId: request.userInputId, response: { action: 'answer', answers: [{ questionId: 'q1', selectedLabel: 'Approve' }] } });
+  await settled(events, 2);
+  assert.equal(events.filter(({ event }) => event === 'agentConfig').at(-1).payload.config.mode, 'build', 'the app sees Build mode');
+  assert.equal(calls[1].body.messages.at(-1).content[0].content, 'The user approved the plan. Plan mode is now off: carry the plan out.');
+  assert.equal(toolNames(calls[1].body).includes('exit_plan_mode'), false, 'Build mode has no plan review to leave by');
+  assert.doesNotMatch(calls[1].body.system.map((block) => block.text).join('\n'), /PLAN MODE/);
+  assert.equal(await readFile(join(root, 'db.ts'), 'utf8'), 'export {};\n', 'the edit Plan mode would refuse now runs');
+});
+
+test('plan feedback is the user\'s own message, and keeping the plan costs no model call', async () => {
+  const root = await workspace();
+  const { calls, fetchImpl } = anthropicStub([
+    () => toolReply('p1', 'exit_plan_mode', { plan }),
+    () => toolReply('p2', 'exit_plan_mode', { plan: `${plan}\n3. Add tests.` }),
+    () => textReply('Noted.'),
+  ]);
+  const { instance, events } = host(fetchImpl, new SessionStore(await mkdtemp(join(temporary, 'store-'))));
+  const { sessionId } = await instance.startSession({ workspaceRoot: root, mode: 'plan' });
+  await instance.sendTurn({ sessionId, text: 'plan it' });
+  await settled(events, 1);
+  const pending = () => events.filter(({ event, payload }) => event === 'userInputs' && payload.requests.length).at(-1).payload.requests[0];
+  await assert.rejects(instance.respondUserInput({ sessionId, userInputId: pending().userInputId, response: { action: 'answer', answers: [{ questionId: 'q1', selectedLabel: 'Ship it' }] } }), /Choose Approve or Keep planning/);
+  await instance.respondUserInput({ sessionId, userInputId: pending().userInputId, response: { action: 'clarify', text: 'Add tests first.' } });
+  await settled(events, 2);
+  const sent = calls[1].body.messages.at(-1).content;
+  assert.match(sent[0].content, /did not approve the plan\. Their feedback follows/);
+  assert.equal(sent.at(-1).text, 'Add tests first.', 'the feedback reaches the model as the user\'s message');
+  assert.ok(events.some(({ event, payload }) => event === 'item' && payload.item.kind === 'userMessage' && payload.item.text === 'Add tests first.'), 'and the transcript shows it');
+  assert.ok(toolNames(calls[1].body).includes('exit_plan_mode'), 'still in Plan mode');
+  const before = calls.length;
+  await instance.respondUserInput({ sessionId, userInputId: pending().userInputId, response: { action: 'answer', answers: [{ questionId: 'q1', selectedLabel: 'Keep planning' }] } });
+  assert.equal(calls.length, before, 'keeping the plan starts no turn');
+  assert.equal(events.filter(({ event }) => event === 'turnStarted').length, 1);
+  await instance.sendTurn({ sessionId, text: 'ok, later' });
+  await settled(events, 3);
+  assert.match(calls.at(-1).body.messages.at(-1).content[0].content, /is staying in Plan mode/, 'the kept review stays in the history ahead of the next message');
+});
+
 test.after(async () => { await rm(temporary, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });

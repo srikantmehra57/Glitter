@@ -9,7 +9,7 @@ import { decide, type ApprovalMode, type Verdict } from "./permission/policy.js"
 import { TIERS, configuredProviders, effortTiers, providerSpec, resolveProvider, splitModelId, type ProviderCredentials, type ResolvedProvider } from "./providers.js";
 import { ExtensionRegistry, type HookEvents, type HookFailure, type HookName, type TurnContributions } from "./registry.js";
 import type { UserInputResponse } from "../protocol.js";
-import { ASK_USER_TOOL, questionRequest, settlement, type PendingQuestion, type Question } from "./questions.js";
+import { ASK_USER_TOOL, EXIT_PLAN_TOOL, questionRequest, settlement, type Asked, type PendingQuestion } from "./questions.js";
 import { discoverSkills, expandInvocation, skillsExtension } from "./skills.js";
 import { SessionStore, type SessionMeta } from "./store.js";
 import { BUILTIN_EXTENSION, canonicalize, executeTool, executionMode, prepareTool, repeatReminder, scheduleToolCalls, type PresentationMeta, type ToolKind } from "./tools.js";
@@ -140,7 +140,7 @@ type Live = {
 };
 
 /** One call's result. A call that asks the user also carries its questions and its transcript item. */
-type CallResult = { id: string; name: string; output: string; isError?: boolean; question?: Question[]; item?: Json };
+type CallResult = { id: string; name: string; output: string; isError?: boolean; question?: Asked; item?: Json };
 
 type HostLimits = {
   idleMs?: number;
@@ -170,8 +170,12 @@ export class HarnessHost {
     this.emit = emit;
     this.registry.register(BUILTIN_EXTENSION);
     this.registry.register(skillsExtension(this.homeDir));
-    // With no one to answer, the model is not offered a way to ask.
-    if (this.limits.approvalChannel !== false) this.registry.register({ id: "questions", tools: [ASK_USER_TOOL] });
+    // With no one to answer, the model is not offered a way to ask, nor a plan review to leave Plan mode by.
+    if (this.limits.approvalChannel !== false) this.registry.register({
+      id: "questions",
+      tools: [ASK_USER_TOOL, (context) => (context.mode === "plan" ? EXIT_PLAN_TOOL : undefined)],
+      prompt: [{ placement: "volatile", text: (context) => (context.mode === "plan" ? "When the plan is ready, present it with exit_plan_mode. Build mode starts only when the user approves it there." : undefined) }],
+    });
   }
 
   /** The native shell injects the keychain's provider keys into every harness request. */
@@ -991,7 +995,8 @@ export class HarnessHost {
       toolName: ask.name,
       itemId: String(ask.item?.itemId ?? ""),
       item: ask.item ?? {},
-      questions: ask.question ?? [],
+      questions: ask.question?.questions ?? [],
+      ...(ask.question?.intent ? { intent: ask.question.intent } : {}),
       results: results.map(({ id, name, output, isError }) => ({ id, name, output, ...(isError ? { isError } : {}) })),
     };
     live.question = pending;
@@ -1005,7 +1010,7 @@ export class HarnessHost {
    */
   private async settleQuestion(live: Live, response: UserInputResponse | { action: "superseded" }) {
     const pending = live.question;
-    if (!pending) return;
+    if (!pending) return undefined;
     const settled = settlement(pending, response);
     const message: ChatMessage = { role: "tool", results: pending.results.map((result) => (result.id === pending.callId ? { id: result.id, name: result.name, output: settled.output } : result)) };
     live.question = undefined;
@@ -1013,6 +1018,7 @@ export class HarnessHost {
     await this.store.append(live.meta.sessionId, [{ type: "message", message }, { type: "questionSettled", userInputId: pending.userInputId }]);
     this.emitItem(live, { ...pending.item, status: "completed", visibleOutput: settled.summary }, true);
     this.emit("userInputs", { sessionId: live.meta.sessionId, requests: [] });
+    return settled;
   }
 
   /** The user settled the question the last turn ended with: record it, then continue in a new turn. */
@@ -1022,14 +1028,32 @@ export class HarnessHost {
     if (live.prompting) throw new Error(`${HARNESS_NAME} is still working. Answer when the turn ends.`);
     // Claimed before the first await, so a message sent meanwhile queues behind this turn.
     live.prompting = true;
+    let turnId: string | undefined;
     try {
-      await this.settleQuestion(live, options.response);
+      const settled = await this.settleQuestion(live, options.response);
+      // An approved plan leaves Plan mode before the next turn's snapshot, so edits are allowed in it.
+      if (settled?.leavePlanMode) await this.changed(live, { mode: "build" });
+      if (settled?.continueTurn) {
+        turnId = this.mintTurnId();
+        live.turnId = turnId;
+        // Plan feedback is the user's own message: it goes in as one, and the transcript shows it.
+        if (settled.feedback) {
+          const message: ChatMessage = { role: "user", content: this.userContent(settled.feedback) };
+          live.messages.push(message);
+          await this.store.append(live.meta.sessionId, [{ type: "message", message }]);
+          this.emitItem(live, { itemId: `${turnId}:user`, kind: "userMessage", status: "completed", text: settled.feedback, turnId }, true);
+        }
+      }
     } catch (error) {
       live.prompting = false;
       throw error;
     }
-    const turnId = this.mintTurnId();
-    live.turnId = turnId;
+    if (!turnId) {
+      // A plan kept without feedback waits for the user's next message, and costs no model call.
+      live.prompting = false;
+      this.pump(live);
+      return { status: "accepted" as const, userInputId: options.userInputId };
+    }
     this.resetRepeat(live);
     this.emit("turnStarted", { sessionId: live.meta.sessionId, turnId, cause: "userInput" });
     void this.runTurn(live, turnId);

@@ -815,3 +815,22 @@ must respect. Don't log routine changes here; they belong in git history and
   `turnStarted` and `cause: "userInput"`. The card is the existing
   `UserInputCard`: answers, "Let me explain" and "Decline to answer" map onto
   the same response shape Muse uses.
+
+### Plan mode ends with a plan review
+
+- **Date:** 2026-10-21
+- **Decision:** In Plan mode the harness offers `exit_plan_mode`, and leaving
+  Plan mode is the user's approval of the plan, not a mode toggle the model can
+  flip. The review is a turn-ending question (see "A Harness question ends the
+  turn") with a `planReview` intent, so it is durable and cannot wedge a turn.
+  The verdict is read from a named answer, `Approve`, never from a position.
+- **Outcomes:** Approve switches the thread to Build before the next turn
+  starts, and that turn carries the plan out. Feedback goes in as the user's own
+  message, so the model revises the plan as it would answer any message, and
+  the transcript shows what the user wrote. Keep planning ends the review
+  without starting a turn.
+- **App contract:** A `userInputs` request may carry `intent: { kind:
+  "planReview", plan }`. The app shows `PlanReviewCard` for it; any other client
+  sees one ordinary question with the plan as the Approve option's preview.
+- **Not done:** The model cannot enter Plan mode on its own, and Plan mode has
+  no exception for writing a plan file; the plan travels in the tool call.

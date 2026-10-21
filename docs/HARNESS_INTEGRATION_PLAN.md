@@ -323,9 +323,10 @@ read-only; a guard denial survives a policy listener that says allow.
 
 ## Phase 5 — App parity
 
-**Status: in progress.** 5.1 and 5.2 are done (2026-10-21, with the DECISIONS
-entries "Harness skills are folders it discovers each turn" and "A Harness
-question ends the turn"); 5.3–5.5 are not started.
+**Status: in progress.** 5.1, 5.2 and 5.3 are done (2026-10-21, with the
+DECISIONS entries "Harness skills are folders it discovers each turn", "A
+Harness question ends the turn" and "Plan mode ends with a plan review");
+5.4 and 5.5 are not started.
 
 - [x] 5.1 `harness/skills.ts`: a skill is a folder with a `SKILL.md` whose
       frontmatter has `name` (the folder name when missing) and
@@ -354,6 +355,18 @@ question ends the turn"); 5.3–5.5 are not started.
       question survives a restart and reopens with the thread. Only the first
       ask in a reply stands; with no approval channel the tool is not offered.
       The card is the existing `UserInputCard`; no new UI.
+- [x] 5.3 `exit_plan_mode`, offered only in Plan-mode turns (a per-turn
+      factory, with a volatile prompt line telling the model to use it), is a
+      5.2 question with a `planReview` intent. Its one question names its
+      answers, `Approve` and `Keep planning`, with the plan as the Approve
+      option's preview, so a client without the review card still works. The
+      app's `PlanReviewCard` shows the plan as Markdown with Approve and
+      build, Send feedback and Keep planning. Approve switches the thread to
+      Build (an `agentConfig` event) before the next turn's snapshot, so the
+      next turn has edit tools and no plan review. Feedback becomes a real user
+      message, in the history and the transcript, and the model revises in
+      Plan mode. Keep planning, or declining, settles the call and starts no
+      turn: no model request is spent on a dismissed review.
 
 **Goal.** Give the harness the features the app already gives Muse.
 

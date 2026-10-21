@@ -1886,6 +1886,10 @@ button.attachment:hover { background: var(--surface-3); color: var(--ink); }
 .question-option input { width: auto; margin-top: 3px; flex-shrink: 0; accent-color: var(--accent); }
 .question-option small { display: block; color: var(--tertiary); }
 .question-option pre { white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--font-mono); font-size: 11.5px; }
+/* The plan scrolls inside the card, so the decision stays in view above the composer. */
+.plan-review .approval-icon { background: var(--accent-soft); color: var(--accent-text); }
+.plan-review-body { max-height: min(46vh, 420px); overflow: auto; margin: 0 0 12px; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); }
+.plan-review .approval-feedback { margin: 0 0 12px; }
 .user-input textarea { width: 100%; border: 1px solid var(--border); background: var(--well); border-radius: var(--r-md); padding: 10px; resize: vertical; outline: none; }
 .user-input textarea:focus { border-color: color-mix(in oklab, var(--accent) 70%, transparent); }
 

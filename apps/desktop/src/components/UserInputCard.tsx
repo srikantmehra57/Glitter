@@ -1,26 +1,16 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import { useAppStore } from "../lib/store";
 import type { UserInputAnswer, UserInputRequest, UserInputResponse } from "../lib/types";
 
 type AnswerDraft = { text?: string; labels?: string[]; freeText?: boolean };
 
-export function UserInputCard({ request, disabled, closing = false, agentName = "Muse" }: { request: UserInputRequest; disabled: boolean; closing?: boolean; agentName?: string }) {
-  const respond = useAppStore((state) => state.respondUserInput);
-  const [drafts, setDrafts] = useState<Record<string, AnswerDraft>>({});
-  const [clarifying, setClarifying] = useState(false);
-  const [clarification, setClarification] = useState("");
-  const [error, setError] = useState("");
-  const card = useRef<HTMLElement>(null);
+/**
+ * Waiting state contract: a question card takes focus when it appears and hands
+ * it back to whatever had it when the request leaves. Focus that already lives
+ * inside the card, or moved away on purpose, is left alone.
+ */
+export function useWaitingFocus(card: RefObject<HTMLElement | null>, requestId: string, closing: boolean) {
   const opener = useRef<HTMLElement | null>(null);
-  const titleId = useId();
-  const edit = (id: string, patch: AnswerDraft) => setDrafts((current) => ({ ...current, [id]: { ...current[id], ...patch } }));
-  const send = (response: UserInputResponse) => {
-    setError("");
-    void respond(request.sessionId, request.userInputId, response);
-  };
-  // Waiting state contract: the card takes focus when it appears and hands it
-  // back to whatever had it when the request leaves. Focus that already lives
-  // inside the card, or moved away on purpose, is left alone.
   const giveBack = (node: HTMLElement | null) => {
     const active = document.activeElement;
     const stranded = active === document.body || !active?.isConnected || (node && active instanceof HTMLElement && node.contains(active));
@@ -37,9 +27,33 @@ export function UserInputCard({ request, disabled, closing = false, agentName = 
     }
     return () => giveBack(node);
     // Each card mounts once per request id (the parent keys them); the exit is
-    // driven by the `closing` prop below.
-  }, [request.userInputId]);
+    // driven by the `closing` flag below.
+  }, [requestId]);
   useEffect(() => { if (closing) giveBack(card.current); }, [closing]);
+}
+
+/** Esc inside a field belongs to the field: it must not bubble to the window handler that reads it as "stop the turn". */
+export function keepFieldEscape(event: KeyboardEvent<HTMLElement>) {
+  if (event.key === "Escape" && event.target !== event.currentTarget) {
+    const target = event.target as HTMLElement;
+    if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target.isContentEditable) event.stopPropagation();
+  }
+}
+
+export function UserInputCard({ request, disabled, closing = false, agentName = "Muse" }: { request: UserInputRequest; disabled: boolean; closing?: boolean; agentName?: string }) {
+  const respond = useAppStore((state) => state.respondUserInput);
+  const [drafts, setDrafts] = useState<Record<string, AnswerDraft>>({});
+  const [clarifying, setClarifying] = useState(false);
+  const [clarification, setClarification] = useState("");
+  const [error, setError] = useState("");
+  const card = useRef<HTMLElement>(null);
+  const titleId = useId();
+  const edit = (id: string, patch: AnswerDraft) => setDrafts((current) => ({ ...current, [id]: { ...current[id], ...patch } }));
+  const send = (response: UserInputResponse) => {
+    setError("");
+    void respond(request.sessionId, request.userInputId, response);
+  };
+  useWaitingFocus(card, request.userInputId, closing);
   const submit = () => {
     const answers: UserInputAnswer[] = [];
     for (const question of request.questions) {
@@ -62,14 +76,7 @@ export function UserInputCard({ request, disabled, closing = false, agentName = 
     send({ action: "answer", answers });
   };
   return <section ref={card} className={`approval user-input${closing ? " closing" : ""}`} role="alertdialog" aria-labelledby={titleId} tabIndex={-1}
-    onKeyDown={(event) => {
-      // Esc inside a field belongs to the field — it must not bubble to the
-      // window handler that reads it as "stop the turn".
-      if (event.key === "Escape" && event.target !== event.currentTarget) {
-        const target = event.target as HTMLElement;
-        if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target.isContentEditable) event.stopPropagation();
-      }
-    }}>
+    onKeyDown={keepFieldEscape}>
     <h3 id={titleId}>{agentName} needs your input</h3>
     <fieldset disabled={disabled || closing} className="settings-fields">
       {clarifying ? <label className="field">Explain what {agentName} should consider instead

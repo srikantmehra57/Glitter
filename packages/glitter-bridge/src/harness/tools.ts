@@ -4,7 +4,8 @@ import { chmod, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promis
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { spawnIsolated, terminateTree } from "../isolation.js";
 import type { Subject } from "./permission/grants.js";
-import type { Question } from "./questions.js";
+import type { UserInputIntent } from "../protocol.js";
+import type { Asked, Question } from "./questions.js";
 import { dangerGuard } from "./permission/guards.js";
 import type { Extension } from "./registry.js";
 import type { ToolSchema } from "./wire.js";
@@ -28,7 +29,7 @@ export type ToolValue =
   | { kind: "terminal"; command: string; stdout: string; exitCode: number; note?: string }
   | { kind: "plan"; plan: Array<{ content: string; status: string }> }
   /** Questions for the user: the call waits for their answer, which ends the turn. */
-  | { kind: "question"; questions: Question[] }
+  | { kind: "question"; questions: Question[]; intent?: UserInputIntent }
   | { kind: "error"; message: string };
 
 /** Replayable card state. Pure: no I/O, no clock, no session. */
@@ -74,7 +75,7 @@ export type ToolOutcome = {
   command?: string;
   plan?: Array<{ content: string; status: string }>;
   /** Set when the call asks the user: the host ends the turn and completes the call from the answer. */
-  question?: Question[];
+  question?: Asked;
   continuation?: Continuation;
 };
 
@@ -769,7 +770,7 @@ function pack(produced: { value: ToolValue; continuation?: Continuation }): Tool
     outcome.command = value.command;
     if (value.exitCode !== 0) outcome.isError = true;
   } else if (value.kind === "plan") outcome.plan = value.plan;
-  else if (value.kind === "question") outcome.question = value.questions;
+  else if (value.kind === "question") outcome.question = { questions: value.questions, ...(value.intent ? { intent: value.intent } : {}) };
   else if (value.kind !== "error") outcome.path = value.path;
   return outcome;
 }

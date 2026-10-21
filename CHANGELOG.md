@@ -21,6 +21,9 @@ licence terms.
   commands under the OS sandbox, follows the permission modes and Plan mode,
   asks through the usual approval cards, and keeps its threads on this Mac.
   Keys stay in the keychain and are sent only to their provider.
+- Plan mode ends with your approval. When Harness has a plan, it shows it in
+  a review card: Approve and build turns Plan mode off and carries it out, Send
+  feedback keeps planning with your notes, and Keep planning closes the review.
 - Harness can ask you questions. When it needs your decision it shows a
   question card with the likely answers and stops; your answer, an explanation
   or a decline lets it continue. An open question stays after a restart, and

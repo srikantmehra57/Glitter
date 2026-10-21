@@ -3,6 +3,7 @@ import { useShallow } from "zustand/react/shallow";
 import { currentThread, useAppStore } from "../lib/store";
 import { EXIT_MS, motionReduced } from "../lib/presence";
 import { AGENT_LABELS, type UserInputRequest } from "../lib/types";
+import { PlanReviewCard } from "./PlanReviewCard";
 import { UserInputCard } from "./UserInputCard";
 
 const keyOf = (request: UserInputRequest) => `${request.sessionId}:${request.userInputId}`;
@@ -40,16 +41,21 @@ export function UserInputCards() {
   }, [live]);
   const exiting = [...leaving.values()].filter((request) => !live.has(keyOf(request)));
   return <>
-    {[...live.values()].map((request) => <UserInputCard
+    {[...live.values()].map((request) => <Card
       key={keyOf(request)} request={request}
       agentName={agentName}
       disabled={disabled}
     />)}
-    {exiting.map((request) => <UserInputCard
+    {exiting.map((request) => <Card
       key={keyOf(request)} request={request}
       agentName={agentName}
       disabled
       closing
     />)}
   </>;
+}
+
+/** A plan review gets its own card; every other request is a set of questions. */
+function Card(props: { request: UserInputRequest; agentName: string; disabled: boolean; closing?: boolean }) {
+  return props.request.intent?.kind === "planReview" ? <PlanReviewCard {...props} /> : <UserInputCard {...props} />;
 }
