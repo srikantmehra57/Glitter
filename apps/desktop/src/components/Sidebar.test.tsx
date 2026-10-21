@@ -211,11 +211,11 @@ describe("Sidebar", () => {
     expect(useAppStore.getState().settingsTab).toBe("Theme");
   });
 
-  it("keeps Extensions, Usage and Settings out of the sidebar's rows; the account menu still opens Settings", async () => {
+  it("keeps New thread, Extensions, Usage and Settings out of the sidebar's rows; the account menu still opens Settings", async () => {
     seed([]);
     render(<Sidebar />);
-    const primary = screen.getByRole("navigation", { name: "Primary" });
-    expect(within(primary).getAllByRole("button").map((button) => button.textContent)).toEqual([expect.stringContaining("New thread")]);
+    // New threads start from each workspace's row, so outside preview there is no primary nav at all.
+    expect(screen.queryByRole("navigation", { name: "Primary" })).not.toBeInTheDocument();
     for (const name of ["Extensions", "Usage", "Settings"]) expect(screen.queryByRole("button", { name })).not.toBeInTheDocument();
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: /Account menu/ }));

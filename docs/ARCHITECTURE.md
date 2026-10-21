@@ -134,7 +134,7 @@ this for UI work without Rust or a CLI. The website's screenshot script
   (`AgentTimeline`, `Composer`, `ApprovalCard`, `UserInputCards`), `ReviewDock`
   (`TaskMonitor`), `SettingsModal` (lazy; it loads `ExtensionsView`, `UsageView`
   and `LoginPanel`). The rest are pickers, dialogs and visuals (`Orb`,
-  `EffortRipple`, `EffortSlider`).
+  `ModelPicker`, `EffortPicker`).
 - `lib/store.ts`: the single store, with all actions and the bridge event
   binding.
 - `lib/bridge.ts`: every `invoke` call and the preview mock fallback.

@@ -7,7 +7,6 @@ import { defaultTier, isPeak, modelFor, tiersFor } from "./lib/effort";
 import { sidebarWidthFor, subscribeResize } from "./lib/reviewLayout";
 import { CommandPalette } from "./components/CommandPalette";
 import { ConfirmDialog } from "./components/ConfirmDialog";
-import { EffortRipple } from "./components/EffortRipple";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { ImageViewer } from "./components/ImageViewer";
 import { Onboarding } from "./components/Onboarding";
@@ -261,7 +260,6 @@ export default function App() {
         <Onboarding />
         <Presence open={paletteOpen}><CommandPalette /></Presence>
         <ImageViewer />
-        <EffortRipple />
       </div>
     </ErrorBoundary>
   );

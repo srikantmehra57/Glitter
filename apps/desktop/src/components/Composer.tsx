@@ -11,7 +11,7 @@ import { acceptsBusySend, activeAgentId, activeConfig, currentThread, currentWor
 import { runBuiltinCommand } from "../lib/commands";
 import { estimateCost, formatCost } from "../lib/cost";
 import { ModelPicker, modelKey } from "./ModelPicker";
-import { EffortMeter } from "./EffortMeter";
+import { EffortPicker } from "./EffortPicker";
 import { SelectMenu } from "./SelectMenu";
 import { availableBuiltins, collectCandidates, customCommandInsert, continuationForEnter, currentWord, filterSlashCommands, findUniqueCompletion, indentText, isStopWord, outdentText, parseShellEscape, slashQuery } from "../lib/composerText";
 import { MAX_DROP_FILES, isImageFile, refPathForDrop } from "../lib/drop";
@@ -765,7 +765,7 @@ function ComposerView({ above }: { above?: ReactNode }) {
             />
             {/* Effort is its own control, beside the model it applies to. */}
             {model && tiers.length && fallbackTier && !(s.modelsLoading && s.modelsAgentId !== agentId) ? (
-              <EffortMeter
+              <EffortPicker
                 key={`${agentId}:${modelValue ?? ""}`}
                 value={config.effort}
                 tiers={tiers}

@@ -328,9 +328,9 @@ describe("built-in slash commands", () => {
     render(<Composer />);
     const box = screen.getByRole("combobox");
     await user.type(box, "/effort{Enter}");
-    await vi.waitFor(() => expect(screen.getByRole("radio", { checked: true })).toHaveFocus());
+    await vi.waitFor(() => expect(screen.getByRole("option", { selected: true })).toHaveFocus());
     expect(useAppStore.getState().composer).toBe("");
-    expect(screen.getByRole("dialog", { name: "Reasoning effort" })).toBeInTheDocument();
+    expect(screen.getByRole("listbox", { name: /^Reasoning effort/ })).toBeInTheDocument();
   });
 
   it("act at once, send nothing and leave the rest of the draft alone", async () => {

@@ -294,7 +294,7 @@ async function shootSurfaces(browser, theme) {
   await page.waitForTimeout(300);
 
   // A new thread: the welcome art, the starting points and where the thread works.
-  await page.locator(".sidebar button.new-thread").click();
+  await page.locator(".sidebar .workspace-row.active button[aria-label^=\"New thread in\"]").click();
   await page.waitForSelector(".welcome-card", { timeout: 5000 });
   await page.waitForTimeout(500);
   await snap(page, `welcome-${theme}.png`);

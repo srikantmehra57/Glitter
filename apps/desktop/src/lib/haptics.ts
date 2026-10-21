@@ -22,22 +22,3 @@ export function haptic(kind: HapticKind) {
   }
   try { navigator.vibrate?.(VIBRATE[kind]); } catch { /* unsupported */ }
 }
-
-/** A rolling rumble: a heavy hit followed by decaying ticks. */
-export function rumble() {
-  haptic("thump");
-  [70, 150, 240, 340].forEach((delay, index) => window.setTimeout(() => {
-    last = 0;
-    haptic(index < 2 ? "level" : "tick");
-  }, delay));
-}
-
-export type RippleVariant = "peak" | "calm";
-export type RippleOrigin = { x: number; y: number; variant?: RippleVariant };
-export const RIPPLE_EVENT = "muse:effort-ripple";
-
-/** Sends a warm peak or cool reset ripple across the window, with a matching rumble. */
-export function effortRipple(origin: RippleOrigin) {
-  window.dispatchEvent(new CustomEvent<RippleOrigin>(RIPPLE_EVENT, { detail: origin }));
-  rumble();
-}

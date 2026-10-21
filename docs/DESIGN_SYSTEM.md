@@ -119,7 +119,7 @@ No Google Fonts. No webfont download.
 Scale: 2, 4, 6, 8, 10, 12, 16, 20, 24, 32.
 
 - Sidebar row padding: 6×8
-- Conversation column: `min(720px, 100% - 40px)`
+- Conversation column: `min(860px, 100% - 40px)`
 - Inspector width: 360 default, user-resizable from 300 up to the smaller of 60% of the window or the space that leaves the thread 336
 - Title bar height: 52 (the window controls sit on its centre line; 50 in compact browser windows)
 
@@ -245,15 +245,17 @@ Attached to the thread, not a floating island. Enter sends, Shift+Enter newline.
 The writing area sits on `--surface`, above a fine divider and a quiet toolbar.
 Attach and mention share a group, separated from the run settings by a rule;
 context usage and Send form the trailing group. Max keeps the same composer
-surface and changes the effort control's tone.
+surface and the same effort control: no level is singled out.
 
 The toolbar is one row that reads left to right: what to add (attach, mention),
 how to run it (model and reasoning, permissions), then status and action
-(context meter, Send). The selectors are one family of 28px outlined controls
-(`.picker-trigger`, and `.select-trigger` inside `.composer-foot`). The model
-control combines the agent mark, model name and effort in one trigger.
-A mode never changes its shape, only its tone: Max takes the peak palette and
-Unrestricted the warning colour for as long as it is selected. When the composer
+(context meter, Send). The selectors are one family of 28px borderless
+controls (`.picker-trigger`, and `.select-trigger` inside `.composer-foot`)
+that fill a capsule on hover; short 16px hairlines separate model, effort and
+permissions, as one separates attach and mention from them. The model control
+pairs the agent mark with the model name; effort is its own control beside it.
+A mode never changes its shape, only its tone: Unrestricted takes the warning
+colour for as long as it is selected. When the composer
 narrows, the model name truncates first, then labels fold to their icons; the
 row never wraps.
 
@@ -265,7 +267,7 @@ The terminal sits above the buffer. While a setting is applied the controls
 are locked but keep their look (`.settling`), so the toolbar does not blink.
 
 The thread column is one width: transcript content, the pinned plan, the
-terminal pane and the composer share `--composer-inset` and a 720px
+terminal pane and the composer share `--composer-inset` and an 860px
 `--content-max` on `.thread-main`, so every edge lines up at any width. Edge
 chrome follows the column — the prompt rail hugs the panel's left edge,
 vertically centred, and the find bar sits just inside its right edge.
@@ -274,28 +276,18 @@ Third-party capabilities open in a dismissible dialog once per agent during
 the app session, with a persisted "Don’t show again" choice. The model picker's
 header has a Capabilities action to reopen the dialog at any time.
 
-The model picker opens above the composer and stays within the window, with
-two views. When the selected model takes reasoning effort the picker lands on
-a compact effort card: a head row with the Fast-mode toggle (a Zap that pairs
-a model with its `-fast`/`-build-fast` sibling, when the catalog lists one), a
-centre button naming the tier in accent colour over the model's name, and a
-reset button that returns to the model default. The Models view holds the
-agent switcher, a scrollable catalog with provider groups, search when there
-are more than six models, and the contributor disclosures. Choosing a model
-with effort returns to the effort card; Escape from the catalog goes back to
-it too, and closes otherwise.
+The model picker opens above the composer and stays within the window. It
+holds the agent switcher, a scrollable catalog with provider groups, search
+when there are more than six models, and the contributor disclosures; one
+click on a row picks it and closes.
 
-Reasoning effort rides a thin rail in the effort card — Muse's own slider,
-not a borrowed one: a hairline track with a tick notch per tier the model
-supports, an accent-gradient fill that glows up to a small orb thumb, and the
-tier's own words underneath. Drag or click the rail and the pick commits on
-release; arrow keys, Home and End work on the focused slider. Commits keep
-the picker open so tiers can be compared in place; Escape, the close button
-or clicking outside dismiss it. The peak tier turns the fill into a drifting
-turbo gradient and the orb warm, pulsing. Picks during an apply merge into a
-trailing request, and a rejected pick returns the thumb to the session's
-applied value. The model and
-effort commands open the same picker on the catalog or the card.
+Reasoning effort (`EffortPicker`) is the shared select menu: the chip names
+the level, and the menu lists the model's levels from least to most, each with
+a line on what it trades and the model's own default tagged Default. One click
+picks a level and closes; the left and right arrows on the closed chip step it
+without opening anything. No level gets its own colour, bars or effect. A pick
+stays drawn while it applies, and a rejected pick returns to the session's
+applied value. The model and effort commands open these two controls.
 
 In the model list a check trails the selected capsule row, a Zap marks the
 base row while its fast variant is selected, and price sits right of the name,
@@ -461,7 +453,8 @@ carries no accent colour.
 The sidebar has no fill, blur or edge of its own: it sits on the shell, so the
 accent tint and the window's translucency reach it. The main pane is opaque and
 takes neither. The sidebar's rows
-are New thread, the workspaces and their threads, then the account button;
+are the workspaces and their threads, then the account button; each workspace
+row starts a new thread in that workspace from its own button;
 Settings and its pages open from the account menu, the shortcut or the palette.
 The list scrolls vertically only — never sideways — and a thread name that does
 not fit rolls to its tail on hover instead of leaving a scrollbar.

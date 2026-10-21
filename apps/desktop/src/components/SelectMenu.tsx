@@ -11,6 +11,8 @@ export type SelectMenuOption = {
   disabled?: boolean;
   icon?: ReactNode;
   tone?: "danger";
+  /** A short note beside the label, such as "Default". */
+  tag?: string;
 };
 
 type SelectMenuProps = {
@@ -100,7 +102,9 @@ export function SelectMenu({
         Math.max(220, popover.offsetWidth));
       const width = style.getPropertyValue("--select-match-width").trim() === "true"
         ? anchor.right - anchor.left : Math.max(anchor.right - anchor.left, naturalWidth);
-      setPosition({ ...menuPosition(anchor, { width, height: Math.min(340, popover.scrollHeight) }, bounds,
+      // A short list of described rows (effort levels) may opt out of the usual cap rather than scroll.
+      const maxHeight = Number.parseFloat(style.getPropertyValue("--select-max-height")) || 340;
+      setPosition({ ...menuPosition(anchor, { width, height: Math.min(maxHeight, popover.scrollHeight) }, bounds,
         style.getPropertyValue("--select-side").trim() === "bottom", style.getPropertyValue("--select-align").trim() === "right"), position: modal ? "absolute" : "fixed" });
     };
     const dismissOnScroll = (event: Event) => {
@@ -251,7 +255,7 @@ export function SelectMenu({
             >
               {option.icon ? <span className="option-icon" aria-hidden="true">{option.icon}</span> : null}
               <span className="option-copy">
-                <span>{option.label}</span>
+                <span>{option.label}{option.tag ? <span className="option-tag">{option.tag}</span> : null}</span>
                 {option.description ? <small>{option.description}</small> : null}
               </span>
               {index === selectedIndex ? <Check size={14} className="option-check" aria-hidden="true" /> : null}

@@ -156,16 +156,11 @@ test('accent-filled controls keep their fill on hover', async () => {
   // Under the ember accent the fill is a gradient. Swapping it for a flat hover
   // colour drops the image at once while the colour fades up from nothing, which
   // flickers; the hover colour fades in on a ::before layer instead.
-  for (const selector of ['.primary', '.send', '.nav-row.new-thread']) {
+  for (const selector of ['.primary', '.send']) {
     const escaped = selector.replace(/[.]/g, '\\.');
     assert.doesNotMatch(css, new RegExp(`${escaped}(?:\\.accent)?:hover[^{]*\\{[^}]*background`), `${selector} swaps its background on hover`);
     assert.match(css, new RegExp(`${escaped}:hover:not\\(:disabled\\)::before`), `${selector} fades its hover layer in`);
   }
-  // The plain row hover and press must not reach the accent-filled row either.
-  assert.match(css, /\.nav-row:not\(\.new-thread\):hover:not\(:disabled\) \{ background: var\(--hover\); \}/);
-  assert.match(css, /\.nav-row:not\(\.new-thread\):active:not\(:disabled\) \{ background: var\(--active\); \}/);
-  // Tinting the sidebar recolours row icons, but not the one on the accent fill.
-  assert.match(css, /html\[data-sidebar-accent="true"\] \.sidebar \.nav-row:not\(\.new-thread\) svg/);
 });
 
 test('row and control highlights are capsules; menu items keep the small radius', async () => {

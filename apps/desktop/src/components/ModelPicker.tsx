@@ -77,7 +77,7 @@ type Props = {
 /**
  * The model chip in the composer. One click opens the models straight away;
  * one click on a row picks it and closes. The agent tabs sit in the header,
- * so nothing here opens a second menu. Effort is its own control (EffortMeter).
+ * so nothing here opens a second menu. Effort is its own control (EffortPicker).
  */
 export function ModelPicker({ models, agentId, agents = [], agentDisabled, value, loading, disabled, applying, title, onChange, onAgentChange, onRescan, onShowCapabilities, onContributorSettings, onManageProviders }: Props) {
   const root = useRef<HTMLDivElement>(null);

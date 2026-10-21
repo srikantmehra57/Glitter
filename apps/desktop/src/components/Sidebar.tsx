@@ -778,14 +778,11 @@ export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) 
         <div><span className="wordmark">Glitter</span></div>
       </div>
 
-      <nav className="sidebar-nav" aria-label="Primary">
-        <button className="nav-row new-thread" onClick={newThread} disabled={s.starting || !workspace} title={!workspace ? "Open a workspace first" : undefined}>
-          <SquarePen size={15} />
-          <span>New thread</span>
-          <kbd>{shortcutText("new-thread")}</kbd>
-        </button>
-        {s.preview ? <button className="nav-row" onClick={() => void s.exitPreview()}><LogOut size={15} /><span>Exit preview</span></button> : null}
-      </nav>
+      {s.preview ? (
+        <nav className="sidebar-nav" aria-label="Primary">
+          <button className="nav-row" onClick={() => void s.exitPreview()}><LogOut size={15} /><span>Exit preview</span></button>
+        </nav>
+      ) : null}
 
       {searchPop.mounted ? (
         <div className={`reveal${searchPop.closing ? " closing" : ""}`}><div>
@@ -864,7 +861,11 @@ export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) 
                   <button className="regrant-btn" title="This folder lost its access grant. Pick it again to restore access." onClick={() => void s.chooseProject()}>Re-open</button>
                 ) : null}
                 <div className="row-actions">
-                  {active ? <button className="icon-btn small" aria-label={`New thread in ${item.name}`} data-tooltip="New thread" disabled={s.starting} onClick={newThread}><SquarePen size={13} /></button> : null}
+                  <button className="icon-btn small" aria-label={`New thread in ${item.name}`} data-tooltip={active ? `New thread  ${shortcutText("new-thread")}` : "New thread"} disabled={s.starting} onClick={() => {
+                    // Selecting a workspace opens its draft, so a new thread elsewhere is one click too.
+                    if (!active) { setExpanded((ids) => ids.includes(item.id) ? ids : [...ids, item.id]); void s.selectWorkspace(item.id); }
+                    newThread();
+                  }}><SquarePen size={13} /></button>
                   {!item.trusted && item.grantId ? <button className="icon-btn small" aria-label={`Trust ${item.name}`} data-tooltip="Trust workspace…" onClick={() => void s.openTrustDialog(item.id)}><ShieldCheck size={13} /></button> : null}
                   <button
                     className="icon-btn small"
