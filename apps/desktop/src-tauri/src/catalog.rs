@@ -214,12 +214,12 @@ const SERVERS: &[CatalogServer] = &[
         id: "fetch",
         name: "Fetch",
         summary: "Fetch a URL and convert its content for the model.",
-        description: "The reference fetch server. It retrieves a page or document and converts it to Markdown, with robots.txt handling.",
+        description: "The reference fetch server. It retrieves a page or document and converts it to Markdown, with robots.txt handling. It is a Python server and runs with uv's uvx.",
         tags: &["web"],
         scope: ServerScope::User,
         transport: "stdio",
-        command: "npx",
-        args: &["-y", "@modelcontextprotocol/server-fetch"],
+        command: "uvx",
+        args: &["mcp-server-fetch"],
         env: &[],
         url: "",
         version: 1,
@@ -228,12 +228,12 @@ const SERVERS: &[CatalogServer] = &[
         id: "time",
         name: "Time",
         summary: "Current time and timezone conversions.",
-        description: "The reference time server: the model can ask for the current time in a named timezone and convert between zones.",
+        description: "The reference time server: the model can ask for the current time in a named timezone and convert between zones. It is a Python server and runs with uv's uvx.",
         tags: &["utilities"],
         scope: ServerScope::User,
         transport: "stdio",
-        command: "npx",
-        args: &["-y", "@modelcontextprotocol/server-time"],
+        command: "uvx",
+        args: &["mcp-server-time"],
         env: &[],
         url: "",
         version: 1,
@@ -987,7 +987,20 @@ mod tests {
         let config = read_json(&file);
         assert_eq!(config["other"], true);
         assert_eq!(config["mcpServers"]["mine"]["command"], "my-server");
-        assert_eq!(config["mcpServers"]["time"]["args"][1], "@modelcontextprotocol/server-time");
+        assert_eq!(config["mcpServers"]["time"]["command"], "uvx");
+    }
+
+    #[test]
+    fn python_reference_servers_run_through_uvx() {
+        // Fetch and Time are published to PyPI, not npm; `npx` cannot start them.
+        for (id, package) in [("fetch", "mcp-server-fetch"), ("time", "mcp-server-time")] {
+            let server = SERVERS.iter().find(|server| server.id == id).unwrap();
+            assert_eq!((server.command, server.args), ("uvx", &[package][..]), "{id}");
+        }
+        let home = TempDir::new("uvx");
+        install(&home.0, None, "fetch").unwrap();
+        let config = read_json(&home.0.join(".glitter/mcp.json"));
+        assert_eq!(config["mcpServers"]["fetch"], json!({"transport": "stdio", "command": "uvx", "args": ["mcp-server-fetch"]}));
     }
 
     #[test]

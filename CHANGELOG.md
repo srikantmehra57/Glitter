@@ -104,7 +104,9 @@ licence terms.
   debugging, refactoring, security, performance, frontend design, docs,
   explaining code, release notes), eight well-known MCP servers (filesystem,
   sequential thinking, memory, fetch, time, Playwright, Context7, DeepWiki) and
-  four bundles. A card shows what is installed, `Remove` takes back only what
+  four bundles. Fetch and Time are Python servers and start with uv's `uvx`;
+  the rest start with `npx`, except DeepWiki, which is remote. A card shows
+  what is installed, `Remove` takes back only what
   the store wrote, and anything you edited yourself is left alone.
 
 ### Changed
