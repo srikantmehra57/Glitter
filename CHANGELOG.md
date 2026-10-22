@@ -58,14 +58,18 @@ licence terms.
   stopped and which attempt landed when one was retried. Other agents report
   totals only, so their turns do not appear. Per-call detail is kept for the
   newest 25 recorded turns; older ones keep their totals.
-- Harness can use **MCP servers**. Add them to `.glitter/mcp.json` in the
-  workspace or your home folder; stdio and streamable-HTTP servers both work.
-  Their tools appear as `mcp__server__tool`, ask before they run unless a
-  thread grant names that tool or server, and are discovered on demand so their
-  schemas do not fill every request. Extensions → MCP shows what the harness
-  connected, its transport and tool count, any sync error, and Refresh. A
-  broken server leaves the previous complete set in use; removing the last one
-  removes its tools.
+- Harness can use **MCP servers**, and you can add and remove them in
+  Extensions → MCP. Choose Workspace or Home, a name, and stdio (command,
+  arguments, environment) or streamable HTTP (URL, headers). They are written
+  to `.glitter/mcp.json`; environment and header values are write-only and are
+  never shown again, so the list shows only their names. Editing the file by
+  hand still works. Their tools appear as `mcp__server__tool`, ask before they
+  run unless a thread grant names that tool or server, and are discovered on
+  demand so their schemas do not fill every request. Extensions → MCP shows
+  what the harness connected, its transport and tool count, any sync error, and
+  Refresh. A server the parser refuses is listed with what is wrong and can be
+  removed. A broken server leaves the previous complete set in use; removing
+  the last one removes its tools.
 - Harness can **delegate**. Its `task` tool runs a child agent in a separate,
   hidden session with a narrower tool set, a 24-step cap and an optional model,
   and reports back as a Subagent card with the job, status, duration and token
@@ -86,9 +90,33 @@ licence terms.
   Providers and the models behind it — Anthropic, OpenAI, Google, DeepSeek and
   the rest — appear in the composer under their own badge. The key stays in
   the keychain and goes only to Cline.
+- **Kilo API** can be a Harness provider. Add a Kilo API key in Settings →
+  Providers and the models behind the Kilo gateway appear in the composer
+  under their own badge. The key stays in the keychain and goes only to Kilo.
+- Extensions has a **Store**. Settings → Extensions now opens with a curated
+  library of skills, MCP servers and skill bundles that ship inside Glitter:
+  search it, filter by kind, and Install. Nothing is downloaded and no CLI,
+  account or network is involved. Skills land in `~/.agents/skills`, which the
+  Harness reads every turn, and servers are merged into `.glitter/mcp.json` —
+  this workspace's file for the filesystem server, your home folder's for the
+  rest — after a confirmation that names each server and the command it adds.
+  Twelve skills (review, commit messages, PR descriptions, test-first,
+  debugging, refactoring, security, performance, frontend design, docs,
+  explaining code, release notes), eight well-known MCP servers (filesystem,
+  sequential thinking, memory, fetch, time, Playwright, Context7, DeepWiki) and
+  four bundles. A card shows what is installed, `Remove` takes back only what
+  the store wrote, and anything you edited yourself is left alone.
 
 ### Changed
 
+- Glitter has its own mark. The app icon, the boot splash, Settings, About,
+  the Muse agent badge and the website now show a geometric G around a
+  four-pointed faceted spark, replacing the ember M carried over from the Muse
+  Code days. One vector source drives all of it: `npm run icons` copies the
+  mark into both apps and regenerates the frosted-grey and graphite icon tiles
+  and every native icon size, so the Dock, Finder and the window agree from the
+  1024px tile down to the 15px the mark sits at beside a model name. It needs
+  no light or dark variant.
 - A new thread's empty state is one calm, centred column: the heading with the
   workspace and branch under it, light starter chips, and the composer lifted
   to the middle of the window. The subtitle and the breadcrumb are gone. The
@@ -339,8 +367,8 @@ licence terms.
   with duration, token usage and estimated cost beside Done; file changes,
   Fork, Undo and snapshot notices stay together below the reply.
 - A new "Frost & Ember" identity: matte grey canvas, frosted glass chrome,
-  soft diffuse elevation, and an ember glow as the brand signal — a five-tile
-  ember M mark, regenerated native app icons on frosted-grey and graphite
+  soft diffuse elevation, and an ember glow as the brand signal — an ember
+  identity mark, regenerated native app icons on frosted-grey and graphite
   tiles, and rounded surfaces throughout. Onboarding, threads, composer
   controls, settings, approvals, changes, files, and terminal share the same
   material in the Frost (light) and Smoke (dark) themes.

@@ -25,6 +25,7 @@ const { agentEnabled, DEFAULT_ENABLED_AGENTS, DEFAULT_SETTINGS, skillScopeArg } 
 const { settingsFields } = await bundle('apps/desktop/src/lib/settingsPersistence.ts');
 const { resolveTheme, shellOpacity, normalizeTranslucency } = await bundle('apps/desktop/src/lib/theme.ts');
 const { rekeyThreadState, projectDraftForAgent } = await bundle('apps/desktop/src/lib/agentSwitch.ts');
+const { mcpServerNameProblem, mcpServerSummary, parseMcpArguments, parseMcpKeyValues } = await bundle('apps/desktop/src/lib/mcpConfig.ts');
 
 test('groups transcript items into agent runs by turnId', () => {
   const runs = groupAgentRuns([
@@ -949,5 +950,44 @@ test('inline code links only to indexed files, and saved comments are sanitized'
   const good = { id: '1', path: 'a.ts', line: 3, removed: false, context: '@@', text: 'Fix' };
   assert.deepEqual(normalizeLineComments({ 'thread:s': [good, { id: 2 }, null, { ...good, line: 'x' }], junk: 'no', empty: [] }), { 'thread:s': [good] });
   assert.deepEqual(normalizeLineComments([good]), {});
+});
+
+test('MCP arguments honour quotes and an unfinished quote is refused', () => {
+  assert.deepEqual(parseMcpArguments(''), []);
+  assert.deepEqual(parseMcpArguments('   '), []);
+  assert.deepEqual(parseMcpArguments('-y @scope/server .'), ['-y', '@scope/server', '.']);
+  assert.deepEqual(parseMcpArguments('-y "a folder/server" \'second value\''), ['-y', 'a folder/server', 'second value']);
+  assert.deepEqual(parseMcpArguments('""'), ['']);
+  assert.deepEqual(parseMcpArguments('C:\\\\Program\\\\x "C:\\\\Program Files"'), ['C:\\Program\\x', 'C:\\Program Files']);
+  assert.throws(() => parseMcpArguments('"unfinished'), /inside a double quote/);
+  assert.throws(() => parseMcpArguments("'unfinished"), /inside a single quote/);
+});
+
+test('MCP env and header lines keep names and refuse malformed or repeated keys', () => {
+  assert.deepEqual(parseMcpKeyValues('', 'env'), {});
+  assert.deepEqual(parseMcpKeyValues('# comment\n\n GITHUB_TOKEN = token-one \nLOG_LEVEL=debug', 'env'), { GITHUB_TOKEN: 'token-one', LOG_LEVEL: 'debug' });
+  assert.deepEqual(parseMcpKeyValues('Authorization: Bearer one\nX-Trace=two:three', 'headers'), { Authorization: 'Bearer one', 'X-Trace': 'two:three' });
+  assert.throws(() => parseMcpKeyValues('NO_EQUALS', 'env'), /Line 1: use NAME=value/);
+  assert.throws(() => parseMcpKeyValues('9BAD=value', 'env'), /not a valid variable name/);
+  assert.throws(() => parseMcpKeyValues('Bad Header: value', 'headers'), /not a valid header name/);
+  assert.throws(() => parseMcpKeyValues('TOKEN=', 'env'), /give TOKEN a value/);
+  assert.throws(() => parseMcpKeyValues('A=1\nA=2', 'env'), /A is listed twice/);
+  assert.throws(() => parseMcpKeyValues('__proto__=1\n__proto__=2', 'env'), /__proto__ is listed twice/);
+  const protoParsed = parseMcpKeyValues('__proto__=foo', 'env');
+  assert.equal(protoParsed.__proto__, 'foo');
+  assert.equal(Object.prototype.hasOwnProperty.call(protoParsed, '__proto__'), true);
+  assert.equal(Object.prototype.foo, undefined);
+});
+
+test('MCP names and row summaries match what the bridge writes', () => {
+  assert.equal(mcpServerNameProblem('docs'), null);
+  assert.equal(mcpServerNameProblem('team.docs_2-test'), null);
+  assert.match(mcpServerNameProblem(''), /Give the server a name/);
+  assert.match(mcpServerNameProblem('two words'), /letters, digits, dots/);
+  assert.match(mcpServerNameProblem('-leading'), /letters, digits, dots/);
+  assert.match(mcpServerNameProblem('x'.repeat(65)), /at most 64/);
+  assert.equal(mcpServerSummary({ name: 'docs', source: 'workspace', transport: 'stdio', command: 'npx', args: 2, envKeys: ['TOKEN'], headerKeys: [] }), 'npx · 2 arguments · 1 env');
+  assert.equal(mcpServerSummary({ name: 'docs', source: 'workspace', transport: 'stdio', command: 'node', args: 1, envKeys: [], headerKeys: [] }), 'node · 1 argument');
+  assert.equal(mcpServerSummary({ name: 'search', source: 'home', transport: 'http', url: 'https://example.test/mcp', args: 0, envKeys: [], headerKeys: ['Authorization'] }), 'https://example.test/mcp · 1 header');
 });
 

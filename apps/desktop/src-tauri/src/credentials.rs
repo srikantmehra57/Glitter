@@ -210,7 +210,7 @@ pub async fn credential_set(value: String) -> Result<(), String> {
 /// Model providers the built-in harness may hold a key for. The bridge's
 /// `harness/providers.ts` is the catalog; this list only bounds what the
 /// renderer may store, so a forged id can never mint a new entry.
-pub const PROVIDER_IDS: &[&str] = &["anthropic", "openai", "google", "openrouter", "cline", "xai", "deepseek", "groq", "mistral", "nvidia", "ollama", "lmstudio", "custom"];
+pub const PROVIDER_IDS: &[&str] = &["anthropic", "openai", "google", "openrouter", "cline", "kilo", "xai", "deepseek", "groq", "mistral", "nvidia", "ollama", "lmstudio", "custom"];
 /// Providers whose address the user sets: a custom endpoint, and local servers
 /// that may listen on another port.
 const PROVIDER_URL_IDS: &[&str] = &["custom", "ollama", "lmstudio"];

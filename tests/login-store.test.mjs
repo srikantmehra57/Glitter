@@ -68,6 +68,7 @@ const storeReplacements = {
     export const listWorkspaceFiles=async()=>[];
     export const cliLogout=async()=>{};
     export const pluginList=async()=>[];export const skillList=async()=>[];
+    export const catalogList=async()=>({entries:[],skillsRoot:'',error:null});export const catalogInstall=async()=>({installedSkills:[],installedServers:[],skipped:[],errors:[]});export const catalogRemove=async()=>({removed:[],skipped:[],errors:[]});
     export const projectInit=async()=>({});
     export const enterpriseStatus=async()=>({ generation: null, sources: [] });
     export const pickPluginBundle=async()=>null;export const pluginInstall=async()=>{};

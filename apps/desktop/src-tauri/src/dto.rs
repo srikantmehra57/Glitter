@@ -11,6 +11,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeMap;
 
 /// Renderer-chosen request id: long enough for UUIDs, too short to bloat logs.
 pub const REQUEST_ID_LIMIT: usize = 128;
@@ -56,6 +57,15 @@ const SUGGEST_PROMPT_LIMIT: usize = 64_000;
 const SUGGEST_TIMEOUT_LIMIT: u64 = 90_000;
 /// `item/readOutput` page bytes (mirrors the host page, schema max 6 MiB).
 const OUTPUT_PAGE_LIMIT: u64 = 6 * 1024 * 1024;
+/// MCP server definitions mirror the bridge's config parser bounds.
+const MCP_NAME_LIMIT: usize = 64;
+const MCP_TEXT_LIMIT: usize = 4_096;
+const MCP_ARGS_MAX: usize = 64;
+const MCP_MAP_MAX: usize = 64;
+const MCP_KEY_LIMIT: usize = 128;
+const MCP_VALUE_LIMIT: usize = 4_096;
+const MCP_TIMEOUT_MS_MIN: u64 = 1_000;
+const MCP_TIMEOUT_MS_MAX: u64 = 600_000;
 
 /// Image types the native drop inspector can produce — the only image source.
 const IMAGE_MEDIA_TYPES: &[&str] = &["image/png", "image/jpeg", "image/gif", "image/webp", "image/avif", "image/bmp", "image/x-icon", "image/svg+xml", "image/tiff", "image/heic", "image/heif"];
@@ -324,6 +334,70 @@ struct HarnessMcpParams {
     session_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     refresh: Option<bool>,
+}
+
+/// Which `.glitter/mcp.json` an added or removed server belongs to.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum McpScope {
+    Workspace,
+    Home,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum McpTransport {
+    Stdio,
+    Http,
+}
+
+/// A server the app is allowed to write. Values in `env` and `headers` are
+/// write-only: the bridge never reads them back to the renderer.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct HarnessMcpServerDefinition {
+    name: String,
+    transport: McpTransport,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    command: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    args: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    env: Option<BTreeMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    headers: Option<BTreeMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    timeout_ms: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct HarnessMcpConfigParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    agent_id: Option<AgentId>,
+    session_id: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct HarnessMcpAddServerParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    agent_id: Option<AgentId>,
+    session_id: String,
+    scope: McpScope,
+    server: HarnessMcpServerDefinition,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct HarnessMcpRemoveServerParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    agent_id: Option<AgentId>,
+    session_id: String,
+    scope: McpScope,
+    name: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -637,6 +711,51 @@ fn check_maybe_id(method: &str, field: &str, value: Option<&str>) -> Result<(), 
     Ok(())
 }
 
+fn check_mcp_map(method: &str, field: &str, map: Option<&BTreeMap<String, String>>) -> Result<(), String> {
+    let Some(map) = map else { return Ok(()) };
+    if map.len() > MCP_MAP_MAX {
+        return Err(format!("Invalid {method} parameters: {field} has more than {MCP_MAP_MAX} entries."));
+    }
+    for (key, value) in map {
+        if key.is_empty() {
+            return Err(format!("Invalid {method} parameters: {field} has an empty key."));
+        }
+        capped(method, field, key, MCP_KEY_LIMIT)?;
+        capped(method, field, value, MCP_VALUE_LIMIT)?;
+        if value.contains(['\r', '\n']) {
+            return Err(format!("Invalid {method} parameters: {field} values must be one line."));
+        }
+    }
+    Ok(())
+}
+
+fn check_mcp_server(method: &str, server: &HarnessMcpServerDefinition) -> Result<(), String> {
+    required(method, "server.name", &server.name)?;
+    capped(method, "server.name", &server.name, MCP_NAME_LIMIT)?;
+    if let Some(command) = server.command.as_deref() {
+        capped(method, "server.command", command, MCP_TEXT_LIMIT)?;
+    }
+    if let Some(url) = server.url.as_deref() {
+        capped(method, "server.url", url, MCP_TEXT_LIMIT)?;
+    }
+    if let Some(args) = &server.args {
+        if args.len() > MCP_ARGS_MAX {
+            return Err(format!("Invalid {method} parameters: server.args has more than {MCP_ARGS_MAX} entries."));
+        }
+        for arg in args {
+            capped(method, "server.args", arg, MCP_TEXT_LIMIT)?;
+        }
+    }
+    check_mcp_map(method, "server.env", server.env.as_ref())?;
+    check_mcp_map(method, "server.headers", server.headers.as_ref())?;
+    if let Some(timeout) = server.timeout_ms {
+        if !(MCP_TIMEOUT_MS_MIN..=MCP_TIMEOUT_MS_MAX).contains(&timeout) {
+            return Err(format!("Invalid {method} parameters: server.timeoutMs must be between {MCP_TIMEOUT_MS_MIN} and {MCP_TIMEOUT_MS_MAX}."));
+        }
+    }
+    Ok(())
+}
+
 fn check_images(method: &str, images: Option<&[ImageAttachment]>) -> Result<(), String> {
     if let Some(images) = images {
         if images.len() > IMAGE_LIMIT {
@@ -864,6 +983,24 @@ pub fn validate_params(method: &str, params: &Value) -> Result<Value, String> {
         "harnessMcp" => {
             let parsed: HarnessMcpParams = parse(method, body)?;
             check_id(method, "sessionId", &parsed.session_id)?;
+            emit(method, &parsed)
+        }
+        "harnessMcpConfig" => {
+            let parsed: HarnessMcpConfigParams = parse(method, body)?;
+            check_id(method, "sessionId", &parsed.session_id)?;
+            emit(method, &parsed)
+        }
+        "harnessMcpAddServer" => {
+            let parsed: HarnessMcpAddServerParams = parse(method, body)?;
+            check_id(method, "sessionId", &parsed.session_id)?;
+            check_mcp_server(method, &parsed.server)?;
+            emit(method, &parsed)
+        }
+        "harnessMcpRemoveServer" => {
+            let parsed: HarnessMcpRemoveServerParams = parse(method, body)?;
+            check_id(method, "sessionId", &parsed.session_id)?;
+            required(method, "name", &parsed.name)?;
+            capped(method, "name", &parsed.name, MCP_NAME_LIMIT)?;
             emit(method, &parsed)
         }
         "mcpServers" => {
@@ -1179,6 +1316,10 @@ mod tests {
             ("listSkills", json!({ "sessionId": "s-1" })),
             ("harnessMcp", json!({ "agentId": "harness", "sessionId": "h-1" })),
             ("harnessMcp", json!({ "sessionId": "h-1", "refresh": true })),
+            ("harnessMcpConfig", json!({ "agentId": "harness", "sessionId": "h-1" })),
+            ("harnessMcpAddServer", json!({ "sessionId": "h-1", "scope": "workspace", "server": { "name": "docs", "transport": "stdio", "command": "npx", "args": ["-y", "server-filesystem", "."], "env": { "LOG_LEVEL": "warn" } } })),
+            ("harnessMcpAddServer", json!({ "sessionId": "h-1", "scope": "home", "server": { "name": "docs", "transport": "http", "url": "https://example.com/mcp", "headers": { "Authorization": "Bearer token" }, "timeoutMs": 30000 } })),
+            ("harnessMcpRemoveServer", json!({ "sessionId": "h-1", "scope": "workspace", "name": "docs" })),
             ("mcpServers", json!({})),
             ("sendTurn", json!({ "sessionId": "s-1", "text": "instead", "ifBusy": "replace" })),
             ("steerTurn", json!({ "sessionId": "s-1", "text": "more tests" })),
@@ -1251,6 +1392,17 @@ mod tests {
         assert!(validate_params("respondUserInput", &json!({ "sessionId": "s", "userInputId": "q", "response": { "action": "answer" } })).is_err());
         assert!(validate_params("setApprovalMode", &json!({ "sessionId": "s" })).is_err());
         assert!(validate_params("sendTurn", &json!(["s", "t"])).is_err());
+        // MCP writes are bounded and closed: no stray server fields, no bad scope.
+        assert!(validate_params("harnessMcpAddServer", &json!({ "sessionId": "s", "scope": "workspace" })).is_err());
+        assert!(validate_params("harnessMcpAddServer", &json!({ "sessionId": "s", "scope": "system", "server": { "name": "x", "transport": "stdio", "command": "x" } })).is_err());
+        assert!(validate_params("harnessMcpAddServer", &json!({ "sessionId": "s", "scope": "workspace", "server": { "name": "", "transport": "stdio", "command": "x" } })).is_err());
+        assert!(validate_params("harnessMcpAddServer", &json!({ "sessionId": "s", "scope": "workspace", "server": { "name": "x", "transport": "sse", "url": "https://example.com" } })).is_err());
+        assert!(validate_params("harnessMcpAddServer", &json!({ "sessionId": "s", "scope": "workspace", "server": { "name": "x", "transport": "stdio", "command": "x", "cwd": "/" } })).is_err());
+        assert!(validate_params("harnessMcpAddServer", &json!({ "sessionId": "s", "scope": "workspace", "server": { "name": "x", "transport": "stdio", "command": "x", "env": { "TOKEN": "two\nlines" } } })).is_err());
+        assert!(validate_params("harnessMcpAddServer", &json!({ "sessionId": "s", "scope": "workspace", "server": { "name": "x", "transport": "stdio", "command": "x", "timeoutMs": 100 } })).is_err());
+        assert!(validate_params("harnessMcpAddServer", &json!({ "sessionId": "s", "scope": "workspace", "server": { "name": "x".repeat(65), "transport": "stdio", "command": "x" } })).is_err());
+        assert!(validate_params("harnessMcpRemoveServer", &json!({ "sessionId": "s", "scope": "workspace" })).is_err());
+        assert!(validate_params("harnessMcpRemoveServer", &json!({ "sessionId": "s", "scope": "workspace", "name": "" })).is_err());
         assert!(validate_params("bogus", &json!({})).is_err());
     }
 

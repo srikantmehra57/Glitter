@@ -9,7 +9,7 @@ import { decide, type ApprovalMode, type Verdict } from "./permission/policy.js"
 import { SENDS_NONE, TIERS, configuredProviders, effortTiers, providerSpec, resolveProvider, splitModelId, type ProviderCredentials, type ResolvedProvider } from "./providers.js";
 import { ExtensionRegistry, type HookEvents, type HookFailure, type HookName, type TurnContext, type TurnContributions } from "./registry.js";
 import type { UserInputResponse } from "../protocol.js";
-import { McpManager, mcpExtension } from "./mcp.js";
+import { McpManager, addMcpServer as writeMcpServer, mcpExtension, readMcpConfig, removeMcpServer as eraseMcpServer, type McpScope, type McpServerInput } from "./mcp.js";
 import { DELEGATE_LEAF_PROFILE, DELEGATE_PROFILE, MAX_DELEGATED_STEPS, MAX_DELEGATION_DEPTH, delegationExtension, type DelegationRequest, type DelegationResult } from "./delegation.js";
 import { ASK_USER_TOOL, EXIT_PLAN_TOOL, questionRequest, settlement, type Asked, type PendingQuestion } from "./questions.js";
 import { discoverSkills, expandInvocation, skillsExtension } from "./skills.js";
@@ -71,10 +71,10 @@ function contextWindow(providerId: string, model: string, listed?: number | null
   if (listed) return listed;
   const id = model.toLowerCase();
   // A gateway's catalog names each model `vendor/model`, so the vendor decides
-  // and what follows the slash is the model the vendor knows it by. Cline
-  // writes xAI as `x-ai` and prefixes a rolling alias with `~`.
+  // and what follows the slash is the model the vendor knows it by. Cline and
+  // Kilo write xAI as `x-ai` and prefix a rolling alias with `~`.
   const slash = id.indexOf("/");
-  const gateway = providerId === "cline" && slash > 0;
+  const gateway = (providerId === "cline" || providerId === "kilo") && slash > 0;
   const vendor = (gateway ? id.slice(0, slash) : providerId).replace(/^~/, "");
   const name = gateway ? id.slice(slash + 1) : id;
   const family = vendor === "x-ai" ? "xai" : vendor;
@@ -93,6 +93,12 @@ const NOT_CHAT = /embed|whisper|tts|dall-e|davinci|babbage|moderation|image|audi
  * must not offer a model a turn would fail on.
  */
 const NOT_CLINE_CHAT = /:batch$|nano-banana|lyria/i;
+/**
+ * Rows in Kilo's catalog that are not chat. Lyria generates music and Nano
+ * Banana generates images. A listed model whose parameters omit `tools` cannot
+ * run a turn: every turn sends the harness tools.
+ */
+const NOT_KILO_CHAT = /nano-banana|lyria/i;
 
 /**
  * Every way an approval request can end. Each reaches the model as its own
@@ -256,9 +262,15 @@ export class HarnessHost {
     const rows = Array.isArray(data) ? data as Json[] : [];
     return rows.map((row): HarnessModel | null => {
       const raw = typeof row.id === "string" ? row.id.replace(/^models\//, "") : "";
-      if (!raw || NOT_CHAT.test(raw) || (provider.id === "cline" && NOT_CLINE_CHAT.test(raw))) return null;
+      const parameters = Array.isArray(row.supported_parameters) ? row.supported_parameters.filter((item): item is string => typeof item === "string") : null;
+      const kiloUntooled = provider.id === "kilo" && parameters != null && !parameters.includes("tools");
+      if (!raw || NOT_CHAT.test(raw) || (provider.id === "cline" && NOT_CLINE_CHAT.test(raw)) || (provider.id === "kilo" && (NOT_KILO_CHAT.test(raw) || kiloUntooled))) return null;
       const pricing = row.pricing as { prompt?: string; completion?: string } | undefined;
-      const perMillion = (value?: string) => value != null && Number.isFinite(Number(value)) ? String(Math.round(Number(value) * 1_000_000 * 1000) / 1000) : null;
+      // A negative price is a sentinel (Kilo's auto routers), not a rate.
+      const perMillion = (value?: string) => {
+        const amount = Number(value);
+        return value != null && Number.isFinite(amount) && amount >= 0 ? String(Math.round(amount * 1_000_000 * 1000) / 1000) : null;
+      };
       const tiers = effortTiers(provider.id, raw);
       const listedWindow = typeof row.context_length === "number" ? row.context_length : null;
       return {
@@ -593,6 +605,26 @@ export class HarnessHost {
     const live = this.requireLive(options.sessionId);
     await this.mcp.ensure(live.meta.workspaceRoot, options.sessionId, options.refresh === true);
     return this.mcp.status(live.meta.workspaceRoot);
+  }
+
+  /** The effective server rows for the Extensions screen, including ones the parser refused. Secret values are never returned. */
+  async mcpConfig(options: { sessionId: string }) {
+    const live = this.requireLive(options.sessionId);
+    return readMcpConfig(live.meta.workspaceRoot, this.homeDir);
+  }
+
+  /** Add a server to one config file, then return the effective rows. */
+  async addMcpServer(options: { sessionId: string; scope: McpScope; server: McpServerInput }) {
+    const live = this.requireLive(options.sessionId);
+    await writeMcpServer(live.meta.workspaceRoot, this.homeDir, options.scope, options.server);
+    return this.mcpConfig(options);
+  }
+
+  /** Remove a server from one config file, then return the effective rows. */
+  async removeMcpServer(options: { sessionId: string; scope: McpScope; name: string }) {
+    const live = this.requireLive(options.sessionId);
+    await eraseMcpServer(live.meta.workspaceRoot, this.homeDir, options.scope, options.name);
+    return this.mcpConfig(options);
   }
 
   async sendTurn(options: { sessionId: string; text: string; reasoningEffort?: string; images?: Array<{ mediaType: string; base64Data: string }>; ifBusy?: "queue" | "steer" | "replace"; skill?: SkillInvocation }) {

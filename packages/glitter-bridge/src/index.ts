@@ -5,6 +5,7 @@ import { MuseHost } from "./host.js";
 import { LoginFlow } from "./login.js";
 import { AcpAgentHost } from "./acp.js";
 import { HARNESS_ID, HarnessHost } from "./harness/host.js";
+import type { McpScope, McpServerInput } from "./harness/mcp.js";
 import type { ProviderCredentials } from "./harness/providers.js";
 import { agentSpec, checkAgentBin, detectAgents, resolveAgentBin } from "./agents.js";
 import { checkCliUpdate, updateCli } from "./cli-update.js";
@@ -158,6 +159,41 @@ function text(value: unknown): string | null {
 function skillParam(value: unknown): { selector: string; arguments?: string } | undefined {
   const skill = value as { selector?: unknown; arguments?: unknown } | undefined;
   return skill && typeof skill.selector === "string" ? { selector: skill.selector, ...(typeof skill.arguments === "string" ? { arguments: skill.arguments } : {}) } : undefined;
+}
+
+/** The file an MCP server is written to: the workspace or the home folder. */
+function mcpScope(value: unknown): McpScope {
+  if (value !== "workspace" && value !== "home") throw new Error("A server scope must be workspace or home.");
+  return value;
+}
+
+/** A server definition from the renderer, reduced to the shapes the config writer accepts. */
+function mcpServerInput(value: unknown): McpServerInput {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("A server definition is required.");
+  const raw = value as Record<string, unknown>;
+  if (raw.transport !== "stdio" && raw.transport !== "http") throw new Error("A server transport must be stdio or http.");
+  const list = (candidate: unknown, label: string): string[] => {
+    if (candidate == null) return [];
+    if (!Array.isArray(candidate) || candidate.some((item) => typeof item !== "string")) throw new Error(`${label} must be a list of strings.`);
+    return candidate as string[];
+  };
+  const map = (candidate: unknown, label: string): Record<string, string> => {
+    if (candidate == null) return {};
+    if (typeof candidate !== "object" || Array.isArray(candidate)) throw new Error(`${label} must be an object of strings.`);
+    const entries = Object.entries(candidate);
+    if (entries.some(([, item]) => typeof item !== "string")) throw new Error(`${label} must be an object of strings.`);
+    return Object.fromEntries(entries) as Record<string, string>;
+  };
+  return {
+    name: typeof raw.name === "string" ? raw.name : "",
+    transport: raw.transport,
+    ...(typeof raw.command === "string" ? { command: raw.command } : {}),
+    args: list(raw.args, "args"),
+    env: map(raw.env, "env"),
+    ...(typeof raw.url === "string" ? { url: raw.url } : {}),
+    headers: map(raw.headers, "headers"),
+    ...(typeof raw.timeoutMs === "number" ? { timeoutMs: raw.timeoutMs } : {}),
+  };
 }
 
 /**
@@ -800,6 +836,12 @@ async function dispatchHarness(method: string, params: Record<string, unknown>) 
       return harness.listSkills({ sessionId });
     case "harnessMcp":
       return harness.mcpStatus({ sessionId, refresh: params.refresh === true });
+    case "harnessMcpConfig":
+      return harness.mcpConfig({ sessionId });
+    case "harnessMcpAddServer":
+      return harness.addMcpServer({ sessionId, scope: mcpScope(params.scope), server: mcpServerInput(params.server) });
+    case "harnessMcpRemoveServer":
+      return harness.removeMcpServer({ sessionId, scope: mcpScope(params.scope), name: String(params.name ?? "") });
     case "respondUserInput":
       if (!params.response || typeof params.response !== "object") throw new Error("Question response is required.");
       return harness.respondUserInput({ sessionId, userInputId: String(params.userInputId ?? ""), response: params.response as UserInputResponse });

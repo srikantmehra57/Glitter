@@ -213,6 +213,7 @@ const storeReplacements = {
     export const cliLogout=async()=>{globalThis.cliLoggedOut=true;};
     export const pluginList=async()=>globalThis.pluginEntries ?? [];
     export const skillList=async()=>globalThis.skillEntries ?? [];
+    export const catalogList=async()=>({entries:[],skillsRoot:'',error:null});export const catalogInstall=async()=>({installedSkills:[],installedServers:[],skipped:[],errors:[]});export const catalogRemove=async()=>({removed:[],skipped:[],errors:[]});
     export const projectInit=async(...args)=>globalThis.runProjectInit(...args);
     export const enterpriseStatus=async()=>globalThis.enterpriseFixture ?? { generation: null, sources: [] };
     export const pickPluginBundle=async()=>globalThis.pickedBundle ?? null;

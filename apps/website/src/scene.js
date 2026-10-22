@@ -1,5 +1,5 @@
 // The constellation — one particle system that morphs between six forms as the
-// page scrolls: the tile mark, a floor of light, a galaxy, the effort ring, a
+// page scrolls: the spark mark, a floor of light, a galaxy, the effort ring, a
 // run helix and a sphere. Each <[data-scene]> element names its form and framing:
 //   data-scene="shape x y scale opacity effortGain"
 // Exposes window.glitterScene { setEffort(t), refreshPalette(), stats(), setPaused(b) }.
@@ -18,15 +18,31 @@ const gauss = () => {
   return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
 };
 
-/* The mark: an M drawn as a cluster of tiles — two pillars of two stacked
-   squircles each, a downward wedge between them, plus a faint halo — the logo
-   in /public/spark.svg, in volume. */
-const MARK_TILES = [
-  [-1.05, 0.525],
-  [-1.05, -0.525],
-  [1.05, 0.525],
-  [1.05, -0.525],
+/* The mark: the Glitter spark — a geometric G whose spur meets a four-pointed
+   faceted star, plus a faint halo — the logo in /public/spark.svg, in volume.
+   Coordinates are the SVG's, centred on (32, 32) and divided by 20, y up: the G
+   is an 8px stroke on a radius-20 arc, open between 0 and 45 degrees. */
+const SPARK_CENTER = [-0.05, 0];
+// Each blade runs from the centre out to a tip through the two waist points.
+const SPARK_BLADES = [
+  [[-0.24, 0.175], [-0.05, 0.775], [0.14, 0.175]],
+  [[0.14, 0.175], [0.575, 0], [0.14, -0.175]],
+  [[0.14, -0.175], [-0.05, -0.775], [-0.24, -0.175]],
+  [[-0.24, -0.175], [-0.775, 0], [-0.24, 0.175]],
 ];
+
+function bladePoint(out, ax, ay, bx, by, cx, cy) {
+  let u = Math.random();
+  let v = Math.random();
+  if (u + v > 1) {
+    u = 1 - u;
+    v = 1 - v;
+  }
+  out[0] = ax + u * (bx - ax) + v * (cx - ax);
+  out[1] = ay + u * (by - ay) + v * (cy - ay);
+  out[2] = gauss() * 0.05;
+}
+
 function sparkPoint(out) {
   const roll = Math.random();
   if (roll < 0.1) {
@@ -38,33 +54,25 @@ function sparkPoint(out) {
     out[2] = gauss() * 0.03;
     return;
   }
-  if (roll >= 0.8) {
-    // the wedge: triangle A(-0.45, 0.975) B(0.45, 0.975) C(0, -0.25)
-    let u = Math.random();
-    let v = Math.random();
-    if (u + v > 1) {
-      u = 1 - u;
-      v = 1 - v;
-    }
-    out[0] = -0.45 + u * 0.9 + v * 0.45;
-    out[1] = 0.975 - v * 1.225;
-    out[2] = gauss() * 0.06;
+  if (roll < 0.31) {
+    // the star: four blades, each two triangles from the centre to a tip
+    const [wa, tip, wb] = SPARK_BLADES[Math.floor(rand(0, 4))];
+    if (Math.random() < 0.5) bladePoint(out, ...SPARK_CENTER, ...wa, ...tip);
+    else bladePoint(out, ...SPARK_CENTER, ...tip, ...wb);
     return;
   }
-  const [cx, cy] = MARK_TILES[Math.floor(rand(0, MARK_TILES.length))];
-  const r = 0.45;
-  const t = rand(0, Math.PI * 2);
-  const edge = Math.random() < 0.58;
-  const s = edge ? rand(0.965, 1.0) : Math.sqrt(Math.random()) * 0.96;
-  const p = 2.35;
-  const c = Math.cos(t);
-  const n = Math.sin(t);
-  const x = Math.sign(c) * Math.pow(Math.abs(c), p) * s;
-  const y = Math.sign(n) * Math.pow(Math.abs(n), p) * s;
-  const d = Math.min(1, Math.hypot(x, y));
-  out[0] = cx + x * r;
-  out[1] = cy + y * r;
-  out[2] = (Math.random() * 2 - 1) * 0.2 * r * (1 - d * 0.85);
+  if (roll < 0.43) {
+    // the spur, running in from the ring to the star
+    out[0] = rand(0.1, 1.0);
+    out[1] = rand(-0.2, 0.2);
+    out[2] = gauss() * 0.05;
+    return;
+  }
+  const a = (45 + rand() * 315) * (Math.PI / 180);
+  const r = rand(0.8, 1.2);
+  out[0] = Math.cos(a) * r;
+  out[1] = Math.sin(a) * r;
+  out[2] = gauss() * 0.06;
 }
 
 function planePoint(out) {

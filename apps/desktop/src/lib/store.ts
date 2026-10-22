@@ -9,7 +9,7 @@ import { buildSuggestionPrompt, cheapestModel, parseSuggestions, suggestionSigna
 import { stepZoom } from "./zoom";
 import { asLedger, compact, EMPTY_LEDGER, recordTurn, turnEntry, type UsageLedger } from "./usageLedger";
 import { persistableDrafts, rememberPrompt, NewerSessionMemoryError, SessionMemoryPersistence, SESSION_MEMORY_VERSION, type Draft, type SessionMemory, type ThreadMeta } from "./sessionMemory";
-import { acpConsentGet, acpConsentSet, agentIdentities, bridge, cliLogout, confirmAgentBin, credentialGet, credentialSet, enterpriseStatus, gitCommit, gitDiscardAll, gitDiscardFiles, gitDiscardHunk, gitInit, gitReview, gitBranches, gitPull, gitPullRequest, gitPush, gitSnapshot, gitStage, gitSwitch, gitWorktreeCreate, gitWorktreeHandoff, gitWorktreeRemove, turnSnapshots, restoreTurnSnapshot, forgetTurnSnapshots, listWorkspaceFiles, MOCK_FILES, mockThreads, mockWorkspaceFile, mockWorktree, readWorkspaceFile, onBridgeEvent, onWindowCloseRequested, persistStoreDocument, pickFolder, pickPluginBundle, pickSkillSource, pluginInstall, pluginList, projectInit, readDroppedPaths, removeGrant, repairStoreDocument, setInterfaceZoom, setWindowAppearance, setMenuShortcuts, skillImport, skillInstall, skillList, skillUninstall, trustPreview, verifyGrants, type BridgeEventPayloads } from "./bridge";
+import { acpConsentGet, acpConsentSet, agentIdentities, bridge, catalogInstall, catalogList, catalogRemove, cliLogout, confirmAgentBin, credentialGet, credentialSet, enterpriseStatus, gitCommit, gitDiscardAll, gitDiscardFiles, gitDiscardHunk, gitInit, gitReview, gitBranches, gitPull, gitPullRequest, gitPush, gitSnapshot, gitStage, gitSwitch, gitWorktreeCreate, gitWorktreeHandoff, gitWorktreeRemove, turnSnapshots, restoreTurnSnapshot, forgetTurnSnapshots, listWorkspaceFiles, MOCK_FILES, mockThreads, mockWorkspaceFile, mockWorktree, readWorkspaceFile, onBridgeEvent, onWindowCloseRequested, persistStoreDocument, pickFolder, pickPluginBundle, pickSkillSource, pluginInstall, pluginList, projectInit, readDroppedPaths, removeGrant, repairStoreDocument, setInterfaceZoom, setWindowAppearance, setMenuShortcuts, skillImport, skillInstall, skillList, skillUninstall, trustPreview, verifyGrants, type BridgeEventPayloads } from "./bridge";
 import { MOCK_AGENT_MODELS, MOCK_AGENTS, MOCK_GIT, MOCK_MODELS, mockGitReview } from "./mock";
 import { clampTier, modelFor, tiersFor } from "./effort";
 import { dropHunk, parseUnifiedDiff, reviewTarget } from "./diff";
@@ -46,7 +46,7 @@ import {
   type WorkspaceFile,
   type Workspace,
   type CliUpdateOutcome, type CliUpdateStatus, type ComposerImage, type ContextRef, type HostCompat, type HostInfo, type Model, type SessionConfig, type SessionMetadata, type SessionOpening, type SessionPreview,
-  type UserInputResponse, type GoalState, type ContextUsage, type TokenUsage, type SubscriptionUsage, type SubagentResult, type Suggestion, type TrustPreview, type SkillRow, type McpServer, type HarnessMcpStatus, type PluginEntry, type SkillEntry, type HostPosture, type EnterpriseStatus, type SettingsTab,
+  type UserInputResponse, type GoalState, type ContextUsage, type TokenUsage, type SubscriptionUsage, type SubagentResult, type Suggestion, type TrustPreview, type SkillRow, type McpServer, type HarnessMcpStatus, type HarnessMcpConfig, type HarnessMcpScope, type HarnessMcpServerInput, type CatalogEntry, type CatalogInstallResult, type CatalogRemoveResult, type PluginEntry, type SkillEntry, type HostPosture, type EnterpriseStatus, type SettingsTab,
 } from "./types";
 
 const persist = isTauri() ? new LazyStore("glitter.json", { autoSave: false, defaults: {} }) : null;
@@ -362,6 +362,25 @@ type AppStore = Settings & {
   harnessMcpLoading: boolean;
   harnessMcpError: string | null;
   refreshHarnessMcp: (sessionId: string, refresh?: boolean) => Promise<void>;
+  /** The config rows behind `harnessMcp`, including servers the parser refused; null until loaded. */
+  harnessMcpConfig: HarnessMcpConfig | null;
+  harnessMcpConfigLoading: boolean;
+  harnessMcpConfigError: string | null;
+  refreshHarnessMcpConfig: (sessionId: string) => Promise<void>;
+  /** Write a server to the workspace or home config, then reconnect the generation. */
+  addHarnessMcpServer: (sessionId: string, scope: HarnessMcpScope, server: HarnessMcpServerInput) => Promise<void>;
+  /** Remove a server from the file that defines it, then reconnect the generation. */
+  removeHarnessMcpServer: (sessionId: string, scope: HarnessMcpScope, name: string) => Promise<void>;
+  /** The bundled extension store: curated skills, MCP servers and skill bundles, installed without a CLI. */
+  catalogEntries: CatalogEntry[];
+  /** Where store-installed skills land, for the store's footnote. */
+  catalogSkillsRoot: string | null;
+  catalogLoading: boolean;
+  catalogError: string | null;
+  refreshCatalog: () => Promise<void>;
+  /** Install one entry, then refresh the store and, when a Harness thread is open, its skills and MCP generation. */
+  installCatalogEntry: (id: string, sessionId?: string) => Promise<CatalogInstallResult>;
+  removeCatalogEntry: (id: string, sessionId?: string) => Promise<CatalogRemoveResult>;
   /** Plugin inventory (`plugin_list`); `availableShown` selects marketplace-available rows. */
   pluginEntries: PluginEntry[];
   pluginsAvailableShown: boolean;
@@ -1230,6 +1249,13 @@ export const useAppStore = create<AppStore>((set, get) => ({
   harnessMcp: null,
   harnessMcpLoading: false,
   harnessMcpError: null,
+  harnessMcpConfig: null,
+  harnessMcpConfigLoading: false,
+  harnessMcpConfigError: null,
+  catalogEntries: [],
+  catalogSkillsRoot: null,
+  catalogLoading: false,
+  catalogError: null,
   pluginEntries: [],
   pluginsAvailableShown: false,
   pluginsLoading: false,
@@ -2458,6 +2484,66 @@ export const useAppStore = create<AppStore>((set, get) => ({
     } finally {
       set({ harnessMcpLoading: false });
     }
+  },
+
+  refreshHarnessMcpConfig: async (sessionId) => {
+    if (get().harnessMcpConfigLoading) return;
+    set({ harnessMcpConfigLoading: true, harnessMcpConfigError: null });
+    try {
+      const config = await bridge<HarnessMcpConfig>("harnessMcpConfig", { sessionId, agentId: "harness" });
+      set({ harnessMcpConfig: { servers: config.servers ?? [], error: config.error ?? null } });
+    } catch (error) {
+      set({ harnessMcpConfigError: describeError("Could not load the Harness MCP configuration", error) });
+    } finally {
+      set({ harnessMcpConfigLoading: false });
+    }
+  },
+
+  addHarnessMcpServer: async (sessionId, scope, server) => {
+    const config = await bridge<HarnessMcpConfig>("harnessMcpAddServer", { sessionId, agentId: "harness", scope, server });
+    set({ harnessMcpConfig: { servers: config.servers ?? [], error: config.error ?? null }, harnessMcpConfigError: null });
+    await get().refreshHarnessMcp(sessionId, true);
+  },
+
+  removeHarnessMcpServer: async (sessionId, scope, name) => {
+    const config = await bridge<HarnessMcpConfig>("harnessMcpRemoveServer", { sessionId, agentId: "harness", scope, name });
+    set({ harnessMcpConfig: { servers: config.servers ?? [], error: config.error ?? null }, harnessMcpConfigError: null });
+    await get().refreshHarnessMcp(sessionId, true);
+  },
+
+  refreshCatalog: async () => {
+    if (get().catalogLoading) return;
+    set({ catalogLoading: true, catalogError: null });
+    try {
+      const listed = await catalogList(currentWorkspace(get())?.grantId ?? undefined);
+      set({ catalogEntries: listed.entries ?? [], catalogSkillsRoot: listed.skillsRoot ?? null, catalogError: listed.error });
+    } catch (error) {
+      set({ catalogError: describeError("Could not load the extension store", error) });
+    } finally {
+      set({ catalogLoading: false });
+    }
+  },
+
+  installCatalogEntry: async (id, sessionId) => {
+    const result = await catalogInstall(id, currentWorkspace(get())?.grantId ?? undefined);
+    await get().refreshCatalog();
+    const thread = sessionId ? get().threads.find((item) => item.sessionId === sessionId) : undefined;
+    if (sessionId && thread?.agentId === "harness") {
+      await get().refreshSkills(sessionId);
+      await get().refreshHarnessMcp(sessionId, true);
+    }
+    return result;
+  },
+
+  removeCatalogEntry: async (id, sessionId) => {
+    const result = await catalogRemove(id, currentWorkspace(get())?.grantId ?? undefined);
+    await get().refreshCatalog();
+    const thread = sessionId ? get().threads.find((item) => item.sessionId === sessionId) : undefined;
+    if (sessionId && thread?.agentId === "harness") {
+      await get().refreshSkills(sessionId);
+      await get().refreshHarnessMcp(sessionId, true);
+    }
+    return result;
   },
 
   refreshPlugins: async (available = false) => {

@@ -28,6 +28,7 @@ export const PROVIDERS: ProviderSpec[] = [
   { id: "google", name: "Google Gemini", wire: "openai", baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai" },
   { id: "openrouter", name: "OpenRouter", wire: "openai", baseUrl: "https://openrouter.ai/api/v1" },
   { id: "cline", name: "Cline API", wire: "openai", baseUrl: "https://api.cline.bot/api/v1" },
+  { id: "kilo", name: "Kilo API", wire: "openai", baseUrl: "https://ai-gateway.kilo.ai/api/v1" },
   { id: "xai", name: "xAI", wire: "openai", baseUrl: "https://api.x.ai/v1" },
   { id: "deepseek", name: "DeepSeek", wire: "openai", baseUrl: "https://api.deepseek.com/v1" },
   { id: "groq", name: "Groq", wire: "openai", baseUrl: "https://api.groq.com/openai/v1" },
@@ -75,7 +76,7 @@ export function splitModelId(modelId: string): { providerId: string; model: stri
 export const TIERS = ["none", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type Tier = (typeof TIERS)[number];
 
-/** Reasoning families a gateway (OpenRouter, the Cline API) routes to, by the vendor's own model names. */
+/** Reasoning families a gateway (OpenRouter, the Cline API, the Kilo API) routes to, by the vendor's own model names. */
 const GATEWAY_REASONING = /(^|\/)(o\d|gpt-([5-9]|\d\d)|gpt-oss)|codex|claude-(3-7|sonnet-4|opus-4|[a-z]+-[4-9])|gemini-(2\.5|[3-9])|deepseek-(r1|v3\.[1-9]|v[4-9])|grok-([3-9]|code)|qwen3|qwq|glm-(4\.[5-9]|[5-9])|kimi-k2|minimax-m|nemotron|magistral|reasoning|thinking/;
 
 /**
@@ -85,7 +86,7 @@ const GATEWAY_REASONING = /(^|\/)(o\d|gpt-([5-9]|\d\d)|gpt-oss)|codex|claude-(3-
 const NIM_THINKING_SWITCH = /nemotron-(nano-9b-v2|[3-9])|qwen3|deepseek-v3\.[1-9]|deepseek-v[4-9]|glm-(4\.[5-9]|[5-9])|kimi-k2\.[5-9]/;
 
 /** Providers whose wire carries an explicit "none" (thinking off). The rest treat None as their default. */
-export const SENDS_NONE = new Set(["nvidia", "cline", "openrouter"]);
+export const SENDS_NONE = new Set(["nvidia", "cline", "openrouter", "kilo"]);
 
 /**
  * The effort tiers a model takes, or none when it has no reasoning control.
@@ -105,7 +106,9 @@ export function effortTiers(providerId: string, model: string): Tier[] {
   if (providerId === "nvidia") return /(^|\/)gpt-oss/.test(id) ? ["low", "medium", "high"] : NIM_THINKING_SWITCH.test(id) ? ["none", "high"] : [];
   if (providerId === "groq") return /(^|\/)gpt-oss/.test(id) ? ["low", "medium", "high"] : [];
   // Gateways take OpenRouter's effort vocabulary and drop what a model cannot use.
-  if (providerId === "openrouter" || providerId === "cline") return GATEWAY_REASONING.test(id) ? ["none", "low", "medium", "high", "xhigh"] : [];
+  // Kilo's auto routers are virtual ids, so the family pattern never sees the model they resolve to.
+  if (providerId === "kilo" && /(^|\/)kilo-auto\//.test(id)) return ["none", "low", "medium", "high", "xhigh"];
+  if (providerId === "openrouter" || providerId === "cline" || providerId === "kilo") return GATEWAY_REASONING.test(id) ? ["none", "low", "medium", "high", "xhigh"] : [];
   return [];
 }
 

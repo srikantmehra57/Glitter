@@ -1,6 +1,6 @@
-import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { createHash, randomUUID } from "node:crypto";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { spawnIsolated, terminateTree } from "../isolation.js";
 import type { Extension, TurnContext } from "./registry.js";
 import type { Subject } from "./permission/grants.js";
@@ -22,6 +22,9 @@ const CONFIG_PATH = [".glitter", "mcp.json"];
 const CONNECT_TIMEOUT_MS = 15_000;
 const DEFAULT_CALL_TIMEOUT_MS = 120_000;
 const MAX_CALL_TIMEOUT_MS = 600_000;
+const MAX_MAP_ENTRIES = 64;
+const MAX_MAP_KEY = 128;
+const MAX_MAP_VALUE = 4_096;
 const MAX_TOOLS_PER_SERVER = 200;
 const MAX_TOOL_PAGES = 20;
 const MAX_TOOL_DESCRIPTION = 2_000;
@@ -52,6 +55,36 @@ export type McpTool = Readonly<{ name: string; description: string; inputSchema:
 export type McpServerInfo = Readonly<{ name: string; transport: McpTransport; tools: number }>;
 export type McpStatus = Readonly<{ servers: McpServerInfo[]; error: string | null }>;
 
+/** Which `.glitter/mcp.json` a server is written to. The workspace file wins a duplicate name. */
+export type McpScope = "workspace" | "home";
+
+/** A server the app may add. Values in `env` and `headers` are written once and never read back. */
+export type McpServerInput = Readonly<{
+  name: string;
+  transport: McpTransport;
+  command?: string;
+  args?: readonly string[];
+  env?: Readonly<Record<string, string>>;
+  url?: string;
+  headers?: Readonly<Record<string, string>>;
+  timeoutMs?: number;
+}>;
+
+/** A configured server for the management list: no env or header values, only their names. */
+export type McpConfigRow = Readonly<{
+  name: string;
+  source: McpScope;
+  transport: McpTransport;
+  command?: string;
+  url?: string;
+  args: number;
+  envKeys: readonly string[];
+  headerKeys: readonly string[];
+  error?: string;
+}>;
+
+export type McpConfig = Readonly<{ servers: McpConfigRow[]; error: string | null }>;
+
 type Json = Record<string, unknown>;
 type JsonRpc = { jsonrpc?: string; id?: number | string | null; method?: string; params?: unknown; result?: unknown; error?: { code?: number; message?: string } };
 
@@ -71,19 +104,25 @@ function stringMap(value: unknown, label: string, keyPattern: RegExp): Record<st
   if (!isRecord(value)) throw new Error(`${label} must be an object of strings.`);
   const out: Record<string, string> = {};
   for (const [key, entry] of Object.entries(value)) {
-    if (!keyPattern.test(key)) throw new Error(`${label} has an invalid key: ${key}.`);
+    if (Object.keys(out).length >= MAX_MAP_ENTRIES) throw new Error(`${label} has more than ${MAX_MAP_ENTRIES} entries.`);
+    if (!keyPattern.test(key) || key.length > MAX_MAP_KEY) throw new Error(`${label} has an invalid key: ${key}.`);
     if (typeof entry !== "string") throw new Error(`${label}.${key} must be a string.`);
+    if (entry.length > MAX_MAP_VALUE) throw new Error(`${label}.${key} is longer than ${MAX_MAP_VALUE} characters.`);
     if (/[\r\n]/.test(entry)) throw new Error(`${label}.${key} must be one line.`);
     if (entry) out[key] = entry;
   }
   return out;
 }
 
+function transportOf(raw: Json): McpTransport {
+  const declared = str(raw.transport || raw.type).toLowerCase();
+  return declared === "http" || declared === "streamablehttp" || declared === "streamable-http" || (!declared && str(raw.url || raw.endpoint)) ? "http" : "stdio";
+}
+
 function parseServer(file: string, name: string, raw: unknown): McpServerConfig {
   if (!NAME.test(name)) throw new Error(`${file}: "${name}" is not a valid server name.`);
   if (!isRecord(raw)) throw new Error(`${file}: server "${name}" must be an object.`);
-  const declared = str(raw.transport || raw.type).toLowerCase();
-  const transport: McpTransport = declared === "http" || declared === "streamablehttp" || declared === "streamable-http" || (!declared && str(raw.url || raw.endpoint)) ? "http" : "stdio";
+  const transport = transportOf(raw);
   const args = raw.args == null ? [] : raw.args;
   if (!Array.isArray(args) || args.length > 64 || args.some((arg) => typeof arg !== "string")) throw new Error(`${file}: ${name}.args must be an array of at most 64 strings.`);
   const timeout = typeof raw.timeoutMs === "number" && Number.isFinite(raw.timeoutMs) ? Math.floor(raw.timeoutMs) : DEFAULT_CALL_TIMEOUT_MS;
@@ -98,6 +137,7 @@ function parseServer(file: string, name: string, raw: unknown): McpServerConfig 
     return Object.freeze({ name, transport, command, args: Object.freeze(args as string[]), env: Object.freeze(env), headers: Object.freeze(headers), timeoutMs: timeout });
   }
   const url = str(raw.url || raw.endpoint);
+  if (url.length > 4_096) throw new Error(`${file}: ${name}.url is too long.`);
   let parsed: URL;
   try { parsed = new URL(url); } catch { throw new Error(`${file}: server "${name}" needs a valid url.`); }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw new Error(`${file}: ${name}.url must be http or https.`);
@@ -126,6 +166,184 @@ export async function readMcpServers(workspaceRoot: string, homeDir: string): Pr
     }
   }
   return [...found.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function configFile(root: string): string {
+  return join(root, ...CONFIG_PATH);
+}
+
+/** A URL for display only: no userinfo, query or fragment, where a token may sit. */
+function displayUrl(value: string): string | undefined {
+  try {
+    const url = new URL(value);
+    return `${url.protocol}//${url.host}${url.pathname}`;
+  } catch {
+    return undefined;
+  }
+}
+
+function rowFor(source: McpScope, config: McpServerConfig): McpConfigRow {
+  const url = config.url ? displayUrl(config.url) : undefined;
+  return {
+    name: config.name,
+    source,
+    transport: config.transport,
+    ...(config.command ? { command: config.command } : {}),
+    ...(url ? { url } : {}),
+    args: config.args.length,
+    envKeys: Object.keys(config.env).sort(),
+    headerKeys: Object.keys(config.headers).sort(),
+  };
+}
+
+/** A row for a server the parser refused, so it can still be seen and removed. */
+function lenientRow(source: McpScope, name: string, raw: unknown): McpConfigRow {
+  const record = isRecord(raw) ? raw : {};
+  const command = str(record.command).trim();
+  const url = displayUrl(str(record.url || record.endpoint));
+  const args = Array.isArray(record.args) ? record.args.filter((arg) => typeof arg === "string").length : 0;
+  const envKeys = isRecord(record.env) ? Object.keys(record.env).filter((key) => ENV_KEY.test(key)).sort() : [];
+  const headerKeys = isRecord(record.headers) ? Object.keys(record.headers).filter((key) => HEADER_KEY.test(key)).sort() : [];
+  return {
+    name,
+    source,
+    transport: transportOf(record),
+    ...(command ? { command } : {}),
+    ...(url ? { url } : {}),
+    args,
+    envKeys,
+    headerKeys,
+  };
+}
+
+const sortRows = (rows: Iterable<McpConfigRow>) => [...rows].sort((a, b) => a.name.localeCompare(b.name));
+
+/**
+ * The effective servers as rows for the app, with per-server errors instead of
+ * one failure for the whole file. Values are never included, only key names.
+ * A malformed workspace file stops the walk, as it does for a sync.
+ */
+export async function readMcpConfig(workspaceRoot: string, homeDir: string): Promise<McpConfig> {
+  const rows = new Map<string, McpConfigRow>();
+  for (const [source, root] of [["workspace", workspaceRoot], ["home", homeDir]] as const) {
+    const file = configFile(root);
+    let document: Json | null;
+    try {
+      document = await readDocument(file);
+    } catch (error) {
+      return { servers: sortRows(rows.values()), error: messageOf(error) };
+    }
+    if (!document) continue;
+    let block: Json;
+    try {
+      block = configBlock(document, file);
+    } catch (error) {
+      return { servers: sortRows(rows.values()), error: messageOf(error) };
+    }
+    for (const [name, raw] of Object.entries(block)) {
+      if (rows.has(name)) continue;
+      try {
+        rows.set(name, rowFor(source, parseServer(file, name, raw)));
+      } catch (error) {
+        rows.set(name, { ...lenientRow(source, name, raw), error: messageOf(error) });
+      }
+    }
+  }
+  return { servers: sortRows(rows.values()), error: null };
+}
+
+async function readDocument(file: string): Promise<Json | null> {
+  let text: string;
+  try {
+    text = await readFile(file, "utf8");
+  } catch (error) {
+    if ((error as { code?: string }).code === "ENOENT") return null;
+    throw error;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error(`${file} is not valid JSON.`);
+  }
+  if (!isRecord(parsed)) throw new Error(`${file} must contain an object.`);
+  return parsed;
+}
+
+function configBlock(document: Json, file: string): Json {
+  if (document.mcpServers == null) return document;
+  if (!isRecord(document.mcpServers)) throw new Error(`${file}: mcpServers must be an object.`);
+  return document.mcpServers;
+}
+
+async function editableDocument(file: string): Promise<{ document: Json; block: Json }> {
+  const document = await readDocument(file) ?? { mcpServers: {} };
+  return { document, block: configBlock(document, file) };
+}
+
+async function writeDocument(file: string, document: Json): Promise<void> {
+  const directory = dirname(file);
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  const temporary = join(directory, `.mcp-${randomUUID()}.tmp`);
+  try {
+    await writeFile(temporary, `${JSON.stringify(document, null, 2)}\n`, { mode: 0o600 });
+    await rename(temporary, file);
+  } finally {
+    await rm(temporary, { force: true }).catch(() => {});
+  }
+}
+
+async function configuredNames(file: string): Promise<Set<string>> {
+  const document = await readDocument(file);
+  return new Set(document ? Object.keys(configBlock(document, file)) : []);
+}
+
+/**
+ * Add a server to one config file. The definition is parsed with the same rules
+ * the sync uses before anything is written; the file is replaced atomically and
+ * only its owner can read it, since env and header values may hold secrets.
+ */
+export async function addMcpServer(workspaceRoot: string, homeDir: string, scope: McpScope, input: McpServerInput): Promise<void> {
+  const file = configFile(scope === "workspace" ? workspaceRoot : homeDir);
+  if (!NAME.test(input.name)) throw new Error(`"${input.name}" is not a valid server name.`);
+  if (input.transport !== "stdio" && input.transport !== "http") throw new Error("A server transport must be stdio or http.");
+  if (scope === "home" && (await configuredNames(configFile(workspaceRoot))).has(input.name)) {
+    throw new Error(`The workspace already defines a server named "${input.name}"; the workspace file wins, so a home server would be hidden.`);
+  }
+  const args = [...(input.args ?? [])];
+  const env = { ...(input.env ?? {}) };
+  const headers = { ...(input.headers ?? {}) };
+  const raw: Json = input.transport === "stdio"
+    ? {
+        transport: "stdio",
+        command: input.command ?? "",
+        ...(args.length ? { args } : {}),
+        ...(Object.keys(env).length ? { env } : {}),
+        ...(input.timeoutMs != null ? { timeoutMs: input.timeoutMs } : {}),
+      }
+    : {
+        transport: "http",
+        url: input.url ?? "",
+        ...(Object.keys(headers).length ? { headers } : {}),
+        ...(input.timeoutMs != null ? { timeoutMs: input.timeoutMs } : {}),
+      };
+  parseServer(file, input.name, raw);
+  const { document, block } = await editableDocument(file);
+  if (Object.hasOwn(block, input.name)) throw new Error(`${file} already defines a server named "${input.name}". Choose another name or remove it first.`);
+  block[input.name] = raw;
+  await writeDocument(file, document);
+}
+
+/** Remove a server from the file that defines it. */
+export async function removeMcpServer(workspaceRoot: string, homeDir: string, scope: McpScope, name: string): Promise<void> {
+  if (!name || name.length > 256) throw new Error("A server name is required.");
+  const file = configFile(scope === "workspace" ? workspaceRoot : homeDir);
+  const document = await readDocument(file);
+  if (!document) throw new Error(`No MCP server named "${name}" is configured in ${scope === "workspace" ? "this workspace" : "your home folder"}.`);
+  const block = configBlock(document, file);
+  if (!Object.hasOwn(block, name)) throw new Error(`${file} has no server named "${name}".`);
+  delete block[name];
+  await writeDocument(file, document);
 }
 
 /** The model-facing name: `mcp__server__tool`, with a hash when normalization changed it. */
@@ -160,6 +378,7 @@ class StdioExchange implements Exchange {
   private closed = false;
 
   private constructor(private readonly config: McpServerConfig, private readonly child: ReturnType<typeof spawnIsolated>["child"]) {
+    child.stdin.on("error", () => {});
     child.stdout.on("data", (chunk: Buffer) => this.receive(chunk.toString("utf8")));
     child.stderr.on("data", (chunk: Buffer) => {
       if (this.stderr.join("").length < 2_000) this.stderr.push(chunk.toString("utf8").slice(0, 500));
@@ -181,7 +400,7 @@ class StdioExchange implements Exchange {
   }
 
   private send(message: JsonRpc) {
-    if (this.closed) throw new Error(`The ${this.config.name} MCP server is closed.`);
+    if (this.closed || !this.child.stdin.writable) throw new Error(`The ${this.config.name} MCP server is closed.`);
     this.child.stdin.write(`${JSON.stringify(message)}\n`);
   }
 
@@ -284,6 +503,7 @@ class StdioExchange implements Exchange {
   async close() {
     if (this.closed) return;
     this.fail(`The ${this.config.name} MCP server was closed.`);
+    try { this.child.stdin.end(); } catch { /* closed */ }
     await terminateTree(this.child);
   }
 }

@@ -7,6 +7,44 @@ must respect. Don't log routine changes here; they belong in git history and
 
 ---
 
+### The extension store ships inside the app
+
+- **Date:** 2026-10-22
+- **Context:** Extensions listed only what already existed — the Muse CLI's
+  skill and plugin inventories and the servers in `.glitter/mcp.json`. A fresh
+  install with no CLI showed three empty sections and gave no way to get an
+  extension without a terminal.
+- **Decision:** A curated catalog is compiled into the app
+  (`src-tauri/src/catalog.rs`, with each skill's `SKILL.md` pulled in by
+  `include_str!`). It has three kinds: a `skill`, an `mcp` server, and a
+  `plugin`, which is a named bundle of skills and servers rather than a runtime.
+  Installing writes skills to `~/.agents/skills/<id>` and merges servers into
+  `.glitter/mcp.json` — the home folder's file, or the workspace's for a
+  workspace-scoped server such as the filesystem one. Installs serve the Harness
+  only; the CLI's own inventories are untouched, and "Plugin" keeps its CLI
+  meaning in the CLI section of the same screen.
+- **Trust:** The renderer sends an entry id and a workspace grant, never
+  content. Skill text and server definitions come only from the compiled
+  catalog, so no install can write a file the app did not ship. Installing
+  something that writes MCP config is confirmed first, naming each server,
+  because a server is a command line; per-call approval is unchanged.
+- **Native writer, deliberate duplicate:** `harness/mcp.ts` already adds and
+  removes servers, and that path stays the one behind the "Add server" form,
+  because it also reconnects the running generation. The store writes the same
+  file natively instead, because installing must work with no host, no session
+  and no CLI, and because it has to preserve keys and legacy bare maps it did
+  not write while claiming only what it did. Two writers, one file: keep the
+  merge rules and the 0600/0700 modes in sync when either changes.
+- **Ownership:** A store-installed skill folder carries
+  `.glitter-catalog.json` with its id and version; removing deletes only a
+  folder whose marker matches. A server is removed only while its command,
+  arguments, environment and URL are still exactly what the catalog wrote.
+  Anything the user edited is left in place and the store says so, which is why
+  a partial install is reported rather than quietly skipped.
+- **Consequences:** The library grows with an app release, not at runtime:
+  adding an entry is a Rust change plus its `SKILL.md`. Nothing is downloaded,
+  so there is no registry to trust and the store works offline.
+
 ### The product is called Glitter
 
 - **Date:** 2026-10-21
@@ -905,6 +943,37 @@ must respect. Don't log routine changes here; they belong in git history and
   harness thread and the CLI's servers for Muse; the two are not merged. A
   broken config is reported as a notice and does not fail the turn.
 
+### The app writes MCP config, and secret values are write-only
+
+- **Date:** 2026-10-22
+- **Decision:** Extensions → MCP can add a server to the workspace or home
+  config and remove one from the file that defines it. Writes go through the
+  harness host (`harnessMcpConfig`, `harnessMcpAddServer`,
+  `harnessMcpRemoveServer`), behind the usual allowlist, native DTO and session
+  binding, and the bridge parses the definition with the same `parseServer` the
+  sync uses before it writes anything. A file is replaced atomically through a
+  temp file, with `.glitter` at 0700 and the file at 0600. Environment and
+  header values are accepted on add and are never returned: rows carry only key
+  names, and a display URL drops userinfo, query and fragment. An entry that
+  fails to parse still appears as a row with its error, so it can be removed
+  rather than trapping the whole list. A home addition that a workspace server
+  of the same name would hide is refused, and a duplicate in the same file is
+  refused.
+- **Why:** The CLI still has no `muse mcp add` or `remove`, and hand-editing
+  JSON for a secret-bearing file is where mistakes and leaked tokens come from.
+  Writing on the bridge means there is one parser, one set of bounds and one
+  atomic write path for both the app and the sync, and the renderer never has
+  to hold a value longer than the add request.
+- **Bounds:** The native DTO mirrors the bridge limits: name ≤64 characters,
+  command or URL ≤4096, args ≤64 each ≤4096, env and headers ≤64 entries with
+  keys ≤128 and values ≤4096 without CR or LF, timeout 1000–600000 ms.
+  `NODE_OPTIONS` stays refused.
+- **Consequences:** A value is not recoverable from the app; to change one,
+  remove the server and add it again, or edit the file. The list reads the
+  effective rows across both files, but a remove only touches the file named
+  by the row's scope. After a write the host re-syncs the generation, so a
+  newly added server connects and a removed one drops its tools.
+
 ### A delegated task is a hidden child with a stamped, narrowed scope
 
 - **Date:** 2026-10-22
@@ -961,9 +1030,12 @@ must respect. Don't log routine changes here; they belong in git history and
 
 - **Date:** 2026-10-22
 - **Decision:** Effort tiers stay per provider and model family
-  (`effortTiers`). Gateways (OpenRouter, the Cline API) take OpenRouter's
-  vocabulary, None to Extra high, for reasoning families. The Cline API gets the
-  pair its own CLI sends, `reasoning_effort` and `reasoning.enabled`. NIM's
+  (`effortTiers`). Gateways (OpenRouter, the Cline API, the Kilo API) take
+  OpenRouter's vocabulary, None to Extra high, for reasoning families. The
+  Cline API gets the pair its own CLI sends, `reasoning_effort` and
+  `reasoning.enabled`. Kilo's gateway is OpenRouter-shaped, so it gets
+  `reasoning.effort`, including `none`. Its `kilo-auto` routers are virtual
+  ids, so they always offer that vocabulary. NIM's
   gpt-oss models take `reasoning_effort`; its hybrid thinkers have only on and
   off, shown as None and High and sent as `chat_template_kwargs` with both
   `thinking` and `enable_thinking`, since templates read one or the other.

@@ -7,21 +7,23 @@ only; their copy is not product copy.
 
 ## Mark and wordmark
 
-`glitter-mark.svg` is the editable source of the ember M. The M is carried over
-from the app's Muse Code days; a Glitter mark has not been drawn yet, so keep
-using it until one replaces it here. Geometry (viewBox 64):
+`glitter-mark.svg` is the editable source of the Glitter mark: the Prismatic
+Spark Core, fusing a geometric letter G with an illuminated four-pointed diamond
+spark (the Glitter Stella). Geometry (viewBox 64):
 
-- Two tile pillars: rounded 18×18 tiles (`rx` 5.5) at x 2 and x 44, rows at
-  y 12.5 and y 33.5.
-- A rounded downward-pointing wedge (▽) between them: top edge spans x 23–41 at
-  y 12.5 (flush with the pillar tops), apex toward the vertical middle, corner
-  radius ≈ 4, authored as a filled path with arc corners.
+- Continuous geometric G contour: radius 20 arc centered at (32, 32) sweeping
+  from (46, 18) clockwise through the base to (52, 32), turning into a horizontal
+  spur ending at x 34. Authored with 8px stroke width and rounded caps.
+- Four-pointed faceted diamond spark: centered at (31, 32), top/bottom vertices
+  at y 16.5 and y 47.5, horizontal span from x 16.5 to x 43.5 meeting the G's spur.
+  Four directional facets capture overhead specular illumination and warm ember
+  depth.
 - One shared `userSpaceOnUse` ember gradient (#E8730C → #F5A313 → #FFD24A) plus
-  a per-tile white top sheen (~22%).
+  an overhead white specular sheen (~35% opacity falling off at 45%).
 
 The mark reads at 16–36px in the interface beside “Glitter” (17px, weight
-600, -0.03em tracking) and needs no theme-specific variant. Avoid decorative
-glyph substitutes.
+600, -0.03em tracking) and scales up to 1024px for macOS dock and App Store tiles.
+Avoid decorative glyph substitutes.
 
 ## Icon generation
 

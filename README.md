@@ -47,8 +47,10 @@ are no Windows or Linux versions. No signed build has been published yet; see [K
   until you enable them, and you can switch agents mid-thread.
 - **Account.** In-app `muse login`, or an API key stored in the OS keychain.
   Choose subscription, API key or automatic billing.
-- **Extensions and usage.** Manage skills, plugins and MCP servers, and see
-  subscription usage, in Settings.
+- **Extensions and usage.** Settings has a store of curated skills, skill
+  bundles and MCP servers that installs in one click with no CLI or download,
+  alongside the skills, plugins and servers already on this Mac, and your
+  subscription usage.
 - **Desktop integration.** Native menu bar, command palette (`⌘K`), OS
   notifications, session export, Muse CLI update checks, light and dark themes
   with seven accents.

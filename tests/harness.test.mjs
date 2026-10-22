@@ -23,10 +23,10 @@ export { decide } from ${JSON.stringify(resolve('packages/glitter-bridge/src/har
 export { catalogPrompt, discoverSkills, parseFrontmatter } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/skills.ts'))};
 export { isTruncatedStop, repairHistory, classifyProviderFailure } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/wire.ts'))};
 export { effortTiers, resolveProvider } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/providers.ts'))};
-export { McpManager, readMcpServers, mcpToolName } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/mcp.ts'))};
+export { McpManager, readMcpServers, readMcpConfig, addMcpServer, removeMcpServer, mcpToolName } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/mcp.ts'))};
 `);
 await build({ entryPoints: [join(temporary, 'entry.ts')], bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'silent' });
-const { HarnessHost, SessionStore, BUILTIN_TOOLS, ExtensionRegistry, parseScript, isReadOnly, assessCommand, covers, scopesFor, runGuards, decide, catalogPrompt, discoverSkills, parseFrontmatter, confine, globRegex, runTool, scheduleToolCalls, encodeSegment, repairHistory, isTruncatedStop, retryBudgetOpen, effortTiers, resolveProvider, classifyProviderFailure, McpManager, readMcpServers, mcpToolName } = await import(pathToFileURL(outfile).href);
+const { HarnessHost, SessionStore, BUILTIN_TOOLS, ExtensionRegistry, parseScript, isReadOnly, assessCommand, covers, scopesFor, runGuards, decide, catalogPrompt, discoverSkills, parseFrontmatter, confine, globRegex, runTool, scheduleToolCalls, encodeSegment, repairHistory, isTruncatedStop, retryBudgetOpen, effortTiers, resolveProvider, classifyProviderFailure, McpManager, readMcpServers, readMcpConfig, addMcpServer, removeMcpServer, mcpToolName } = await import(pathToFileURL(outfile).href);
 
 const sse = (frames) => new Response(new ReadableStream({
   start(controller) {
@@ -104,6 +104,9 @@ test('providers need a key unless they are local, and custom endpoints use the U
   assert.deepEqual(effortTiers('cline', 'anthropic/claude-haiku-5.5'), ['none', 'low', 'medium', 'high', 'xhigh'], 'the Cline API routes reasoning');
   assert.deepEqual(effortTiers('cline', 'openai/gpt-6.1-sol'), ['none', 'low', 'medium', 'high', 'xhigh']);
   assert.deepEqual(effortTiers('cline', 'upstage/solar-mini4'), [], 'a non-reasoning model behind a gateway has none');
+  assert.deepEqual(effortTiers('kilo', 'anthropic/claude-sonnet-4.6'), ['none', 'low', 'medium', 'high', 'xhigh'], 'the Kilo API routes reasoning');
+  assert.deepEqual(effortTiers('kilo', 'kilo-auto/frontier'), ['none', 'low', 'medium', 'high', 'xhigh'], 'a Kilo auto router still offers effort');
+  assert.deepEqual(effortTiers('kilo', 'upstage/solar-mini4'), [], 'a non-reasoning model behind Kilo has none');
 });
 
 test('paths stay inside the workspace, symlinks included', async () => {
@@ -376,6 +379,64 @@ test('the Cline API lists its models and keeps each vendor prefix in the request
     assert.deepEqual({ effort: body.reasoning_effort, reasoning: body.reasoning }, { effort, reasoning: { enabled } }, `Cline gets the level and the switch at ${effort}`);
   }
   assert.equal(requests[0].body.stream_options, undefined, 'Cline answers usage without being asked');
+  assert.equal(events.filter(({ payload }) => payload.item?.kind === 'agentMessage').at(-1).payload.item.text, 'There is hello.txt.');
+});
+
+test('the Kilo API lists chat models and sends OpenRouter reasoning', async () => {
+  const root = await workspace();
+  const requests = [];
+  const fetchImpl = async (url, init) => {
+    if (String(url) === 'https://ai-gateway.kilo.ai/api/v1/models') {
+      const row = (id, extra = {}) => ({ id, object: 'model', name: id, supported_parameters: ['tools', 'temperature'], ...extra });
+      return Response.json({ object: 'list', data: [
+        row('anthropic/claude-sonnet-4.6', { context_length: 200000, pricing: { prompt: '0.000003', completion: '0.000015' } }),
+        row('openai/text-embedding-3-large'),
+        row('google/lyria-3-pro-preview'),
+        row('google/gemini-nano-banana-2.1'),
+        row('google/gemini-3.1-flash-image'),
+        row('scaledown/summarize', { supported_parameters: ['temperature'] }),
+        row('x-ai/grok-4.7'),
+        row('~anthropic/claude-sonnet-latest'),
+        row('kilo-auto/frontier', { context_length: 1000000, pricing: { prompt: '-1', completion: '-1' } }),
+        row('upstage/solar-mini4'),
+      ] });
+    }
+    const body = JSON.parse(init.body);
+    requests.push({ url: String(url), headers: init.headers, body });
+    return sse([{ choices: [{ delta: { content: 'There is hello.txt.' }, finish_reason: 'stop' }] }, '[DONE]']);
+  };
+  const events = [];
+  const instance = new HarnessHost((event, payload) => events.push({ event, payload }), new SessionStore(await mkdtemp(join(temporary, 'store-'))), fetchImpl);
+  instance.setCredentials({ kilo: { key: 'eyJ.kilo-test' } });
+  const listed = await instance.listModels();
+  assert.deepEqual(listed.models.map((model) => model.modelId).sort(), ['kilo/anthropic/claude-sonnet-4.6', 'kilo/kilo-auto/frontier', 'kilo/upstage/solar-mini4', 'kilo/x-ai/grok-4.7', 'kilo/~anthropic/claude-sonnet-latest'], 'embeddings, media models and models without tools are left out');
+  assert.equal(listed.models.find((model) => model.isDefault)?.modelId, 'kilo/anthropic/claude-sonnet-4.6', 'the default is a named chat model, not an alias or an auto router');
+  assert.equal(listed.models.find((model) => model.modelId === 'kilo/anthropic/claude-sonnet-4.6').contextLimit, 200000, 'a listed window is kept');
+  assert.equal(listed.models.find((model) => model.modelId === 'kilo/x-ai/grok-4.7').contextLimit, 256000, 'Kilo writes xAI as x-ai');
+  assert.equal(listed.models.find((model) => model.modelId === 'kilo/~anthropic/claude-sonnet-latest').contextLimit, 200000, 'a rolling alias still names its vendor');
+  assert.equal(listed.models.find((model) => model.modelId === 'kilo/kilo-auto/frontier').contextLimit, 1000000);
+  assert.equal(listed.models.find((model) => model.modelId === 'kilo/kilo-auto/frontier').cost, null, 'a sentinel price is not shown as a rate');
+  assert.deepEqual(listed.models.find((model) => model.modelId === 'kilo/anthropic/claude-sonnet-4.6').cost, { input: '3', output: '15', currency: 'USD' });
+  assert.deepEqual(listed.models.find((model) => model.modelId === 'kilo/kilo-auto/frontier').reasoningEfforts, ['none', 'low', 'medium', 'high', 'xhigh']);
+  assert.deepEqual(listed.models.find((model) => model.modelId === 'kilo/upstage/solar-mini4').reasoningEfforts, []);
+
+  const { sessionId } = await instance.startSession({ workspaceRoot: root, modelId: 'kilo/anthropic/claude-sonnet-4.6' });
+  await instance.sendTurn({ sessionId, text: 'list text files' });
+  await until(events, ({ event }) => event === 'turnCompleted');
+  assert.equal(requests[0].url, 'https://ai-gateway.kilo.ai/api/v1/chat/completions');
+  assert.equal(requests[0].headers.authorization, 'Bearer eyJ.kilo-test');
+  assert.equal(requests[0].body.model, 'anthropic/claude-sonnet-4.6', 'the vendor prefix reaches Kilo, the provider prefix does not');
+  assert.equal(requests[0].body.reasoning, undefined, 'no effort is sent until one is picked');
+  assert.equal(requests[0].body.stream_options, undefined, 'Kilo is not asked for stream usage');
+  for (const effort of ['high', 'none']) {
+    await instance.setEffort(sessionId, effort);
+    const before = events.filter(({ event }) => event === 'turnCompleted').length;
+    await instance.sendTurn({ sessionId, text: `again at ${effort}` });
+    await until(events, () => events.filter(({ event }) => event === 'turnCompleted').length > before);
+    const body = requests.at(-1).body;
+    assert.deepEqual(body.reasoning, { effort }, `Kilo gets reasoning.effort at ${effort}`);
+    assert.equal(body.reasoning_effort, undefined);
+  }
   assert.equal(events.filter(({ payload }) => payload.item?.kind === 'agentMessage').at(-1).payload.item.text, 'There is hello.txt.');
 });
 
@@ -1518,6 +1579,108 @@ test('MCP config merges the workspace over home and refuses unsafe values', asyn
   await invalid({ 'bad name': { command: 'node' } }, /not a valid server name/);
   await invalid({ node: { command: 'node', env: { NODE_OPTIONS: '--require evil' } } }, /cannot set NODE_OPTIONS/);
   await invalid({ node: { type: 'http', url: 'ftp://example.test/rpc' } }, /http or https/);
+});
+
+test('MCP management rows name their file and never return env or header values', async () => {
+  const root = await workspace();
+  const home = await mkdtemp(join(temporary, 'home-'));
+  await mkdir(join(root, '.glitter'));
+  await mkdir(join(home, '.glitter'));
+  await writeFile(join(root, '.glitter', 'mcp.json'), JSON.stringify({ mcpServers: {
+    docs: { command: 'node', args: ['docs.js', '--flag'], env: { TOKEN: 'workspace-secret' } },
+    remote: { type: 'http', url: 'https://user:pass@workspace.example/rpc?token=query-secret', headers: { Authorization: 'Bearer ws-secret' } },
+    broken: { command: 'node', env: { 'bad key': 'x' } },
+  } }));
+  await writeFile(join(home, '.glitter', 'mcp.json'), JSON.stringify({ mcpServers: {
+    'home-remote': { url: 'https://home.example/rpc' },
+    docs: { command: 'node', args: ['home.js'] },
+    'hidden-broken': { type: 'http', url: 'ftp://nope' },
+  } }));
+  const config = await readMcpConfig(root, home);
+  assert.deepEqual(config.servers.map((row) => `${row.name}:${row.source}:${row.transport}`), [
+    'broken:workspace:stdio',
+    'docs:workspace:stdio',
+    'hidden-broken:home:http',
+    'home-remote:home:http',
+    'remote:workspace:http',
+  ]);
+  const docs = config.servers.find((row) => row.name === 'docs');
+  assert.equal(docs.args, 2);
+  assert.equal(docs.command, 'node');
+  assert.deepEqual(docs.envKeys, ['TOKEN'], 'the workspace file wins a duplicate name');
+  const remote = config.servers.find((row) => row.name === 'remote');
+  assert.equal(remote.url, 'https://workspace.example/rpc', 'userinfo and query are removed from the display URL');
+  assert.match(config.servers.find((row) => row.name === 'broken').error, /invalid key: bad key/);
+  assert.match(config.servers.find((row) => row.name === 'hidden-broken').error, /http or https/);
+  assert.equal(JSON.stringify(config).includes('workspace-secret'), false);
+  assert.equal(JSON.stringify(config).includes('ws-secret'), false);
+  assert.equal(JSON.stringify(config).includes('user:pass'), false);
+  assert.equal(config.error, null);
+});
+
+test('adding and removing an MCP server edits one file atomically and keeps other keys', async () => {
+  const root = await workspace();
+  const home = await mkdtemp(join(temporary, 'home-'));
+  await mkdir(join(root, '.glitter'));
+  const file = join(root, '.glitter', 'mcp.json');
+  await writeFile(file, JSON.stringify({ $schema: 'https://example.test/mcp.schema.json', mcpServers: {
+    keep: { command: 'node', args: ['keep.js'] },
+  } }));
+  await addMcpServer(root, home, 'workspace', {
+    name: 'docs',
+    transport: 'stdio',
+    command: process.execPath,
+    args: ['docs.js'],
+    env: { TOKEN: 'secret-one' },
+  });
+  const parsed = JSON.parse(await readFile(file, 'utf8'));
+  assert.equal(parsed.$schema, 'https://example.test/mcp.schema.json', 'other top-level keys survive');
+  assert.deepEqual(parsed.mcpServers.keep, { command: 'node', args: ['keep.js'] });
+  assert.deepEqual(parsed.mcpServers.docs, { transport: 'stdio', command: process.execPath, args: ['docs.js'], env: { TOKEN: 'secret-one' } });
+  if (process.platform !== 'win32') assert.equal((await stat(file)).mode & 0o777, 0o600);
+  await assert.rejects(addMcpServer(root, home, 'workspace', { name: 'docs', transport: 'stdio', command: 'node' }), /already defines/);
+  await assert.rejects(addMcpServer(root, home, 'home', { name: 'docs', transport: 'stdio', command: 'node' }), /workspace already defines/);
+  await assert.rejects(addMcpServer(root, home, 'workspace', { name: 'unsafe', transport: 'stdio', command: 'node', env: { NODE_OPTIONS: '--require evil' } }), /NODE_OPTIONS/);
+  await addMcpServer(root, home, 'home', { name: 'remote', transport: 'http', url: 'https://example.test/rpc', headers: { Authorization: 'Bearer home-secret' } });
+  const homeFile = join(home, '.glitter', 'mcp.json');
+  assert.deepEqual(JSON.parse(await readFile(homeFile, 'utf8')).mcpServers.remote, {
+    transport: 'http',
+    url: 'https://example.test/rpc',
+    headers: { Authorization: 'Bearer home-secret' },
+  });
+  const config = await readMcpConfig(root, home);
+  assert.deepEqual(config.servers.map((row) => `${row.name}:${row.source}`), ['docs:workspace', 'keep:workspace', 'remote:home']);
+  await removeMcpServer(root, home, 'workspace', 'docs');
+  assert.deepEqual((await readMcpConfig(root, home)).servers.map((row) => row.name), ['keep', 'remote']);
+  await assert.rejects(removeMcpServer(root, home, 'workspace', 'docs'), /has no server named/);
+  await removeMcpServer(root, home, 'home', 'remote');
+  assert.deepEqual((await readMcpConfig(root, home)).servers.map((row) => row.name), ['keep']);
+});
+
+test('the host manages MCP servers in the thread workspace and never returns their values', async () => {
+  const root = await workspace();
+  const home = await mkdtemp(join(temporary, 'home-'));
+  const { instance } = host(anthropicStub([]).fetchImpl, new SessionStore(await mkdtemp(join(temporary, 'store-'))), { homeDir: home });
+  try {
+    const { sessionId } = await instance.startSession({ workspaceRoot: root });
+    assert.deepEqual(await instance.mcpConfig({ sessionId }), { servers: [], error: null });
+    const added = await instance.addMcpServer({
+      sessionId,
+      scope: 'workspace',
+      server: { name: 'docs', transport: 'stdio', command: process.execPath, args: ['docs.js'], env: { TOKEN: 'workspace-secret' } },
+    });
+    assert.deepEqual(added.servers.map(({ name, source, transport, args, envKeys }) => ({ name, source, transport, args, envKeys })), [
+      { name: 'docs', source: 'workspace', transport: 'stdio', args: 1, envKeys: ['TOKEN'] },
+    ]);
+    assert.doesNotMatch(JSON.stringify(added), /workspace-secret/, 'the read-back carries key names, never values');
+    const disk = JSON.parse(await readFile(join(root, '.glitter', 'mcp.json'), 'utf8'));
+    assert.deepEqual(disk.mcpServers.docs, { transport: 'stdio', command: process.execPath, args: ['docs.js'], env: { TOKEN: 'workspace-secret' } });
+    await assert.rejects(instance.addMcpServer({ sessionId, scope: 'workspace', server: { name: 'docs', transport: 'stdio', command: process.execPath } }), /already defines/);
+    assert.deepEqual((await instance.removeMcpServer({ sessionId, scope: 'workspace', name: 'docs' })).servers, []);
+    assert.deepEqual(JSON.parse(await readFile(join(root, '.glitter', 'mcp.json'), 'utf8')).mcpServers, {});
+  } finally {
+    await instance.stop();
+  }
 });
 
 test('an HTTP MCP server is reached with its configured headers and session', async () => {

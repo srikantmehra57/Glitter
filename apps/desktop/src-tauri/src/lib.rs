@@ -14,6 +14,7 @@ use tauri_plugin_opener::OpenerExt;
 
 #[cfg(target_os = "macos")]
 mod app_icon;
+mod catalog;
 mod credentials;
 mod dto;
 mod exec;
@@ -171,6 +172,9 @@ const BRIDGE_METHODS: &[&str] = &[
     "pageHistory",
     "listSkills",
     "harnessMcp",
+    "harnessMcpConfig",
+    "harnessMcpAddServer",
+    "harnessMcpRemoveServer",
     "mcpServers",
     "userShell",
     "readOutput",
@@ -987,7 +991,7 @@ fn bridge_request_impl<R: Runtime>(state: &AppState, app: &AppHandle<R>, id: Str
     }
     if matches!(
         method.as_str(),
-        "startHost" | "stopHost" | "listSessions" | "listModels" | "suggest" | "startSession" | "resumeSession" | "forkSession" | "compactSession" | "readSession" | "readChildSession" | "pageHistory" | "listSkills" | "harnessMcp" | "mcpServers" | "readOutput" | "setReasoningEffort" | "subagentControl" | "taskControl" | "workflowControl" | "goalControl" | "sendTurn" | "steerTurn" | "unqueueTurn" | "cancelTurn" | "setModel" | "setSessionOption"
+        "startHost" | "stopHost" | "listSessions" | "listModels" | "suggest" | "startSession" | "resumeSession" | "forkSession" | "compactSession" | "readSession" | "readChildSession" | "pageHistory" | "listSkills" | "harnessMcp" | "harnessMcpConfig" | "harnessMcpAddServer" | "harnessMcpRemoveServer" | "mcpServers" | "readOutput" | "setReasoningEffort" | "subagentControl" | "taskControl" | "workflowControl" | "goalControl" | "sendTurn" | "steerTurn" | "unqueueTurn" | "cancelTurn" | "setModel" | "setSessionOption"
     ) {
         inject_agent_bin(state, &mut params)?;
     }
@@ -1079,7 +1083,7 @@ fn bridge_request_impl<R: Runtime>(state: &AppState, app: &AppHandle<R>, id: Str
     }
     if matches!(
         method.as_str(),
-        "forkSession" | "compactSession" | "closeSession" | "readSession" | "readChildSession" | "pageHistory" | "listSkills" | "harnessMcp" | "userShell" | "readOutput" | "setReasoningEffort" | "subagentControl" | "taskControl" | "workflowControl" | "goalControl" | "sendTurn" | "steerTurn" | "unqueueTurn" | "cancelTurn" | "respondUserInput" | "setApprovalMode" | "setModel" | "setSessionOption" | "renameSession"
+        "forkSession" | "compactSession" | "closeSession" | "readSession" | "readChildSession" | "pageHistory" | "listSkills" | "harnessMcp" | "harnessMcpConfig" | "harnessMcpAddServer" | "harnessMcpRemoveServer" | "userShell" | "readOutput" | "setReasoningEffort" | "subagentControl" | "taskControl" | "workflowControl" | "goalControl" | "sendTurn" | "steerTurn" | "unqueueTurn" | "cancelTurn" | "respondUserInput" | "setApprovalMode" | "setModel" | "setSessionOption" | "renameSession"
     ) {
         let session_id = params.get("sessionId").and_then(Value::as_str).unwrap_or("");
         require_session(state, session_id)?;
@@ -3711,6 +3715,34 @@ async fn plugin_install(app: AppHandle, muse_bin: String, path: String) -> Resul
     .await
 }
 
+/// The bundled store: popular skills, plugins and MCP servers that install with
+/// no network. Skills go under `~/.agents/skills`; servers merge into the
+/// workspace's or the home folder's `.glitter/mcp.json`.
+#[tauri::command]
+async fn catalog_list(state: State<'_, AppState>, grant_id: String) -> Result<catalog::CatalogList, String> {
+    let home = dirs::home_dir().ok_or("Could not find your home folder.")?;
+    let workspace = if grant_id.is_empty() { None } else { Some(grant_root(&state, &grant_id)?) };
+    blocking(move || Ok(catalog::list(&home, workspace.as_deref()))).await
+}
+
+/// Install one catalog entry. Content comes from the app bundle, never from the
+/// renderer; a workspace is required only for workspace-scoped servers.
+#[tauri::command]
+async fn catalog_install(state: State<'_, AppState>, entry_id: String, grant_id: String) -> Result<catalog::InstallResult, String> {
+    let home = dirs::home_dir().ok_or("Could not find your home folder.")?;
+    let workspace = if grant_id.is_empty() { None } else { Some(grant_root(&state, &grant_id)?) };
+    blocking(move || catalog::install(&home, workspace.as_deref(), &entry_id)).await
+}
+
+/// Remove the parts of a catalog entry that the store installed. Folders and
+/// server entries the user made or changed are reported, never deleted.
+#[tauri::command]
+async fn catalog_remove(state: State<'_, AppState>, entry_id: String, grant_id: String) -> Result<catalog::RemoveResult, String> {
+    let home = dirs::home_dir().ok_or("Could not find your home folder.")?;
+    let workspace = if grant_id.is_empty() { None } else { Some(grant_root(&state, &grant_id)?) };
+    blocking(move || catalog::remove(&home, workspace.as_deref(), &entry_id)).await
+}
+
 /// Ask the native folder picker for a plugin bundle directory. The choice is
 /// recorded natively as a one-time install authorization (see
 /// `take_picked_install`), so `plugin_install` accepts only this folder.
@@ -4878,6 +4910,9 @@ pub fn run() {
                 plugin_review,
                 plugin_install,
                 pick_plugin_bundle,
+                catalog_list,
+                catalog_install,
+                catalog_remove,
                 read_dropped_files,
                 open_path,
                 open_url,

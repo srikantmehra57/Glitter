@@ -380,6 +380,7 @@ export const MOCK_AGENT_MODELS: Record<string, Model[]> = {
     { modelId: "nvidia/moonshotai/kimi-k2.6", displayLabel: "moonshotai/kimi-k2.6", providerId: "nvidia", description: "NVIDIA NIM", contextLimit: null, reasoningEfforts: ["none", "high"], defaultReasoningEffort: "high", effortSource: "host" },
     { modelId: "nvidia/openai/gpt-oss-120b", displayLabel: "openai/gpt-oss-120b", providerId: "nvidia", description: "NVIDIA NIM", contextLimit: null, reasoningEfforts: ["low", "medium", "high"], defaultReasoningEffort: "medium", effortSource: "host" },
     { modelId: "cline/anthropic/claude-sonnet-5.5", displayLabel: "anthropic/claude-sonnet-5.5", providerId: "cline", description: "Cline API", contextLimit: 200000, reasoningEfforts: ["none", "low", "medium", "high", "xhigh"], defaultReasoningEffort: "medium", effortSource: "host" },
+    { modelId: "kilo/anthropic/claude-sonnet-4.6", displayLabel: "anthropic/claude-sonnet-4.6", providerId: "kilo", description: "Kilo API", contextLimit: 200000, reasoningEfforts: ["none", "low", "medium", "high", "xhigh"], defaultReasoningEffort: "medium", effortSource: "host" },
     { modelId: "ollama/qwen3-coder", displayLabel: "qwen3-coder", providerId: "ollama", description: "Ollama", contextLimit: null, reasoningEfforts: [], effortSource: "host" },
   ],
   opencode: [

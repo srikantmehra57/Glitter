@@ -218,6 +218,58 @@ export type McpServer = { name: string; transport: string; oauth: boolean };
 /** A server the Harness started from `.glitter/mcp.json`; `tools` is what its last listing returned. */
 export type HarnessMcpServer = { name: string; transport: string; tools: number };
 export type HarnessMcpStatus = { servers: HarnessMcpServer[]; error: string | null };
+/** Which `.glitter/mcp.json` a server lives in; the workspace file wins a duplicate name. */
+export type HarnessMcpScope = "workspace" | "home";
+/** A configured server for the management list. Values from env and headers never reach the renderer, only their key names. */
+export type HarnessMcpConfigServer = {
+  name: string;
+  source: HarnessMcpScope;
+  transport: string;
+  command?: string;
+  url?: string;
+  args: number;
+  envKeys: string[];
+  headerKeys: string[];
+  error?: string;
+};
+export type HarnessMcpConfig = { servers: HarnessMcpConfigServer[]; error: string | null };
+/** A server the app may add; env and header values are written once and never read back. */
+export type HarnessMcpServerInput = {
+  name: string;
+  transport: "stdio" | "http";
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  url?: string;
+  headers?: Record<string, string>;
+};
+
+/** One entry in the bundled extension store: a skill, an MCP server, or a plugin that bundles either. */
+export type CatalogKind = "skill" | "mcp" | "plugin";
+export type CatalogEntry = {
+  id: string;
+  kind: CatalogKind;
+  name: string;
+  summary: string;
+  description: string;
+  tags: string[];
+  version: number;
+  /** Skill ids this entry installs into `~/.agents/skills`. */
+  skills: string[];
+  /** Server ids this entry writes to `.glitter/mcp.json`. */
+  servers: string[];
+  /** Where the servers go: `user` is the home config, `mixed` spans both. */
+  scope: "user" | "workspace" | "mixed";
+  requiresWorkspace: boolean;
+  /** The commands or URLs the entry would add, for review before installing. */
+  commands: string[];
+  installed: boolean;
+  installedParts: number;
+  totalParts: number;
+};
+export type CatalogList = { entries: CatalogEntry[]; skillsRoot: string; error: string | null };
+export type CatalogInstallResult = { installedSkills: string[]; installedServers: string[]; skipped: string[]; errors: string[] };
+export type CatalogRemoveResult = { removed: string[]; skipped: string[]; errors: string[] };
 
 export type PluginEntry = { id: string; version?: string | null; description: string; enabled?: boolean | null };
 /** One CLI skill row (`skills list`): `activation` is `on`/`off`, `scope` is user/project/bundled/plugin. */

@@ -34,7 +34,7 @@ const TAB_LABELS: Partial<Record<SettingsTab, string>> = { Theme: "Appearance", 
 const SEARCH_TERMS: Partial<Record<SettingsTab, string>> = {
   General: "notifications alerts editor vscode cursor zed intellij custom commands slash macros",
   Agents: "opencode grok gemini qwen goose cline third-party sandbox isolation binary harness",
-  Providers: "api key byok bring your own anthropic claude openai gpt google gemini openrouter cline xai grok deepseek groq mistral nvidia nim ollama lm studio local custom endpoint",
+  Providers: "api key byok bring your own anthropic claude openai gpt google gemini openrouter cline kilo xai grok deepseek groq mistral nvidia nim ollama lm studio local custom endpoint",
   Theme: "light dark system accent color sidebar tint translucent translucency transparency thinking orb animation", Models: "default effort model provider reasoning contributor subscription", Account: "sign in out subscription api key credential binary path connection",
   Permissions: "approval sandbox network shell file writes ephemeral read only ask auto review unrestricted", Threads: "archive restore delete history", Extensions: "skills mcp servers plugins import",
   Shortcuts: "keybindings hotkeys remap",

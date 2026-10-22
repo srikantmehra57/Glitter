@@ -412,7 +412,8 @@ function effortField(providerId: string, model: string, effort?: string): Record
   if (!effort) return {};
   const tiers = effortTiers(providerId, model) as string[];
   if (!tiers.includes(effort)) return {};
-  if (providerId === "openrouter") return { reasoning: { effort } };
+  // OpenRouter, and the Kilo gateway in front of it, take `reasoning.effort` (including "none").
+  if (providerId === "openrouter" || providerId === "kilo") return { reasoning: { effort } };
   // The Cline API takes the same pair its own CLI sends: the level and an on/off switch.
   if (providerId === "cline") return { reasoning_effort: effort, reasoning: { enabled: effort !== "none" } };
   if (providerId === "nvidia" && tiers.includes("none")) {

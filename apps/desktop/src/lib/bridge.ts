@@ -5,7 +5,7 @@ import { isTauri } from "./format";
 import { log } from "./logger";
 import { MOCK_FILES, MOCK_GIT, MOCK_MODELS, MOCK_THREADS, mockGitReview, mockThreads, mockWorkspaceFile, mockWorktree } from "./mock";
 import type { DiagnosticsSnapshot, EditorChoice, ThemeMode } from "./types";
-import type { AgentId, AgentIdentity, AgentSessionConfig, ApprovalRequest, CliUpdateOutcome, CliUpdateStatus, ContextUsage, Detection, DroppedFile, EnterpriseStatus, GitBranch, GoalState, ModelCall, PlanItem, PullRequest, GitReview, GitReviewRequest, GitSnapshot, SessionConfig, SessionMetadata, SnapshotRestore, ThreadWorktree, TokenUsage, TranscriptItem, TurnSnapshot, UserInputRequest, WorkspaceFile, WorktreeRemoval, PluginDetail, PluginEntry, SkillDetail, SkillEntry } from "./types";
+import type { AgentId, AgentIdentity, AgentSessionConfig, ApprovalRequest, CatalogEntry, CatalogInstallResult, CatalogList, CatalogRemoveResult, CliUpdateOutcome, CliUpdateStatus, ContextUsage, Detection, DroppedFile, EnterpriseStatus, GitBranch, GoalState, HarnessMcpConfig, HarnessMcpConfigServer, HarnessMcpScope, HarnessMcpServerInput, ModelCall, PlanItem, PullRequest, GitReview, GitReviewRequest, GitSnapshot, SessionConfig, SessionMetadata, SnapshotRestore, ThreadWorktree, TokenUsage, TranscriptItem, TurnSnapshot, UserInputRequest, WorkspaceFile, WorktreeRemoval, PluginDetail, PluginEntry, SkillDetail, SkillEntry } from "./types";
 
 /**
  * The payload each bridge event carries, declared once here instead of being
@@ -160,6 +160,37 @@ export async function bridge<T = unknown>(method: string, params: Record<string,
   });
 }
 
+/** Preview keeps MCP management state in memory, so adding and removing works without a host. */
+let previewMcpConfig: HarnessMcpConfig = {
+  servers: [
+    { name: "preview-docs", source: "workspace", transport: "stdio", command: "npx", args: 2, envKeys: ["DOCS_TOKEN"], headerKeys: [] },
+    { name: "preview-search", source: "home", transport: "http", url: "https://mcp.example.dev/search", args: 0, envKeys: [], headerKeys: ["Authorization"] },
+  ],
+  error: null,
+};
+
+/** Preview store state lives in memory, so install and remove round-trip without the desktop shell. */
+const PREVIEW_CATALOG: CatalogEntry[] = [
+  { id: "code-review", kind: "skill", name: "Code review", summary: "Review a diff for correctness, security and missing tests.", description: "Find the defects that matter, with a file and line, the failure mode, and a concrete fix.", tags: ["quality", "git"], version: 1, skills: ["code-review"], servers: [], scope: "user", requiresWorkspace: false, commands: [], installed: false, installedParts: 0, totalParts: 1 },
+  { id: "commit-message", kind: "skill", name: "Commit message", summary: "Write a Conventional Commits message from the staged change.", description: "Reads the staged diff, picks the right type, and writes an imperative subject plus a why-focused body.", tags: ["git", "everyday"], version: 1, skills: ["commit-message"], servers: [], scope: "user", requiresWorkspace: false, commands: [], installed: false, installedParts: 0, totalParts: 1 },
+  { id: "test-first", kind: "skill", name: "Test first", summary: "One failing test, the smallest fix, then cleanup.", description: "A disciplined TDD loop for new behavior and bug fixes.", tags: ["testing"], version: 1, skills: ["test-first"], servers: [], scope: "user", requiresWorkspace: false, commands: [], installed: false, installedParts: 0, totalParts: 1 },
+  { id: "daily-driver", kind: "plugin", name: "Daily driver", summary: "Review, commit and open a PR with one consistent voice.", description: "The three skills used on every change, plus sequential thinking for plans that need room.", tags: ["git", "everyday"], version: 1, skills: ["code-review", "commit-message"], servers: ["sequential-thinking"], scope: "user", requiresWorkspace: false, commands: ["npx -y @modelcontextprotocol/server-sequential-thinking"], installed: false, installedParts: 0, totalParts: 3 },
+  { id: "filesystem", kind: "mcp", name: "Filesystem", summary: "Read and write files inside this workspace.", description: "The reference filesystem server. It can only touch the workspace it was installed for.", tags: ["files", "workspace"], version: 1, skills: [], servers: ["filesystem"], scope: "workspace", requiresWorkspace: true, commands: ["npx -y @modelcontextprotocol/server-filesystem <workspace>"], installed: false, installedParts: 0, totalParts: 1 },
+];
+const previewCatalogInstalled = new Set<string>();
+
+function previewCatalogList(): CatalogList {
+  return {
+    entries: PREVIEW_CATALOG.map((entry) => {
+      const parts = [...entry.skills, ...entry.servers];
+      const installedParts = parts.filter((part) => previewCatalogInstalled.has(part)).length;
+      return { ...entry, installedParts, installed: parts.length > 0 && installedParts === parts.length };
+    }),
+    skillsRoot: "~/.agents/skills",
+    error: null,
+  };
+}
+
 function mockBridge(method: string, params: Record<string, unknown>): unknown {
   switch (method) {
     case "detect":
@@ -253,7 +284,56 @@ function mockBridge(method: string, params: Record<string, unknown>): unknown {
     case "listSkills":
       return { skills: [{ selector: "review", displayName: "Review", description: "Review the working tree", source: "user" }] };
     case "harnessMcp":
-      return { servers: [{ name: "preview-docs", transport: "stdio", tools: 3 }], error: null };
+      return { servers: previewMcpConfig.servers.map(({ name, transport }) => ({ name, transport, tools: 3 })), error: previewMcpConfig.error };
+    case "harnessMcpConfig":
+      return previewMcpConfig;
+    case "harnessMcpAddServer": {
+      const scope = params.scope as HarnessMcpScope;
+      const server = params.server as HarnessMcpServerInput;
+      if (previewMcpConfig.servers.some((row) => row.name === server.name)) throw new Error(`The MCP config already defines a server named “${server.name}”.`);
+      const row: HarnessMcpConfigServer = {
+        name: server.name,
+        source: scope,
+        transport: server.transport,
+        ...(server.command ? { command: server.command } : {}),
+        ...(server.url ? { url: server.url } : {}),
+        args: server.args?.length ?? 0,
+        envKeys: Object.keys(server.env ?? {}).sort(),
+        headerKeys: Object.keys(server.headers ?? {}).sort(),
+      };
+      previewMcpConfig = { servers: [...previewMcpConfig.servers, row].sort((a, b) => a.name.localeCompare(b.name)), error: null };
+      return previewMcpConfig;
+    }
+    case "harnessMcpRemoveServer":
+      previewMcpConfig = { ...previewMcpConfig, servers: previewMcpConfig.servers.filter((row) => !(row.name === params.name && row.source === params.scope)) };
+      return previewMcpConfig;
+    case "catalogList":
+      return previewCatalogList();
+    case "catalogInstall": {
+      const entry = PREVIEW_CATALOG.find((row) => row.id === params.entryId);
+      if (!entry) throw new Error("That extension is not in the bundled catalog.");
+      if (entry.requiresWorkspace && !params.grantId) throw new Error("Open a workspace before installing this extension.");
+      const result: CatalogInstallResult = { installedSkills: [], installedServers: [], skipped: [], errors: [] };
+      for (const id of entry.skills) {
+        if (previewCatalogInstalled.has(id)) result.skipped.push(id);
+        else { previewCatalogInstalled.add(id); result.installedSkills.push(id); }
+      }
+      for (const id of entry.servers) {
+        if (previewCatalogInstalled.has(id)) result.skipped.push(id);
+        else { previewCatalogInstalled.add(id); result.installedServers.push(id); }
+      }
+      return result;
+    }
+    case "catalogRemove": {
+      const entry = PREVIEW_CATALOG.find((row) => row.id === params.entryId);
+      if (!entry) throw new Error("That extension is not in the bundled catalog.");
+      const result: CatalogRemoveResult = { removed: [], skipped: [], errors: [] };
+      for (const id of [...entry.skills, ...entry.servers]) {
+        if (!previewCatalogInstalled.delete(id)) result.skipped.push(id);
+        else result.removed.push(id);
+      }
+      return result;
+    }
     case "mcpServers":
       return { servers: [{ name: "preview-docs", transport: "streamableHttp", oauth: true }] };
     case "checkCliUpdate":
@@ -721,6 +801,22 @@ export async function pluginInstall(path: string, museBin?: string): Promise<voi
 export async function pickPluginBundle(): Promise<string | null> {
   if (!isTauri()) return null;
   return invoke<string | null>("pick_plugin_bundle", {});
+}
+
+/** The bundled extension store. Installation is native: no CLI and no network. */
+export async function catalogList(grantId: string | undefined): Promise<CatalogList> {
+  if (!isTauri()) return previewCatalogList();
+  return invoke<CatalogList>("catalog_list", { grantId: grantId ?? "" });
+}
+
+export async function catalogInstall(entryId: string, grantId: string | undefined): Promise<CatalogInstallResult> {
+  if (!isTauri()) return mockBridge("catalogInstall", { entryId, grantId: grantId ?? "" }) as CatalogInstallResult;
+  return invoke<CatalogInstallResult>("catalog_install", { entryId, grantId: grantId ?? "" });
+}
+
+export async function catalogRemove(entryId: string, grantId: string | undefined): Promise<CatalogRemoveResult> {
+  if (!isTauri()) return mockBridge("catalogRemove", { entryId, grantId: grantId ?? "" }) as CatalogRemoveResult;
+  return invoke<CatalogRemoveResult>("catalog_remove", { entryId, grantId: grantId ?? "" });
 }
 
 export async function trustPreview(grantId: string, museBin?: string): Promise<import("./types").TrustPreview> {

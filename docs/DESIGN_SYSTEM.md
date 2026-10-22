@@ -440,15 +440,17 @@ Centered, 420px, search field + command rows with shortcut glyphs. Arrow keys + 
 
 ## Brand
 
-The identity combines the five-tile ember M mark, frosted glass surfaces,
-system sans typography, and a warm ember accent.
-`docs/brand/glitter-mark.svg` is the editable source: two pillars of two stacked
-rounded tiles each, with a rounded downward-pointing wedge (▽) between them —
-the silhouette reads `|▽|`. All tiles share one ember gradient plus a white top
-sheen. Use it at 16–36px beside “Glitter”; it reads on both light and dark UI
-without theme switching. App icons embed the mark on a frosted-grey tile
-(light) or a graphite tile (dark); the running Mac Dock icon follows
-the OS appearance, independently of an explicit interface theme selection.
+The identity combines the Glitter mark — a geometric G around a four-pointed
+faceted spark — with frosted glass surfaces, system sans typography, and a warm
+ember accent. `docs/brand/glitter-mark.svg` is the editable source: a radius-20
+G contour stroked at 8px with rounded caps, whose horizontal spur meets a
+four-faceted diamond spark centred at (31, 32). The G takes one ember gradient
+plus an overhead white sheen; the spark's upper facets are lit and its lower
+facets fall to deep ember. Use it at 16–36px beside “Glitter”; it reads on both
+light and dark UI without theme switching, and scales to the 1024px icon tile.
+App icons embed the mark on a frosted-grey tile (light) or a graphite tile
+(dark); the running Mac Dock icon follows the OS appearance, independently of
+an explicit interface theme selection.
 Footer/About: **Not affiliated with Meta.** No Meta wordmark.
 
 

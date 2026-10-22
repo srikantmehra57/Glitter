@@ -35,12 +35,30 @@ States: `todo`, `next`, `in progress`, `done` (verified with `npm run verify`),
 | 2 | Review foundation | done | C1, C2, C3, C7, C9 |
 | 3 | Safe parallel work | done | B1, B2, C4, A1 |
 | 4 | Commands and navigation | done | E1, E3, E4, E5 (H4 with E1) |
-| 5 | Workspace tools and git | in progress | D2, C8, C5, D1 done; G1 blocked on the CLI |
+| 5 | Workspace tools and git | in progress | D2, C8, C5, D1 done; G1 done for Harness, Muse add/remove still blocked on the CLI |
 | — | Unscheduled items | done | G2, A6, E6, D3, E2 |
 | — | Gaps in finished items | done | A1 Handoff, C8 Pull, D2 prose links, C5 persistence, E4 remapping |
 | 6 | Longer-term | in progress | L4, L5 done; L1, L2, L3, L6 blocked |
 
 Per-item log (newest first):
+
+- **G1 done for Harness. The Muse half is still blocked.** Extensions → MCP can
+  add and remove a server for a harness thread; Muse keeps the CLI list and its
+  "Add them with the Muse CLI" note. The form takes a name, Workspace or Home,
+  and stdio (command, arguments, environment) or streamable HTTP (URL, headers).
+  Arguments split with quotes and backslashes; environment and headers are one
+  `NAME=value` per line, and headers also accept `Name: value`. The bridge
+  parses the definition with the same rules the sync uses, writes it atomically
+  with the folder at 0700 and the file at 0600, refuses a duplicate in the same
+  file and a home server a workspace one would hide, then re-syncs the
+  generation. Values are write-only: rows carry only key names, and a display
+  URL drops userinfo, query and fragment. A server the parser refuses is listed
+  with its error and can be removed. `npm run verify` passes: 690 Node tests,
+  304 UI tests and 198 native tests. Two unrelated failures from the
+  in-progress catalog store work stood in the way: four store test mocks lacked
+  the catalog exports and the skills empty-state test expected the old copy;
+  both were fixed minimally. Not verified in the desktop app: adding a live
+  server and watching it connect. Still blocked: G1 for Muse, L1, L2, L3, L6.
 
 - **L5 done. L4 was already in the app.** Markdown export sits beside the JSON
   exports in the thread menu and the command palette, share-safe or raw. It
@@ -900,16 +918,26 @@ Per-item log (newest first):
 
 ### G1. Manage MCP servers in the app
 
-- **Status.** Blocked on the CLI: `muse mcp` has only `login` and `logout`
-  (rechecked 2026-10-21 on Muse Code 1.4.11).
+- **Status.** Done for Harness, verified with `npm run verify`. See the log
+  entry under [Progress](#progress). The Muse side remains blocked:
+  `muse mcp` has only `login` and `logout` (rechecked 2026-10-21 on Muse Code
+  1.4.11).
 - **Problem.** Extensions lists servers and handles OAuth only: "Add them with
-  the Muse CLI, then refresh."
-- **Proposal.** First check `muse mcp --help` for add and remove. If they
-  exist, wrap them as native commands the way `skill_install` and
-  `mcp_login` are wrapped, with bounded arguments passed after `--`. Then add an
-  "Add server" form (name, transport, command or URL, environment variable
-  names; values go to the keychain or the CLI). If the CLI has no such
-  commands, this item depends on the CLI.
+  the Muse CLI, then refresh." The Harness reads `.glitter/mcp.json` but could
+  only be configured by editing that file by hand.
+- **Proposal.** Add an "Add server" form to Extensions → MCP for a Harness
+  thread, and a Remove button per configured server. When the CLI grows add and
+  remove, wrap them as native commands the way `skill_install` and `mcp_login`
+  are wrapped, with bounded arguments passed after `--`, and use the same form
+  for Muse.
+- **What landed.** The form takes a name, Workspace or Home, stdio (command,
+  arguments, environment) or streamable HTTP (URL, headers). The bridge writes
+  the server to the chosen `.glitter/mcp.json` after parsing it with the same
+  rules the sync uses, atomically and owner-only. Environment and header values
+  are write-only: the list shows key names, never values, and a display URL
+  drops userinfo, query and fragment. Entries the parser refuses are listed with
+  their error and can be removed. Home additions a workspace server would hide
+  are refused. After a write the generation re-syncs.
 
 ### G2. Consistent saving in Settings
 

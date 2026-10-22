@@ -1,11 +1,13 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { describeError } from "../lib/errors";
 import { useShallow } from "zustand/react/shallow";
-import { Check, KeyRound, LogOut, Package, Puzzle, RefreshCw, Server, WandSparkles, X } from "lucide-react";
+import { Check, KeyRound, LogOut, Package, Plus, Puzzle, RefreshCw, Server, WandSparkles, X } from "lucide-react";
 import { mcpLogin, mcpLogout, pluginInspect, pluginReview, skillInspect, skillSet } from "../lib/bridge";
 import { skillSelectorText, skillUseText } from "../lib/composerText";
+import { mcpServerNameProblem, mcpServerSummary, parseMcpArguments, parseMcpKeyValues } from "../lib/mcpConfig";
 import { currentThread, currentWorkspace, supportsSkills, useAppStore } from "../lib/store";
-import { skillScopeArg, type PluginDetail, type SkillDetail, type SkillEntry, type SkillRow } from "../lib/types";
+import { skillScopeArg, type HarnessMcpConfigServer, type HarnessMcpScope, type HarnessMcpServerInput, type PluginDetail, type SkillDetail, type SkillEntry, type SkillRow } from "../lib/types";
+import { ExtensionsStore } from "./ExtensionsStore";
 
 const selectorText = (row: SkillRow) => skillSelectorText(row.selector);
 
@@ -38,6 +40,9 @@ export function ExtensionsView({ onOpenThreads, embedded = false }: { onOpenThre
     harnessMcp: state.harnessMcp,
     harnessMcpLoading: state.harnessMcpLoading,
     harnessMcpError: state.harnessMcpError,
+    harnessMcpConfig: state.harnessMcpConfig,
+    harnessMcpConfigLoading: state.harnessMcpConfigLoading,
+    harnessMcpConfigError: state.harnessMcpConfigError,
     pluginEntries: state.pluginEntries,
     pluginsAvailableShown: state.pluginsAvailableShown,
     pluginsLoading: state.pluginsLoading,
@@ -47,6 +52,9 @@ export function ExtensionsView({ onOpenThreads, embedded = false }: { onOpenThre
     skillsError: state.skillsError,
     refreshMcpServers: state.refreshMcpServers,
     refreshHarnessMcp: state.refreshHarnessMcp,
+    refreshHarnessMcpConfig: state.refreshHarnessMcpConfig,
+    addHarnessMcpServer: state.addHarnessMcpServer,
+    removeHarnessMcpServer: state.removeHarnessMcpServer,
     refreshSkills: state.refreshSkills,
     refreshManagedSkills: state.refreshManagedSkills,
     refreshPlugins: state.refreshPlugins,
@@ -78,6 +86,19 @@ export function ExtensionsView({ onOpenThreads, embedded = false }: { onOpenThre
   const [skillDetail, setSkillDetail] = useState<SkillDetail | null>(null);
   const [skillDetailLoading, setSkillDetailLoading] = useState(false);
   const [skillDetailError, setSkillDetailError] = useState<string | null>(null);
+  const [mcpFormOpen, setMcpFormOpen] = useState(false);
+  const [mcpName, setMcpName] = useState("");
+  const [mcpScope, setMcpScope] = useState<HarnessMcpScope>("workspace");
+  const [mcpTransport, setMcpTransport] = useState<"stdio" | "http">("stdio");
+  const [mcpCommand, setMcpCommand] = useState("");
+  const [mcpArgs, setMcpArgs] = useState("");
+  const [mcpUrl, setMcpUrl] = useState("");
+  const [mcpEnv, setMcpEnv] = useState("");
+  const [mcpHeaders, setMcpHeaders] = useState("");
+  const [mcpBusy, setMcpBusy] = useState(false);
+  const [mcpRowBusy, setMcpRowBusy] = useState<string | null>(null);
+  const [mcpError, setMcpError] = useState<string | null>(null);
+  const [mcpFormError, setMcpFormError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!s.preview) void s.refreshMcpServers();
@@ -87,9 +108,64 @@ export function ExtensionsView({ onOpenThreads, embedded = false }: { onOpenThre
 
   const harnessThread = thread?.agentId === "harness" ? thread : null;
   useEffect(() => {
-    if (harnessThread) void s.refreshHarnessMcp(harnessThread.sessionId);
+    if (!harnessThread) return;
+    void s.refreshHarnessMcp(harnessThread.sessionId);
+    void s.refreshHarnessMcpConfig(harnessThread.sessionId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [harnessThread?.sessionId]);
+
+  const refreshHarnessMcp = (refresh: boolean) => {
+    if (!harnessThread) return;
+    void s.refreshHarnessMcp(harnessThread.sessionId, refresh);
+    void s.refreshHarnessMcpConfig(harnessThread.sessionId);
+  };
+
+  const submitMcpServer = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!harnessThread || mcpBusy) return;
+    const name = mcpName.trim();
+    const problem = mcpServerNameProblem(name);
+    if (problem) { setMcpFormError(problem); return; }
+    let server: HarnessMcpServerInput;
+    try {
+      if (mcpTransport === "stdio") {
+        const command = mcpCommand.trim();
+        if (!command) throw new Error("A stdio server needs a command, such as npx.");
+        server = { name, transport: "stdio", command, args: parseMcpArguments(mcpArgs), env: parseMcpKeyValues(mcpEnv, "env") };
+      } else {
+        const url = mcpUrl.trim();
+        if (!url) throw new Error("An HTTP server needs a URL.");
+        server = { name, transport: "http", url, headers: parseMcpKeyValues(mcpHeaders, "headers") };
+      }
+    } catch (error) {
+      setMcpFormError(describeError("Check the server details", error));
+      return;
+    }
+    setMcpBusy(true); setMcpFormError(null);
+    try {
+      await s.addHarnessMcpServer(harnessThread.sessionId, mcpScope, server);
+      setMcpName(""); setMcpCommand(""); setMcpArgs(""); setMcpUrl(""); setMcpEnv(""); setMcpHeaders("");
+      setMcpFormOpen(false);
+    } catch (error) {
+      setMcpFormError(describeError("Could not add the server", error));
+    } finally {
+      setMcpBusy(false);
+    }
+  };
+
+  const removeMcpServer = async (server: HarnessMcpConfigServer) => {
+    if (!harnessThread) return;
+    const where = server.source === "workspace" ? "this workspace" : "your home folder";
+    if (!(await s.confirm({ title: `Remove ${server.name}?`, body: `Its entry is removed from ${where}'s .glitter/mcp.json.`, confirmLabel: "Remove", danger: true }))) return;
+    setMcpRowBusy(server.name); setMcpError(null);
+    try {
+      await s.removeHarnessMcpServer(harnessThread.sessionId, server.source, server.name);
+    } catch (error) {
+      setMcpError(describeError("Could not remove the server", error));
+    } finally {
+      setMcpRowBusy(null);
+    }
+  };
 
   const refreshSkills = async () => {
     if (!thread || skillsBusy) return;
@@ -184,6 +260,7 @@ export function ExtensionsView({ onOpenThreads, embedded = false }: { onOpenThre
         </header>
       )}
       <div className="extensions-scroll">
+        <ExtensionsStore />
         <section className="extensions-section" aria-labelledby="extensions-skills-title">
           <div className="extensions-section-head">
             <h2 id="extensions-skills-title"><Puzzle size={15} aria-hidden="true" />Skills</h2>
@@ -195,7 +272,7 @@ export function ExtensionsView({ onOpenThreads, embedded = false }: { onOpenThre
           {skillsState === "foreign" ? <p className="permission-note">Skills work with Muse and Harness; this thread runs on another agent.</p> : null}
           {harness ? <p className="permission-note">Harness loads skills from <code>.glitter/skills</code> and <code>.agents/skills</code>, in the workspace and in your home folder. A workspace skill wins over a home one with the same name.</p> : null}
           {skillsState === "unloaded" ? <p className="permission-note">The skill catalog has not loaded yet. Refresh to fetch it.</p> : null}
-          {skillsState === "empty" ? <p className="permission-note">{harness ? "No skills yet. Add a folder with a SKILL.md to one of those places, then refresh." : "No skills are available for this session. Workspace skills load only from trusted workspaces."}</p> : null}
+          {skillsState === "empty" ? <p className="permission-note">{harness ? "No skills yet. Install one from the Store above, or add a folder with a SKILL.md to one of those places, then refresh." : "No skills are available for this session. Workspace skills load only from trusted workspaces."}</p> : null}
           {skillsState === "ready" ? <ul className="extension-list">
             {(skills ?? []).map((row) => <SkillCard key={`${row.source ?? ""}:${row.selector}`} row={row} onUse={useSkill} />)}
           </ul> : null}
@@ -308,30 +385,104 @@ export function ExtensionsView({ onOpenThreads, embedded = false }: { onOpenThre
         <section className="extensions-section" aria-labelledby="extensions-mcp-title">
           <div className="extensions-section-head">
             <h2 id="extensions-mcp-title"><Server size={15} aria-hidden="true" />MCP servers</h2>
-            <button
-              type="button"
-              className="ghost-btn small"
-              disabled={harnessThread ? s.harnessMcpLoading : s.mcpLoading}
-              onClick={() => { if (harnessThread) void s.refreshHarnessMcp(harnessThread.sessionId, true); else void s.refreshMcpServers(); }}
-            >
-              <RefreshCw size={11} className={(harnessThread ? s.harnessMcpLoading : s.mcpLoading) ? "spin" : ""} />{(harnessThread ? s.harnessMcpLoading : s.mcpLoading) ? "Refreshing…" : "Refresh"}
-            </button>
+            <span className="extension-actions">
+              {harnessThread ? <button
+                type="button"
+                className="ghost-btn small"
+                aria-expanded={mcpFormOpen}
+                onClick={() => { setMcpFormOpen(!mcpFormOpen); setMcpFormError(null); }}
+              >
+                <Plus size={11} />{mcpFormOpen ? "Close form" : "Add server"}
+              </button> : null}
+              <button
+                type="button"
+                className="ghost-btn small"
+                disabled={harnessThread ? (s.harnessMcpLoading || s.harnessMcpConfigLoading) : s.mcpLoading}
+                onClick={() => { if (harnessThread) refreshHarnessMcp(true); else void s.refreshMcpServers(); }}
+              >
+                <RefreshCw size={11} className={(harnessThread ? (s.harnessMcpLoading || s.harnessMcpConfigLoading) : s.mcpLoading) ? "spin" : ""} />{(harnessThread ? (s.harnessMcpLoading || s.harnessMcpConfigLoading) : s.mcpLoading) ? "Refreshing…" : "Refresh"}
+              </button>
+            </span>
           </div>
           {harnessThread ? <>
-            <p className="permission-note">Servers configured for the Harness in .glitter/mcp.json: this workspace's file first, then your home folder. Their tools load on demand, and each call asks before it runs.</p>
+            <p className="permission-note">Servers come from .glitter/mcp.json: this workspace's file first, then your home folder. Their tools load on demand, and each call asks before it runs.</p>
             {s.harnessMcpError ? <p className="permission-note" role="alert">{s.harnessMcpError}</p> : null}
+            {s.harnessMcpConfigError ? <p className="permission-note" role="alert">{s.harnessMcpConfigError}</p> : null}
             {s.harnessMcp?.error ? <p className="permission-note" role="alert">{s.harnessMcp.error}</p> : null}
-            {s.harnessMcp && !s.harnessMcp.servers.length && !s.harnessMcpLoading ? <p className="permission-note extension-empty">No MCP servers are configured. Add them to .glitter/mcp.json in this workspace, then refresh.</p> : null}
-            {s.harnessMcp?.servers.length ? <ul className="extension-list">
-              {s.harnessMcp.servers.map((server) => (
-                <li key={server.name} className="extension-card">
-                  <Server size={16} aria-hidden="true" />
-                  <span className="extension-copy">
-                    <span className="extension-name">{server.name}<span className="picker-tag">{server.transport}</span><span className="picker-tag">{server.tools} tool{server.tools === 1 ? "" : "s"}</span></span>
-                  </span>
-                </li>
-              ))}
+            {s.harnessMcpConfig?.error ? <p className="permission-note" role="alert">{s.harnessMcpConfig.error}</p> : null}
+            {mcpError ? <p className="permission-note" role="alert">{mcpError}</p> : null}
+            {mcpFormOpen ? <form className="mcp-form" onSubmit={(event) => void submitMcpServer(event)}>
+              <div className="mcp-form-grid">
+                <div className="field">
+                  <label htmlFor="mcp-name">Name</label>
+                  <input id="mcp-name" value={mcpName} autoComplete="off" spellCheck={false} disabled={mcpBusy} placeholder="docs" onChange={(event) => setMcpName(event.target.value)} />
+                </div>
+                <div className="field">
+                  <label htmlFor="mcp-scope">Save to</label>
+                  <select id="mcp-scope" value={mcpScope} disabled={mcpBusy} onChange={(event) => setMcpScope(event.target.value as HarnessMcpScope)}>
+                    <option value="workspace">This workspace</option>
+                    <option value="home">Home folder</option>
+                  </select>
+                </div>
+                <div className="field">
+                  <label htmlFor="mcp-transport">Connection</label>
+                  <select id="mcp-transport" value={mcpTransport} disabled={mcpBusy} onChange={(event) => setMcpTransport(event.target.value as "stdio" | "http")}>
+                    <option value="stdio">stdio · a local command</option>
+                    <option value="http">HTTP · a URL</option>
+                  </select>
+                </div>
+              </div>
+              {mcpTransport === "stdio" ? <>
+                <div className="field">
+                  <label htmlFor="mcp-command">Command</label>
+                  <input id="mcp-command" value={mcpCommand} autoComplete="off" spellCheck={false} disabled={mcpBusy} placeholder="npx" onChange={(event) => setMcpCommand(event.target.value)} />
+                </div>
+                <div className="field">
+                  <label htmlFor="mcp-args">Arguments</label>
+                  <input id="mcp-args" value={mcpArgs} autoComplete="off" spellCheck={false} disabled={mcpBusy} placeholder="-y @modelcontextprotocol/server-filesystem ." onChange={(event) => setMcpArgs(event.target.value)} />
+                  <span className="field-help">Split on spaces. Use quotes for an argument that contains spaces.</span>
+                </div>
+                <div className="field">
+                  <label htmlFor="mcp-env">Environment (optional)</label>
+                  <textarea id="mcp-env" value={mcpEnv} rows={3} spellCheck={false} disabled={mcpBusy} placeholder={"GITHUB_TOKEN=…\nLOG_LEVEL=debug"} onChange={(event) => setMcpEnv(event.target.value)} />
+                  <span className="field-help">One NAME=value per line. Values are written to the file and never shown again.</span>
+                </div>
+              </> : <>
+                <div className="field">
+                  <label htmlFor="mcp-url">URL</label>
+                  <input id="mcp-url" type="url" value={mcpUrl} autoComplete="off" spellCheck={false} disabled={mcpBusy} placeholder="https://example.com/mcp" onChange={(event) => setMcpUrl(event.target.value)} />
+                </div>
+                <div className="field">
+                  <label htmlFor="mcp-headers">Headers (optional)</label>
+                  <textarea id="mcp-headers" value={mcpHeaders} rows={3} spellCheck={false} disabled={mcpBusy} placeholder={"Authorization: Bearer …"} onChange={(event) => setMcpHeaders(event.target.value)} />
+                  <span className="field-help">One Name: value per line. Values are written to the file and never shown again.</span>
+                </div>
+              </>}
+              {mcpFormError ? <p className="permission-note" role="alert">{mcpFormError}</p> : null}
+              <div className="mcp-form-actions">
+                <button type="button" className="ghost-btn small" disabled={mcpBusy} onClick={() => { setMcpFormOpen(false); setMcpFormError(null); }}>Cancel</button>
+                <button type="submit" className="primary" disabled={mcpBusy}>{mcpBusy ? "Adding…" : "Add server"}</button>
+              </div>
+            </form> : null}
+            {s.harnessMcpConfig?.servers.length ? <ul className="extension-list">
+              {s.harnessMcpConfig.servers.map((server) => {
+                const tools = s.harnessMcp?.servers.find((row) => row.name === server.name)?.tools;
+                return (
+                  <li key={`${server.source}:${server.name}`} className="extension-card">
+                    <Server size={16} aria-hidden="true" />
+                    <span className="extension-copy">
+                      <span className="extension-name">{server.name}<span className="picker-tag">{server.source === "workspace" ? "Workspace" : "Home"}</span><span className="picker-tag">{server.transport}</span>{tools != null ? <span className="picker-tag">{tools} tool{tools === 1 ? "" : "s"}</span> : null}{server.error ? <span className="picker-tag warm">Needs attention</span> : null}</span>
+                      <span className="extension-meta">{mcpServerSummary(server)}</span>
+                      {server.error ? <span className="extension-meta mcp-error">{server.error}</span> : null}
+                    </span>
+                    <span className="extension-actions">
+                      <button type="button" className="ghost-btn small" disabled={mcpRowBusy === server.name} title={`Remove ${server.name}`} onClick={() => void removeMcpServer(server)}>{mcpRowBusy === server.name ? "Removing…" : "Remove"}</button>
+                    </span>
+                  </li>
+                );
+              })}
             </ul> : null}
+            {!s.harnessMcpConfig?.servers.length && !s.harnessMcpConfigLoading && !mcpFormOpen ? <p className="permission-note extension-empty">No MCP servers are configured. Install one from the Store above, add one here, or write .glitter/mcp.json yourself.</p> : null}
           </> : <>
             <p className="permission-note">Servers configured for the Muse CLI. OAuth servers need a sign-in before their tools work.</p>
             {s.mcpError ? <p className="permission-note" role="alert">{s.mcpError}</p> : null}
@@ -378,7 +529,7 @@ export function ExtensionsView({ onOpenThreads, embedded = false }: { onOpenThre
           <p className="permission-note">Inspect a plugin's runtime capabilities before approving it. Per-capability review and marketplace management still need the CLI.</p>
           {s.pluginsError ? <p className="permission-note" role="alert">{s.pluginsError}</p> : null}
           {reviewError ? <p className="permission-note" role="alert">{reviewError}</p> : null}
-          {!s.pluginEntries.length && !s.pluginsLoading ? <p className="permission-note extension-empty">{s.pluginsAvailableShown ? "No marketplace plugins are available." : "No plugins are installed."}</p> : null}
+          {!s.pluginEntries.length && !s.pluginsLoading ? <p className="permission-note extension-empty">{s.pluginsAvailableShown ? "No marketplace plugins are available." : "No CLI plugins are installed. The Store above has skill bundles that install without a CLI."}</p> : null}
           {s.pluginEntries.length ? <ul className="extension-list">
             {s.pluginEntries.map((plugin) => (
               <li key={plugin.id}>
