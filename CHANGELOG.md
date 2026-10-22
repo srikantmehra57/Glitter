@@ -123,6 +123,10 @@ licence terms.
 
 ### Changed
 
+- Select menus — permissions, reasoning effort and the selects in Settings —
+  are redesigned: even padding on both sides, the check in a column of its
+  own, descriptions that wrap in full, and a height that fits every row
+  instead of cutting off the last one.
 - **Settings is a full-window page.** It takes the place of the app view, with
   its categories on the sidebar's surface and Back beside the window controls.
   The pages are regrouped and renamed — AI (Models, Providers, Agents),

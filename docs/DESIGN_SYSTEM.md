@@ -346,6 +346,18 @@ the foot says how many are hidden
 and links to Manage models and Manage providers. One click on a row picks it
 and closes.
 
+**Select menus** (`SelectMenu`: permissions, effort, every select in
+Settings) share one anatomy. The popover has a 6px inset; the heading and every
+row share a 10px inner gutter, so the heading lines up with the icon column. A
+row is an 18px icon column, the label (`--text-md`, 20px line), and a 16px
+check column kept on every row — so the right edge lines up whichever row is
+chosen. A row with a description is "rich": 8px vertical padding, icon, label
+and check on the label's line, the description (`--text-sm`, `--tertiary`)
+wrapping under the label in full — never cut off or clamped. Hover takes
+`--hover`; the chosen row keeps `--active` and an `--accent-text` check. The
+menu measures its height at its final width and sizes to its content up to
+`--select-max-height`, so a short menu never scrolls or clips its last row.
+
 Reasoning effort (`EffortPicker`) is the shared select menu: the chip names
 the level, and the menu lists the model's levels from least to most, each with
 a line on what it trades and the model's own default tagged Default. One click

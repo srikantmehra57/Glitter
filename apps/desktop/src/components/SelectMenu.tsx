@@ -104,7 +104,14 @@ export function SelectMenu({
         ? anchor.right - anchor.left : Math.max(anchor.right - anchor.left, naturalWidth);
       // A short list of described rows (effort levels) may opt out of the usual cap rather than scroll.
       const maxHeight = Number.parseFloat(style.getPropertyValue("--select-max-height")) || 340;
-      setPosition({ ...menuPosition(anchor, { width, height: Math.min(maxHeight, popover.scrollHeight) }, bounds,
+      // Measure the height at the width the menu will have: descriptions wrap
+      // more once it narrows, and a height taken at its natural width cuts off
+      // the last rows.
+      const before = popover.style.width;
+      popover.style.width = `${width}px`;
+      const contentHeight = popover.scrollHeight;
+      popover.style.width = before;
+      setPosition({ ...menuPosition(anchor, { width, height: Math.min(maxHeight, contentHeight) }, bounds,
         style.getPropertyValue("--select-side").trim() === "bottom", style.getPropertyValue("--select-align").trim() === "right"), position: modal ? "absolute" : "fixed" });
     };
     const dismissOnScroll = (event: Event) => {
@@ -219,7 +226,7 @@ export function SelectMenu({
               ref={(node) => { optionRefs.current[index] = node; }}
               type="button"
               role="option"
-              className={`select-option ${index === activeIndex ? "active" : ""} ${option.tone ?? ""}`.trim()}
+              className={`select-option${option.description ? " rich" : ""}${index === activeIndex ? " active" : ""}${option.tone ? ` ${option.tone}` : ""}`}
               aria-selected={index === selectedIndex}
               disabled={option.disabled}
               onMouseEnter={() => setActiveIndex(index)}
@@ -258,7 +265,8 @@ export function SelectMenu({
                 <span>{option.label}{option.tag ? <span className="option-tag">{option.tag}</span> : null}</span>
                 {option.description ? <small>{option.description}</small> : null}
               </span>
-              {index === selectedIndex ? <Check size={14} className="option-check" aria-hidden="true" /> : null}
+              {/* The check's slot is kept on every row, so the right gutter lines up whichever row is chosen. */}
+              <span className="option-check" aria-hidden="true">{index === selectedIndex ? <Check size={14} strokeWidth={2.5} /> : null}</span>
             </button>
           ))}
         </div>

@@ -744,7 +744,7 @@ html[data-sidebar-accent="true"] .sidebar .nav-row:active:not(:disabled) { backg
   font-size: var(--text-md);
 }
 .menu button svg { color: var(--secondary); }
-.menu button:hover:not(:disabled), .select-option:hover:not(:disabled), .select-option.active { background: var(--active); }
+.menu button:hover:not(:disabled) { background: var(--active); }
 .menu button:disabled { opacity: 0.45; cursor: default; }
 .menu-sep { height: 1px; margin: 4px 6px; background: var(--border); }
 .menu button.danger, .menu button.danger svg { color: var(--danger); }
@@ -2233,26 +2233,30 @@ button.attachment:hover { background: var(--surface-3); color: var(--ink); }
 .review-file .select-menu, .work-location .select-menu { --select-align: right; }
 .select-menu-overlay { display: contents; }
 .select-menu-overlay .select-menu-popover { position: fixed; bottom: auto; margin: 0; min-width: 0; max-width: none; box-sizing: border-box; }
-.option-copy { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 0; padding: 5px 0; }
-.option-copy > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-md); }
+/* Select menus: one inner gutter (10px) for the heading and every row, an icon
+   column and a check column on every row, so both edges line up whichever row
+   is chosen. A row with a description is "rich": icon, label and check sit on
+   the label's line and the description wraps under the label, never cut off. */
+.select-menu-popover > .menu-heading { padding: 6px 10px 6px; color: var(--tertiary); font-size: var(--text-xs); font-weight: 500; letter-spacing: 0.01em; }
+.select-option { gap: 10px; padding: 0 10px; }
+.option-copy { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 0; padding: 6px 0; }
+.option-copy > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-md); line-height: 20px; }
 .option-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--tertiary); font-size: var(--text-xs); }
-.approval-select .select-menu-popover { width: min(360px, calc(100vw - 32px)); }
-.approval-select { --select-max-width: 360px; }
-.approval-select .select-option { align-items: flex-start; }
-.approval-select .option-copy { gap: 2px; }
-.approval-select .option-copy small { overflow: visible; text-overflow: clip; white-space: normal; line-height: 1.35; }
-/* Top-aligned rows: drop the icon and check to the label's first line (5px copy
-   padding + half the slack between the 12.5px/1.5 label line and 14px glyphs). */
-.approval-select .option-icon, .approval-select .option-check { margin-top: 7px; }
-.option-check { color: var(--ink); flex: none; }
-.option-icon { display: inline-flex; flex: none; color: var(--secondary); }
-/* The selected row keeps a background even when hover/keyboard focus moves on. */
+.option-icon { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 18px; height: 20px; color: var(--secondary); }
+.option-check { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 16px; height: 20px; color: var(--accent-text); }
+.select-option.rich { align-items: flex-start; padding: 8px 10px; }
+.select-option.rich .option-copy { gap: 2px; padding: 0; }
+.select-option.rich .option-copy small { overflow: visible; text-overflow: clip; white-space: normal; font-size: var(--text-sm); line-height: 1.4; text-wrap: pretty; }
+.select-option.rich + .select-option.rich { margin-top: 2px; }
+/* Hover follows the pointer lightly; the chosen row keeps a firmer fill. */
+.select-option:hover:not(:disabled), .select-option.active { background: var(--hover); }
 .select-option[aria-selected="true"]:not(:disabled) { background: var(--active); }
+.approval-select { --select-max-width: 360px; --select-max-height: 560px; }
 /* Danger is signaled by the icon and label alone: a warning-tinted row wash
    under a warning label destroys contrast, so hover/focus stay neutral. */
 .select-option.danger .option-icon { color: var(--warning); }
 .select-option.danger .option-copy > span { color: var(--warning); font-weight: 600; }
-.select-option.danger:hover:not(:disabled), .select-option.danger.active { background: var(--active); }
+.select-option.danger:hover:not(:disabled), .select-option.danger.active { background: var(--hover); }
 .select-option.danger[aria-selected="true"]:not(:disabled) .option-check { color: var(--warning); }
 .select-option:disabled { cursor: not-allowed; opacity: 0.45; }
 
@@ -2864,12 +2868,7 @@ html[data-accent="teal"] { --peak-a: #0FB5AE; --peak-b: #2DD4C4; --peak-c: #A5EF
    menu. Each row says what the level trades; the model's default is tagged. */
 .effort-select { display: inline-flex; min-width: 0; }
 .effort-select:has(.select-trigger[aria-expanded="true"])::after { opacity: 0; transition-delay: 0ms; }
-.effort-menu { --select-max-width: 280px; --select-max-height: 440px; }
-.effort-menu .select-menu-popover { max-height: min(440px, 70vh); }
-.effort-menu .select-option { align-items: flex-start; }
-.effort-menu .option-copy { gap: 1px; padding: 4px 0; }
-.effort-menu .option-check { margin-top: 6px; }
-.effort-menu .option-icon { align-self: center; }
+.effort-menu { --select-max-width: 320px; --select-max-height: 520px; }
 /* The dial: a 240° track, its fill and a needle, all easing to the new level. */
 /* Cool to hot: calm blue at the bottom, amber at Medium, the peak red at Max. */
 .effort-gauge { display: inline-flex; flex: none; --heat-color: var(--calm-b); }
