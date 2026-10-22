@@ -2834,38 +2834,30 @@ html[data-accent="teal"] { --peak-a: #0FB5AE; --peak-b: #2DD4C4; --peak-c: #A5EF
 
 /* The rail: where models come from, then the agents. Picking a source filters
    the list; picking an agent switches the thread's agent. */
-.model-rail { display: flex; flex-direction: column; flex: none; width: 184px; min-height: 0; border-right: 1px solid var(--border); background: var(--fog); }
+/* The rail is a column of provider icons; the name floats beside the hovered one. */
+.model-rail { position: relative; display: flex; flex-direction: column; flex: none; width: 56px; min-height: 0; border-right: 1px solid var(--border); background: var(--fog); }
 .model-rail-scroll { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 10px 8px 6px; scrollbar-width: none; }
 .model-rail-scroll::-webkit-scrollbar { display: none; }
-.model-rail-section + .model-rail-section { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
-.model-rail-label { margin: 0 0 4px; padding: 0 8px; color: var(--tertiary); font-size: var(--text-2xs); font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.model-rail [role="tablist"] { display: flex; flex-direction: column; gap: 1px; }
-.rail-tab { position: relative; display: flex; align-items: center; gap: 9px; width: 100%; min-height: 34px; padding: 4px 8px 4px 7px; border-radius: var(--r-sm); color: var(--secondary); font-size: var(--text-md); font-weight: 500; text-align: left; transition: background-color var(--dur-1) var(--ease), color var(--dur-1) var(--ease), box-shadow var(--dur-1) var(--ease); }
-.rail-tab:hover:not(:disabled) { background: var(--hover); color: var(--ink); }
-.rail-tab[aria-selected="true"] { background: var(--raised); color: var(--ink); box-shadow: var(--shadow-sm), var(--raised-edge); }
+.model-rail [role="tablist"] { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.rail-tab { position: relative; display: grid; place-items: center; width: 38px; height: 38px; padding: 0; border-radius: var(--r-md); color: var(--secondary); transition: background-color var(--dur-1) var(--ease), box-shadow var(--dur-1) var(--ease), opacity var(--dur-1) var(--ease); }
+.rail-tab:hover:not(:disabled) { background: var(--hover); }
+.rail-tab[aria-selected="true"] { background: var(--raised); box-shadow: var(--shadow-sm), var(--raised-edge); }
 .rail-tab:focus-visible { outline-offset: -2px; }
+.rail-tab:disabled { opacity: 0.4; }
 .rail-tab .agent-mark { transition: transform var(--dur-2) var(--ease-spring), opacity var(--dur-1) var(--ease); }
 .rail-tab:not([aria-selected="true"]) .agent-mark { opacity: 0.85; }
 .rail-tab:hover:not(:disabled) .agent-mark { opacity: 1; transform: scale(1.1) rotate(-6deg); }
 .rail-tab[aria-selected="true"] .agent-mark { animation: mark-in var(--dur-3) var(--ease-spring); }
-.rail-tab-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rail-tab-count { flex: none; min-width: 18px; padding: 0 5px; border-radius: var(--r-pill); background: var(--well); color: var(--tertiary); font-size: var(--text-2xs); line-height: 16px; text-align: center; font-variant-numeric: tabular-nums; }
-.rail-tab[aria-selected="true"] .rail-tab-count { background: var(--accent-soft); color: var(--secondary); }
-/* The agent this thread runs on: a small live dot. */
-.rail-tab-live { flex: none; width: 6px; height: 6px; border-radius: var(--r-pill); background: var(--success); box-shadow: 0 0 0 3px color-mix(in oklab, var(--success) 22%, transparent); }
-.model-rail-foot { display: flex; gap: 2px; padding: 6px 8px; border-top: 1px solid var(--border); }
-.model-rail-foot .icon-btn { width: 26px; height: 26px; }
-/* A narrow window keeps the rail as marks only. */
-@container (max-width: 519px) {
-  .model-rail { width: 52px; }
-  .model-rail-label, .rail-tab-name, .rail-tab-count { display: none; }
-  .rail-tab { justify-content: center; padding: 4px; }
-  .rail-tab-live { position: absolute; right: 5px; top: 5px; width: 5px; height: 5px; }
-  .model-rail-foot { flex-direction: column; align-items: center; }
-}
+.rail-tab .rail-tab-live { position: absolute; right: 5px; bottom: 5px; width: 7px; height: 7px; margin: 0; border-radius: 50%; background: var(--success); box-shadow: 0 0 0 2px var(--glass-strong); }
+.rail-key { display: inline-grid; place-items: center; width: 18px; height: 18px; color: var(--secondary); }
+.rail-tip { position: absolute; left: calc(100% + 6px); z-index: 3; padding: 4px 8px; transform: translateY(-50%); border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--glass-strong); box-shadow: var(--shadow-sm); color: var(--ink); font-size: var(--text-xs); font-weight: 500; white-space: nowrap; pointer-events: none; animation: rail-tip-in var(--dur-2) var(--ease-out) 200ms both; }
+@keyframes rail-tip-in { from { opacity: 0; transform: translate(-3px, -50%); } }
+.model-rail-foot { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px 8px; border-top: 1px solid var(--border); }
+.model-rail-foot .icon-btn { width: 28px; height: 28px; }
 @media (prefers-reduced-motion: reduce) {
   .model-row, .model-head-mark, .rail-tab[aria-selected="true"] .agent-mark, .model-option[aria-selected="true"] .model-check svg { animation: none; }
   .model-icon, .rail-tab .agent-mark { transition: none; transform: none !important; }
+  .rail-tip { animation: none; }
 }
 
 /* Reasoning effort, beside the model: a plain chip that opens the shared select

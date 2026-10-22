@@ -26,7 +26,7 @@ const { settingsFields } = await bundle('apps/desktop/src/lib/settingsPersistenc
 const { resolveTheme, shellOpacity, normalizeTranslucency } = await bundle('apps/desktop/src/lib/theme.ts');
 const { rekeyThreadState, projectDraftForAgent } = await bundle('apps/desktop/src/lib/agentSwitch.ts');
 const { mcpServerNameProblem, mcpServerSummary, parseMcpArguments, parseMcpKeyValues } = await bundle('apps/desktop/src/lib/mcpConfig.ts');
-const { modelVisibilityKey, normalizeHiddenModels, isModelHidden, pickerModels, withModelsHidden } = await bundle('apps/desktop/src/lib/modelVisibility.ts');
+const { modelVisibilityKey, normalizeHiddenModels, normalizeHiddenProviders, providerKey, isModelHidden, pickerModels, withModelsHidden } = await bundle('apps/desktop/src/lib/modelVisibility.ts');
 const { extensionArt, EXTENSION_TONES } = await bundle('apps/desktop/src/lib/extensionArt.ts');
 const { SETTINGS_NAV_GROUPS, SETTINGS_TAB_LABELS, SETTINGS_TAB_COPY, settingsTabsMatching } = await bundle('apps/desktop/src/lib/settingsNav.ts');
 const { SETTINGS_TABS } = await bundle('apps/desktop/src/lib/types.ts');
@@ -1008,6 +1008,9 @@ test('hidden models leave the picker by agent, provider and model, except the on
   assert.deepEqual(withModelsHidden(hidden, 'harness', [haiku], false), ['harness|anthropic|anthropic/claude-sonnet']);
   assert.deepEqual(normalizeHiddenModels(['a|b|c', 'a|b|c', 7, 'no-pipes', 'x'.repeat(700)]), ['a|b|c']);
   assert.deepEqual(normalizeHiddenModels('a|b|c'), []);
+  assert.equal(providerKey('harness', 'anthropic'), 'harness:anthropic');
+  assert.equal(providerKey('muse', 'meta'), 'muse:', 'a CLI agent is one provider whatever its labs');
+  assert.deepEqual(normalizeHiddenProviders(['harness:openai', 'harness:openai', 'nope', 3]), ['harness:openai']);
 });
 
 test('an extension gets its own icon and tint: by id in the store, by name otherwise, stable by kind', () => {

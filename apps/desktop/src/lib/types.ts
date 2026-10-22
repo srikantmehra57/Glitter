@@ -675,6 +675,8 @@ export type Settings = {
   suggestionsModelId?: string;
   /** Models switched off in Settings → Models, as `modelVisibilityKey` strings. They leave the model picker, not the catalog. */
   hiddenModels?: string[];
+  /** Providers switched off in Settings → Models, as `providerKey` strings. They leave the model picker. */
+  hiddenProviders?: string[];
   workspaces: Workspace[];
 };
 
@@ -706,6 +708,7 @@ export const DEFAULT_SETTINGS: Settings = {
   suggestionsModelId: undefined,
   shortcutOverrides: {},
   hiddenModels: [],
+  hiddenProviders: [],
   workspaces: [],
 };
 

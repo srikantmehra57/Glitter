@@ -324,7 +324,9 @@ the app session, with a persisted "Don’t show again" choice. The model picker'
 rail foot has a Capabilities action to reopen the dialog at any time.
 
 The model picker opens above the composer and stays within the window. It has
-exactly two levels: **providers**, then **models**. The rail lists providers —
+exactly two levels: **providers**, then **models**. The rail is a 56px column of
+provider icons — no names; a label floats beside the hovered or focused icon,
+and the list's header names the open provider. It lists providers —
 each provider the built-in agent has a key for (Anthropic, OpenAI, OpenRouter…)
 and each other installed agent as a provider of its own (Muse, Cline CLI…), in
 a fixed order — with no Agents section and no agent row nested over its
@@ -334,7 +336,9 @@ under lab headings inside the list, never as a third level. Search spans every
 provider, with provider headings. Picking a model from a provider on another
 agent moves the thread to that agent, then sets the model; those rows are off
 while the thread cannot switch. Models switched off in Settings → Models leave
-the list (the thread's current model stays); the foot says how many are hidden
+the list (the thread's current model stays), and a provider switched off — or
+with every model off — leaves the rail unless the thread's model comes from it;
+the foot says how many are hidden
 and links to Manage models and Manage providers. One click on a row picks it
 and closes.
 
@@ -381,8 +385,10 @@ and the navigation, search and the command palette all read those names.
 | App | General · Appearance · Commands & shortcuts · Usage |
 | System | Diagnostics · About |
 
-- **Models**: new-thread defaults, then the model library — every provider's
-  models, each with a switch that keeps it in or out of the picker, and for the
+- **Models**: new-thread defaults, then the model library — every provider as a
+  card whose header switch turns the whole provider off (the card dims and
+  folds, keeping its model choices for when it returns), and its models, each
+  with a switch that keeps it in or out of the picker, and for the
   built-in agent's providers a **Test** icon button (Activity, a spinner while
   it runs) that sends one word and shows the reply time as a chip, or why it
   failed. A search field at the top searches every provider; a provider with
@@ -395,6 +401,11 @@ and the navigation, search and the command palette all read those names.
 - **Permissions**: approvals for new threads, then the Muse host sandbox.
 - Muse-only content (the subscription meter, the CLI updater, Muse diagnostics)
   appears only while Muse is shown, and after the app's own content.
+
+**Motion.** The category highlight moves on the click; the page renders a beat
+later (`useDeferredValue`) and fades up 4px over `--dur-2`, transform and
+opacity only. Cards below the fold use `content-visibility: auto`. The app view
+steps back through `html[data-settings]`, never an app-wide `:has()`.
 
 **Layout.** One centred column (`.settings-column`, 760px) on every page. The
 page head is the title (`--text-3xl`) and one sentence, over a hairline. A

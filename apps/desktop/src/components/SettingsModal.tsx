@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { lazy, Suspense, useDeferredValue, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useModalDialog } from "../lib/dialogFocus";
 import { describeError } from "../lib/errors";
 import { useShallow } from "zustand/react/shallow";
@@ -424,6 +424,7 @@ export function SettingsModal() {
     hideAgentCapabilities: state.hideAgentCapabilities,
     notifications: state.notifications,
     hiddenModels: state.hiddenModels,
+    hiddenProviders: state.hiddenProviders,
     workspaces: state.workspaces,
     threads: state.threads,
     selectedSessionId: state.selectedSessionId,
@@ -474,6 +475,9 @@ export function SettingsModal() {
   const [connecting, setConnecting] = useState(false);
   const [notice, setNotice] = useState("");
   const tab = s.settingsTab;
+  // The category highlight moves at once; the page it opens renders a beat later,
+  // so a click on a heavy page (Models, Usage) never holds up the frame that answers it.
+  const page = useDeferredValue(tab);
   const setTab = (next: SettingsTab) => s.setSettingsOpen(true, next);
   const navRef = useRef<HTMLDivElement>(null);
   const [search, setSearch] = useState("");
@@ -507,6 +511,14 @@ export function SettingsModal() {
   useEffect(() => { bodyRef.current?.scrollTo(0, 0); setSearch(""); }, [tab]);
   const [showKey, setShowKey] = useState(false);
   useModalDialog(s.settingsOpen, dialog);
+  // The app view steps back while Settings is open and returns as it closes. A
+  // root attribute drives that, not an app-wide :has() selector, which the
+  // engine would re-match on every change anywhere in the window.
+  useEffect(() => {
+    const root = document.documentElement;
+    root.dataset.settings = s.settingsOpen ? "open" : "closing";
+  }, [s.settingsOpen]);
+  useEffect(() => () => { delete document.documentElement.dataset.settings; }, []);
   // Opening would otherwise hand focus to the first control, and a focused
   // control greets every opening with a lit ring. The page itself takes focus
   // instead, with no ring; Tab moves on to Back and the categories from there.
@@ -710,21 +722,21 @@ export function SettingsModal() {
         <button type="button" className="icon-btn settings-close" aria-label="Close settings" data-tooltip-align="end" data-tooltip="Close  Esc" onClick={discardAndClose}><X size={16} /></button>
       </div>
       <fieldset disabled={connecting} className="settings-fields settings-content">
-        <div ref={bodyRef} className={`settings-section-body settings-page-${tab.toLowerCase()}`} role="region" aria-labelledby="settings-page-title" tabIndex={0}>
-          <div key={tab} className="settings-column settings-page">
-            <header className="settings-section-head"><h3 id="settings-page-title">{SETTINGS_TAB_LABELS[tab]}</h3><p>{SETTINGS_TAB_COPY[tab]}</p></header>
-        {tab === "Models" ? <>
+        <div ref={bodyRef} className={`settings-section-body settings-page-${page.toLowerCase()}`} role="region" aria-labelledby="settings-page-title" tabIndex={0}>
+          <div key={page} className="settings-column settings-page">
+            <header className="settings-section-head"><h3 id="settings-page-title">{SETTINGS_TAB_LABELS[page]}</h3><p>{SETTINGS_TAB_COPY[page]}</p></header>
+        {page === "Models" ? <>
           <SectionHead title="New thread defaults" help={`From ${AGENT_LABELS[defaultsAgentId]}, your default agent. The composer can change both for any thread.`} action={<button type="button" className="ghost-btn small" aria-label="Refresh default models" disabled={modelCatalog.loading} onClick={() => setCatalogRefresh((value) => value + 1)}><RefreshCw size={11} className={modelCatalog.loading ? "spin" : ""} aria-hidden="true" />Refresh</button>} />
           {modelCatalog.error ? <p className="settings-note" role="alert">{modelCatalog.error} Refresh the list, or check the agent under Agents.</p> : modelCatalog.loading ? <p className="settings-note" role="status">Loading {AGENT_LABELS[defaultsAgentId]} models…</p> : !defaultModels.length ? <p className="settings-note" role="status">{AGENT_LABELS[defaultsAgentId]} did not report any models.</p> : null}
           <section className="settings-card" aria-label="New thread defaults">
           <SettingRow label={<label htmlFor="default-model">Default model</label>} help={<>{savedUnlisted ? <span>This saved model is no longer listed. Choose a current model. </span> : null}{draft.defaultModel ? <button className="text-btn" type="button" onClick={() => edit({ defaultModel: "", defaultProviderId: undefined })}>Use the agent’s default</button> : "New threads start on the agent’s own default."}</>}><SelectMenu id="default-model" ariaLabel="Default model" icon={draft.defaultModel && selectedDefault ? <ModelIcon modelId={selectedDefault.modelId} providerId={selectedDefault.providerId} size={15} fallback={<AgentMark id={defaultsAgentId} size={15} />} /> : undefined} value={defaultModelValue} placeholder={modelCatalog.loading ? "Loading models…" : defaultModels.length ? "Agent default" : "Connect to load models"} options={modelOptions} disabled={modelCatalog.loading || !defaultModels.length} onChange={(value) => { const model = modelByKey.get(value); if (model) edit({ defaultModel: model.modelId, defaultProviderId: model.providerId }); }} /></SettingRow>
           <SettingRow label={<label htmlFor="default-effort">Default reasoning effort</label>} help="More effort gives the model longer on hard problems; less suits quick edits and questions."><SelectMenu id="default-effort" ariaLabel="Default reasoning effort" value={draft.defaultEffort} placeholder="Agent default" options={EFFORTS.map((effort) => ({ value: effort, label: EFFORT_LABELS[effort] }))} onChange={(value) => edit({ defaultEffort: value as ReasoningEffort })} /></SettingRow>
           </section>
-          <SectionHead title="Model library" help="Switch a model off to keep it out of the composer’s picker. Test sends one word and times the reply, so a busy or retired model shows up before you rely on it." />
-          <ModelLibrary agents={libraryAgents} hidden={draft.hiddenModels ?? []} onHiddenChange={(hiddenModels) => edit({ hiddenModels })} loadCatalog={s.peekModelCatalog} testModel={s.testModel} onManageProviders={() => setTab("Providers")} />
+          <SectionHead title="Model library" help="Switch a provider or a single model off to keep it out of the composer’s picker. Test sends one word and times the reply, so a busy or retired model shows up before you rely on it." />
+          <ModelLibrary agents={libraryAgents} hidden={draft.hiddenModels ?? []} onHiddenChange={(hiddenModels) => edit({ hiddenModels })} hiddenProviders={draft.hiddenProviders ?? []} onHiddenProvidersChange={(hiddenProviders) => edit({ hiddenProviders })} loadCatalog={s.peekModelCatalog} testModel={s.testModel} onManageProviders={() => setTab("Providers")} />
         </> : null}
-        {tab === "Providers" ? <ProvidersPanel onChanged={() => { void s.refreshDetection().then(() => useAppStore.getState().refreshModels(true)); }} /> : null}
-        {tab === "Agents" ? <div className="agents-panel">
+        {page === "Providers" ? <ProvidersPanel onChanged={() => { void s.refreshDetection().then(() => useAppStore.getState().refreshModels(true)); }} /> : null}
+        {page === "Agents" ? <div className="agents-panel">
           <SectionHead title="Defaults" />
           <div className="settings-card">
             <section className="agent-default-section" aria-labelledby="default-agent-title"><div><h4 id="default-agent-title">Default for new threads</h4><p>Automatic uses the first ready agent.</p></div><div className="agent-default-options" role="radiogroup" aria-label="Default agent for new threads"><button type="button" role="radio" aria-checked={!draft.defaultAgentId} className={!draft.defaultAgentId ? "selected" : ""} onClick={() => edit({ defaultAgentId: undefined })}>Automatic</button>{readyAgents.map((agent) => <button key={agent.id} type="button" role="radio" aria-checked={draft.defaultAgentId === agent.id} className={draft.defaultAgentId === agent.id ? "selected" : ""} onClick={() => edit({ defaultAgentId: agent.id as AgentId })}><AgentMark id={agent.id} size={16} />{agent.name}</button>)}</div></section>
@@ -776,9 +788,9 @@ export function SettingsModal() {
             </section>
           </> : null}
         </div> : null}
-        {tab === "Extensions" ? <Suspense fallback={null}><ExtensionsView embedded /></Suspense> : null}
-        {tab === "Permissions" ? <PermissionsPanel draft={draft} onChange={edit} /> : null}
-        {tab === "Threads" ? <div className="archive-panel">
+        {page === "Extensions" ? <Suspense fallback={null}><ExtensionsView embedded /></Suspense> : null}
+        {page === "Permissions" ? <PermissionsPanel draft={draft} onChange={edit} /> : null}
+        {page === "Threads" ? <div className="archive-panel">
           <SectionHead title="Thread list" />
           <section className="settings-card" aria-label="Thread list">
           <SettingRow label={<label htmlFor="list-since">Show threads updated within</label>} help="A narrower window lists fewer threads per workspace, which keeps very large histories quick to load.">
@@ -841,7 +853,7 @@ export function SettingsModal() {
             {!s.threads.some((thread) => thread.archived) ? <li className="missing"><ArchiveRestore size={22} aria-hidden="true" /><span><strong>Nothing archived</strong><span className="model-meta">Archived threads appear here. Your active threads are in the sidebar.</span></span></li> : null}
           </ul>
         </div> : null}
-        {tab === "General" ? <>
+        {page === "General" ? <>
           <SectionHead title="Workspace" />
           <section className="settings-card" aria-label="General">
             <SettingRow label={<label htmlFor="editor-choice">Open files in</label>} help="Used by Open file in Changes, Files and the task monitor. An editor that is not installed reports an error instead of opening.">
@@ -869,13 +881,13 @@ export function SettingsModal() {
             </> : null}
           </section>
         </> : null}
-        {tab === "Theme" ? <ThemePanel draft={draft} onChange={edit} /> : null}
-        {tab === "Shortcuts" ? <>
+        {page === "Theme" ? <ThemePanel draft={draft} onChange={edit} /> : null}
+        {page === "Shortcuts" ? <>
           <CustomCommandsCard commands={draft.customCommands ?? []} onChange={(customCommands) => edit({ customCommands })} />
           <ShortcutsPanel overrides={draft.shortcutOverrides ?? {}} onChange={(shortcutOverrides) => edit({ shortcutOverrides })} />
         </> : null}
-        {tab === "Usage" ? <Suspense fallback={null}><UsageView embedded /></Suspense> : null}
-        {tab === "Diagnostics" ? <>
+        {page === "Usage" ? <Suspense fallback={null}><UsageView embedded /></Suspense> : null}
+        {page === "Diagnostics" ? <>
           <SectionHead title="This app" action={<span className="row diagnostics-actions">
             <button type="button" className="ghost-btn small" onClick={() => void copyDiagnostics()}>Copy diagnostics</button>
             {isTauri() ? <button type="button" className="ghost-btn small" onClick={() => void openLogFolder().then((path) => setNotice(`Opened logs. Current file: ${path}`)).catch((error) => setNotice(describeError("Could not open the log folder", error)))}><FolderOpen size={11} />Open logs</button> : null}
@@ -905,7 +917,7 @@ export function SettingsModal() {
             </div>
           </> : null}
         </> : null}
-        {tab === "About" ? <div className="about">
+        {page === "About" ? <div className="about">
           <div className="settings-card">
             <div className="about-identity"><span className="about-mark"><img src="/spark.svg" alt="" /></span><div><h4>Glitter</h4><span className="about-version">Version {APP_VERSION}</span></div></div>
             {s.detection?.found ? <SettingRow label={<span className="setting-label">Muse CLI updates</span>} help={cliUpdateSummary(s)}>

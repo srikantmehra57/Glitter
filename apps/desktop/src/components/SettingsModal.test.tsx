@@ -272,6 +272,23 @@ describe("settings navigation", () => {
     await vi.waitFor(() => expect(useAppStore.getState().hiddenModels).toEqual([]));
   });
 
+  it("switches a whole provider off and back on, folding its list while it is off", async () => {
+    seedStore({
+      settingsTab: "Models", hiddenModels: [], hiddenProviders: [],
+      peekModelCatalog: vi.fn(async () => [{ modelId: "openai/gpt-5", providerId: "openai", displayLabel: "GPT-5" }]),
+      agents: [{ id: "harness", name: "Harness", protocol: "native", found: true, path: null, version: null, verified: true, signIn: "", authenticated: true }],
+    });
+    render(<SettingsModal />);
+    const group = await screen.findByRole("region", { name: "OpenAI" });
+    await within(group).findByRole("switch", { name: "Show GPT-5 in the model picker" });
+    fireEvent.click(within(group).getByRole("switch", { name: "Use OpenAI in the model picker" }));
+    await vi.waitFor(() => expect(useAppStore.getState().hiddenProviders).toEqual(["harness:openai"]));
+    expect(within(group).getByText("Off — not in the model picker")).toBeInTheDocument();
+    await vi.waitFor(() => expect(within(group).queryByRole("switch", { name: "Show GPT-5 in the model picker" })).toBeNull());
+    fireEvent.click(within(group).getByRole("switch", { name: "Use OpenAI in the model picker" }));
+    await vi.waitFor(() => expect(useAppStore.getState().hiddenProviders).toEqual([]));
+  });
+
   it("keeps notifications on a General tab, saved on toggle", async () => {
     seedStore({ settingsTab: "General", notifications: true });
     render(<SettingsModal />);

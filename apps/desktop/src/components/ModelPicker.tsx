@@ -98,6 +98,8 @@ type Props = {
   title?: string;
   /** Settings → Models' switched-off models, as `modelVisibilityKey` strings. */
   hidden?: readonly string[];
+  /** Providers switched off as a whole, as `providerKey` strings. */
+  hiddenProviders?: readonly string[];
   onChange: (model: Model) => void;
   /** A model from a provider on another agent: the thread switches agent, then model. */
   onChooseOther?: (agentId: AgentId, model: Model) => void;
@@ -110,7 +112,7 @@ type Props = {
   onManageProviders?: () => void;
 };
 
-const SIZE = { width: 640, height: 480, short: 380 };
+const SIZE = { width: 540, height: 480, short: 380 };
 const PLAIN_SIZE = { width: 420, height: 460 };
 
 /**
@@ -118,7 +120,7 @@ const PLAIN_SIZE = { width: 420, height: 460 };
  * it and closes. The rail lists providers and the list shows that provider's
  * models — two levels, nothing nested. Effort is its own control (EffortPicker).
  */
-export function ModelPicker({ models, agentId, agents = [], agentDisabled, value, loading, disabled, applying, title, hidden, onChange, onChooseOther, loadCatalog, onRescan, onShowCapabilities, onManageModels, onManageProviders }: Props) {
+export function ModelPicker({ models, agentId, agents = [], agentDisabled, value, loading, disabled, applying, title, hidden, hiddenProviders, onChange, onChooseOther, loadCatalog, onRescan, onShowCapabilities, onManageModels, onManageProviders }: Props) {
   const root = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
@@ -183,8 +185,10 @@ export function ModelPicker({ models, agentId, agents = [], agentDisabled, value
       }
       list.push({ id: `${id}:`, agentId: id, name: info?.name ?? AGENT_LABELS[id], mark: <AgentMark id={id} size={18} />, count: catalog.models.length ? visibleModels.length : undefined, catalog, models: visibleModels, hidden: catalog.models.length - visibleModels.length, disabled: !current && (Boolean(agentDisabled) || signIn), title: signIn ? `${info?.name ?? AGENT_LABELS[id]} · sign in from Settings → Agents` : undefined, live: current });
     }
-    return list;
-  }, [shownAgents, others.join(","), agentId, models, loading, catalogs, agents, hidden, selected, agentDisabled]);
+    // A provider switched off in Settings → Models, or one with every model off, leaves the
+    // rail — except the one the thread's model comes from, which stays reachable.
+    return list.filter((item) => item.live || (!hiddenProviders?.includes(item.id) && !(item.hidden > 0 && !item.models.length)));
+  }, [shownAgents, others.join(","), agentId, models, loading, catalogs, agents, hidden, hiddenProviders, selected, agentDisabled]);
 
   const homeId = agentId === "harness" ? `harness:${selected?.providerId ?? ""}` : `${agentId}:`;
   const sourceId = pinned && sources.some((source) => source.id === pinned) ? pinned : sources.some((source) => source.id === homeId) ? homeId : sources.find((source) => source.agentId === agentId)?.id ?? sources[0]?.id;

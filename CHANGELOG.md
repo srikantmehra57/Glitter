@@ -19,7 +19,9 @@ licence terms.
   a **Test** button, which sends one word and shows how long the reply took —
   or why it failed — so a busy or retired model shows up before you rely on
   it. Test shown runs the whole list, two at a time. Search covers every
-  provider, and a provider with many models has its own search.
+  provider, and a provider with many models has its own search. A switch on
+  each provider turns it off altogether: it leaves the model picker, and comes
+  back with the models you had chosen.
 - Skills, plugins and MCP servers have **thumbnails**: a tinted tile with an
   icon for what each one does, in the Store and in the installed lists.
 - A built-in agent, **Harness**, that works without any agent CLI installed.
@@ -128,7 +130,9 @@ licence terms.
   Commands & shortcuts, Usage) and System (Diagnostics, About) — and search
   matches every word you type. A host setting that needs a restart raises a bar
   at the foot of the page; other messages appear as a toast.
-- **The model picker has two levels: providers, then models.** The built-in
+- **The model picker has two levels: providers, then models.** Providers are a
+  column of icons, named as you hover, and ones you switched off (or whose
+  models are all off) are left out. The built-in
   agent's providers (Anthropic, OpenAI, OpenRouter…) and each other installed
   agent (Muse, Cline CLI…) sit side by side in one list; there is no Agents
   section and no Harness row above its providers. Choosing a model from another

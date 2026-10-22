@@ -123,6 +123,7 @@ function ComposerView({ above }: { above?: ReactNode }) {
     chooseAgentModel: state.chooseAgentModel,
     peekModelCatalog: state.peekModelCatalog,
     hiddenModels: state.hiddenModels,
+    hiddenProviders: state.hiddenProviders,
     refreshDetection: state.refreshDetection,
     refreshModels: state.refreshModels,
     setSessionConfig: state.setSessionConfig,
@@ -762,6 +763,7 @@ function ComposerView({ above }: { above?: ReactNode }) {
               applying={Boolean(thread?.configPending)}
               title={thread?.configPending ? "Applying your last change…" : lockReason}
               hidden={s.hiddenModels}
+              hiddenProviders={s.hiddenProviders}
               onChange={(next) => void s.setSessionConfig({ modelId: next.modelId, providerId: next.providerId })}
               onChooseOther={(id, next) => void s.chooseAgentModel(id, next)}
               loadCatalog={s.peekModelCatalog}

@@ -30,6 +30,20 @@ export function pickerModels<T extends ModelRef>(models: readonly T[], agentId: 
   return models.filter((model) => !set.has(modelVisibilityKey(agentId, model)) || (keep != null && keep.modelId === model.modelId && (keep.providerId ?? "") === (model.providerId ?? "")));
 }
 
+/**
+ * A provider as the picker and Settings → Models group them: each provider the
+ * built-in agent calls is its own, and every other agent is one provider.
+ */
+export function providerKey(agentId: string, providerId?: string): string {
+  return agentId === "harness" ? `harness:${providerId ?? ""}` : `${agentId}:`;
+}
+
+export function normalizeHiddenProviders(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const keys = value.filter((key): key is string => typeof key === "string" && key.length > 1 && key.length <= MAX_KEY && key.includes(":"));
+  return [...new Set(keys)].slice(0, MAX_HIDDEN);
+}
+
 /** Show or hide a set of models at once, keeping every other agent's choices. */
 export function withModelsHidden(hidden: readonly string[] | undefined, agentId: string, models: readonly ModelRef[], hide: boolean): string[] {
   const keys = models.map((model) => modelVisibilityKey(agentId, model));

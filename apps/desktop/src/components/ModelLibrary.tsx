@@ -35,10 +35,13 @@ function contextLabel(limit?: number | null) {
  * it in or out of the composer's picker, and — for the built-in agent, which
  * calls providers itself — a Test that sends one word and times the reply.
  */
-export function ModelLibrary({ agents, hidden, onHiddenChange, loadCatalog, testModel, onManageProviders }: {
+export function ModelLibrary({ agents, hidden, onHiddenChange, hiddenProviders, onHiddenProvidersChange, loadCatalog, testModel, onManageProviders }: {
   agents: AgentInfo[];
   hidden: readonly string[];
   onHiddenChange: (next: string[]) => void;
+  /** Providers switched off as a whole, by `providerKey`. */
+  hiddenProviders: readonly string[];
+  onHiddenProvidersChange: (next: string[]) => void;
   loadCatalog: (agentId: AgentId) => Promise<Model[]>;
   testModel: (agentId: AgentId, model: Model) => Promise<ModelTestResult>;
   onManageProviders: () => void;
@@ -121,25 +124,28 @@ export function ModelLibrary({ agents, hidden, onHiddenChange, loadCatalog, test
         const matches = group.models.filter((model) => matchesQuery(model, needle) && matchesQuery(model, own));
         if (needle && !group.models.some((model) => matchesQuery(model, needle))) return null;
         const shown = group.models.filter((model) => !isHidden(group.agentId, model)).length;
-        const open = needle ? true : !closed[group.id];
+        // A provider switched off keeps its list folded away; turning it back on restores its own model choices.
+        const providerOff = hiddenProviders.includes(group.id);
+        const open = providerOff ? false : needle ? true : !closed[group.id];
         const folded = !needle && !own && !unfolded[group.id] && matches.length > FOLD + 2;
         const rows = folded ? matches.slice(0, FOLD) : matches;
         const allShown = shown === group.models.length;
         const testing = group.models.some((model) => tests[modelVisibilityKey(group.agentId, model)]?.state === "running");
         return (
-          <section key={group.id} className={`settings-card library-group${open ? " open" : ""}`} aria-label={group.name}>
+          <section key={group.id} className={`settings-card library-group${open ? " open" : ""}${providerOff ? " off" : ""}`} aria-label={group.name}>
             <div className="library-head">
-              <button type="button" className="library-toggle" aria-expanded={open} onClick={() => setClosed((all) => ({ ...all, [group.id]: open }))}>
+              <button type="button" className="library-toggle" aria-expanded={open} disabled={providerOff} onClick={() => setClosed((all) => ({ ...all, [group.id]: open }))}>
                 {group.mark}
                 <span className="library-title">
                   <strong>{group.name}</strong>
-                  <span>{group.catalog.loading && !group.models.length ? "Loading models…" : group.catalog.error ? "Unavailable" : `${shown} of ${group.models.length} in the picker`}</span>
+                  <span>{providerOff ? "Off — not in the model picker" : group.catalog.loading && !group.models.length ? "Loading models…" : group.catalog.error ? "Unavailable" : `${shown} of ${group.models.length} in the picker`}</span>
                 </span>
                 <ChevronDown size={14} className="library-chevron" aria-hidden="true" />
               </button>
               <span className="library-actions">
-                {group.testable && group.models.length ? <button type="button" className="ghost-btn small" disabled={testing} onClick={() => void testAll(group, matches.filter((model) => !isHidden(group.agentId, model)))}><Activity size={11} aria-hidden="true" />{testing ? "Testing…" : "Test shown"}</button> : null}
-                {group.models.length ? <button type="button" className="ghost-btn small" onClick={() => setHidden(group.agentId, group.models, allShown)}>{allShown ? "Hide all" : "Show all"}</button> : null}
+                {!providerOff && group.testable && group.models.length ? <button type="button" className="ghost-btn small" disabled={testing} onClick={() => void testAll(group, matches.filter((model) => !isHidden(group.agentId, model)))}><Activity size={11} aria-hidden="true" />{testing ? "Testing…" : "Test shown"}</button> : null}
+                {!providerOff && group.models.length ? <button type="button" className="ghost-btn small" onClick={() => setHidden(group.agentId, group.models, allShown)}>{allShown ? "Hide all" : "Show all"}</button> : null}
+                <button type="button" role="switch" aria-checked={!providerOff} aria-label={`Use ${group.name} in the model picker`} data-tooltip={providerOff ? `Turn ${group.name} on` : `Turn ${group.name} off`} className="toggle library-provider-switch" onClick={() => onHiddenProvidersChange(providerOff ? hiddenProviders.filter((key) => key !== group.id) : [...hiddenProviders, group.id])}><i /></button>
               </span>
             </div>
             <Collapse open={open}>{() => (

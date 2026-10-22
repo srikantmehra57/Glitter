@@ -298,3 +298,29 @@ it("shows the agent's own mark for a model with no family or provider logo", () 
   fireEvent.click(screen.getByRole("button", { name: "Model" }));
   expect(screen.getByRole("option").querySelector(".agent-mark.img img")).toHaveAttribute("src", "/spark.svg");
 });
+
+it("leaves a provider switched off, or with every model off, out of the rail unless the thread uses it", () => {
+  const models: Model[] = [
+    { modelId: "anthropic/claude-sonnet", providerId: "anthropic", displayLabel: "Claude Sonnet" },
+    { modelId: "openai/gpt-5", providerId: "openai", displayLabel: "GPT-5" },
+    { modelId: "kilo/auto", providerId: "kilo", displayLabel: "Auto" },
+  ];
+  const { rerender } = render(<ModelPicker models={models} agentId="harness" value={modelKey(models[0])} hidden={["harness|kilo|kilo/auto"]} hiddenProviders={["harness:openai"]} loading={false} disabled={false} onChange={vi.fn()} onRescan={async () => {}} />);
+  fireEvent.click(screen.getByRole("button", { name: "Model" }));
+  expect(screen.getAllByRole("tab").map((tab) => tab.getAttribute("aria-label"))).toEqual(["Anthropic"]);
+  rerender(<ModelPicker models={models} agentId="harness" value={modelKey(models[0])} hiddenProviders={["harness:anthropic"]} loading={false} disabled={false} onChange={vi.fn()} onRescan={async () => {}} />);
+  // The provider the thread's model comes from stays, even when it is switched off.
+  expect(screen.getAllByRole("tab").map((tab) => tab.getAttribute("aria-label"))).toEqual(["Anthropic", "OpenAI", "Kilo API"]);
+});
+
+it("shows each provider as an icon, named by its label and a floating tip", () => {
+  const models: Model[] = [{ modelId: "anthropic/claude-sonnet", providerId: "anthropic", displayLabel: "Claude Sonnet" }, { modelId: "openai/gpt-5", providerId: "openai", displayLabel: "GPT-5" }];
+  render(<ModelPicker models={models} agentId="harness" value={modelKey(models[0])} loading={false} disabled={false} onChange={vi.fn()} onRescan={async () => {}} />);
+  fireEvent.click(screen.getByRole("button", { name: "Model" }));
+  const openai = screen.getByRole("tab", { name: "OpenAI" });
+  expect(openai).not.toHaveTextContent("OpenAI");
+  fireEvent.mouseEnter(openai);
+  expect(document.querySelector(".rail-tip")).toHaveTextContent("OpenAI");
+  fireEvent.mouseLeave(openai);
+  expect(document.querySelector(".rail-tip")).toBeNull();
+});

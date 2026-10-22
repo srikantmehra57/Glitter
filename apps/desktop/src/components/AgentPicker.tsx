@@ -104,17 +104,26 @@ function moveFocus(event: React.KeyboardEvent<HTMLElement>) {
 }
 
 /**
- * The model picker's left rail: one row per provider. A Harness provider and
- * another agent sit side by side; the dot marks where the thread's model is.
+ * The model picker's left rail: one icon per provider, named by its tooltip and
+ * label. A provider the built-in agent calls and another agent sit side by side;
+ * the dot marks where the thread's model comes from.
  */
 export function SourceRail({ sources, sourceId, onSourceChange, onRescan, onShowCapabilities, capabilitiesLabel }: RailProps) {
   const [scanning, setScanning] = useState(false);
+  // The rail scrolls, so a tooltip drawn inside it would be clipped: one label floats beside it instead.
+  const [tip, setTip] = useState<{ text: string; top: number } | null>(null);
   const focusId = sourceId ?? sources.find((source) => source.live)?.id ?? sources[0]?.id;
+  const showTip = (target: HTMLElement, text: string) => {
+    const rail = target.closest(".model-rail");
+    if (!rail) return;
+    const box = target.getBoundingClientRect();
+    setTip({ text, top: box.top - rail.getBoundingClientRect().top + box.height / 2 });
+  };
   return (
     <nav className="model-rail" aria-label="Model sources">
-      <div className="model-rail-scroll">
+      <div className="model-rail-scroll" onScroll={() => setTip(null)}>
         <section className="model-rail-section">
-          <h3 className="model-rail-label">Providers</h3>
+          <h3 className="model-rail-label visually-hidden">Providers</h3>
           <div role="tablist" aria-orientation="vertical" aria-label="Providers" onKeyDown={moveFocus}>
             {sources.map((source) => (
               <button
@@ -126,17 +135,20 @@ export function SourceRail({ sources, sourceId, onSourceChange, onRescan, onShow
                 aria-label={source.name}
                 tabIndex={source.id === focusId ? 0 : -1}
                 disabled={source.disabled}
-                title={source.title}
+                onMouseEnter={(event) => showTip(event.currentTarget, source.title ?? source.name)}
+                onFocus={(event) => showTip(event.currentTarget, source.title ?? source.name)}
+                onMouseLeave={() => setTip(null)}
+                onBlur={() => setTip(null)}
                 onClick={() => { if (source.id !== sourceId) onSourceChange(source.id); }}
               >
                 {source.mark}
-                <span className="rail-tab-name">{source.name}</span>
-                {source.live ? <span className="rail-tab-live" aria-hidden="true" /> : source.count != null ? <span className="rail-tab-count" aria-hidden="true">{source.count}</span> : null}
+                {source.live ? <span className="rail-tab-live" aria-hidden="true" /> : null}
               </button>
             ))}
           </div>
         </section>
       </div>
+      {tip ? <span key={tip.text} className="rail-tip" style={{ top: tip.top }} aria-hidden="true">{tip.text}</span> : null}
       {onShowCapabilities || onRescan ? (
         <div className="model-rail-foot">
           {onShowCapabilities ? <button type="button" className="icon-btn" aria-label="Capabilities" data-tooltip={capabilitiesLabel ?? "Capabilities"} data-tooltip-side="top" data-tooltip-align="start" onClick={onShowCapabilities}><Info size={13} aria-hidden="true" /></button> : null}

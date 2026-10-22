@@ -33,9 +33,10 @@ dialog.settings-dialog::backdrop { background: transparent; -webkit-backdrop-fil
 dialog.settings-dialog[data-closing]:not([open]) { margin: 0; box-shadow: none; animation: settings-out var(--dur-2) var(--ease) forwards; }
 @keyframes settings-in { from { opacity: 0; } }
 @keyframes settings-out { to { opacity: 0; } }
-/* The app view steps back while Settings is open, and returns as it closes. */
-.app:has(> dialog.settings-dialog[open]) > :not(dialog) { pointer-events: none; animation: settings-away var(--dur-2) var(--ease) forwards; }
-.app:has(> dialog.settings-dialog[data-closing]:not([open])) > :not(dialog) { animation: fade-in var(--dur-3) var(--ease); }
+/* The app view steps back while Settings is open, and returns as it closes
+   (html[data-settings], set by SettingsModal). */
+html[data-settings="open"] .app > :not(dialog) { pointer-events: none; animation: settings-away var(--dur-2) var(--ease) forwards; }
+html[data-settings="closing"] .app > :not(dialog) { animation: fade-in var(--dur-3) var(--ease); }
 @keyframes settings-away { to { opacity: 0; visibility: hidden; } }
 
 .settings-nav {
@@ -112,8 +113,11 @@ html[data-sidebar-accent="true"] .settings-nav-group button.active { background:
 .settings-section-head { margin: 0 0 28px; padding: 8px 0 20px; border-bottom: 1px solid var(--border); }
 .settings-section-head h3 { margin: 0 0 6px; font-size: var(--text-3xl); font-weight: 600; line-height: 1.15; letter-spacing: -0.035em; }
 .settings-section-head p { margin: 0; max-width: 64ch; color: var(--secondary); font-size: var(--text-md); line-height: 1.5; text-wrap: pretty; }
-.settings-page { animation: settings-page-in var(--dur-3) var(--ease-out); }
-@keyframes settings-page-in { from { opacity: 0; transform: translateY(6px); } }
+/* A page change is a short fade with a 4px rise: transform and opacity only, so it runs on the compositor. */
+.settings-page { animation: settings-page-in var(--dur-2) var(--ease-out); }
+@keyframes settings-page-in { from { opacity: 0; transform: translate3d(0, 4px, 0); } }
+/* Cards below the fold skip layout and paint until they scroll near, so a long page opens as fast as a short one. */
+.settings-page > .settings-card, .settings-page > .agent-list, .settings-page > .diagnostics, .model-library > .library-group, .theme-section { content-visibility: auto; contain-intrinsic-size: auto 180px; }
 
 .settings-dialog .settings-notice { position: absolute; left: 50%; bottom: 20px; z-index: 4; max-width: min(560px, calc(100% - 48px)); margin: 0; padding: 9px 14px; transform: translateX(-50%); border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--glass-strong); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); box-shadow: var(--shadow-pop), inset 0 1px 0 var(--glass-edge); color: var(--ink); font-size: var(--text-sm); line-height: 1.5; animation: toast-in var(--dur-3) var(--ease-out); }
 @keyframes toast-in { from { opacity: 0; transform: translate(-50%, 8px); } }
@@ -416,6 +420,12 @@ button.setting-row.sidebar-accent-option:focus-visible { outline-offset: -2px; }
 .library-chevron { flex: none; color: var(--tertiary); transform: rotate(-90deg); transition: transform var(--dur-2) var(--ease-out); }
 .library-group.open .library-chevron { transform: none; }
 .library-actions { flex: none; display: inline-flex; align-items: center; gap: 2px; }
+.library-provider-switch { margin-left: 10px; }
+.library-group.off .library-toggle { cursor: default; }
+.library-group.off .library-toggle:hover { background: none; }
+.library-group.off .library-toggle > .agent-mark { opacity: 0.45; filter: grayscale(1); transition: opacity var(--dur-2) var(--ease), filter var(--dur-2) var(--ease); }
+.library-group.off .library-title strong { color: var(--secondary); }
+.library-group.off .library-chevron { opacity: 0; }
 .library-body { border-top: 1px solid var(--border); }
 .library-list { margin: 0; padding: 4px 0; list-style: none; }
 .library-search { margin: 10px 16px 2px; max-width: 320px; }
