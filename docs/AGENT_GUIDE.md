@@ -59,7 +59,7 @@ files (see the README's known limitations).
 | Muse protocol behavior | `packages/glitter-bridge/src/host.ts` |
 | Third-party (ACP) agents | `packages/glitter-bridge/src/acp.ts`, registry in `agents.ts` |
 | The built-in harness agent | `packages/glitter-bridge/src/harness/` (providers, wire, tools, registry, store, host) |
-| Harness permissions: read-only commands, risky and blocked commands, thread grants | `packages/glitter-bridge/src/harness/permission/` (`classify.ts`, `danger.ts`, `grants.ts`, `policy.ts`, `guards.ts`, over the `shell.ts` reader) |
+| Harness permissions: read-only commands, risky and blocked commands, thread grants, the Autonomous mode | `packages/glitter-bridge/src/harness/permission/` (`classify.ts`, `danger.ts`, `grants.ts`, `policy.ts`, `guards.ts`, over the `shell.ts` reader) |
 | Harness skills: discovery, the catalog in the prompt, the `skill` tool, `/name` | `packages/glitter-bridge/src/harness/skills.ts`; the app side is `supportsSkills` in `store.ts` and `ExtensionsView.tsx` |
 | The plan review that ends Plan mode | `EXIT_PLAN_TOOL` and `planSettlement` in `harness/questions.ts`; `PlanReviewCard.tsx`, picked in `UserInputCards.tsx` |
 | Harness questions (`ask_user`): the tool, the durable pending question, answers | `packages/glitter-bridge/src/harness/questions.ts`; `parkQuestion`, `settleQuestion` and `respondUserInput` in `harness/host.ts` |

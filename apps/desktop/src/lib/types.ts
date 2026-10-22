@@ -1,4 +1,6 @@
-export type ApprovalMode = "allowAll" | "promptUnmatched" | "onRequest" | "denyUnmatched";
+export type ApprovalMode = "allowAll" | "promptUnmatched" | "onRequest" | "denyUnmatched" | "guarded";
+/** The four modes the Muse CLI knows. `guarded` is the harness's own. */
+export type CliApprovalMode = Exclude<ApprovalMode, "guarded">;
 export type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 export type ThemeMode = "system" | "dark" | "light";
 export type AccentColor = "ember" | "mono" | "blue" | "violet" | "pink" | "orange" | "yellow" | "green" | "teal";
@@ -643,24 +645,33 @@ export const DEFAULT_SETTINGS: Settings = {
   workspaces: [],
 };
 
-/** Labels match the Muse CLI permission picker exactly: Read only, Ask me, Auto-review, Unrestricted. */
+/** The four CLI label values match the Muse CLI permission picker exactly; `guarded` is harness-only. */
 export const APPROVAL_LABELS: Record<ApprovalMode, string> = {
   denyUnmatched: "Read only",
   promptUnmatched: "Ask me",
   onRequest: "Auto-review",
+  guarded: "Autonomous",
   allowAll: "Unrestricted",
 };
 
-/** Descriptions match the Muse CLI permission picker exactly. */
+/** The four CLI descriptions match the Muse CLI permission picker exactly; `guarded` is harness-only. */
 export const APPROVAL_DESCRIPTIONS: Record<ApprovalMode, string> = {
   denyUnmatched: "Reads files only.",
   promptUnmatched: "Edits workspace and temporary files; requires approval for protected writes, new network targets, and other restricted actions.",
   onRequest: "Same access as Ask me; AI reviews eligible actions; trusted permission hooks may decide approval requests first.",
+  guarded: "Edits and ordinary commands run without asking. Risky or destructive commands still ask first.",
   allowAll: "No filesystem sandbox or approval prompts; local commands have direct network access; project trust is unchanged.",
 };
 
-/** All four MSP modes offered in the UI, in CLI order from most to least restrictive. */
-export const APPROVAL_ORDER: ApprovalMode[] = ["denyUnmatched", "promptUnmatched", "onRequest", "allowAll"];
+/** The four MSP modes offered in the UI, in CLI order from most to least restrictive. */
+export const APPROVAL_ORDER: CliApprovalMode[] = ["denyUnmatched", "promptUnmatched", "onRequest", "allowAll"];
+
+/** The harness also offers Autonomous, between Auto-review and Unrestricted. */
+export const HARNESS_APPROVAL_ORDER: ApprovalMode[] = ["denyUnmatched", "promptUnmatched", "onRequest", "guarded", "allowAll"];
+
+/** `guarded` is harness-only: any other agent falls back to Auto-review, the closest mode it knows. */
+export const approvalModeForAgent = (agentId: AgentId | undefined, mode: ApprovalMode | undefined): ApprovalMode | undefined =>
+  mode === "guarded" && agentId !== "harness" ? "onRequest" : mode;
 
 export const AUTH_MODE_ORDER: AuthMode[] = ["auto", "subscription", "apiKey"];
 

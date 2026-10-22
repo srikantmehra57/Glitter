@@ -764,8 +764,9 @@ must respect. Don't log routine changes here; they belong in git history and
 - **Outcomes:** An approval ends as allowed, rejected, cancelled, expired or
   unavailable, each with its own message to the model. With no approval
   channel the request is refused at once instead of waiting.
-- **Not done:** Full access still runs ask-level risks without asking. A guarded
-  "autonomous but not reckless" mode is harness plan item 5.5.
+- **Later:** Full access still runs ask-level risks without asking. The guarded
+  mode added on 2026-10-22 ("Autonomous is the harness's guarded mode") is the
+  one that stops at them.
 
 ### Harness skills are folders it discovers each turn
 
@@ -855,3 +856,25 @@ must respect. Don't log routine changes here; they belong in git history and
 - **Consequences:** Trajectory detail is app-local and recent. A client that is
   not this app sees the events pass but has nothing to read back later, and an
   agent other than Harness reports totals only, so its turns have no trajectory.
+
+### Autonomous is the harness's guarded mode
+
+- **Date:** 2026-10-22
+- **Decision:** The harness offers a fifth permission mode, `guarded`, labeled
+  **Autonomous** in the composer between Auto-review and Unrestricted. It allows
+  edits and runs commands without asking, but a command the danger catalog
+  rates ask-level (`rm -r`, `git push --force`, `git reset --hard`, `chmod -R`,
+  a download piped into a shell…) still asks every time. The deny-only guards
+  run first, as in every mode, so nothing they block can run; Plan mode still
+  refuses edits. A risky call is offered no thread grant: the card allows it
+  once or denies it, and says why.
+- **Why:** The four CLI modes keep their exact Muse CLI meanings, and
+  Auto-review is a review policy, not "run everything harmless". A separate
+  opt-in mode supplies the "autonomous but not reckless" behavior the reviews
+  asked for without changing what the existing modes mean or choosing it for
+  the user.
+- **Mode boundary:** `guarded` exists in the shared protocol so the renderer
+  can describe a harness thread, but it is harness-only. The renderer maps it
+  to Auto-review whenever a thread switches to Muse, the Muse host rejects it
+  outright if it arrives anyway, and hydration clamps it to Ask me rather than
+  keeping it as the default for new threads.

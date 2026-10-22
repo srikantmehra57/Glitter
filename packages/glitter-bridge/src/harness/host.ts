@@ -47,7 +47,7 @@ const MODES = [
   { value: "plan", name: "Plan", description: "Reads the workspace and plans. File edits are refused." },
 ];
 
-const APPROVAL_MODES = new Set<ApprovalMode>(["denyUnmatched", "promptUnmatched", "onRequest", "allowAll"]);
+const APPROVAL_MODES = new Set<ApprovalMode>(["denyUnmatched", "promptUnmatched", "onRequest", "guarded", "allowAll"]);
 
 const MAX_STEPS = 80;
 const RETRIES = 3;

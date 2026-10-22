@@ -45,6 +45,12 @@ licence terms.
   home folder, in any permission mode. Risky commands, such as `rm -r`,
   `git push --force`, `git reset --hard` or piping a download into a shell, can
   only be allowed once, and the card says why.
+- Harness has an **Autonomous** permission mode, between Auto-review and
+  Unrestricted. Edits and ordinary commands run without asking; a risky
+  command such as `rm -r`, `git push --force`, `git reset --hard` or a download
+  piped into a shell still asks every time, with allow once or deny. Commands
+  that are never allowed stay blocked. The mode is Harness-only and is not a
+  saved default; a thread switched to Muse falls back to Auto-review.
 - When a Harness approval expires, the agent is told it expired, not that you
   denied it.
 - Settings → Usage has a Trajectory section: each model call behind your recent

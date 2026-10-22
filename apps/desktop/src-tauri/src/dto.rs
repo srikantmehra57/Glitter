@@ -83,6 +83,8 @@ enum ApprovalMode {
     PromptUnmatched,
     OnRequest,
     DenyUnmatched,
+    /// The harness's Autonomous mode; no other agent accepts it.
+    Guarded,
 }
 
 /// Reasoning tiers (`protocol.ts`).
@@ -1107,6 +1109,7 @@ mod tests {
             ("suggest", json!({ "grantId": "wg-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "prompt": "Project: repo", "modelId": "m", "providerId": "p", "timeoutMs": 75000, "museAuthMode": "auto", "contributorMode": "off" })),
             ("suggest", json!({ "agentId": "opencode", "grantId": "wg-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "prompt": "names only", "modelId": "zen/a" })),
             ("startSession", json!({ "grantId": "wg-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "approvalMode": "promptUnmatched", "modelId": "m", "providerId": "p" })),
+            ("startSession", json!({ "agentId": "harness", "grantId": "wg-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "approvalMode": "guarded" })),
             ("startSession", json!({ "agentId": "qwen", "grantId": "wg-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "reasoningEffort": "high" })),
             ("startSession", json!({ "grantId": "wg-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "clientRequestId": "create-1" })),
             ("resumeSession", json!({ "sessionId": "s-1" })),
@@ -1149,6 +1152,7 @@ mod tests {
             ("respondUserInput", json!({ "sessionId": "s-1", "userInputId": "q", "response": { "action": "clarify", "text": "which file?" } })),
             ("decideApproval", json!({ "approvalId": "a-1", "choiceId": "c", "sessionId": "s-1" })),
             ("setApprovalMode", json!({ "sessionId": "s-1", "mode": "denyUnmatched" })),
+            ("setApprovalMode", json!({ "sessionId": "s-1", "mode": "guarded" })),
             ("setModel", json!({ "sessionId": "s-1", "modelId": "m", "providerId": "p" })),
             ("setModel", json!({ "agentId": "grok", "sessionId": "s-1", "modelId": "grok-4.6" })),
             ("setSessionOption", json!({ "agentId": "opencode", "sessionId": "s-1", "option": "effort", "value": "high" })),

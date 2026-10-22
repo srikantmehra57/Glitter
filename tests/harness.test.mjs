@@ -1058,6 +1058,19 @@ test('the policy lets read-only commands through in every mode and never grants 
   assert.equal(ask('git push --force', { mode: 'allowAll' }).kind, 'allow', 'Full access stays full access for ask-level risks');
 });
 
+test('the guarded mode runs ordinary calls and still asks about risky ones', () => {
+  const guarded = (subject, extra = {}) => decide({ kind: 'shell', subject, mode: 'guarded', planMode: false, grants: [], ...extra });
+  assert.equal(guarded({ kind: 'command', command: 'npm test' }).kind, 'allow', 'an ordinary command runs');
+  assert.equal(guarded({ kind: 'command', command: 'git push origin feature' }).kind, 'allow');
+  assert.equal(guarded({ kind: 'command', command: 'ls' }).kind, 'allow');
+  assert.equal(decide({ kind: 'edit', subject: { kind: 'path', path: 'src/a.ts' }, mode: 'guarded', planMode: false, grants: [] }).kind, 'allow', 'edits run');
+  const risky = guarded({ kind: 'command', command: 'git push --force' }, { grants: [{ kind: 'command', match: 'prefix', argv: ['git'] }] });
+  assert.equal(risky.kind, 'ask', 'a risky command still asks');
+  assert.deepEqual(risky.scopes, [], 'a risky command is still offered no grant');
+  assert.match(risky.risk, /history on the remote/);
+  assert.equal(decide({ kind: 'edit', subject: { kind: 'path', path: 'src/a.ts' }, mode: 'guarded', planMode: true, grants: [] }).kind, 'deny', 'Plan mode still refuses edits');
+});
+
 test('guards only deny, and a guard that throws refuses', () => {
   const input = { toolName: 'bash', kind: 'shell', subject: { kind: 'command', command: 'ls' } };
   assert.equal(runGuards([() => undefined], input), undefined);
@@ -1096,6 +1109,38 @@ test('thread grants follow the chosen scope, and a risky command is asked about 
   assert.deepEqual(risky.availableChoices.map((choice) => choice.choiceId), ['allow-once', 'deny'], 'no thread grant for a risky command');
   assert.match(risky.subject.risk, /Deletes a folder/);
   assert.equal(await readFile(join(root, 'one.txt'), 'utf8'), '', 'the denied script did not run');
+  assert.match(JSON.stringify(calls.at(-1).body.messages.at(-1)), /The user denied this tool call/);
+});
+
+test('Autonomous runs edits and ordinary commands, and stops at a destructive one', async () => {
+  const root = await workspace();
+  const { calls, fetchImpl } = anthropicStub([
+    () => toolReply('w1', 'write_file', { path: 'auto.txt', content: 'kept\n' }),
+    () => textReply('wrote'),
+    () => toolReply('b1', 'bash', { command: 'touch auto-run.txt' }),
+    () => textReply('touched'),
+    () => toolReply('b2', 'bash', { command: 'rm -rf auto.txt' }),
+    () => textReply('removed'),
+  ]);
+  const { instance, events } = host(fetchImpl, new SessionStore(await mkdtemp(join(temporary, 'store-'))));
+  const { sessionId } = await instance.startSession({ workspaceRoot: root, approvalMode: 'promptUnmatched' });
+  assert.equal(instance.setApprovalMode(sessionId, 'guarded').effectiveMode.mode, 'guarded');
+  await instance.sendTurn({ sessionId, text: 'write a file' });
+  await settled(events, 1);
+  await instance.sendTurn({ sessionId, text: 'touch a file' });
+  await settled(events, 2);
+  assert.equal(events.some(({ event }) => event === 'approval'), false, 'ordinary calls ran without asking');
+  assert.equal(await readFile(join(root, 'auto.txt'), 'utf8'), 'kept\n');
+  assert.equal(await readFile(join(root, 'auto-run.txt'), 'utf8'), '');
+  const before = events.filter(({ event }) => event === 'approval').length;
+  await instance.sendTurn({ sessionId, text: 'remove it' });
+  await until(events, () => events.filter(({ event }) => event === 'approval').length > before, 3000);
+  const risky = events.filter(({ event }) => event === 'approval').at(-1).payload;
+  assert.deepEqual(risky.availableChoices.map((choice) => choice.choiceId), ['allow-once', 'deny'], 'a risky command gets no thread grant');
+  assert.match(risky.subject.risk, /Deletes a folder/);
+  instance.decideApproval({ approvalId: risky.approvalId, choiceId: 'deny' });
+  await settled(events, 3);
+  assert.equal(await readFile(join(root, 'auto.txt'), 'utf8'), 'kept\n', 'the denied script did not run');
   assert.match(JSON.stringify(calls.at(-1).body.messages.at(-1)), /The user denied this tool call/);
 });
 

@@ -25,6 +25,7 @@ import { resolveTheme, type ThemeSettings } from "./theme";
 import {
   DEFAULT_SETTINGS,
   agentEnabled,
+  approvalModeForAgent,
   type AgentId,
   type AgentIdentity,
   type AgentInfo,
@@ -1170,6 +1171,7 @@ async function applyThreadConfig(get: () => AppStore, set: (patch: Partial<AppSt
   // dropping them, so a scrubbed value is never silently lost.
   if (thread.configPending) { update({ pendingConfig: { ...thread.pendingConfig, ...patch } }); return; }
   const config = fitEffort({ ...(thread.config ?? defaults(state)), ...patch }, state.models);
+  config.approvalMode = approvalModeForAgent(thread.agentId, config.approvalMode);
   update({ configPending: true, configNotice: undefined, error: null });
   try {
     if (!state.preview) {
@@ -1343,7 +1345,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         if (saved) {
           // `allowAll` is a per-thread composer choice, never a durable default:
           // a stored value (older build or hand-edited file) is clamped on load.
-          if (saved.defaultApprovalMode === "allowAll") {
+          if (saved.defaultApprovalMode === "allowAll" || saved.defaultApprovalMode === "guarded") {
             log.info("settings.approval_default_coerced");
             saved.defaultApprovalMode = "promptUnmatched";
             coerced = true;
@@ -1707,6 +1709,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       const switching = patch.agentId && patch.agentId !== (previous.agentId ?? preferredAgent(state));
       // A new agent brings its own models and effort tiers; drop the old agent's picks.
       const next = switching ? { ...previous, agentId: patch.agentId, modelId: undefined, providerId: undefined, effort: undefined, mode: undefined } : fitEffort({ ...previous, ...patch }, state.models);
+      next.approvalMode = approvalModeForAgent(next.agentId ?? preferredAgent(state), next.approvalMode);
       set({ drafts: { ...state.drafts, [key]: { text: state.composer, images: state.images, refs: state.contextRefs, config: next } } });
       // A new agent lists its own models; a newly picked third-party model is
       // described, so its effort levels show before the thread exists.
@@ -1904,7 +1907,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       } else if (options?.firstMessage) {
         if (!workspace?.grantId) throw new Error(UNGRANTED_ERROR);
         await get().startHost();
-        forked = { ...await bridge<SessionOpening>("startSession", { grantId: workspace.grantId, modelId: source.config?.modelId, providerId: source.config?.providerId, approvalMode: source.config?.approvalMode, ...(options.clientRequestId ? { clientRequestId: options.clientRequestId } : {}) }), items: [], historyExhausted: true };
+        forked = { ...await bridge<SessionOpening>("startSession", { grantId: workspace.grantId, modelId: source.config?.modelId, providerId: source.config?.providerId, approvalMode: approvalModeForAgent(undefined, source.config?.approvalMode), ...(options.clientRequestId ? { clientRequestId: options.clientRequestId } : {}) }), items: [], historyExhausted: true };
       } else {
         forked = await bridge<typeof forked>("forkSession", { sessionId: source.sessionId, ...(cut ? { lastTurnId: cut } : {}), ...(options?.clientRequestId ? { clientRequestId: options.clientRequestId } : {}) });
       }
@@ -2738,6 +2741,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     const config = fromProject ? get().drafts[sourceKey]?.config ?? defaults(get()) : defaults(get());
     set({ starting: true, error: null });
     const agentId = (config.agentId && agentEnabled(get(), config.agentId) ? config.agentId : undefined) ?? preferredAgent(get());
+    const approvalMode = approvalModeForAgent(agentId, config.approvalMode);
     try {
       let thread: Thread;
       const existingCount = get().threads.filter((t) => t.workspacePath === workspace.path && /^(New thread|Untitled thread)/.test(t.title)).length;
@@ -2751,8 +2755,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
         const ownModel = get().modelsAgentId === agentId && get().models.some((model) => model.modelId === config.modelId);
         const gated = agentId === "opencode" && /(?:^|[/:])[^/]*-free$/i.test(config.modelId ?? "");
         const mode = config.mode ?? get().agentModes[agentId]?.defaultMode;
-        const opened = await bridge<{ sessionId: string; agentConfig?: AgentSessionConfig }>("startSession", { agentId, grantId: workspace.grantId ?? undefined, modelId: ownModel && !gated ? config.modelId : undefined, reasoningEffort: config.effort, ...(mode ? { mode } : {}), ...(agentId === "harness" && config.approvalMode ? { approvalMode: config.approvalMode } : {}) });
-        thread = { sessionId: opened.sessionId, agentId, workspacePath: workspace.path, title, order: Date.now(), updatedAt: new Date().toISOString(), status: "idle", unread: false, items: [], opened: true, config: { ...config, ...agentConfigPatch(opened.agentConfig), agentId }, modes: opened.agentConfig?.modes };
+        const opened = await bridge<{ sessionId: string; agentConfig?: AgentSessionConfig }>("startSession", { agentId, grantId: workspace.grantId ?? undefined, modelId: ownModel && !gated ? config.modelId : undefined, reasoningEffort: config.effort, ...(mode ? { mode } : {}), ...(agentId === "harness" && approvalMode ? { approvalMode } : {}) });
+        thread = { sessionId: opened.sessionId, agentId, workspacePath: workspace.path, title, order: Date.now(), updatedAt: new Date().toISOString(), status: "idle", unread: false, items: [], opened: true, config: { ...config, ...agentConfigPatch(opened.agentConfig), ...(approvalMode ? { approvalMode } : {}), agentId }, modes: opened.agentConfig?.modes };
       } else {
         if (!get().preview) await get().startHost();
         // The worktree exists before the session does, so the CLI starts in it.
@@ -2762,13 +2766,13 @@ export const useAppStore = create<AppStore>((set, get) => ({
         const worktree: ThreadWorktree | undefined = made && { grantId: made.grantId, path: made.path, branch: made.branch, base: made.base, workspaceId: workspace.id };
         let opened: { sessionId: string } | SessionOpening;
         try {
-          opened = get().preview ? { sessionId: `preview-${uid()}` } : await bridge<SessionOpening>("startSession", { grantId: worktree?.grantId ?? workspace.grantId ?? undefined, approvalMode: config.approvalMode, modelId: config.modelId || undefined, providerId: config.providerId || undefined });
+          opened = get().preview ? { sessionId: `preview-${uid()}` } : await bridge<SessionOpening>("startSession", { grantId: worktree?.grantId ?? workspace.grantId ?? undefined, approvalMode, modelId: config.modelId || undefined, providerId: config.providerId || undefined });
         } catch (error) {
           if (worktree && !get().preview) await gitWorktreeRemove(worktree.grantId).catch(() => {});
           throw error;
         }
         const metadata = "opening" in opened ? opened.opening?.result.session : undefined;
-        thread = { sessionId: opened.sessionId, workspacePath: workspace.path, worktree, title, order: Date.now(), updatedAt: new Date().toISOString(), status: "idle", unread: false, items: [], opened: true, config: metadata ? metadataConfig(metadata, config.effort) : config, ...(made?.warning ? { notice: { level: "warning" as const, message: made.warning } } : {}) };
+        thread = { sessionId: opened.sessionId, workspacePath: workspace.path, worktree, title, order: Date.now(), updatedAt: new Date().toISOString(), status: "idle", unread: false, items: [], opened: true, config: metadata ? metadataConfig(metadata, config.effort) : { ...config, approvalMode }, ...(made?.warning ? { notice: { level: "warning" as const, message: made.warning } } : {}) };
       }
       const opened = { sessionId: thread.sessionId };
       set({ threads: [thread, ...get().threads] });
@@ -2806,6 +2810,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     const previousId = thread.sessionId;
     const previousName = state.agents.find((agent) => agent.id === (thread.agentId ?? "muse"))?.name ?? thread.agentId ?? "Muse";
     const nextName = state.agents.find((agent) => agent.id === agentId)?.name ?? agentId;
+    const approvalMode = approvalModeForAgent("muse", thread.config?.approvalMode);
     set({ starting: true, error: null });
     try {
       let next: Thread;
@@ -2830,17 +2835,17 @@ export const useAppStore = create<AppStore>((set, get) => ({
           configNotice: `Now using ${nextName}`,
         };
       } else if (get().preview) {
-        next = { ...thread, agentId: undefined, modes: undefined, config: { approvalMode: thread.config?.approvalMode, effort: thread.config?.effort }, error: null, notice: null, status: "idle", opened: true, configPending: false, pendingConfig: undefined, configNotice: `Now using ${nextName}` };
+        next = { ...thread, agentId: undefined, modes: undefined, config: { approvalMode, effort: thread.config?.effort }, error: null, notice: null, status: "idle", opened: true, configPending: false, pendingConfig: undefined, configNotice: `Now using ${nextName}` };
       } else {
         await get().startHost();
-        const opened = await bridge<SessionOpening>("startSession", { grantId: workspace.grantId ?? undefined, approvalMode: thread.config?.approvalMode });
+        const opened = await bridge<SessionOpening>("startSession", { grantId: workspace.grantId ?? undefined, approvalMode });
         next = {
           ...thread,
           sessionId: opened.sessionId,
           agentId: undefined,
           opened: true,
           opening: false,
-          config: { approvalMode: thread.config?.approvalMode },
+          config: { approvalMode },
           modes: undefined,
           error: null,
           notice: null,

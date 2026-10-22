@@ -106,6 +106,22 @@ describe("Composer", () => {
     expect(screen.getByPlaceholderText(/Queue a follow-up/)).toBeInTheDocument();
   });
 
+  it("offers Autonomous to the harness and not to Muse", () => {
+    seedWorkspace({ agentId: "harness" });
+    const view = render(<Composer />);
+    fireEvent.click(screen.getByRole("button", { name: "Permissions" }));
+    const harnessMenu = screen.getByRole("listbox", { name: "Permissions" });
+    expect(within(harnessMenu).getByRole("option", { name: /Autonomous/ })).toBeInTheDocument();
+    expect(within(harnessMenu).getAllByRole("option")).toHaveLength(5);
+    view.unmount();
+    seedWorkspace();
+    render(<Composer />);
+    fireEvent.click(screen.getByRole("button", { name: "Permissions" }));
+    const museMenu = screen.getByRole("listbox", { name: "Permissions" });
+    expect(within(museMenu).queryByRole("option", { name: /Autonomous/ })).toBeNull();
+    expect(within(museMenu).getAllByRole("option")).toHaveLength(4);
+  });
+
   it("keeps Stop-to-send for an ACP agent while a turn runs", () => {
     seedWorkspace({ agentId: "opencode", status: "running", activeTurnId: "t1" });
     useAppStore.setState({ composer: "follow up" });

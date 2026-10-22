@@ -9,8 +9,8 @@ import { covers, scopesFor, type Grant, type GrantScope, type Subject } from "./
  * cannot turn that denial into permission.
  */
 
-/** Permission modes the app offers, in the app's vocabulary. */
-export type ApprovalMode = "denyUnmatched" | "promptUnmatched" | "onRequest" | "allowAll";
+/** Permission modes the harness enforces: the app's vocabulary plus `guarded`, which the app calls Autonomous. */
+export type ApprovalMode = "denyUnmatched" | "promptUnmatched" | "onRequest" | "guarded" | "allowAll";
 
 export type PolicyInput = {
   kind: ToolKind;
@@ -37,6 +37,9 @@ export function decide(input: PolicyInput): Verdict {
   if (mode === "onRequest" && kind === "edit") return { kind: "allow" };
   const risks = subject.kind === "command" ? assessCommand(subject.command).filter((risk) => risk.level === "ask") : [];
   if (risks.length) return { kind: "ask", scopes: [], risk: risks.map((risk) => risk.reason).join(" ") };
+  // Autonomous but not reckless: the ask-level risks above are the brakes, and
+  // everything else runs. A risky call is still offered no grant.
+  if (mode === "guarded") return { kind: "allow" };
   if (covers(input.grants, subject)) return { kind: "allow" };
   return { kind: "ask", scopes: scopesFor(subject) };
 }

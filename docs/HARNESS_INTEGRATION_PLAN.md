@@ -294,8 +294,8 @@ guards deny, the policy asks, and a grant names its subject"). The code is in
 Differs from the plan: no bash AST (the reader covers what the classifier
 needs and refuses the rest), and an `expired` outcome beside the four named,
 since a timeout was the case the reviews said the model could not tell apart.
-Full access still runs ask-level risks without asking; the guarded mode is
-5.5.
+Full access still runs ask-level risks without asking; Autonomous (5.5) is the
+mode that stops at them.
 
 **Goal.** Make the permission model mean something. Today "Allow commands for
 session" allows every command, including `rm -rf`, for the rest of the thread.
@@ -323,10 +323,10 @@ read-only; a guard denial survives a policy listener that says allow.
 
 ## Phase 5 — App parity
 
-**Status: in progress.** 5.1, 5.2, 5.3 and 5.4 are done (2026-10-21 and
-2026-10-22, with the DECISIONS entries "Harness skills are folders it discovers
-each turn", "A Harness question ends the turn", "Plan mode ends with a plan
-review" and "Per-call usage is emitted, not logged"); 5.5 is not started.
+**Status: complete.** 5.1–5.5 are done (2026-10-21 and 2026-10-22, with the
+DECISIONS entries "Harness skills are folders it discovers each turn", "A
+Harness question ends the turn", "Plan mode ends with a plan review", "Per-call
+usage is emitted, not logged" and "Autonomous is the harness's guarded mode").
 
 - [x] 5.1 `harness/skills.ts`: a skill is a folder with a `SKILL.md` whose
       frontmatter has `name` (the folder name when missing) and
@@ -377,6 +377,16 @@ review" and "Per-call usage is emitted, not logged"); 5.5 is not started.
       → Usage shows them in a Trajectory section, recent turns that have calls,
       newest first, each opening onto its call list. The harness session log
       keeps no copy (see "Per-call usage is emitted, not logged").
+- [x] 5.5 A harness-only fifth permission mode, **Autonomous** (`guarded`):
+      edits and ordinary commands run without asking, while an ask-level danger
+      (`rm -r`, `git push --force`, `git reset --hard`, a download piped into a
+      shell…) still asks and is offered only allow once or deny. Blocked
+      commands are refused in every mode, Plan mode still refuses edits, and a
+      risky call gets no thread grant. The composer shows the mode between
+      Auto-review and Unrestricted for Harness only; the renderer maps it to
+      Auto-review when a thread switches to Muse, the Muse host rejects it, and
+      hydration never keeps it as the default. See "Autonomous is the harness's
+      guarded mode".
 
 **Goal.** Give the harness the features the app already gives Muse.
 
@@ -389,9 +399,11 @@ review" and "Per-call usage is emitted, not logged"); 5.5 is not started.
 | 5.5 | An "autonomous but not reckless" permission mode: ordinary calls auto-approve, dangerous ones still ask | ZCode, MiniMax | 80 lines |
 
 **Files.** `harness/skills.ts` (new), `harness/host.ts`,
-`apps/desktop/src/components/ExtensionsView.tsx` (skills list becomes
-agent-aware), `apps/desktop/src/components/UserInputCards.tsx`,
-`apps/desktop/src/components/UsageView.tsx`, `apps/desktop/src/lib/usageLedger.ts`.
+`harness/permission/policy.ts`, `apps/desktop/src/components/ExtensionsView.tsx`
+(skills list becomes agent-aware), `apps/desktop/src/components/UserInputCards.tsx`,
+`apps/desktop/src/components/UsageView.tsx`, `apps/desktop/src/lib/usageLedger.ts`,
+`apps/desktop/src/lib/types.ts` and `apps/desktop/src/components/Composer.tsx`
+(the fifth mode).
 
 **Tests.** `apps/desktop/src/components/*.test.tsx` for each UI surface;
 `tests/harness.test.mjs` for the skill catalog, `ask_user` and the per-call

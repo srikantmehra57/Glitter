@@ -6,7 +6,8 @@ export type BridgeRequest = {
   deadlineInMs?: number;
 };
 
-export type ApprovalMode = "allowAll" | "promptUnmatched" | "onRequest" | "denyUnmatched";
+/** `guarded` is the harness's Autonomous mode; the renderer never sends it to another agent. */
+export type ApprovalMode = "allowAll" | "promptUnmatched" | "onRequest" | "denyUnmatched" | "guarded";
 export type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 
 export type { UserInputAnswer } from "@muse-code/sdk/dist/src/msp.js";

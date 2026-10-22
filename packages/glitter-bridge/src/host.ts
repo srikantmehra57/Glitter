@@ -773,9 +773,11 @@ export class MuseHost {
     providerId?: string;
   }) {
     const { client } = this.requireState();
+    const { approvalMode } = options;
+    if (approvalMode === "guarded") throw new Error("Muse sessions do not have an Autonomous mode.");
     const session = await client.startSession({
       workspaceRoot: options.workspaceRoot,
-      approvalMode: options.approvalMode,
+      approvalMode,
       modelId: options.modelId,
       providerId: options.providerId,
     });
@@ -1348,10 +1350,12 @@ export class MuseHost {
 
   async setApprovalMode(options: { sessionId: string; mode: ApprovalMode }) {
     const { spawned } = this.requireState();
+    const { mode } = options;
+    if (mode === "guarded") throw new Error("Muse sessions do not have an Autonomous mode.");
     const commandId = spawned.connection.mintCommandId();
     return spawned.connection.command(
       "session/setApprovalMode",
-      { commandId, sessionId: options.sessionId, mode: options.mode },
+      { commandId, sessionId: options.sessionId, mode },
       { commandId },
     );
   }

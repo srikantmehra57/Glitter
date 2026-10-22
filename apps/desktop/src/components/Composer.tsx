@@ -1,8 +1,8 @@
 import { memo, useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode, type DragEvent as ReactDragEvent } from "react";
 import { describeError } from "../lib/errors";
 import { useShallow } from "zustand/react/shallow";
-import { ArrowUp, AtSign, FileText, FileUp, GitBranch, Hammer, Lock, Paperclip, Play, RotateCcw, ShieldCheck, Square, Terminal, TriangleAlert, X } from "lucide-react";
-import { AGENT_LABELS, APPROVAL_DESCRIPTIONS, APPROVAL_LABELS, APPROVAL_ORDER, agentEnabled, type ApprovalMode, type ContextRef, type Thread, type TranscriptItem } from "../lib/types";
+import { ArrowUp, AtSign, FileText, FileUp, GitBranch, Hammer, Lock, Paperclip, Play, RotateCcw, ShieldAlert, ShieldCheck, Square, Terminal, TriangleAlert, X } from "lucide-react";
+import { AGENT_LABELS, APPROVAL_DESCRIPTIONS, APPROVAL_LABELS, APPROVAL_ORDER, HARNESS_APPROVAL_ORDER, agentEnabled, type ApprovalMode, type ContextRef, type Thread, type TranscriptItem } from "../lib/types";
 import { defaultTier, isPeak, modelFor, tiersFor, withUnlistedModels } from "../lib/effort";
 import { formatTokens, humanizeModelLabel, isTauri, uid } from "../lib/format";
 import { fuzzyScore } from "../lib/fuzzy";
@@ -780,17 +780,17 @@ function ComposerView({ above }: { above?: ReactNode }) {
               <div className={`selector-chip${config.approvalMode === "allowAll" ? " danger" : ""}`} title={lockReason ?? "Approval mode"}>
                 <SelectMenu
                   id="approval"
-                  icon={config.approvalMode === "allowAll" ? <TriangleAlert size={13} aria-hidden="true" /> : <ShieldCheck size={13} aria-hidden="true" />}
+                  icon={config.approvalMode === "allowAll" ? <TriangleAlert size={13} aria-hidden="true" /> : config.approvalMode === "guarded" ? <ShieldAlert size={13} aria-hidden="true" /> : <ShieldCheck size={13} aria-hidden="true" />}
                   ariaLabel="Permissions"
                   heading="Permissions"
                   className="approval-select"
                   value={config.approvalMode}
                   placeholder="Permissions"
-                  options={APPROVAL_ORDER.map((mode) => ({
+                  options={(agentId === "harness" ? HARNESS_APPROVAL_ORDER : APPROVAL_ORDER).map((mode) => ({
                     value: mode,
                     label: APPROVAL_LABELS[mode],
                     description: APPROVAL_DESCRIPTIONS[mode],
-                    icon: mode === "allowAll" ? <TriangleAlert size={14} aria-hidden="true" /> : mode === "denyUnmatched" ? <Lock size={14} aria-hidden="true" /> : <ShieldCheck size={14} aria-hidden="true" />,
+                    icon: mode === "allowAll" ? <TriangleAlert size={14} aria-hidden="true" /> : mode === "denyUnmatched" ? <Lock size={14} aria-hidden="true" /> : mode === "guarded" ? <ShieldAlert size={14} aria-hidden="true" /> : <ShieldCheck size={14} aria-hidden="true" />,
                     ...(mode === "allowAll" ? { tone: "danger" as const } : {}),
                   }))}
                   disabled={locked}

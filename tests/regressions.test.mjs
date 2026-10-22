@@ -901,15 +901,17 @@ test('confirm resolves with the answer and a second confirm cancels the first', 
   assert.equal(await third, false);
 });
 
-test('hydrate clamps a persisted allowAll approval default to promptUnmatched', async () => {
-  globalThis.persistedData = { settings: { defaultApprovalMode: 'allowAll' } };
-  const store = await frontendStore({
-    '@tauri-apps/plugin-store': `export class LazyStore { async entries(){ return Object.entries(globalThis.persistedData ?? {}); } async get(key){ return globalThis.persistedData?.[key]; } async set(key, value){ globalThis.persistedData = { ...globalThis.persistedData, [key]: value }; } async save(){ throw new Error('the non-atomic plugin writer must not be used'); } }`,
-    '@tauri-apps/api/core': `export const invoke = async (command) => command === 'acp_isolation_consent_get' ? false : command === 'credential_get' ? null : undefined;`,
-    '@tauri-apps/plugin-notification': `export const isPermissionGranted=async()=>true;export const requestPermission=async()=>"granted";export const sendNotification=()=>{};`,
-  }, true);
-  await store.getState().hydrate();
-  assert.equal(store.getState().defaultApprovalMode, 'promptUnmatched');
+test('hydrate clamps a persisted per-thread-only approval default', async () => {
+  for (const mode of ['allowAll', 'guarded']) {
+    globalThis.persistedData = { settings: { defaultApprovalMode: mode } };
+    const store = await frontendStore({
+      '@tauri-apps/plugin-store': `export class LazyStore { async entries(){ return Object.entries(globalThis.persistedData ?? {}); } async get(key){ return globalThis.persistedData?.[key]; } async set(key, value){ globalThis.persistedData = { ...globalThis.persistedData, [key]: value }; } async save(){ throw new Error('the non-atomic plugin writer must not be used'); } }`,
+      '@tauri-apps/api/core': `export const invoke = async (command) => command === 'acp_isolation_consent_get' ? false : command === 'credential_get' ? null : undefined;`,
+      '@tauri-apps/plugin-notification': `export const isPermissionGranted=async()=>true;export const requestPermission=async()=>"granted";export const sendNotification=()=>{};`,
+    }, true);
+    await store.getState().hydrate();
+    assert.equal(store.getState().defaultApprovalMode, 'promptUnmatched', `${mode} is not a durable default`);
+  }
 });
 
 function hooks() {

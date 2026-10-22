@@ -8,7 +8,7 @@ import { isMacPlatform, isTauri } from "../lib/format";
 import { modelFor, VOCABULARY } from "../lib/effort";
 import { APP_VERSION } from "../lib/version";
 import { AgentMark } from "./AgentPicker";
-import { AGENT_IDS, AGENT_LABELS, APPROVAL_DESCRIPTIONS, APPROVAL_LABELS, APPROVAL_ORDER, AUTH_MODE_DESCRIPTIONS, AUTH_MODE_LABELS, AUTH_MODE_ORDER, AUTH_SOURCE_LABELS, AUTH_SOURCE_SHORT, DEFAULT_ENABLED_AGENTS, EDITOR_CHOICES, EDITOR_LABELS, EFFORT_LABELS, SETTINGS_TABS, THINKING_ORBS, agentEnabled, type CustomCommand, type EditorChoice, type AccentColor, type AgentId, type AgentInfo, type ApprovalMode, type AuthMode, type CliUpdateOutcome, type CliUpdateStatus, type Detection, type HostPosture, type ReasoningEffort, type SandboxNetwork, type SettingsTab, type ThemeMode, type ThinkingOrbStyle, type Settings } from "../lib/types";
+import { AGENT_IDS, AGENT_LABELS, APPROVAL_DESCRIPTIONS, APPROVAL_LABELS, APPROVAL_ORDER, AUTH_MODE_DESCRIPTIONS, AUTH_MODE_LABELS, AUTH_MODE_ORDER, AUTH_SOURCE_LABELS, AUTH_SOURCE_SHORT, DEFAULT_ENABLED_AGENTS, EDITOR_CHOICES, EDITOR_LABELS, EFFORT_LABELS, SETTINGS_TABS, THINKING_ORBS, agentEnabled, type CustomCommand, type EditorChoice, type AccentColor, type AgentId, type AgentInfo, type CliApprovalMode, type AuthMode, type CliUpdateOutcome, type CliUpdateStatus, type Detection, type HostPosture, type ReasoningEffort, type SandboxNetwork, type SettingsTab, type ThemeMode, type ThinkingOrbStyle, type Settings } from "../lib/types";
 import { humanizeModelLabel, humanizeProvider, relativeTime, shortCliVersion, shortHash, shortcutLabel, worktreeRemovalNote } from "../lib/format";
 import { settingsFields } from "../lib/settingsPersistence";
 import { customCommandProblem } from "../lib/composerText";
@@ -224,14 +224,14 @@ function ThemePanel({ draft, onChange }: { draft: Settings; onChange: (patch: Pa
   </div>;
 }
 
-const PERMISSION_BADGES: Record<ApprovalMode, string> = {
+const PERMISSION_BADGES: Record<CliApprovalMode, string> = {
   onRequest: "Recommended",
   promptUnmatched: "More review",
   denyUnmatched: "Strict",
   allowAll: "No prompts",
 };
 
-const PERMISSION_ICONS: Record<ApprovalMode, ReactNode> = {
+const PERMISSION_ICONS: Record<CliApprovalMode, ReactNode> = {
   onRequest: <ShieldCheck size={15} aria-hidden="true" />,
   promptUnmatched: <ShieldCheck size={15} aria-hidden="true" />,
   denyUnmatched: <Lock size={15} aria-hidden="true" />,
