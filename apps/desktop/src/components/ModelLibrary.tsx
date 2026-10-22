@@ -14,6 +14,12 @@ type Group = { id: string; agentId: AgentId; name: string; mark: React.ReactNode
 
 /** Rows shown before a long provider list folds the rest behind "Show more". */
 const FOLD = 8;
+/** A provider with more models than this gets its own search field. */
+const SEARCHABLE = 10;
+
+function matchesQuery(model: Model, needle: string) {
+  return !needle || `${model.modelId} ${model.displayLabel ?? ""} ${humanizeModelLabel(model.modelId, model.displayLabel)}`.toLowerCase().includes(needle);
+}
 
 function seconds(ms: number) {
   return ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)} s`;
@@ -43,6 +49,7 @@ export function ModelLibrary({ agents, hidden, onHiddenChange, loadCatalog, test
   const [query, setQuery] = useState("");
   const [closed, setClosed] = useState<Record<string, boolean>>({});
   const [unfolded, setUnfolded] = useState<Record<string, boolean>>({});
+  const [groupQueries, setGroupQueries] = useState<Record<string, string>>({});
 
   useEffect(() => {
     let live = true;
@@ -97,8 +104,8 @@ export function ModelLibrary({ agents, hidden, onHiddenChange, loadCatalog, test
       <div className="model-library-tools">
         <label className="search-field">
           <Search size={13} aria-hidden="true" />
-          <input value={query} placeholder="Filter models" aria-label="Filter models" spellCheck={false} onChange={(event) => setQuery(event.target.value)} />
-          {query ? <button type="button" className="search-clear" aria-label="Clear model filter" onClick={() => setQuery("")}><X size={12} /></button> : null}
+          <input value={query} placeholder="Search all models" aria-label="Search all models" spellCheck={false} onChange={(event) => setQuery(event.target.value)} />
+          {query ? <button type="button" className="search-clear" aria-label="Clear model search" onClick={() => setQuery("")}><X size={12} /></button> : null}
         </label>
         <span className="model-library-count" aria-live="polite">{hidden.length ? `${hidden.length} hidden from the picker` : "Every model is in the picker"}</span>
       </div>
@@ -110,11 +117,12 @@ export function ModelLibrary({ agents, hidden, onHiddenChange, loadCatalog, test
         </div>
       ) : null}
       {groups.map((group) => {
-        const matches = needle ? group.models.filter((model) => `${model.modelId} ${model.displayLabel ?? ""} ${humanizeModelLabel(model.modelId, model.displayLabel)}`.toLowerCase().includes(needle)) : group.models;
-        if (needle && !matches.length) return null;
+        const own = (groupQueries[group.id] ?? "").trim().toLowerCase();
+        const matches = group.models.filter((model) => matchesQuery(model, needle) && matchesQuery(model, own));
+        if (needle && !group.models.some((model) => matchesQuery(model, needle))) return null;
         const shown = group.models.filter((model) => !isHidden(group.agentId, model)).length;
         const open = needle ? true : !closed[group.id];
-        const folded = !needle && !unfolded[group.id] && matches.length > FOLD + 2;
+        const folded = !needle && !own && !unfolded[group.id] && matches.length > FOLD + 2;
         const rows = folded ? matches.slice(0, FOLD) : matches;
         const allShown = shown === group.models.length;
         const testing = group.models.some((model) => tests[modelVisibilityKey(group.agentId, model)]?.state === "running");
@@ -136,6 +144,14 @@ export function ModelLibrary({ agents, hidden, onHiddenChange, loadCatalog, test
             </div>
             <Collapse open={open}>{() => (
               <div className="library-body">
+                {group.models.length > SEARCHABLE ? (
+                  <label className="search-field library-search">
+                    <Search size={13} aria-hidden="true" />
+                    <input value={groupQueries[group.id] ?? ""} placeholder={`Search ${group.models.length} ${group.name} models`} aria-label={`Search ${group.name} models`} spellCheck={false} onChange={(event) => setGroupQueries((all) => ({ ...all, [group.id]: event.target.value }))} />
+                    {groupQueries[group.id] ? <button type="button" className="search-clear" aria-label={`Clear the ${group.name} search`} onClick={() => setGroupQueries((all) => ({ ...all, [group.id]: "" }))}><X size={12} /></button> : null}
+                  </label>
+                ) : null}
+                {own && !matches.length ? <p className="library-empty">No {group.name} models match “{groupQueries[group.id]}”.</p> : null}
                 {group.catalog.error ? <p className="settings-note danger" role="alert">{group.catalog.error}</p> : null}
                 {group.catalog.loading && !group.models.length ? <p className="library-empty" role="status"><LoaderCircle size={12} className="spin" aria-hidden="true" />Loading {group.name} models…</p> : null}
                 {!group.catalog.loading && !group.catalog.error && !group.models.length ? <p className="library-empty">{group.name} did not report any models.</p> : null}
@@ -157,8 +173,8 @@ export function ModelLibrary({ agents, hidden, onHiddenChange, loadCatalog, test
                           <span className="library-test">
                             {test?.state === "ok" ? <span className="test-chip ok" title={test.result.reply ? `Replied “${test.result.reply}”` : "Replied"}><Check size={10} strokeWidth={3} aria-hidden="true" />{seconds(test.result.latencyMs)}</span> : null}
                             {test?.state === "failed" ? <span className="test-chip failed"><TriangleAlert size={10} aria-hidden="true" />No reply</span> : null}
-                            <button type="button" className="ghost-btn small" aria-label={`Test ${name}`} disabled={test?.state === "running"} onClick={() => void runTest(group, model)}>
-                              {test?.state === "running" ? <><LoaderCircle size={11} className="spin" aria-hidden="true" />Testing</> : test ? "Retest" : "Test"}
+                            <button type="button" className="icon-btn small" aria-label={`Test ${name}`} data-tooltip={test?.state === "running" ? "Testing…" : test ? "Test again" : "Test the reply"} disabled={test?.state === "running"} onClick={() => void runTest(group, model)}>
+                              {test?.state === "running" ? <LoaderCircle size={14} className="spin" aria-hidden="true" /> : <Activity size={14} aria-hidden="true" />}
                             </button>
                           </span>
                         ) : null}
@@ -174,7 +190,7 @@ export function ModelLibrary({ agents, hidden, onHiddenChange, loadCatalog, test
           </section>
         );
       })}
-      {needle && !groups.some((group) => group.models.some((model) => `${model.modelId} ${model.displayLabel ?? ""} ${humanizeModelLabel(model.modelId, model.displayLabel)}`.toLowerCase().includes(needle))) ? <p className="settings-note">No models match “{query}”.</p> : null}
+      {needle && !groups.some((group) => group.models.some((model) => matchesQuery(model, needle))) ? <p className="settings-note">No models match “{query}”.</p> : null}
     </div>
   );
 }

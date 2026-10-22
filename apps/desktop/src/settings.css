@@ -7,7 +7,8 @@
 /* ───────────────────────── Shell ───────────────────────── */
 
 .settings-dialog {
-  --settings-nav-width: clamp(232px, 22vw, 272px);
+  /* The sidebar's own width, so the categories line up with it exactly. */
+  --settings-nav-width: var(--sidebar-width);
   position: fixed;
   inset: 0;
   width: 100vw;
@@ -26,6 +27,8 @@
 }
 dialog.settings-dialog:is([open], [data-closing]) { display: grid; grid-template-columns: var(--settings-nav-width) minmax(0, 1fr); }
 dialog.settings-dialog[open] { animation: settings-in var(--dur-3) var(--ease-out); }
+/* The page takes focus on opening (see SettingsModal); it draws no ring for it. */
+.settings-dialog:focus { outline: none; }
 dialog.settings-dialog::backdrop { background: transparent; -webkit-backdrop-filter: none; backdrop-filter: none; animation: none; }
 dialog.settings-dialog[data-closing]:not([open]) { margin: 0; box-shadow: none; animation: settings-out var(--dur-2) var(--ease) forwards; }
 @keyframes settings-in { from { opacity: 0; } }
@@ -415,6 +418,7 @@ button.setting-row.sidebar-accent-option:focus-visible { outline-offset: -2px; }
 .library-actions { flex: none; display: inline-flex; align-items: center; gap: 2px; }
 .library-body { border-top: 1px solid var(--border); }
 .library-list { margin: 0; padding: 4px 0; list-style: none; }
+.library-search { margin: 10px 16px 2px; max-width: 320px; }
 .library-list li { display: flex; align-items: center; gap: 12px; min-height: 48px; padding: 6px 16px; transition: background-color var(--dur-1) var(--ease), opacity var(--dur-2) var(--ease); }
 .library-list li:hover { background: var(--fog); }
 .library-list li > .agent-mark, .library-list li > .model-icon-stack { flex: none; transition: opacity var(--dur-2) var(--ease), filter var(--dur-2) var(--ease); }

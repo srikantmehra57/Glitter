@@ -92,6 +92,7 @@ describe("Sidebar", () => {
     render(<Sidebar />);
     expect(screen.queryByText("Deploy notes")).toBeNull();
     const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Search threads" }));
     await user.type(screen.getByRole("textbox", { name: "Search threads" }), "deploy");
     await screen.findByText("Deploy notes");
     expect(screen.queryByText("Alpha")).toBeNull();
@@ -161,6 +162,7 @@ describe("Sidebar", () => {
     mount();
     expect(screen.getAllByRole("listitem")).toHaveLength(2);
     const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Search threads" }));
     await user.type(screen.getByRole("textbox", { name: "Search threads" }), "reconcil");
     await screen.findByText("Alpha");
     expect(screen.queryByText("Beta")).toBeNull();
@@ -201,8 +203,8 @@ describe("Sidebar", () => {
     expect(screen.queryByText("Glitter")).not.toBeInTheDocument();
     expect(screen.queryByRole("dialog", { name: "Usage" })).not.toBeInTheDocument();
     const usage = screen.getByRole("button", { name: "Usage" });
-    // An icon in the title-bar group with the sidebar toggle and Settings, not a row in the foot.
-    expect(usage.closest(".sidebar-rail")).not.toBeNull();
+    // An icon in the sidebar's foot beside Settings, not a labelled row.
+    expect(usage.closest(".sidebar-foot")).not.toBeNull();
     expect(usage).not.toHaveTextContent("Usage");
     await user.click(usage);
     const card = screen.getByRole("dialog", { name: "Usage" });
@@ -246,6 +248,23 @@ describe("Sidebar", () => {
     await user.click(screen.getByRole("button", { name: "All" }));
     expect(screen.getByText("Idle one")).toBeInTheDocument();
     expect(screen.queryByText("Blocked")).toBeNull();
+  });
+
+  it("keeps thread search behind its title-bar icon until it is opened, and folds it on Escape", async () => {
+    seed([]);
+    render(<Sidebar />);
+    const user = userEvent.setup();
+    const icon = screen.getByRole("button", { name: "Search threads" });
+    expect(icon.closest(".sidebar-rail")).not.toBeNull();
+    expect(screen.queryByRole("textbox", { name: "Search threads" })).toBeNull();
+    await user.click(icon);
+    const field = screen.getByRole("textbox", { name: "Search threads" });
+    await waitFor(() => expect(field).toHaveFocus());
+    await user.type(field, "auth");
+    expect(useAppStore.getState().threadSearch).toBe("auth");
+    await user.keyboard("{Escape}");
+    expect(useAppStore.getState().threadSearch).toBe("");
+    expect(useAppStore.getState().threadSearchOpen).toBe(false);
   });
 
   it("collapses from its own button", async () => {

@@ -360,7 +360,10 @@ and interrupted turns retain their explicit state and recovery controls.
 
 ### Settings
 
-Settings is a full-window page, not a dialog. It takes the place of the app
+Settings is a full-window page, not a dialog. Its categories column is exactly
+the sidebar's width (`--sidebar-width`, the width the user dragged it to) with
+the sidebar's 12px gutters, so the two line up when one replaces the other.
+Opening focuses the page itself, so no control greets it with a focus ring. It takes the place of the app
 view: the app steps back (fades and hides) while it is open and fades back as it
 closes. The categories sit on the shell where the sidebar sits, so the tint and
 the window's translucency reach them, and the page fills the main panel on
@@ -380,8 +383,11 @@ and the navigation, search and the command palette all read those names.
 
 - **Models**: new-thread defaults, then the model library — every provider's
   models, each with a switch that keeps it in or out of the picker, and for the
-  built-in agent's providers a **Test** that sends one word and shows the
-  reply time (or why it failed). Long lists fold after eight rows.
+  built-in agent's providers a **Test** icon button (Activity, a spinner while
+  it runs) that sends one word and shows the reply time as a chip, or why it
+  failed. A search field at the top searches every provider; a provider with
+  more than ten models has its own search inside its card. Long lists fold
+  after eight rows.
 - **Providers**: API keys for the built-in agent.
 - **Agents**: the default agent, the built-in agent, the agent CLIs, and the
   Muse connection (credential, API key, binary, Contributor mode) while Muse is
@@ -449,19 +455,21 @@ reach it as they reach the sidebar. The main panel starts below it and holds
 only the thread; the title bar is never drawn inside the panel. Its title lines
 up with the panel's left edge and its last action with the panel's right edge.
 
-**The sidebar group.** Show/Hide sidebar, Settings and Usage are one group of
-28px icon buttons, in that order, with tooltips and no labels. With the sidebar
-open the group sits at the sidebar's right edge (12px in); collapsed, it slides
-with the sidebar to just after the window controls. It is one element whose box
-narrows with the sidebar, and the toggle is one button throughout, so nothing
-re-mounts under the pointer. Usage opens its card under the button. Toggling the
-sidebar moves the title bar sideways only; nothing in the panel shifts up or
-down.
+**The sidebar group.** Show/Hide sidebar and Search are one group of 28px icon
+buttons, in that order, with tooltips and no labels. With the sidebar open the
+group sits at the sidebar's right edge (12px in); collapsed, it slides with the
+sidebar to just after the window controls. It is one element whose box narrows
+with the sidebar, and the toggle is one button throughout, so nothing re-mounts
+under the pointer. Search grows the thread search field in under New thread
+(`<Collapse>`) and focuses it; Escape, or leaving it empty, folds it away, and
+it stays while it holds a query. The search shortcut and the palette open it
+the same way. Toggling the sidebar moves the title bar sideways only; nothing in
+the panel shifts up or down.
 
 ### Collapsed sidebar
 
-The sidebar gives up its column entirely. New thread and Open workspace join
-the sidebar group after the window controls (`--window-controls`, group width
+The sidebar gives up its column entirely. New thread, Open workspace, Settings
+and Usage join the sidebar group after the window controls (`--window-controls`, group width
 `--rail-width`), and the title starts after them. Nothing may sit under the
 window controls.
 
@@ -563,10 +571,9 @@ accent tint and the window's translucency reach it. The main pane is opaque and
 takes neither. The sidebar is the session list. Under the title bar it offers
 New thread, a search field, and a filter for all threads, live ones, or ones
 that need you, then the workspaces and their threads. Each workspace row starts
-a thread in that workspace. Settings and Usage are icons in the title bar
-(see Title bar), so the list runs to the bottom. The foot exists only while
-something needs saying — a CLI update, or offline, sign-in and a missing agent,
-each while it lasts. The Muse subscription meter appears in the Usage card only
+a thread in that workspace. The foot is a row of icons — Settings, then Usage,
+whose card opens upward — under a hairline, with a CLI update, offline, sign-in
+and a missing agent each getting a row above it while they last. The Muse subscription meter appears in the Usage card only
 while the Muse agent is enabled. The list scrolls vertically only —
 never sideways — and a thread name that does not fit rolls to its tail on
 hover instead of leaving a scrollbar.

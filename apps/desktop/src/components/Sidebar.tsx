@@ -572,6 +572,7 @@ export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) 
   const s = useAppStore(useShallow((state) => ({
     threadsLoading: state.threadsLoading,
     threadSearch: state.threadSearch,
+    threadSearchOpen: state.threadSearchOpen,
     enabledAgents: state.enabledAgents,
     workspaces: state.workspaces,
     selectedWorkspaceId: state.selectedWorkspaceId,
@@ -594,6 +595,7 @@ export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) 
     newThread: state.newThread,
     exitPreview: state.exitPreview,
     setThreadSearch: state.setThreadSearch,
+    setThreadSearchOpen: state.setThreadSearchOpen,
     selectWorkspace: state.selectWorkspace,
     chooseProject: state.chooseProject,
     removeWorkspace: state.removeWorkspace,
@@ -780,14 +782,15 @@ export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) 
   const statusTitle = installed.map((agent) => `${agent.name}${agent.version ? ` ${agent.version}` : ""} — ${agent.path}`).join("\n") || undefined;
   const newThread = () => { onOpenThreads?.(); void s.newThread(); };
   const openSettings = (tab?: SettingsTab) => { s.setSettingsOpen(true, tab); };
+  const searchShown = s.threadSearchOpen || Boolean(s.threadSearch);
   const updateAvailable = !s.preview && s.cliUpdate?.available === true && Boolean(s.cliUpdate.latest);
 
   return (
     <>
-      {/* The sidebar's buttons in the title bar: Show/Hide sidebar, Settings and
-          Usage, as icons. Open, they sit at the sidebar's right edge; collapsed,
-          they slide to the window controls and the sidebar's other actions join
-          them. The toggle is one button throughout, so it never re-mounts. */}
+      {/* The sidebar's buttons in the title bar: Show/Hide sidebar and Search, as
+          icons. Open, they sit at the sidebar's right edge; collapsed, they slide
+          to the window controls and the actions from the sidebar's rows and foot
+          join them. The toggle is one button throughout, so it never re-mounts. */}
       <div className="sidebar-rail" role="group" aria-label="Sidebar">
         <button
           className="icon-btn"
@@ -798,12 +801,26 @@ export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) 
           data-tooltip-align="start"
           onClick={() => s.setSidebarCollapsed(!s.sidebarCollapsed)}
         ><PanelLeft size={16} /></button>
-        <button className="icon-btn" aria-label="Settings" data-tooltip={`Settings  ${shortcutText("settings")}`} onClick={() => openSettings()}><Settings size={16} /></button>
-        <SidebarUsage />
+        <button
+          className="icon-btn"
+          aria-label="Search threads"
+          // Keeps the field's blur (which folds an empty search) from closing it before this click toggles it.
+          onMouseDown={(event) => event.preventDefault()}
+          aria-expanded={!s.sidebarCollapsed && searchShown}
+          aria-controls={!s.sidebarCollapsed && searchShown ? "thread-search" : undefined}
+          data-tooltip={`Search threads  ${shortcutText("search-threads")}`}
+          onClick={() => {
+            if (!s.sidebarCollapsed && searchShown) { s.setThreadSearchOpen(false); return; }
+            s.setThreadSearchOpen(true);
+            window.setTimeout(() => document.getElementById("thread-search")?.focus(), 0);
+          }}
+        ><Search size={16} /></button>
         {railPop.mounted ? (
           <div className={`sidebar-rail-more${railPop.closing ? " closing" : ""}`} aria-hidden={railPop.closing || undefined} inert={railPop.closing}>
             <button className="icon-btn" aria-label="New thread" data-tooltip={`New thread  ${shortcutText("new-thread")}`} disabled={s.starting || !workspace} onClick={newThread}><SquarePen size={16} /></button>
             <button className="icon-btn" aria-label="Open workspace" data-tooltip={`Open workspace  ${shortcutText("open-workspace")}`} onClick={() => void s.chooseProject()}><Plus size={16} /></button>
+            <button className="icon-btn" aria-label="Settings" data-tooltip={`Settings  ${shortcutText("settings")}`} onClick={() => openSettings()}><Settings size={16} /></button>
+            <SidebarUsage />
             {updateAvailable ? <button className="icon-btn update-dot" aria-label="CLI update available — show sidebar" title="CLI update available" onClick={() => s.setSidebarCollapsed(false)}><Download size={16} /></button> : null}
           </div>
         ) : null}
@@ -820,18 +837,22 @@ export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) 
           <span aria-hidden="true">New thread</span>
           <kbd aria-hidden="true">{shortcutText("new-thread")}</kbd>
         </button>
-        <label className="search-field">
-          <Search size={13} aria-hidden="true" />
-          <input
-            id="thread-search"
-            value={s.threadSearch}
-            placeholder="Search threads"
-            aria-label="Search threads"
-            onChange={(event) => s.setThreadSearch(event.target.value)}
-            onKeyDown={(event) => { if (event.key === "Escape") { s.setThreadSearch(""); (event.target as HTMLInputElement).blur(); } }}
-          />
-          {s.threadSearch ? <button type="button" className="search-clear" aria-label="Clear search" onClick={() => s.setThreadSearch("")}><X size={12} /></button> : null}
-        </label>
+        {/* Search folds behind its title-bar icon, and grows in when opened. It stays while it holds a query. */}
+        <Collapse open={searchShown}>{() => (
+          <label className="search-field">
+            <Search size={13} aria-hidden="true" />
+            <input
+              id="thread-search"
+              value={s.threadSearch}
+              placeholder="Search threads"
+              aria-label="Search threads"
+              onChange={(event) => s.setThreadSearch(event.target.value)}
+              onBlur={(event) => { if (!event.target.value) s.setThreadSearchOpen(false); }}
+              onKeyDown={(event) => { if (event.key === "Escape") { s.setThreadSearchOpen(false); (event.target as HTMLInputElement).blur(); } }}
+            />
+            {s.threadSearch ? <button type="button" className="search-clear" aria-label="Clear search" onClick={() => s.setThreadSearch("")}><X size={12} /></button> : null}
+          </label>
+        )}</Collapse>
         <div className="segmented thread-filter" role="group" aria-label="Show threads">
           <button type="button" aria-pressed={filter === "all"} onClick={() => setFilter("all")}>All</button>
           <button type="button" aria-pressed={filter === "live"} onClick={() => setFilter("live")}>Live{liveCount ? <> <span className="count">{liveCount}</span></> : null}</button>
@@ -964,8 +985,8 @@ export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) 
         })}
       </div>
 
-      {/* The foot exists only while something needs saying: an update, or a blocked agent. */}
-      {(updateAvailable && s.cliUpdate) || alert ? <div className="sidebar-bottom">
+      {/* The foot: an update or a blocked agent while they last, then Settings and Usage as icons. */}
+      <div className="sidebar-bottom">
         {updateAvailable && s.cliUpdate ? <div className="update-wrap" onKeyDown={(event) => { if (event.key === "Escape") setUpdateOpen(false); }}>
           <button
             type="button"
@@ -1005,8 +1026,12 @@ export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) 
               </div>
             )
           ) : null}
+          <div className="sidebar-utilities">
+            <button type="button" className="icon-btn" aria-label="Settings" data-tooltip={`Settings  ${shortcutText("settings")}`} data-tooltip-side="top" data-tooltip-align="start" onClick={() => openSettings()}><Settings size={16} /></button>
+            <SidebarUsage />
+          </div>
         </div>
-      </div> : null}
+      </div>
       {!s.sidebarCollapsed ? <SidebarResize /> : null}
       </aside> : null}
     </>

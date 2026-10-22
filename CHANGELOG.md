@@ -16,9 +16,10 @@ licence terms.
   a switch that keeps it in or out of the composer's model picker, so a
   provider with hundreds of models can show the two you use. A model a thread is
   already on stays in its picker. Models the built-in agent calls directly have
-  **Test**, which sends one word and shows how long the reply took — or why it
-  failed — so a busy or retired model shows up before you rely on it. Test
-  shown runs the whole list, two at a time.
+  a **Test** button, which sends one word and shows how long the reply took —
+  or why it failed — so a busy or retired model shows up before you rely on
+  it. Test shown runs the whole list, two at a time. Search covers every
+  provider, and a provider with many models has its own search.
 - Skills, plugins and MCP servers have **thumbnails**: a tinted tile with an
   icon for what each one does, in the Store and in the installed lists.
 - A built-in agent, **Harness**, that works without any agent CLI installed.
@@ -138,9 +139,11 @@ licence terms.
   Muse sign-in as an alternative when the Muse CLI is installed. The Muse
   subscription meter moved to the end of Usage, and app copy no longer assumes
   Muse is the agent.
-- Settings and Usage are **icons in the title bar**, beside Show/Hide sidebar
-  at the sidebar's right edge, and slide with it when it collapses. The sidebar
-  foot appears only for an update or an agent that needs attention.
+- The sidebar's top row holds **Show/Hide sidebar and Search** as icons at its
+  right edge; Search grows the thread search field in when you need it.
+  **Settings and Usage** are icons in the sidebar's foot. Settings' categories
+  are exactly as wide as the sidebar, and opening Settings no longer lights a
+  focus ring.
 - The Store is a **grid of cards** with the summary, what a bundle installs and
   the command a server adds, and Install at each card's foot.
 - Text across the app follows one **type scale** (11, 12, 13, 15px and up), so

@@ -365,8 +365,8 @@ button:disabled, select:disabled { cursor: not-allowed; opacity: 0.45; }
   /* Room for the window controls the overlay title bar draws at the top left. */
   --window-controls: 88px;
   /* The collapsed sidebar's buttons, in a row after the window controls. */
-  /* The collapsed title-bar group: toggle, Settings, Usage, New thread, Open workspace. */
-  --rail-width: 148px;
+  /* The collapsed title-bar group: toggle, Search, New thread, Open workspace, Settings, Usage. */
+  --rail-width: 178px;
   /* The accent's ambient glow, measured against the window's box. */
   --shell-glow:
     radial-gradient(46% 52% at -6% -10%, color-mix(in srgb, var(--glow-b) 12%, transparent), transparent 72%),
@@ -413,7 +413,7 @@ html[data-sidebar-accent="true"] .app::after { opacity: 1; }
 .app.sidebar-collapsed { --sidebar-w: 0px; }
 /* Collapsed, the sidebar gives up its column. Its buttons become a row in the
    title bar, after the window controls, and the title makes room for them. */
-.app.sidebar-collapsed:has(.sidebar-rail .update-dot) { --rail-width: 178px; }
+.app.sidebar-collapsed:has(.sidebar-rail .update-dot) { --rail-width: 208px; }
 .app.sidebar-collapsed :is(.main, .topbar) { border-left-color: transparent; }
 .app.sidebar-collapsed .topbar { padding-left: calc(var(--window-controls) + 8px + var(--rail-width) + 12px); }
 .main, .sidebar, .dock { min-height: 0; }
@@ -497,8 +497,7 @@ html[data-sidebar-accent="true"] .sidebar .nav-row:active:not(:disabled) { backg
   box-shadow: var(--shadow-sm), var(--raised-edge);
 }
 .sidebar-tools .new-thread svg { color: var(--accent-text); }
-.sidebar-tools .new-thread kbd,
-.sidebar-utilities .nav-row kbd { opacity: 1; color: var(--tertiary); }
+.sidebar-tools .new-thread kbd { opacity: 1; color: var(--tertiary); }
 .sidebar-tools .search-field { margin: 0; }
 .thread-filter { display: flex; width: 100%; }
 .sidebar-nav { display: flex; flex-direction: column; gap: 4px; padding: 0 0 8px; }
@@ -800,12 +799,7 @@ html[data-sidebar-accent="true"] .sidebar .nav-row:active:not(:disabled) { backg
   gap: 2px;
   padding: 2px 0 0;
 }
-.sidebar-utilities { display: flex; align-items: center; gap: 2px; }
-.sidebar-utilities > .nav-row,
-.sidebar-utilities > .usage-wrap { flex: 1; min-width: 0; }
-.sidebar-utilities .usage-wrap .nav-row { width: 100%; min-width: 0; }
-/* The shortcut sits with the label. A flex-grow span would park "⌘," at the far edge of the row. */
-.sidebar-utilities .nav-row span { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.sidebar-utilities { display: flex; align-items: center; gap: 2px; margin: 0 -2px; }
 .sidebar-alert {
   display: flex;
   align-items: center;
@@ -828,6 +822,8 @@ button.sidebar-alert:hover { background: var(--hover); }
 /* Usage opens under its title-bar button: leftward over the sidebar, or rightward while collapsed. */
 .usage-anchor { position: absolute; top: calc(100% + 8px); left: auto; right: 0; z-index: 70; width: min(260px, calc(var(--sidebar-width) - 24px)); transform-origin: top right; animation: pop-in var(--dur-2) var(--ease-out); }
 .app.sidebar-collapsed .usage-anchor { left: 0; right: auto; transform-origin: top left; }
+/* From the sidebar's foot it opens upward, over the list. */
+.sidebar-foot .usage-anchor { top: auto; bottom: calc(100% + 8px); left: 0; right: auto; transform-origin: bottom left; animation-name: pop-up; }
 .usage-anchor.closing { pointer-events: none; animation: pop-out var(--dur-1) var(--ease) forwards; }
 .usage-anchor .sidebar-usage { margin: 0; background: var(--glass-strong); box-shadow: var(--shadow-pop), inset 0 1px 0 var(--glass-edge); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); }
 .usage-anchor .usage-local > .sidebar-usage { margin-top: 10px; padding: 8px 0 0; border: none; border-top: 1px solid var(--border); border-radius: 0; background: transparent; box-shadow: none; }
@@ -900,7 +896,7 @@ button.sidebar-alert:hover { background: var(--hover); }
 .app.sidebar-collapsed .sidebar-rail { width: calc(var(--window-controls) + 8px + var(--rail-width)); padding-right: 0; }
 html[data-sidebar-resizing] .sidebar-rail { transition: none; }
 .sidebar-rail .icon-btn, .sidebar-rail .usage-wrap { pointer-events: auto; -webkit-app-region: no-drag; }
-.sidebar-rail .icon-btn[aria-expanded="true"]:not([aria-controls]) { background: var(--active); color: var(--ink); }
+.sidebar-rail .icon-btn[aria-controls="thread-search"], .usage-wrap > .icon-btn[aria-expanded="true"] { background: var(--active); color: var(--ink); }
 .sidebar-rail-more { animation: fade-in var(--dur-3) var(--ease); }
 .sidebar-rail-more.closing { pointer-events: none; animation: fade-out var(--dur-1) var(--ease) forwards; }
 

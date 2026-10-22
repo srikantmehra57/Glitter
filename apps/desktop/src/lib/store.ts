@@ -461,6 +461,8 @@ type AppStore = Settings & {
   promptHistory: Record<string, string[]>;
   threadMeta: Record<string, ThreadMeta>;
   threadSearch: string;
+  /** The sidebar's search field is shown: opened from its icon, the shortcut or the palette. */
+  threadSearchOpen: boolean;
   sidebarCollapsed: boolean;
   /** Persisted dragged sidebar width; null is the default. The rendered width clamps to the window. */
   sidebarWidth: number | null;
@@ -542,6 +544,8 @@ type AppStore = Settings & {
   /** Rebuild the transcript after a failed fill or history load (re-resume). */
   rebuildThread: () => Promise<void>;
   setThreadSearch: (value: string) => void;
+  /** Show or hide the sidebar's search field; opening also expands a collapsed sidebar. Closing clears the query. */
+  setThreadSearchOpen: (open: boolean) => void;
   setSidebarCollapsed: (collapsed: boolean) => void;
   setPaletteOpen: (open: boolean) => void;
   /** The terminal pane below the composer. */
@@ -1291,6 +1295,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   threadsLoading: [],
   threadMeta: {},
   threadSearch: "",
+  threadSearchOpen: false,
   sidebarCollapsed: false,
   sidebarWidth: null,
   paletteOpen: false,
@@ -2707,6 +2712,10 @@ export const useAppStore = create<AppStore>((set, get) => ({
   },
 
   setThreadSearch: (value) => set({ threadSearch: value }),
+  setThreadSearchOpen: (open) => {
+    if (open && get().sidebarCollapsed) get().setSidebarCollapsed(false);
+    set(open ? { threadSearchOpen: true } : { threadSearchOpen: false, threadSearch: "" });
+  },
   setSidebarCollapsed: (collapsed) => { set({ sidebarCollapsed: collapsed }); scheduleMemory(get); },
   setSidebarWidth: (width) => { set({ sidebarWidth: normalizeSidebarWidth(width) }); scheduleMemory(get); },
   setPaletteOpen: (open) => set({ paletteOpen: open }),

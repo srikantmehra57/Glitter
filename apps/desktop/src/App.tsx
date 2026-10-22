@@ -63,8 +63,8 @@ function runShortcut(id: ShortcutId) {
     case "new-thread": void state.newThread(); break;
     case "find": findInThread(); break;
     case "search-threads": {
-      // The field lives in the sidebar, so a collapsed sidebar opens before focus lands.
-      if (state.sidebarCollapsed) state.setSidebarCollapsed(false);
+      // The field lives in the sidebar behind its search icon; opening it also expands a collapsed sidebar.
+      state.setThreadSearchOpen(true);
       window.setTimeout(focusThreadSearch, 0);
       break;
     }

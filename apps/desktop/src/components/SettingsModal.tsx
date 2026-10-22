@@ -507,11 +507,11 @@ export function SettingsModal() {
   useEffect(() => { bodyRef.current?.scrollTo(0, 0); setSearch(""); }, [tab]);
   const [showKey, setShowKey] = useState(false);
   useModalDialog(s.settingsOpen, dialog);
-  // The page would otherwise hand focus to its first field, the search box,
-  // and greet every opening with a lit text field. The current page is where
-  // a keyboard user starts anyway; a mouse user sees no ring on it.
+  // Opening would otherwise hand focus to the first control, and a focused
+  // control greets every opening with a lit ring. The page itself takes focus
+  // instead, with no ring; Tab moves on to Back and the categories from there.
   useEffect(() => {
-    if (s.settingsOpen) navRef.current?.querySelector<HTMLElement>('[aria-current="page"]')?.focus();
+    if (s.settingsOpen) dialog.current?.focus();
   }, [s.settingsOpen]);
   useEffect(() => {
     if (s.settingsOpen) { setDraft(settingsFields(useAppStore.getState())); setNotice(""); setShowKey(false); setSearch(""); }
@@ -688,7 +688,7 @@ export function SettingsModal() {
     </li>;
   };
   const saveHint = READ_ONLY_TABS.includes(tab) || dirty ? null : <span className="settings-save-status" role="status"><Check size={11} strokeWidth={2.5} aria-hidden="true" />Changes save as you make them</span>;
-  return <dialog ref={dialog} className="settings-dialog" aria-labelledby="settings-title" aria-hidden={!s.settingsOpen} onCancel={(event) => { event.preventDefault(); discardAndClose(); }} onClose={() => s.setSettingsOpen(false)}>
+  return <dialog ref={dialog} className="settings-dialog" tabIndex={-1} aria-labelledby="settings-title" aria-hidden={!s.settingsOpen} onCancel={(event) => { event.preventDefault(); discardAndClose(); }} onClose={() => s.setSettingsOpen(false)}>
     <nav className="settings-nav" aria-label="Settings categories">
       <div className="settings-titlebar" data-tauri-drag-region>
         <button type="button" className="ghost-btn settings-back" aria-label="Back to Glitter" onClick={discardAndClose}><ArrowLeft size={14} aria-hidden="true" />Back</button>
