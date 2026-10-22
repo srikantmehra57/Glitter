@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { backgroundAgents, describeAgents, describeLive, estimateTurnTokens, hasVisibleReply, trailingWork } from "../lib/agent";
-import { ArrowDown, TriangleAlert, Bug, ChevronRight, CircleAlert, FlaskConical, FolderOpen, GitCompareArrows, GitFork, History, LoaderCircle, PanelRight, Pencil, RotateCcw, ScanSearch, Sparkles, SquareTerminal, WifiOff, X } from "lucide-react";
+import { ArrowDown, TriangleAlert, Bug, ChevronRight, CircleAlert, FlaskConical, FolderOpen, GitBranch, GitCompareArrows, GitFork, History, LoaderCircle, PanelRight, Pencil, RotateCcw, ScanSearch, Sparkles, SquareTerminal, WifiOff, X } from "lucide-react";
 import { Orb } from "./Orb";
 import { BranchMenu } from "./BranchMenu";
 import { FindBar } from "./FindBar";
@@ -198,27 +198,32 @@ export function ThreadView() {
   // Same visibility the welcome card used: the draft's own stage, not an
   // opening thread, a restore, or a history failure.
   const suggestionsVisible = Boolean(workspace && newThreadView && !starting && !restoring && !thread?.opening && !thread?.historyFailed);
+  // The chips fade out with the empty state instead of vanishing under the first message.
+  const starters = usePresence(suggestionsVisible, EXIT_FAST_MS);
+  // The empty state lifts the composer to the middle of the column; the open
+  // terminal sits between them, so with it open the composer stays docked.
+  const centered = Boolean(workspace && newThreadView && !starting && !terminalOpen);
   const aboveComposer = useMemo(() => {
     const jumpRow = latest.mounted ? <div className="jump-latest-row"><button className={`jump-latest${latest.closing ? " closing" : ""}`} tabIndex={latest.closing ? -1 : undefined} onClick={jump}><ArrowDown size={13} />Jump to latest</button></div> : null;
-    // Starter tiles hug the composer's top edge; centred on the empty stage they read as decoration.
-    if (!suggestionsVisible || !workspace) return jumpRow ?? undefined;
+    // Starter chips hug the composer's top edge; centred on the empty stage they read as decoration.
+    if (!starters.mounted || !workspace) return jumpRow ?? undefined;
     const predicted = s.suggestionsEnabled && s.suggestions?.workspaceId === workspace.id ? s.suggestions : null;
     const chips: Array<{ icon?: typeof Sparkles; title: string; prompt: string }> = predicted?.items ?? SUGGESTIONS;
     const agentName = predicted?.agentId ? s.agents.find((agent) => agent.id === predicted.agentId)?.name ?? AGENT_LABELS[predicted.agentId] : null;
     return <>
-      {/* A fresh prediction re-pops the grid so the swap-in is noticed. */}
-      <div className="suggestions" key={predicted?.signature ?? "static"}>
+      {/* A fresh prediction re-pops the chips so the swap-in is noticed. */}
+      <div className={`suggestions${starters.closing ? " closing" : ""}`} key={predicted?.signature ?? "static"} inert={starters.closing}>
         {predicted ? <p className="suggestion-src">Predicted from workspace state{agentName ? ` by ${agentName}` : ""}</p> : null}
-        {chips.map(({ icon: Icon = Sparkles, title, prompt }) => (
-          <button key={title} className="suggestion" onClick={() => { s.setComposer(prompt); document.getElementById("prompt")?.focus(); }}>
-            <Icon size={15} aria-hidden="true" />
+        {chips.map(({ icon: Icon = Sparkles, title, prompt }, index) => (
+          <button key={title} className="suggestion" style={{ "--i": index } as CSSProperties} onClick={() => { s.setComposer(prompt); document.getElementById("prompt")?.focus(); }}>
+            <Icon size={14} aria-hidden="true" />
             <span>{title}</span>
           </button>
         ))}
       </div>
       {jumpRow}
     </>;
-  }, [latest.mounted, latest.closing, jump, suggestionsVisible, workspace, s.suggestionsEnabled, s.suggestions, s.agents, s.setComposer]);
+  }, [latest.mounted, latest.closing, jump, starters.mounted, starters.closing, workspace, s.suggestionsEnabled, s.suggestions, s.agents, s.setComposer]);
   // The title bar is the window's own strip on the shell; the panel below it is the canvas.
   return <>
     <header className="topbar" data-tauri-drag-region>
@@ -273,7 +278,7 @@ export function ThreadView() {
     <Collapse open={thread?.viewGap?.state === "failed" && !error}>{() => <div className="banner" role="alert"><CircleAlert size={14} aria-hidden="true" /><span>Events after {viewGapAfter?.slice(-8)} never arrived. Retry the rebuild to replay them from the log.</span><button className="ghost-btn small" onClick={() => void s.rebuildThread()}>Retry rebuild</button></div>}</Collapse>
     <Collapse open={Boolean(thread?.viewHealth)}>{() => <div className="banner warn" role="status"><TriangleAlert size={14} aria-hidden="true" /><span>Live updates unavailable{viewHealth?.noneReason ? ` (${viewHealth.noneReason})` : ""}. Reconnect to restore them.</span>{thread && <button className="ghost-btn small" onClick={() => void s.selectThread(thread.sessionId)}>Reconnect</button>}</div>}</Collapse>
     <div className={`review-layout${s.dockOpen ? " docked" : ""}${s.dockExpanded && s.dockOpen ? " expanded" : ""}`}>
-    <div className="thread-main">
+    <div className={`thread-main${centered ? " centered" : ""}`}>
     <div className="thread-transcript">
     {thread && workspace && !newThreadView ? <TurnRail key={thread.sessionId} thread={thread} scroller={scroller} /> : null}
     {find.mounted && thread ? <FindBar key={`find-${thread.sessionId}`} thread={thread} scroller={scroller} closing={find.closing} /> : null}
@@ -301,12 +306,16 @@ export function ThreadView() {
         <WorkingIndicator label="Starting thread" />
       </div></div>
     ) : newThreadView ? (
-      <div className="empty welcome-stage">
+      <div className="empty welcome-stage thread-welcome">
         <section className="welcome-card" aria-labelledby="thread-welcome-title">
         {thread?.opening || restoring ? <Orb state="connecting" size={64} aria-label="Muse" /> : null}
-        <span className="eyebrow">Workspace / {workspace.name}</span>
         <h2 id="thread-welcome-title">{thread?.opening ? "Opening thread…" : restoring ? "Restoring your last thread…" : "What should we build next?"}</h2>
-        <p>{restoring ? "Reconnecting to your workspace." : suggestionsVisible ? "Describe a task, or start from a suggestion above the composer." : "Describe a task."}</p>
+        {restoring ? <p className="welcome-meta">Reconnecting to your workspace.</p> : (
+          <p className="welcome-meta">
+            <span className="welcome-meta-name" title={workspace.path}>{workspace.name}</span>
+            {branch ? <span className="welcome-meta-branch"><GitBranch size={12} aria-hidden="true" />{branch}</span> : null}
+          </p>
+        )}
         {!restoring && !thread?.opening && thread?.historyFailed ? (
           <button className="primary lg" onClick={() => void s.rebuildThread()} disabled={thread.opening}><RotateCcw size={15} />Retry loading history</button>
         ) : null}

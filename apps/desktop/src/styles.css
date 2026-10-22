@@ -64,12 +64,16 @@
   /* A selected tile's edge. Dark tiles read on their own fill; in the light theme
      a white tile on a near-white surface needs a hairline to show at all. */
   --raised-edge: 0 0 0 0 transparent;
-  --r-sm: 12px;
-  --r-md: 18px;
-  --r-lg: 20px;
-  --r-xl: 24px;
-  /* Fully-rounded ends for controls, chips and single-line row highlights. */
-  --r-pill: 999px;
+  /* Slight, macOS-sized corners that grow with the surface: menu items and
+     small options 6px, controls and rows 8px, cards and popovers 10px, the
+     composer, palette and dialogs 12px. Circles (status dots, radio knobs,
+     switch tracks) stay circles. Engines with continuous corners get larger
+     values below, since a squircle of the same radius reads tighter. */
+  --r-sm: 6px;
+  --r-md: 8px;
+  --r-lg: 10px;
+  --r-xl: 12px;
+  --r-pill: 8px;
   --ease: cubic-bezier(0.2, 0, 0, 1);
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
@@ -83,6 +87,15 @@
      1 the window's own material shows through it. */
   --shell: var(--bg);
   --shell-opacity: 1;
+}
+/* Apple-style continuous corners where the engine draws them (Chromium today;
+   macOS WebKit does not yet, and keeps the circular arcs above). Circles opt
+   back out, or they would turn into rounded squares. */
+@supports (corner-shape: squircle) {
+  :root { --r-sm: 8px; --r-md: 11px; --r-lg: 14px; --r-xl: 16px; --r-pill: 11px; }
+  *, *::before, *::after { corner-shape: squircle; }
+  .thread-status, .sidebar-alert i, .sidebar-rail .update-dot::after, .branch .dirty, .boot-progress, .dl-comment, .monitor-status,
+  .toggle, .toggle i, .settings-connection i, .permission-radio, .permission-radio i, .choice-check, .settings-dialog .agent-state::before { corner-shape: round; }
 }
 
 html[data-theme="light"] {
@@ -1260,6 +1273,25 @@ html[data-theme="light"] .usage-providers, html[data-theme="light"] .usage-detai
 .welcome-subtitle { display: block; color: var(--secondary); }
 .welcome-card p { margin: 16px 0 0; max-width: 44ch; font-size: 13px; line-height: 1.65; }
 .welcome-card .primary { margin-top: 24px; }
+/* A new thread's empty state: a short centred heading set right on top of the
+   starter chips and the composer, one column with them rather than a hero
+   floating a third of the way down. */
+.welcome-stage.thread-welcome { justify-content: flex-end; padding: 32px var(--composer-inset) 12px; }
+.thread-welcome .welcome-card { display: flex; flex-direction: column; align-items: center; padding: 0; text-align: center; animation: rise-in var(--dur-3) var(--ease-out); }
+.thread-welcome .welcome-card > .orb { margin: 0 0 20px; }
+.thread-welcome .welcome-card h2 { font-size: clamp(26px, 2.4vw, 30px); line-height: 1.15; letter-spacing: -0.03em; text-wrap: balance; }
+.thread-welcome .welcome-card .primary { margin-top: 20px; }
+.welcome-card .welcome-meta { display: inline-flex; align-items: center; justify-content: center; gap: 10px; min-width: 0; max-width: 100%; margin: 10px 0 0; color: var(--tertiary); font-size: 12.5px; line-height: 1.5; }
+.welcome-meta > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.welcome-meta-branch { display: inline-flex; align-items: center; gap: 4px; font-family: var(--font-mono); font-size: 11.5px; }
+.welcome-meta-branch svg { flex: none; }
+/* The composer rides the column's middle while the thread is empty: the space
+   under it is a pseudo-element, never content, so the composer stays the last
+   surface. The transcript and this spacer split the free space, which lifts the
+   heading, chips and composer together just above centre. Sending the first
+   message eases the spacer away and the composer settles at the bottom. */
+.thread-main::after { content: ""; flex: 0 1 0%; transition: flex-grow var(--dur-3) var(--ease-out); }
+.thread-main.centered::after { flex-grow: 1; }
 
 /* EmberTiles: frosted tiles over an ember glow, the white link shape on the
    right — DOM-rendered so the accent tokens theme the glow. */
@@ -1354,31 +1386,36 @@ html[data-theme="dark"] .ember-tiles-grid > span { background: rgba(255, 255, 25
 .boot-status svg { color: var(--accent-text); }
 .boot-privacy { position: absolute; bottom: 24px; margin: 0; color: var(--tertiary); font-size: 11px; letter-spacing: 0.005em; }
 @keyframes boot-progress-slide { from { transform: translateX(0); } to { transform: translateX(380%); } }
-/* Starter tiles ride the composer's top edge — centred on the empty stage they
-   read as decoration. The bottom margin is the 16px buffer the composer keeps. */
-.suggestions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; width: 100%; margin: 0 0 16px; animation: pop-up var(--dur-2) var(--ease-out); }
+/* Starter chips ride the composer's top edge — centred on the empty stage they
+   read as decoration. The bottom margin is the 16px buffer the composer keeps.
+   They are quiet outlines, so the composer stays the focal surface. */
+.suggestions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; width: 100%; margin: 0 0 16px; }
+.suggestions.closing { animation: fade-out var(--dur-1) var(--ease) forwards; }
 .suggestion {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 10px;
-  height: 48px;
-  padding: 0 12px;
-  border-radius: var(--r-md);
+  gap: 7px;
+  min-width: 0;
+  max-width: 100%;
+  height: 32px;
+  padding: 0 12px 0 10px;
+  border-radius: var(--r-pill);
   border: 1px solid var(--border);
-  background: var(--raised);
-  box-shadow: var(--shadow-sm);
-  color: var(--ink);
-  text-align: left;
+  background: transparent;
+  color: var(--secondary);
   font-size: 12px;
   font-weight: 500;
-  transition: background var(--dur-1) var(--ease), border-color var(--dur-1) var(--ease), transform 80ms var(--ease);
+  white-space: nowrap;
+  animation: rise-in var(--dur-3) var(--ease-out) backwards;
+  animation-delay: calc(var(--i, 0) * 35ms);
+  transition: background-color var(--dur-1) var(--ease), border-color var(--dur-1) var(--ease), color var(--dur-1) var(--ease), transform 80ms var(--ease);
 }
-/* The leading glyph sits in a recessed round icon well. */
-.suggestion svg { flex: none; width: 28px; height: 28px; padding: 6px; border-radius: var(--r-pill); background: var(--well); color: var(--secondary); transition: color var(--dur-1) var(--ease); }
-.suggestion:hover { background: var(--hover); border-color: var(--border-heavy); }
-.suggestion:active { transform: scale(0.98); }
+.suggestion span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.suggestion svg { flex: none; color: var(--tertiary); transition: color var(--dur-1) var(--ease); }
+.suggestion:hover { background: var(--hover); border-color: var(--border-heavy); color: var(--ink); }
+.suggestion:active { transform: scale(0.97); }
 .suggestion:hover svg { color: var(--accent-text); }
-.suggestion-src { grid-column: 1 / -1; margin: 0 0 2px; color: var(--tertiary); font-size: 11px; }
+.suggestion-src { flex-basis: 100%; margin: 0 0 2px; color: var(--tertiary); font-size: 11px; text-align: center; animation: fade-in var(--dur-3) var(--ease) backwards; }
 
 .conversation {
   flex: 1;
@@ -2554,6 +2591,8 @@ dialog.palette { width: min(560px, calc(100% - 32px)); padding: 0; margin: auto;
   .review-layout.docked .dock-resize { display: none; }
   /* Narrow windows show the pane full-width, so it has nowhere to slide: it leaves at once. */
   .dock.closing { display: none; }
+  /* With the transcript hidden behind the pane, the composer stays at the foot. */
+  .review-layout.docked .thread-main::after { flex-grow: 0; }
 }
 @media (max-width: 680px) {
   .app { --titlebar-height: 50px; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto var(--titlebar-height) minmax(0, 1fr); }
@@ -2571,13 +2610,12 @@ dialog.palette { width: min(560px, calc(100% - 32px)); padding: 0; margin: auto;
   .welcome-stage { padding: 24px 16px; justify-content: safe center; }
   .welcome-card .ember-tiles { width: min(320px, 100%); margin-bottom: 16px; }
   .welcome-card .eyebrow { font-size: 10.5px; }
-  .composer-wrap .suggestions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .composer-wrap .suggestion { height: 44px; gap: 6px; font-size: 11px; padding-inline: 8px; }
+  .suggestions { gap: 6px; }
+  .suggestion { height: 30px; font-size: 11.5px; }
   .topbar { grid-column: 1; grid-row: 2; padding-inline: 12px; }
   .hero { padding: 24px; }
   .hero h2 { font-size: 24px; }
   .crumb-root, .crumb-sep, .branch { display: none; }
-  .suggestions { grid-template-columns: 1fr; }
   .conversation { padding-top: 16px; }
   .thread-main { --composer-inset: 10px; }
   .selector-chip .select-value { max-width: 90px; }
@@ -2588,7 +2626,12 @@ dialog.palette { width: min(560px, calc(100% - 32px)); padding: 0; margin: auto;
   .welcome-card h2 { font-size: 30px; }
   .welcome-card .eyebrow { margin-bottom: 10px; }
   .welcome-card p { margin-top: 12px; }
-  .composer-wrap .suggestion { height: 42px; }
+  .thread-welcome .welcome-card h2 { font-size: 26px; }
+  .thread-welcome .welcome-card .welcome-meta { margin-top: 8px; }
+}
+/* Too short to lift the composer without crowding the heading: it stays docked. */
+@media (max-height: 600px) {
+  .thread-main.centered::after { flex-grow: 0; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; }
@@ -2653,11 +2696,11 @@ html[data-accent="teal"] { --peak-a: #0FB5AE; --peak-b: #2DD4C4; --peak-c: #A5EF
 }
 /* A model row: its icon, the name with its tags over the specs, the price
    column, and the check. A long name truncates; the specs give way first. */
-.model-option { display: flex; align-items: center; gap: 11px; width: 100%; min-height: 44px; padding: 6px 10px 6px 8px; border-radius: 14px; text-align: left; color: var(--ink); transition: background-color var(--dur-1) var(--ease), box-shadow var(--dur-1) var(--ease); }
+.model-option { display: flex; align-items: center; gap: 11px; width: 100%; min-height: 44px; padding: 6px 10px 6px 8px; border-radius: var(--r-sm); text-align: left; color: var(--ink); transition: background-color var(--dur-1) var(--ease), box-shadow var(--dur-1) var(--ease); }
 .model-option.active { background: var(--hover); }
 .model-option[aria-selected="true"], .model-option.active[aria-selected="true"] { background: var(--raised); box-shadow: var(--shadow-sm), var(--raised-edge); }
 .model-option:focus-visible { outline-offset: -2px; }
-.model-icon { flex: none; display: grid; place-items: center; width: 30px; height: 30px; border-radius: 10px; background: var(--well); transition: transform var(--dur-2) var(--ease-spring); }
+.model-icon { flex: none; display: grid; place-items: center; width: 30px; height: 30px; border-radius: var(--r-sm); background: var(--well); transition: transform var(--dur-2) var(--ease-spring); }
 .model-option.active:not(:disabled) .model-icon { transform: scale(1.08) rotate(-4deg); }
 .model-option[aria-selected="true"] .model-icon { background: var(--accent-soft); }
 .model-icon-stack { position: relative; display: inline-flex; flex: none; }
@@ -2723,7 +2766,7 @@ html[data-accent="teal"] { --peak-a: #0FB5AE; --peak-b: #2DD4C4; --peak-c: #A5EF
 .model-rail-section + .model-rail-section { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
 .model-rail-label { margin: 0 0 4px; padding: 0 8px; color: var(--tertiary); font-size: 10.5px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .model-rail [role="tablist"] { display: flex; flex-direction: column; gap: 1px; }
-.rail-tab { position: relative; display: flex; align-items: center; gap: 9px; width: 100%; min-height: 34px; padding: 4px 8px 4px 7px; border-radius: 11px; color: var(--secondary); font-size: 12.5px; font-weight: 500; text-align: left; transition: background-color var(--dur-1) var(--ease), color var(--dur-1) var(--ease), box-shadow var(--dur-1) var(--ease); }
+.rail-tab { position: relative; display: flex; align-items: center; gap: 9px; width: 100%; min-height: 34px; padding: 4px 8px 4px 7px; border-radius: var(--r-sm); color: var(--secondary); font-size: 12.5px; font-weight: 500; text-align: left; transition: background-color var(--dur-1) var(--ease), color var(--dur-1) var(--ease), box-shadow var(--dur-1) var(--ease); }
 .rail-tab:hover:not(:disabled) { background: var(--hover); color: var(--ink); }
 .rail-tab[aria-selected="true"] { background: var(--raised); color: var(--ink); box-shadow: var(--shadow-sm), var(--raised-edge); }
 .rail-tab:focus-visible { outline-offset: -2px; }

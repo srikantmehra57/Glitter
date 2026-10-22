@@ -89,6 +89,16 @@ licence terms.
 
 ### Changed
 
+- A new thread's empty state is one calm, centred column: the heading with the
+  workspace and branch under it, light starter chips, and the composer lifted
+  to the middle of the window. The subtitle and the breadcrumb are gone. The
+  chips fade out and the composer eases down to the foot when the first
+  message is sent.
+- Corners are slight and macOS-sized: 6px menu items, 8px buttons, chips,
+  inputs and rows (and their hover highlights), 10px cards and popovers, and
+  12px for the composer, command palette and dialogs. Where the web engine
+  supports continuous corners they take Apple's squircle curve. Circles stay
+  circles.
 - The model picker is a two-pane panel. A rail on the left lists your agents,
   then where the current agent's models come from: Harness providers, or the
   labs an agent such as Cline CLI mixes, with a count for each and All models

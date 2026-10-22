@@ -157,6 +157,32 @@ describe("predicted suggestions", () => {
     expect(useAppStore.getState().composer).toBe("Wire the login submit handler and cover it.");
   });
 
+  it("centres the empty state on the composer with the workspace beneath the heading", () => {
+    seedStore({ suggestionsEnabled: false, git: { repository: true, branch: "main", dirty: false, files: [], diff: "", truncated: false }, refreshSuggestions: vi.fn(async () => {}) });
+    const { container } = render(<ThreadView />);
+    expect(container.querySelector(".thread-main")).toHaveClass("centered");
+    const hero = screen.getByRole("region", { name: "What should we build next?" });
+    expect(within(hero).getByText("repo")).toBeInTheDocument();
+    expect(within(hero).getByText("main")).toBeInTheDocument();
+    expect(screen.queryByText(/suggestion above the composer/)).toBeNull();
+    // The chips still ride the composer's top edge, never the stage.
+    expect(screen.getByRole("button", { name: /Explain this codebase/ }).closest(".composer-wrap")).not.toBeNull();
+  });
+
+  it("docks the composer once the thread has messages or the terminal opens", () => {
+    seedStore({ terminalOpen: true, refreshSuggestions: vi.fn(async () => {}) });
+    const terminal = render(<ThreadView />);
+    expect(terminal.container.querySelector(".thread-main")).not.toHaveClass("centered");
+    terminal.unmount();
+    seedStore({
+      terminalOpen: false,
+      selectedSessionId: "s1",
+      threads: [{ sessionId: "s1", workspacePath: "/repo", title: "Work", updatedAt: new Date().toISOString(), status: "idle", unread: false, opened: true, items: [{ itemId: "u1", kind: "userMessage", status: "completed", text: "Hi", turnId: "t1" }] }],
+    });
+    const { container } = render(<ThreadView />);
+    expect(container.querySelector(".thread-main")).not.toHaveClass("centered");
+  });
+
   it("does not ask while restoring or while an existing thread is selected", () => {
     const refreshSuggestions = vi.fn(async () => {});
     seedStore({ suggestionsEnabled: true, restoringSession: "s1", suggestions: predicted(), refreshSuggestions });

@@ -104,6 +104,7 @@ No Google Fonts. No webfont download.
 | Role | Size | Weight | Tracking |
 |---|---|---|---|
 | Display (welcome titles) | 34–38px (30px at compact widths) | 400 | -0.035em |
+| New-thread heading | 26–30px | 400 | -0.03em |
 | Settings page title | 28px | 500 | -0.04em |
 | Brand wordmark | 17px | 600 | -0.03em |
 | Title (thread name) | 13px | 600 | -0.01em |
@@ -127,19 +128,30 @@ Scale: 2, 4, 6, 8, 10, 12, 16, 20, 24, 32.
 
 ## Radius
 
-Use the tokens, not literal pixel values:
+Corners are slight, macOS-sized, and grow with the surface. Use the tokens, not
+literal pixel values.
 
-| Token | Value | Use |
-|---|---|---|
-| `--r-sm` | 12px | Detail elements: menu and option items, key caps, inline code, progress tracks, rename inputs |
-| `--r-md` | 18px | Inputs, cards in the transcript, code blocks |
-| `--r-lg` | 20px | Cards, popovers, dialogs |
-| `--r-xl` | 24px | The composer, the command palette |
-| `--r-pill` | 999px | Capsule ends on single-line controls and rows: buttons, chips, icon buttons, sidebar and file rows, picker and menu triggers |
+| Token | Value | Continuous | Use |
+|---|---|---|---|
+| `--r-sm` | 6px | 8px | Menu and option items, progress tracks, rename inputs |
+| `--r-md` | 8px | 11px | Inputs, cards in the transcript, code blocks |
+| `--r-pill` | 8px | 11px | Single-line controls and rows: buttons, chips, icon buttons, sidebar and file rows, picker and menu triggers |
+| `--r-lg` | 10px | 14px | Cards, popovers, dialogs |
+| `--r-xl` | 12px | 16px | The composer, the command palette, the settings dialog |
 
-Section surfaces run round: the composer and palette take the full 24px, and
-every clickable row, chip and button is a capsule on `--r-pill`. Menu items and
-multi-line options stay on `--r-sm`, where a capsule would read as a bubble.
+A row inside a popover takes a smaller corner than the popover, so the two
+curves stay concentric. Sections that nest inside a bordered surface use
+`calc(var(--r-*) - 1px)` so their corner follows the parent's edge.
+
+Where the engine supports `corner-shape`, every corner is an Apple-style
+continuous curve (`squircle`) and the tokens take the larger "Continuous"
+values, since a squircle of the same radius reads tighter. macOS WebKit does not
+support it yet, so the app draws circular arcs at the base values. Circles opt
+back out with `corner-shape: round`; a new circle needs adding to that list in
+`styles.css`.
+
+Micro marks — inline code, key caps, checkboxes, plan marks, chart swatches —
+keep their own small radii.
 
 The main pane has no radius of its own: it runs flush to the window's edges,
 and the window's 16pt corner (macOS 26 and later) rounds it.
@@ -168,8 +180,7 @@ content never stays legible through it.
 One set: `lucide-react`, 13–16px, 1.75–2 stroke, monochrome `currentColor`.
 Status uses a 6px dot: muted idle, accent unread, success running, danger error.
 
-Rounded-square icon wells (`--well` fill, 28px in suggestion tiles and 26px
-in the settings navigation) may hold icons in list rows and navigation; never in
+Rounded-square icon wells (`--well` fill, 26px in the settings navigation) may hold icons in list rows and navigation; never in
 transcript rows.
 
 ---
@@ -443,7 +454,7 @@ Footer/About: **Not affiliated with Meta.** No Meta wordmark.
 
 ## Frost & Ember identity and welcome panels
 
-Shared radii use `--r-sm` through `--r-xl` (12/18/20/24px). Status dots, spinners
+Shared radii use `--r-sm` through `--r-xl` (6/8/10/12px). Status dots, spinners
 and radio knobs retain circles for recognition; switches are pill tracks. The
 main pane is flush with the window, title bar included, on `--surface`; one
 `--border` hairline separates it from the sidebar. With "Tint
@@ -464,21 +475,31 @@ shortcuts and account live in Settings. The list scrolls vertically only —
 never sideways — and a thread name that does not fit rolls to its tail on
 hover instead of leaving a scrollbar.
 
-The welcome state sits on the main panel itself, with a sans eyebrow and a
-display heading in a column up to 540px wide. Its suggestion tiles — a 2×2
-grid of raised tiles, each with a 28px icon well — ride the composer's top
-edge, spanning its width and keeping the 16px buffer; centred on the empty
-stage they read as decoration and go unnoticed. Empty workspace and thread
-states have no decorative artwork or glow. At short heights the welcome
-region scrolls while the composer stays visible. The connecting orb appears
-only while a thread is actually opening or restoring. `EmberTiles` remains in
-onboarding, separate from the workspace's empty state.
+The welcome state sits on the main panel itself. A new thread's empty state is
+one centred column: a short heading, the workspace name and branch in a quiet
+line under it, the starter chips, then the composer. No eyebrow and no
+subtitle. While the thread is empty the composer rides just above the middle of
+the column, the space under it being a pseudo-element on `.thread-main` rather
+than content, so the composer stays the last surface; sending the first message
+eases that space away and the composer settles at the foot. It stays docked
+when the terminal is open, at heights under 600px, and when the Changes pane
+covers the transcript.
+
+The starter chips are quiet outlined capsules with a 14px icon, wrapped and
+centred on the composer's top edge with the 16px buffer under them; they rise
+in one after another and fade out when the first message replaces them.
+Centred on the empty stage, away from the composer, they read as decoration and
+go unnoticed. Empty workspace and thread states have no decorative artwork or
+glow. At short heights the welcome region scrolls while the composer stays
+visible. The connecting orb appears only while a thread is actually opening or
+restoring. `EmberTiles` remains in onboarding, separate from the workspace's
+empty state.
 
 Smart suggestions (opt-in, Settings → General) replace the static tiles with
 predicted starters an agent drafts from project state — file names, branch and
-thread titles, never file contents. Predicted tiles carry a sparkle icon and a
-"Predicted from project state by {agent}" note spanning the grid; a fresh
-prediction re-pops the grid so the swap-in is seen. Everything falls back to
+thread titles, never file contents. Predicted chips carry a sparkle icon and a
+"Predicted from workspace state by {agent}" note centred over them; a fresh
+prediction re-pops the chips so the swap-in is seen. Everything falls back to
 the static set when the feature is off, the agent is unreachable, or the reply
 doesn't parse.
 

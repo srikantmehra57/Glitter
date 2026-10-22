@@ -174,10 +174,14 @@ test('accent-filled controls keep their fill on hover', async () => {
   }
 });
 
-test('row and control highlights are capsules; menu items keep the small radius', async () => {
+test('corners stay slight: rows and controls take the control radius, menu items a smaller one', async () => {
   const css = await readFile(resolve('apps/desktop/src/styles.css'), 'utf8');
-  // Single-line controls and rows take fully rounded ends; menu and option
-  // items can carry a second line, where a capsule reads as a bubble.
+  // macOS-sized corners: no token rounds past the composer's 12px, and a menu
+  // item sits inside its popover's corner rather than matching it.
+  const root = rules(css, ':root');
+  for (const [token, px] of [['sm', 6], ['md', 8], ['pill', 8], ['lg', 10], ['xl', 12]]) {
+    assert.match(root, new RegExp(`--r-${token}:\\s*${px}px;`), `--r-${token}`);
+  }
   for (const selector of ['.icon-btn', '.nav-row', '.workspace-row', '.thread', '.picker-trigger']) {
     assert.match(rules(css, selector), /border-radius:\s*var\(--r-pill\);/, `${selector} highlight radius`);
   }
