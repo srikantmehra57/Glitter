@@ -3,6 +3,7 @@ import { appendFile, mkdir, readFile, rename, rm, writeFile } from "node:fs/prom
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { PendingQuestion } from "./questions.js";
+import type { ApprovalMode } from "./permission/policy.js";
 import type { ChatMessage } from "./wire.js";
 
 /**
@@ -11,6 +12,19 @@ import type { ChatMessage } from "./wire.js";
  * renders), plus a small index for listing. The native shell points
  * `GLITTER_HARNESS_DIR` at the app's data folder; files are written 0600.
  */
+
+/** What a delegated child was created with. Stamped into its meta and its log; never widened. */
+export type DelegationPolicy = {
+  parentSessionId: string;
+  /** 1 is a child of a top-level thread; the cap lives in delegation.ts. */
+  depth: number;
+  /** The tool profile the child was created with. */
+  profile: string;
+  /** The permission mode it inherited, fixed for its life. */
+  approvalMode: ApprovalMode;
+  /** A child of a Plan-mode thread stays in Plan mode. */
+  planMode: boolean;
+};
 
 export type SessionMeta = {
   sessionId: string;
@@ -21,6 +35,8 @@ export type SessionMeta = {
   modelId?: string;
   effort?: string;
   mode?: string;
+  /** Present only on a delegated child. Hidden from the session list, shown in its parent's log. */
+  delegation?: DelegationPolicy;
   /**
    * Tokens this session has used so far, as the providers reported them.
    * `promptTokens` is uncached input. Cache reads and writes are disjoint from it.
@@ -32,6 +48,8 @@ type Record_ =
   | { type: "message"; message: ChatMessage }
   | { type: "item"; item: Record<string, unknown> }
   | { type: "toolStarted"; id: string }
+  /** Written once, at child creation, so the policy survives even without the index. */
+  | { type: "delegation"; delegation: DelegationPolicy }
   /** A turn ended asking the user; `questionSettled` closes it. */
   | { type: "question"; question: PendingQuestion }
   | { type: "questionSettled"; userInputId: string };
@@ -120,10 +138,11 @@ export class SessionStore {
   }
 
   /** Messages for the model and items for the transcript. A torn last line (a crash mid-write) is skipped. */
-  async read(sessionId: string): Promise<{ messages: ChatMessage[]; items: Array<Record<string, unknown>>; question?: PendingQuestion }> {
+  async read(sessionId: string): Promise<{ messages: ChatMessage[]; items: Array<Record<string, unknown>>; question?: PendingQuestion; delegation?: DelegationPolicy }> {
     const path = this.file(sessionId);
     if (!existsSync(path)) return { messages: [], items: [] };
     let question: PendingQuestion | undefined;
+    let delegation: DelegationPolicy | undefined;
     const messages: ChatMessage[] = [];
     const items = new Map<string, Record<string, unknown>>();
     const started = new Set<string>();
@@ -136,13 +155,14 @@ export class SessionStore {
       else if (record.type === "toolStarted" && typeof record.id === "string") started.add(record.id);
       else if (record.type === "question" && record.question) question = record.question;
       else if (record.type === "questionSettled" && record.userInputId === question?.userInputId) question = undefined;
+      else if (record.type === "delegation" && record.delegation) delegation = record.delegation;
     }
     // A crash mid-tool leaves the assistant message without a result. The marker says the call had started.
     for (const message of messages) {
       if (message.role !== "assistant") continue;
       for (const call of message.toolCalls ?? []) if (started.has(call.id)) call.started = true;
     }
-    return { messages, items: [...items.values()], ...(question ? { question } : {}) };
+    return { messages, items: [...items.values()], ...(question ? { question } : {}), ...(delegation ? { delegation } : {}) };
   }
 
   remove(sessionId: string): Promise<void> {

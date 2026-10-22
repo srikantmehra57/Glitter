@@ -221,6 +221,7 @@ function mockBridge(method: string, params: Record<string, unknown>): unknown {
       return { offsetBytes: 0, byteLen: content.length, eof: true, encoding: "utf8", mediaType: "text/plain", content };
     }
     case "readSession":
+    case "readChildSession":
       return {
         session: { sessionId: params.sessionId },
         history: { items: [

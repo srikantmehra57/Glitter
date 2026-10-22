@@ -7,12 +7,13 @@ import type { Grant, Subject } from "./permission/grants.js";
 import { runGuards } from "./permission/guards.js";
 import { decide, type ApprovalMode, type Verdict } from "./permission/policy.js";
 import { TIERS, configuredProviders, effortTiers, providerSpec, resolveProvider, splitModelId, type ProviderCredentials, type ResolvedProvider } from "./providers.js";
-import { ExtensionRegistry, type HookEvents, type HookFailure, type HookName, type TurnContributions } from "./registry.js";
+import { ExtensionRegistry, type HookEvents, type HookFailure, type HookName, type TurnContext, type TurnContributions } from "./registry.js";
 import type { UserInputResponse } from "../protocol.js";
 import { McpManager, mcpExtension } from "./mcp.js";
+import { DELEGATE_LEAF_PROFILE, DELEGATE_PROFILE, MAX_DELEGATED_STEPS, MAX_DELEGATION_DEPTH, delegationExtension, type DelegationRequest, type DelegationResult } from "./delegation.js";
 import { ASK_USER_TOOL, EXIT_PLAN_TOOL, questionRequest, settlement, type Asked, type PendingQuestion } from "./questions.js";
 import { discoverSkills, expandInvocation, skillsExtension } from "./skills.js";
-import { SessionStore, type SessionMeta } from "./store.js";
+import { SessionStore, type DelegationPolicy, type SessionMeta } from "./store.js";
 import { BUILTIN_EXTENSION, canonicalize, executeTool, executionMode, prepareTool, repeatReminder, scheduleToolCalls, type PresentationMeta, type ToolKind } from "./tools.js";
 import { ProviderError, isTransientProviderError, isTruncatedStop, streamChat, truncatedToolResult, type AssistantMessage, type ChatMessage, type ContentPart, type SystemPrompt, type ToolCall, type ToolSchema } from "./wire.js";
 
@@ -185,6 +186,7 @@ export class HarnessHost {
   constructor(emit: Emit, private readonly store = new SessionStore(), private readonly fetchImpl: typeof fetch = fetch, private readonly limits: HostLimits = {}) {
     this.emit = emit;
     this.registry.register(BUILTIN_EXTENSION);
+    this.registry.register(delegationExtension(this));
     this.registry.register(skillsExtension(this.homeDir));
     this.mcp = new McpManager(this.homeDir, emit);
     this.registry.register(mcpExtension(this.mcp));
@@ -192,7 +194,7 @@ export class HarnessHost {
     if (this.limits.approvalChannel !== false) this.registry.register({
       id: "questions",
       tools: [ASK_USER_TOOL, (context) => (context.mode === "plan" ? EXIT_PLAN_TOOL : undefined)],
-      prompt: [{ placement: "volatile", text: (context) => (context.mode === "plan" ? "When the plan is ready, present it with exit_plan_mode. Build mode starts only when the user approves it there." : undefined) }],
+      prompt: [{ placement: "volatile", text: (context) => (context.mode === "plan" && context.delegationDepth === 0 ? "When the plan is ready, present it with exit_plan_mode. Build mode starts only when the user approves it there." : undefined) }],
     });
   }
 
@@ -325,7 +327,9 @@ export class HarnessHost {
   }
 
   async listSessions(workspaceRoot?: string) {
-    const rows = await this.store.list(workspaceRoot);
+    // Delegated children are part of their parent's transcript, not threads of
+    // their own, so they never appear in the sidebar.
+    const rows = (await this.store.list(workspaceRoot)).filter((meta) => !meta.delegation);
     return { sessions: rows.map((meta) => ({ sessionId: meta.sessionId, name: meta.title, workspaceRoot: meta.workspaceRoot, updatedAt: meta.updatedAt, status: this.sessions.get(meta.sessionId)?.prompting ? "running" : "idle" })) };
   }
 
@@ -351,8 +355,16 @@ export class HarnessHost {
     const meta = await this.store.meta(options.sessionId);
     if (!meta) throw new Error("This thread's history is no longer on this device.");
     if (meta.workspaceRoot !== options.workspaceRoot) throw new Error("That thread belongs to another workspace.");
-    const { messages, items, question } = await this.store.read(options.sessionId);
-    const live = this.track(meta, messages, options.approvalMode);
+    const { messages, items, question, delegation } = await this.store.read(options.sessionId);
+    // The log is authoritative for a child's scope: if the index lost the
+    // stamp, restore it and persist it, never adopt the caller's mode.
+    const policy = meta.delegation ?? delegation;
+    if (policy && !meta.delegation) {
+      meta.delegation = policy;
+      meta.mode = policy.planMode ? "plan" : "build";
+      await this.store.update(options.sessionId, { delegation: policy, mode: meta.mode });
+    }
+    const live = this.track(meta, messages, policy ? policy.approvalMode : options.approvalMode);
     // Replay the transcript exactly as it was recorded; nothing runs again.
     live.question = question;
     // The call a pending question belongs to is still open: it completes when the question is answered.
@@ -378,7 +390,7 @@ export class HarnessHost {
     Object.assign(live.meta, patch);
     await this.store.update(live.meta.sessionId, patch);
     const config = this.config(live);
-    this.emit("agentConfig", { sessionId: live.meta.sessionId, config });
+    if (!live.muted) this.emit("agentConfig", { sessionId: live.meta.sessionId, config });
     return { status: "accepted", agentConfig: config };
   }
 
@@ -393,7 +405,9 @@ export class HarnessHost {
   }
 
   async setMode(sessionId: string, mode: string) {
-    return this.changed(this.requireLive(sessionId), { mode: mode === "plan" ? "plan" : "build" });
+    const live = this.requireLive(sessionId);
+    if (live.meta.delegation) throw new Error("A delegated task keeps the mode it was created with.");
+    return this.changed(live, { mode: mode === "plan" ? "plan" : "build" });
   }
 
   async setOption(sessionId: string, option: string, value: string) {
@@ -405,10 +419,107 @@ export class HarnessHost {
   setApprovalMode(sessionId: string, mode: string) {
     const live = this.requireLive(sessionId);
     if (!APPROVAL_MODES.has(mode as ApprovalMode)) throw new Error("Unknown permission mode.");
+    // A child's permission was fixed when it was created; widening it here
+    // would be exactly the escalation delegation is meant to prevent.
+    if (live.meta.delegation) throw new Error("A delegated task keeps the permission mode it was created with.");
     live.approvalMode = mode as ApprovalMode;
     // Widening or narrowing the mode resets thread grants.
     live.grants = [];
     return { status: "accepted", effectiveMode: { mode } };
+  }
+
+  // ─── Delegation ───────────────────────────────────────────────────────────
+
+  /** A child below the cap may hand off once more; a child at the cap gets no task tool. */
+  canDelegate(context: TurnContext): boolean {
+    return (context.delegationDepth ?? 0) < MAX_DELEGATION_DEPTH;
+  }
+
+  /**
+   * Run one self-contained task in a child session. The child shares this
+   * host's turn loop and workspace, but gets the narrowed profile for its
+   * depth, a step cap, the parent's permission mode fixed for its life, and no
+   * approval channel: anything the mode would ask about is refused.
+   */
+  async delegate(context: TurnContext, request: DelegationRequest, signal?: AbortSignal): Promise<DelegationResult> {
+    const parent = this.requireLive(context.sessionId);
+    if (!this.canDelegate(context)) throw new Error("This agent cannot delegate any further.");
+    if (request.model && !splitModelId(request.model).providerId) throw new Error("Pick a model from the list.");
+    if (signal?.aborted) throw new Error("The user stopped this turn.");
+    const depth = (context.delegationDepth ?? 0) + 1;
+    const profile = depth >= MAX_DELEGATION_DEPTH ? DELEGATE_LEAF_PROFILE : DELEGATE_PROFILE;
+    const planMode = parent.meta.mode === "plan";
+    const now = new Date().toISOString();
+    const childSessionId = `h-${randomUUID()}`;
+    // Stamped in the child's index row and in its own log: the scope is
+    // reconstructable from either, and neither is ever widened later.
+    const delegation: DelegationPolicy = { parentSessionId: parent.meta.sessionId, depth, profile, approvalMode: parent.approvalMode, planMode };
+    const modelId = request.model ?? parent.meta.modelId;
+    const meta: SessionMeta = {
+      sessionId: childSessionId,
+      workspaceRoot: parent.meta.workspaceRoot,
+      title: request.description,
+      createdAt: now,
+      updatedAt: now,
+      ...(modelId ? { modelId } : {}),
+      ...(parent.meta.effort ? { effort: parent.meta.effort } : {}),
+      mode: planMode ? "plan" : "build",
+      delegation,
+    };
+    await this.store.create(meta);
+    await this.store.append(childSessionId, [{ type: "delegation", delegation }]);
+    const child = this.track(meta, [], delegation.approvalMode);
+    child.muted = true;
+    const turnId = this.mintTurnId();
+    const itemId = this.itemId(parent, "subagent");
+    const started = Date.now();
+    // The durable catalog lives in the parent's log: a child is discoverable
+    // here without opening or waking it.
+    this.emitItem(parent, { itemId, kind: "subagent", status: "inProgress", role: "delegate", objective: request.description, childSessionId, readOnly: true, controlStatus: "running", turnId: parent.turnId }, true);
+    const user: ChatMessage = { role: "user", content: this.userContent(request.prompt) };
+    child.messages.push(user);
+    child.turnId = turnId;
+    await this.store.append(childSessionId, [{ type: "message", message: user }]);
+    this.emitItem(child, { itemId: `${childSessionId}:${turnId}:user`, kind: "userMessage", status: "completed", text: request.prompt, turnId }, true);
+    child.prompting = true;
+    let run: { outcome: Json; text: string; capped: boolean };
+    try {
+      run = await this.runTurn(child, turnId, { stepCap: MAX_DELEGATED_STEPS, profileId: profile, signal });
+    } finally {
+      this.sessions.delete(childSessionId);
+    }
+    const params = run.outcome.params as { terminal?: string; error?: { message?: string } } | undefined;
+    const failed = run.outcome.kind === "failed";
+    const stopped = !failed && params?.terminal === "cancelled";
+    const error = params?.error?.message ?? "The delegated task failed.";
+    const text = failed || stopped ? [run.text, stopped ? "The user stopped this turn." : error].filter(Boolean).join("\n\n") : run.text;
+    this.emitItem(parent, {
+      itemId,
+      kind: "subagent",
+      status: stopped ? "cancelled" : failed ? "failed" : "completed",
+      role: "delegate",
+      objective: request.description,
+      childSessionId,
+      readOnly: true,
+      controlStatus: failed || stopped ? "failed" : "resultReady",
+      turnId: parent.turnId,
+      durationMs: Date.now() - started,
+      ...(failed || stopped
+        ? { failureReason: stopped ? "The user stopped this turn." : error }
+        : { result: { summary: request.description, text: run.text, artifactRefs: [], evidenceRefs: [] } }),
+    }, true);
+    return { childSessionId, text, failed: failed || stopped, capped: run.capped };
+  }
+
+  /** A delegated child's transcript, read through the parent's session binding. */
+  async readChildSession(options: { sessionId: string; childSessionId: string; excludeItems?: boolean }) {
+    const child = await this.store.meta(options.childSessionId);
+    if (!child?.delegation || child.delegation.parentSessionId !== options.sessionId) throw new Error("That session is not a delegated child of this thread.");
+    const { items } = await this.store.read(options.childSessionId);
+    return {
+      session: { sessionId: child.sessionId, workspaceRoot: child.workspaceRoot, modelId: child.modelId ?? null, title: child.title },
+      history: { items: options.excludeItems ? [] : items },
+    };
   }
 
   // ─── Turns ────────────────────────────────────────────────────────────────
@@ -433,8 +544,9 @@ export class HarnessHost {
   }
 
   private emitItem(live: Live, item: Json, persist = false) {
-    if (live.muted) return;
-    this.emit("item", { sessionId: live.meta.sessionId, item });
+    // A muted child still writes its transcript: the parent's drill-down reads
+    // it from disk, and the log is the durable child catalog.
+    if (!live.muted) this.emit("item", { sessionId: live.meta.sessionId, item });
     if (persist) void this.store.append(live.meta.sessionId, [{ type: "item", item }]).catch(() => {});
   }
 
@@ -697,7 +809,9 @@ export class HarnessHost {
 
   /** Ask the user about one call. Thread choices come from the policy, narrowest first. */
   private ask(live: Live, call: ToolCall, kind: ToolKind, subject: Subject, verdict: Extract<Verdict, { kind: "ask" }>): Promise<ApprovalOutcome> {
-    if (this.limits.approvalChannel === false) return Promise.resolve({ kind: "unavailable" });
+    // A delegated child has no one to answer: its asks fail closed rather than
+    // waiting on a card the app never shows for it.
+    if (this.limits.approvalChannel === false || live.meta.delegation) return Promise.resolve({ kind: "unavailable" });
     const approvalId = randomUUID();
     const choices = [
       { choiceId: "allow-once", label: "Allow once", decision: "approved", scope: "once" },
@@ -753,19 +867,31 @@ export class HarnessHost {
   }
 
   private reportHookFailures(turn: TurnContributions, failures: HookFailure[]) {
-    for (const failure of failures) this.emit("agentNotice", { sessionId: turn.context.sessionId, level: "warning", message: `The ${failure.extensionId} extension failed in ${failure.hook}: ${failure.message}` });
+    for (const failure of failures) {
+      if (this.sessions.get(turn.context.sessionId)?.muted) continue;
+      this.emit("agentNotice", { sessionId: turn.context.sessionId, level: "warning", message: `The ${failure.extensionId} extension failed in ${failure.hook}: ${failure.message}` });
+    }
   }
 
-  private async runTurn(live: Live, turnId: string) {
+  private async runTurn(live: Live, turnId: string, options: { stepCap?: number; profileId?: string; signal?: AbortSignal } = {}): Promise<{ outcome: Json; text: string; capped: boolean }> {
     const controller = new AbortController();
+    const parentSignal = options.signal;
+    const linkAbort = () => controller.abort();
+    if (parentSignal) {
+      if (parentSignal.aborted) controller.abort();
+      else parentSignal.addEventListener("abort", linkAbort, { once: true });
+    }
     live.controller = controller;
     const sessionId = live.meta.sessionId;
+    const stepCap = options.stepCap ?? MAX_STEPS;
     let outcome: Json = { kind: "completed", params: { terminal: "completed" } };
     const cancelled = () => { outcome = { kind: "completed", params: { terminal: "cancelled" } }; };
     let turn: TurnContributions | undefined;
+    let text = "";
+    let capped = false;
     try {
       // Before the first await, so a registry change made during this turn waits for the next one.
-      turn = this.registry.snapshot({ sessionId, turnId, workspaceRoot: live.meta.workspaceRoot, mode: live.meta.mode === "plan" ? "plan" : "build" });
+      turn = this.registry.snapshot({ sessionId, turnId, workspaceRoot: live.meta.workspaceRoot, mode: live.meta.mode === "plan" ? "plan" : "build", delegationDepth: live.meta.delegation?.depth ?? 0 }, options.profileId);
       const contributions = turn;
       await this.hook(contributions, "turnStarted", { context: contributions.context });
       // Once per turn: a mid-turn edit of AGENTS.md must not change the cached prefix.
@@ -774,7 +900,7 @@ export class HarnessHost {
       // them; an activated name is advertised for the rest of this turn.
       const active = new Set<string>();
       const offered = () => contributions.schemas.filter((schema) => !contributions.tools.get(schema.name)?.deferred || active.has(schema.name));
-      for (let step = 0; step < MAX_STEPS; step += 1) {
+      for (let step = 0; step < stepCap; step += 1) {
         if (controller.signal.aborted) { cancelled(); break; }
         // Steering that arrived during tools waits until the results are in the history.
         await this.flushSteering(live);
@@ -798,12 +924,16 @@ export class HarnessHost {
           const message: ChatMessage = { role: "tool", results };
           live.messages.push(message);
           await this.store.append(sessionId, [{ type: "message", message }]);
-          if (step === MAX_STEPS - 1) this.emit("agentNotice", { sessionId, level: "warning", message: `${HARNESS_NAME} stopped after ${MAX_STEPS} steps. Send a message to continue.` });
+          if (step === stepCap - 1) {
+            capped = true;
+            if (!live.muted) this.emit("agentNotice", { sessionId, level: "warning", message: `${HARNESS_NAME} stopped after ${stepCap} steps. Send a message to continue.` });
+          }
           continue;
         }
         if (!reply.toolCalls?.length) {
           // A steer that arrived while the model was writing should still be answered.
           if (live.steering.length) continue;
+          text = reply.text;
           break;
         }
         const calls = reply.toolCalls;
@@ -829,7 +959,10 @@ export class HarnessHost {
         const message: ChatMessage = { role: "tool", results };
         live.messages.push(message);
         await this.store.append(sessionId, [{ type: "message", message }]);
-        if (step === MAX_STEPS - 1) this.emit("agentNotice", { sessionId, level: "warning", message: `${HARNESS_NAME} stopped after ${MAX_STEPS} steps. Send a message to continue.` });
+        if (step === stepCap - 1) {
+          capped = true;
+          if (!live.muted) this.emit("agentNotice", { sessionId, level: "warning", message: `${HARNESS_NAME} stopped after ${stepCap} steps. Send a message to continue.` });
+        }
       }
       if (controller.signal.aborted) cancelled();
     } catch (error) {
@@ -847,14 +980,16 @@ export class HarnessHost {
       live.prompting = false;
       live.controller = null;
       void this.store.update(sessionId, {});
-      this.emit("agentNotice", { sessionId, message: null });
+      if (!live.muted) this.emit("agentNotice", { sessionId, message: null });
       // After the notice is cleared, or the warning would vanish with it.
       if (turn) this.reportHookFailures(turn, finished);
-      this.emit("turnCompleted", { sessionId, turnId, outcome });
+      if (!live.muted) this.emit("turnCompleted", { sessionId, turnId, outcome });
       // After turnCompleted, which clears a thread's questions in the app. A queued message settles it at once.
-      if (live.question?.turnId === turnId) this.emit("userInputs", { sessionId, requests: [questionRequest(sessionId, live.question)], turnEnded: true });
+      if (!live.muted && live.question?.turnId === turnId) this.emit("userInputs", { sessionId, requests: [questionRequest(sessionId, live.question)], turnEnded: true });
       if (startNext) this.pump(live);
     }
+    parentSignal?.removeEventListener("abort", linkAbort);
+    return { outcome, text, capped };
   }
 
   /** One model call, streamed into reasoning and message items, with retries for transient failures. */
@@ -951,13 +1086,13 @@ export class HarnessHost {
         // A model that rejects the reasoning setting gets one retry without it.
         if (effort && status === 400 && /thinking|reasoning|effort|budget/i.test(message)) {
           effort = undefined;
-          this.emit("agentNotice", { sessionId: live.meta.sessionId, level: "info", message: `${model} does not accept that effort level; continuing without it.` });
+          if (!live.muted) this.emit("agentNotice", { sessionId: live.meta.sessionId, level: "info", message: `${model} does not accept that effort level; continuing without it.` });
           continue;
         }
         const transient = error instanceof ProviderError ? isTransientProviderError(error) : true;
         if (!transient || !retryBudgetOpen(Date.now() - startedAt, attempt, cap)) throw error;
         const wait = Math.min(20_000, 1500 * 2 ** (attempt - 1));
-        this.emit("agentNotice", { sessionId: live.meta.sessionId, level: "warning", message: `${message} Retrying in ${Math.round(wait / 1000)}s (attempt ${attempt + 1} of ${RETRIES + 1}).` });
+        if (!live.muted) this.emit("agentNotice", { sessionId: live.meta.sessionId, level: "warning", message: `${message} Retrying in ${Math.round(wait / 1000)}s (attempt ${attempt + 1} of ${RETRIES + 1}).` });
         await new Promise((resolve, reject) => {
           const timer = setTimeout(resolve, wait);
           signal.addEventListener("abort", () => { clearTimeout(timer); reject(new Error("cancelled")); }, { once: true });
@@ -985,8 +1120,9 @@ export class HarnessHost {
     const frozen = prepared.input;
     call.input = frozen;
     const base = this.toolBase(live, call, frozen);
-    // Plan bookkeeping shows as the plan card, not as a step.
-    if (kind !== "plan") this.emitItem(live, { ...base, status: "inProgress" });
+    // Plan bookkeeping shows as the plan card, not as a step. A delegated task
+    // shows as its child card, which `delegate` writes with the same turn.
+    if (kind !== "plan" && kind !== "delegate") this.emitItem(live, { ...base, status: "inProgress" });
     let subject: Subject | undefined;
     try { subject = definition.subject?.(live.meta.workspaceRoot, frozen) ?? { kind: "none" }; } catch { /* refused below */ }
     // Guards first, in every mode: the policy below never sees a call they refused.
@@ -1022,11 +1158,11 @@ export class HarnessHost {
     const visible = noted(result.display ?? result.output);
     if (result.question) return { id: call.id, name: call.name, output: "", question: result.question, item: base };
     if (result.plan) {
-      this.emit("sessionFacts", { sessionId: live.meta.sessionId, plan: result.plan.map((todo, index) => ({ id: `plan-${index}`, text: todo.content, status: todo.status === "in_progress" ? "inProgress" : todo.status })) });
+      if (!live.muted) this.emit("sessionFacts", { sessionId: live.meta.sessionId, plan: result.plan.map((todo, index) => ({ id: `plan-${index}`, text: todo.content, status: todo.status === "in_progress" ? "inProgress" : todo.status })) });
       return { id: call.id, name: call.name, output };
     }
     const presentation = this.itemPresentation(result.presentation);
-    this.emitItem(live, {
+    if (kind !== "delegate") this.emitItem(live, {
       ...base,
       status: result.isError ? "failed" : "completed",
       visibleOutput: visible,

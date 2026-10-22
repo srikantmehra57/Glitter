@@ -464,6 +464,44 @@ without leaving a partial set behind.
 
 ## Phase 7 — Subagents
 
+**Status: complete.** 7.1–7.5 are done (2026-10-22, with the DECISIONS entry
+"A delegated task is a hidden child with a stamped, narrowed scope"). The tool
+lives in `harness/delegation.ts`; the host owns the child session, its policy
+and the read-only transcript verb.
+
+- [x] 7.1 The `task` tool takes a description, a prompt and an optional model,
+      and runs a hidden child `Live` in the same host. The child's tools come
+      from a registry profile (`delegate`, then `delegate-leaf` at the cap),
+      never the full set; it gets `MAX_DELEGATED_STEPS = 24` steps. The model
+      must name a provider from the catalog; otherwise the child inherits the
+      parent's model and effort. A generic `toolCall` card is suppressed for
+      the `task` call, and the parent gets one `subagent` card instead.
+- [x] 7.2 Depth is stamped into the child's session index and its own log. The
+      turn context carries it, so a resumed child keeps its depth and
+      `canDelegate` refuses at `MAX_DELEGATION_DEPTH = 2`; the leaf profile has
+      no `task` tool. A child may not change its mode or permission mode after
+      creation, and `ask` has no channel: such a call is refused, not parked.
+- [x] 7.3 The log opens with a `delegation` record naming parent, depth,
+      profile, approval mode and Plan mode; the index carries the same policy.
+      `resumeSession` restores it from the index, falling back to the log, and
+      never accepts the caller's approval mode. Skills, MCP discovery, the
+      plan review and `ask_user` are hidden from the child's prompt and tools,
+      so it is not told about anything its profile excludes.
+- [x] 7.4 The parent log's persisted `subagent` items are the catalog: each
+      carries the child session id, objective, status, duration and result.
+      Children are filtered out of `listSessions` but remain in the store, so
+      they are discoverable through the parent without waking them.
+- [x] 7.5 `readChildSession` takes the parent session and the child id, checks
+      `parentSessionId`, and returns the child transcript read-only. It has a
+      bridge allowlist entry, a strict DTO and a grant-bound session check; the
+      app opens it in the existing `SubagentModal` and the card offers only
+      Transcript — no message, consume or lifecycle buttons.
+
+Differs from the plan: the child is a muted session in the same host rather
+than a second process, and it cannot ask at all. A delegated call that would
+need approval fails with an explanation, which keeps a hidden session from
+blocking on a card the user never sees.
+
 **Goal.** Delegation, done safely.
 
 | # | Change | Source | Effort |

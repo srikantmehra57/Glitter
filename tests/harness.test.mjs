@@ -1668,4 +1668,106 @@ test('MCP tools are discovered on demand, ask, run, and are revoked without a pa
   }
 });
 
+test('a delegated task runs in a hidden child and persists the scope the user can see', async () => {
+  const root = await workspace();
+  const store = new SessionStore(await mkdtemp(join(temporary, 'store-')));
+  const { calls, fetchImpl } = anthropicStub([
+    () => toolReply('p1', 'task', { description: 'Read hello.txt', prompt: 'Read hello.txt and report its lines.' }),
+    () => toolReply('c1', 'read_file', { path: 'hello.txt' }),
+    () => textReply('It says one, two, three.'),
+    () => textReply('The child says one, two, three.'),
+  ]);
+  const { instance, events } = host(fetchImpl, store);
+  const { sessionId } = await instance.startSession({ workspaceRoot: root });
+  await instance.sendTurn({ sessionId, text: 'Delegate reading hello.txt.' });
+  const completed = await settled(events, 1);
+  assert.equal(completed[0].payload.outcome.params.terminal, 'completed');
+  const toolNames = (body) => body.tools.map((tool) => tool.name);
+  assert.ok(toolNames(calls[0].body).includes('task'), 'the top-level agent is offered the task tool');
+  assert.deepEqual(toolNames(calls[1].body), ['read_file', 'list_files', 'grep', 'write_file', 'edit_file', 'bash', 'todo_write', 'task'], 'the child gets the narrowed profile');
+  assert.equal(toolNames(calls[1].body).includes('ask_user'), false, 'a child cannot ask the user');
+  assert.equal(toolNames(calls[1].body).includes('tool_search'), false, 'a child gets no MCP tools');
+  assert.match(calls[1].body.system.map((block) => block.text).join('\n'), /delegated child agent/);
+  assert.match(JSON.stringify(calls[3].body.messages.at(-1)), /The delegated task finished[\s\S]*one, two, three/);
+  assert.equal(events.filter(({ event }) => event === 'approval').length, 0, 'the task call needs no approval of its own');
+  const subagents = events.filter(({ event, payload }) => event === 'item' && payload.item.kind === 'subagent');
+  const card = subagents.at(-1).payload.item;
+  assert.equal(card.status, 'completed');
+  assert.equal(card.readOnly, true);
+  assert.equal(card.role, 'delegate');
+  assert.equal(card.controlStatus, 'resultReady');
+  assert.equal(card.result.text, 'It says one, two, three.');
+  const childId = card.childSessionId;
+  assert.match(childId, /^h-/);
+  assert.equal(events.filter(({ event, payload }) => event === 'item' && payload.item.kind === 'toolCall' && payload.item.tool === 'task').length, 0, 'the child card replaces the generic task tool card');
+  const meta = await store.meta(childId);
+  assert.deepEqual(meta.delegation, { parentSessionId: sessionId, depth: 1, profile: 'delegate', approvalMode: 'promptUnmatched', planMode: false });
+  const view = await instance.readChildSession({ sessionId, childSessionId: childId });
+  assert.deepEqual(view.history.items.map((entry) => entry.kind), ['userMessage', 'reasoning', 'toolCall', 'agentMessage']);
+  assert.equal(view.history.items.at(-1).text, 'It says one, two, three.');
+  await assert.rejects(instance.readChildSession({ sessionId: 'h-someone-else', childSessionId: childId }), /not a delegated child/);
+  await assert.rejects(instance.readChildSession({ sessionId, childSessionId: sessionId }), /not a delegated child/);
+  assert.deepEqual((await instance.listSessions(root)).sessions.map((session) => session.sessionId), [sessionId], 'a child never becomes a sidebar thread');
+  assert.ok((await store.list(root)).some((row) => row.sessionId === childId), 'the child stays on disk for the drill-down');
+});
+
+test('a delegated child inherits its scope, cannot widen it, and cannot recurse past the cap', async () => {
+  const root = await workspace();
+  const store = new SessionStore(await mkdtemp(join(temporary, 'store-')));
+  const { calls, fetchImpl } = anthropicStub([
+    () => textReply('child done'),
+    () => textReply('leaf done'),
+  ]);
+  const { instance } = host(fetchImpl, store);
+  const { sessionId } = await instance.startSession({ workspaceRoot: root, mode: 'plan', approvalMode: 'denyUnmatched' });
+  const child = await instance.delegate({ sessionId, turnId: 'manual', workspaceRoot: root, mode: 'plan', delegationDepth: 0 }, { description: 'Investigate', prompt: 'Investigate the workspace.' });
+  const childMeta = await store.meta(child.childSessionId);
+  assert.deepEqual(childMeta.delegation, { parentSessionId: sessionId, depth: 1, profile: 'delegate', approvalMode: 'denyUnmatched', planMode: true });
+  assert.equal(childMeta.mode, 'plan');
+  assert.equal(child.text, 'child done');
+  const resumed = await instance.resumeSession({ sessionId: child.childSessionId, workspaceRoot: root, approvalMode: 'allowAll' });
+  assert.equal(resumed.agentConfig.mode, 'plan', 'the child stays in the mode it was created with');
+  assert.throws(() => instance.setApprovalMode(child.childSessionId, 'allowAll'), /keeps the permission mode/);
+  await assert.rejects(instance.setMode(child.childSessionId, 'build'), /keeps the mode/);
+  const grandchild = await instance.delegate({ sessionId: child.childSessionId, turnId: 'manual-2', workspaceRoot: root, mode: 'plan', delegationDepth: 1 }, { description: 'Leaf work', prompt: 'Do the leaf work.' });
+  const leaf = await store.meta(grandchild.childSessionId);
+  assert.equal(leaf.delegation.depth, 2);
+  assert.equal(leaf.delegation.profile, 'delegate-leaf');
+  assert.equal(leaf.delegation.parentSessionId, child.childSessionId);
+  const toolNames = (body) => body.tools.map((tool) => tool.name);
+  assert.equal(toolNames(calls[1].body).includes('task'), false, 'the leaf is never offered a further delegation');
+  assert.ok(toolNames(calls[1].body).includes('read_file'));
+  await assert.rejects(instance.delegate({ sessionId: child.childSessionId, turnId: 'manual-3', workspaceRoot: root, mode: 'plan', delegationDepth: 2 }, { description: 'Too deep', prompt: 'No.' }), /cannot delegate any further/);
+  const registry = instance.registry;
+  const profile = (id, depth) => [...registry.snapshot({ sessionId, turnId: 't', workspaceRoot: root, mode: 'build', delegationDepth: depth }, id).tools.keys()];
+  assert.deepEqual(profile('delegate', 1), ['read_file', 'list_files', 'grep', 'write_file', 'edit_file', 'bash', 'todo_write', 'task']);
+  assert.deepEqual(profile('delegate-leaf', 2), ['read_file', 'list_files', 'grep', 'write_file', 'edit_file', 'bash', 'todo_write']);
+  for (const mode of ['denyUnmatched', 'promptUnmatched', 'onRequest', 'guarded', 'allowAll']) {
+    assert.deepEqual(decide({ kind: 'delegate', subject: { kind: 'none' }, mode, planMode: false, grants: [] }), { kind: 'allow' }, `delegation is allowed in ${mode}`);
+  }
+});
+
+test('a child with no approval channel has its asks refused instead of waiting', async () => {
+  const root = await workspace();
+  const store = new SessionStore(await mkdtemp(join(temporary, 'store-')));
+  const { calls, fetchImpl } = anthropicStub([
+    () => toolReply('p1', 'task', { description: 'Write a file', prompt: 'Create denied.txt.' }),
+    () => toolReply('c1', 'write_file', { path: 'denied.txt', content: 'no' }),
+    () => textReply('I could not write it.'),
+    () => textReply('The child could not write it.'),
+  ]);
+  const { instance, events } = host(fetchImpl, store);
+  const { sessionId } = await instance.startSession({ workspaceRoot: root });
+  await instance.sendTurn({ sessionId, text: 'Delegate the write.' });
+  await settled(events, 1);
+  assert.equal(events.filter(({ event }) => event === 'approval').length, 0, 'no approval card is shown for a hidden child');
+  await assert.rejects(readFile(join(root, 'denied.txt')), /ENOENT/);
+  const childId = events.filter(({ event, payload }) => event === 'item' && payload.item.kind === 'subagent').at(-1).payload.item.childSessionId;
+  const view = await instance.readChildSession({ sessionId, childSessionId: childId });
+  const write = view.history.items.find((entry) => entry.kind === 'toolCall' && entry.tool === 'write_file');
+  assert.equal(write.status, 'failed');
+  assert.match(write.failureReason, /No one can approve tool calls/);
+  assert.match(JSON.stringify(calls[3].body.messages.at(-1)), /I could not write it/);
+});
+
 test.after(async () => { await rm(temporary, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });

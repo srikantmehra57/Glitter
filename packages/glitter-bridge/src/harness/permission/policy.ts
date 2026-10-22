@@ -28,7 +28,9 @@ export type Verdict =
 
 export function decide(input: PolicyInput): Verdict {
   const { kind, subject, mode } = input;
-  if (kind === "read" || kind === "plan") return { kind: "allow" };
+  // Delegation does not act by itself: the child's own calls meet this same
+  // policy, one at a time, so the task call needs no approval of its own.
+  if (kind === "read" || kind === "plan" || kind === "delegate") return { kind: "allow" };
   // Known read-only commands need no approval in any mode, Plan mode and read-only threads included.
   if (kind === "shell" && subject.kind === "command" && isReadOnly(subject.command)) return { kind: "allow" };
   if (kind === "edit" && input.planMode) return { kind: "deny", reason: "Plan mode is on: files are not edited. Finish the plan, or ask the user to switch to Build." };

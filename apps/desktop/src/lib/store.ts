@@ -506,8 +506,8 @@ type AppStore = Settings & {
   controlWorkflow: (sessionId: string, workflowRunId: string, action: string, child?: { childId: string; attempt: number }) => Promise<void>;
   /** Session-goal control (`goal/*`); resolves the ack (a `turnId` names the goal-driving turn). */
   controlGoal: (sessionId: string, action: string, objective?: string) => Promise<{ turnId?: string }>;
-  /** Child drill-down: result envelope plus the child transcript via `session/read`. */
-  childSession: { sessionId: string; itemId: string; title: string; loading: boolean; error: string | null; result: SubagentResult | null; items: TranscriptItem[]; consumed: boolean } | null;
+  /** Child drill-down: result envelope plus the child transcript via `session/read` (harness: `readChildSession`). */
+  childSession: { sessionId: string; itemId: string; title: string; loading: boolean; error: string | null; result: SubagentResult | null; items: TranscriptItem[]; consumed: boolean; consumable: boolean } | null;
   openChild: (sessionId: string, itemId: string) => Promise<void>;
   consumeChild: () => Promise<void>;
   closeChild: () => void;
@@ -2114,14 +2114,19 @@ export const useAppStore = create<AppStore>((set, get) => ({
     const item = thread?.items.find((entry) => entry.itemId === itemId);
     if (!thread || !item || item.kind !== "subagent" || !item.childSessionId) return;
     const title = item.objective || "Subagent";
-    set({ childSession: { sessionId, itemId, title, loading: true, error: null, result: item.result ?? null, items: [], consumed: false } });
+    // A harness child has no subagent lifecycle, so its result needs no
+    // consuming gesture; an ACP child's result does.
+    const consumable = Boolean(item.subagentId);
+    set({ childSession: { sessionId, itemId, title, loading: true, error: null, result: item.result ?? null, items: [], consumed: false, consumable } });
     try {
-      const snapshot = await bridge<SessionPreview>("readSession", { sessionId: item.childSessionId, excludeItems: false });
+      const snapshot = thread.agentId === "harness"
+        ? await bridge<SessionPreview>("readChildSession", { agentId: "harness", sessionId, childSessionId: item.childSessionId, excludeItems: false })
+        : await bridge<SessionPreview>("readSession", { sessionId: item.childSessionId, excludeItems: false });
       if (get().childSession?.itemId !== itemId) return;
-      set({ childSession: { sessionId, itemId, title, loading: false, error: null, result: item.result ?? null, items: snapshot?.history?.items ?? [], consumed: false } });
+      set({ childSession: { sessionId, itemId, title, loading: false, error: null, result: item.result ?? null, items: snapshot?.history?.items ?? [], consumed: false, consumable } });
     } catch (error) {
       if (get().childSession?.itemId !== itemId) return;
-      set({ childSession: { sessionId, itemId, title, loading: false, error: describeError("Could not read the child transcript", error), result: item.result ?? null, items: [], consumed: false } });
+      set({ childSession: { sessionId, itemId, title, loading: false, error: describeError("Could not read the child transcript", error), result: item.result ?? null, items: [], consumed: false, consumable } });
     }
   },
 

@@ -904,3 +904,33 @@ must respect. Don't log routine changes here; they belong in git history and
 - **Consequences:** Extensions → MCP shows the harness's own generation for a
   harness thread and the CLI's servers for Muse; the two are not merged. A
   broken config is reported as a notice and does not fail the turn.
+
+### A delegated task is a hidden child with a stamped, narrowed scope
+
+- **Date:** 2026-10-22
+- **Decision:** The `task` tool starts a child agent as a hidden session
+  (`h-…`) in the same harness host. The child is filtered out of
+  `listSessions`, has no approval channel, and runs under a registry profile
+  (`delegate`, then `delegate-leaf` at the cap) with a 24-step turn cap. Its
+  scope is written both to the session index and to its own log as a
+  `delegation` record: parent session, depth, profile, approval mode and Plan
+  mode. A call that would need approval is refused instead of parked. The
+  model may choose a model from the catalog; otherwise the child inherits the
+  parent's model and effort. Children are catalogued by the parent's persisted
+  `subagent` items, and `readChildSession` returns a child transcript read-only
+  through the parent's binding.
+- **Why:** A hidden session cannot ask the user anything, so giving it the
+  power to ask would deadlock the turn. Narrowing its tools by profile means
+  the child's capability is fixed when it starts, not chosen by its own model.
+  Stamping depth and policy in two durable places means a resumed child is
+  still a child: it cannot delegate as if it were top-level, widen its
+  permission mode, or claim a tool its profile excluded. Keeping the catalog
+  in the parent log makes children observable without an extra index.
+- **Bounds:** Depth 2, 24 delegated steps, description ≤120 characters, prompt
+  ≤100,000 characters, result ≤30,000 characters. Plan/review, skills, MCP
+  discovery and `ask_user` are excluded from delegated turns.
+- **Consequences:** `listSessions` hides children, but `store.list` keeps them,
+  and the parent's card can open one through `readChildSession`. The child's
+  logs are complete (muted only suppresses live events), so a crash and resume
+  behaves like any other harness session. A thread's mode and permission mode
+  are immutable while it is a child; an attempt to change either explains why.

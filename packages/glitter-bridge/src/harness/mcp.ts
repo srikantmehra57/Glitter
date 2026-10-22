@@ -530,6 +530,9 @@ export function mcpExtension(manager: McpManager): Extension {
   return {
     id: "mcp",
     tools: [(context) => {
+      // A delegated child's profile keeps the built-ins only; it must not hold
+      // a generation open or advertise tools it cannot call.
+      if (context.delegationDepth > 0) return undefined;
       const generation = manager.acquire(context);
       if (!generation) return undefined;
       perTurn.set(context, generation);
@@ -539,6 +542,7 @@ export function mcpExtension(manager: McpManager): Extension {
       return [...generation.definitions, searchTool(generation)];
     }],
     prompt: [{ placement: "stable", text: (context) => {
+      if (context.delegationDepth > 0) return undefined;
       const generation = perTurn.get(context) ?? manager.acquire(context);
       return generation ? generationPrompt(generation) : undefined;
     } }],

@@ -322,8 +322,10 @@ export type TranscriptItem = {
   approvalId?: string;
   /** `subagent`: durable child identity for `subagent/*` controls. */
   subagentId?: string;
-  /** `subagent`: the child's own session id — drill down via `session/read`. */
+  /** `subagent`: the child's own session id — drill down via `session/read`, or `readChildSession` for the harness. */
   childSessionId?: string;
+  /** `subagent`: a harness child that only supports the read-only drill-down, with no lifecycle controls. */
+  readOnly?: boolean;
   /** `subagent`: result envelope once ready; consume via `subagent/readResult`. */
   result?: SubagentResult;
   /** `subagent`/`workflow`: owning durable workflow run id for `workflow/*` controls. */

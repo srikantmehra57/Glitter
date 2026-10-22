@@ -701,6 +701,7 @@ async function dispatchAcp(agent: AcpAgentHost, hostKey: string, method: string,
     case "taskControl":
     case "workflowControl":
     case "goalControl":
+    case "readChildSession":
       throw new Error(`${agent.spec.name} does not support this session operation.`);
     case "decideApproval":
       return agent.decideApproval({ approvalId: String(params.approvalId ?? ""), choiceId: String(params.choiceId ?? "") });
@@ -826,6 +827,12 @@ async function dispatchHarness(method: string, params: Record<string, unknown>) 
       release(sessionId);
       return closed;
     }
+    case "readChildSession":
+      return harness.readChildSession({
+        sessionId,
+        childSessionId: String(params.childSessionId ?? ""),
+        excludeItems: typeof params.excludeItems === "boolean" ? params.excludeItems : undefined,
+      });
     default:
       throw new Error(`${harness.spec.name} does not support ${method}.`);
   }

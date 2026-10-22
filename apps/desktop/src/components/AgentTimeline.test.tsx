@@ -297,6 +297,34 @@ describe("AgentTimeline", () => {
     expect(screen.getAllByText("Changed 1 file")).toHaveLength(1);
     expect(screen.queryByText(/Run failed/)).toBeNull();
   });
+
+  it("drills into a delegated child read-only, with no lifecycle buttons to drive it", async () => {
+    const openChild = vi.fn(async () => {});
+    seedStore({ openChild });
+    mount(thread({
+      items: [
+        item({ itemId: "u1", kind: "userMessage", turnId: "t1", text: "audit the repo" }),
+        item({
+          itemId: "child-card",
+          kind: "subagent",
+          turnId: "t1",
+          role: "delegate",
+          readOnly: true,
+          childSessionId: "h-child",
+          objective: "Audit the repo",
+          controlStatus: "resultReady",
+          result: { summary: "Audit", text: "All clean.", artifactRefs: [], evidenceRefs: [] },
+        }),
+      ],
+      lastTurnId: "t1",
+      lastOutcome: "completed",
+    }));
+    expect(screen.queryByRole("button", { name: "Result" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Follow up" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Close" })).toBeNull();
+    await userEvent.setup().click(screen.getByRole("button", { name: /Transcript/ }));
+    expect(openChild).toHaveBeenCalledWith("s1", "child-card");
+  });
 });
 
 describe("timeline edit and thought previews", () => {

@@ -60,7 +60,7 @@ export function SubagentModal() {
                 {result.evidenceRefs.map((ref) => <li key={`e:${ref}`}>Evidence · {ref}</li>)}
               </ul>
             ) : null}
-            {!viewing.consumed ? (
+            {!viewing.consumed && viewing.consumable ? (
               <div className="agent-buttons" role="toolbar" aria-label="Result controls">
                 <button
                   type="button"

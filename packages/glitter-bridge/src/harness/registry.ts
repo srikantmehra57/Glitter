@@ -10,8 +10,8 @@ import type { ToolSchema } from "./wire.js";
  * extensions are plain objects, registered in order, with no loading or DI.
  */
 
-/** What a contribution may look at when a turn starts. */
-export type TurnContext = Readonly<{ sessionId: string; turnId: string; workspaceRoot: string; mode: "build" | "plan" }>;
+/** What a contribution may look at when a turn starts. `delegationDepth` is 0 for a top-level thread. */
+export type TurnContext = Readonly<{ sessionId: string; turnId: string; workspaceRoot: string; mode: "build" | "plan"; delegationDepth: number }>;
 
 /** A tool that exists only for the turns it returns a definition for. */
 export type ToolFactory = (context: TurnContext) => ToolDefinition | readonly ToolDefinition[] | undefined;

@@ -592,6 +592,17 @@ function SubagentControls({ step }: { step: AgentStep }) {
   const [error, setError] = useState<string | null>(null);
   const item = step.item;
   const subagentId = item.subagentId;
+  // A harness child has no subagent lifecycle to control; its card only drills
+  // into the read-only transcript.
+  if (item.readOnly) {
+    return sessionId && item.childSessionId ? (
+      <div className="agent-controls">
+        <div className="agent-buttons" role="toolbar" aria-label="Subagent controls">
+          <button type="button" className="agent-btn" onClick={() => void openChild(sessionId, item.itemId)} title="Read the child transcript without attaching"><FileText size={12} />Transcript</button>
+        </div>
+      </div>
+    ) : null;
+  }
   if (!subagentId || !sessionId) return null;
   const control = item.controlStatus;
   const running = step.status === "running" || control === "running" || control === "starting" || control === "accepted";

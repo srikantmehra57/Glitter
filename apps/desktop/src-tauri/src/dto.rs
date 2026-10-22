@@ -294,6 +294,18 @@ struct ReadSessionParams {
     exclude_items: Option<bool>,
 }
 
+/// A delegated child's transcript, read through the parent session's binding.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ReadChildSessionParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    agent_id: Option<AgentId>,
+    session_id: String,
+    child_session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    exclude_items: Option<bool>,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ListSkillsParams {
@@ -838,6 +850,12 @@ pub fn validate_params(method: &str, params: &Value) -> Result<Value, String> {
             check_id(method, "sessionId", &parsed.session_id)?;
             emit(method, &parsed)
         }
+        "readChildSession" => {
+            let parsed: ReadChildSessionParams = parse(method, body)?;
+            check_id(method, "sessionId", &parsed.session_id)?;
+            check_id(method, "childSessionId", &parsed.child_session_id)?;
+            emit(method, &parsed)
+        }
         "listSkills" => {
             let parsed: ListSkillsParams = parse(method, body)?;
             check_id(method, "sessionId", &parsed.session_id)?;
@@ -1138,6 +1156,8 @@ mod tests {
             ("closeSession", json!({ "sessionId": "s-1" })),
             ("readSession", json!({ "sessionId": "s-1" })),
             ("readSession", json!({ "sessionId": "s-1", "excludeItems": false })),
+            ("readChildSession", json!({ "sessionId": "h-1", "childSessionId": "h-2" })),
+            ("readChildSession", json!({ "agentId": "harness", "sessionId": "h-1", "childSessionId": "h-2", "excludeItems": false })),
             ("pageHistory", json!({ "sessionId": "s-1", "cursor": "c-old" })),
             ("pageHistory", json!({ "sessionId": "s-1" })),
             ("readOutput", json!({ "sessionId": "s-1", "itemId": "i-1", "outputRef": "r-1" })),
@@ -1247,6 +1267,8 @@ mod tests {
         assert!(validate_params("compactSession", &json!({ "sessionId": "s", "turnId": "t" })).is_err());
         assert!(validate_params("closeSession", &json!({ "sessionId": "s", "turnId": "t" })).is_err());
         assert!(validate_params("readSession", &json!({ "sessionId": "s", "excludeItems": "no" })).is_err());
+        assert!(validate_params("readChildSession", &json!({ "sessionId": "h-1" })).is_err());
+        assert!(validate_params("readChildSession", &json!({ "sessionId": "h-1", "childSessionId": "h-2", "excludeItems": "no" })).is_err());
         assert!(validate_params("detect", &json!({ "museAuthMode": "oauth" })).is_err());
         assert!(validate_params("status", &json!({ "museAuthMode": "oauth" })).is_err());
         assert!(validate_params("startHost", &json!({ "agentId": "chatgpt" })).is_err());

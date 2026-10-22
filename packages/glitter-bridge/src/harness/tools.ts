@@ -17,7 +17,7 @@ import type { ToolSchema } from "./wire.js";
  * never sees provider keys and cannot write outside the workspace and temp.
  */
 
-export type ToolKind = "read" | "edit" | "shell" | "plan" | "mcp";
+export type ToolKind = "read" | "edit" | "shell" | "plan" | "mcp" | "delegate";
 export type OffsetUnit = "line" | "match" | "file";
 
 /** The truth a tool produced. Frozen by `runTool` before anyone renders it. */
@@ -32,6 +32,8 @@ export type ToolValue =
   | { kind: "question"; questions: Question[]; intent?: UserInputIntent }
   /** A tool on an external MCP server; the text is the server's own result. */
   | { kind: "mcp"; server: string; tool: string; text: string; isError?: boolean }
+  /** A delegated child agent's final reply. */
+  | { kind: "task"; childSessionId: string; summary: string; text: string; failed?: boolean }
   | { kind: "error"; message: string };
 
 /** Replayable card state. Pure: no I/O, no clock, no session. */
@@ -217,6 +219,13 @@ export const BUILTIN_TOOLS: readonly ToolDefinition[] = [
 export const BUILTIN_EXTENSION: Extension = {
   id: "builtin",
   tools: BUILTIN_TOOLS,
+  // What a delegated child may use. It is the whole built-in set minus the
+  // extensions a child must not touch: skills, MCP, questions and plan review.
+  // `delegate` can still hand off once more; the leaf profile cannot.
+  profiles: {
+    delegate: ["read_file", "list_files", "grep", "write_file", "edit_file", "bash", "todo_write", "task"],
+    "delegate-leaf": ["read_file", "list_files", "grep", "write_file", "edit_file", "bash", "todo_write"],
+  },
   guards: [dangerGuard],
   prompt: [{
     placement: "stable",
@@ -363,6 +372,9 @@ export function render(value: ToolValue, continuation?: Continuation): string {
     case "mcp":
       text = value.text.trim() || (value.isError ? "The MCP server reported an error." : "(no output)");
       break;
+    case "task":
+      text = value.text;
+      break;
     case "error":
       text = value.message;
       break;
@@ -388,6 +400,8 @@ export function presentationMeta(value: ToolValue): PresentationMeta {
       return { kind: "question" };
     case "mcp":
       return { kind: "mcp", path: `${value.server} › ${value.tool}` };
+    case "task":
+      return { kind: "task" };
     case "error":
       return { kind: "error" };
   }
@@ -785,6 +799,8 @@ function pack(produced: ToolProduced): ToolOutcome {
   else if (value.kind === "mcp") {
     outcome.path = `${value.server} › ${value.tool}`;
     if (value.isError) outcome.isError = true;
+  } else if (value.kind === "task") {
+    if (value.failed) outcome.isError = true;
   } else if (value.kind !== "error") outcome.path = value.path;
   return outcome;
 }

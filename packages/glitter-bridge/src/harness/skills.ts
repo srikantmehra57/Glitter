@@ -217,10 +217,13 @@ export function skillsExtension(homeDir: string): Extension {
   return {
     id: "skills",
     tools: [(context) => {
+      // A delegated child's profile has no skill tool, so it must not be told a
+      // catalog it cannot load.
+      if (context.delegationDepth > 0) return undefined;
       const skills = catalog(context);
       return skills.length ? skillTool(skills) : undefined;
     }],
-    prompt: [{ placement: "stable", text: (context) => catalogPrompt(catalog(context)) }],
+    prompt: [{ placement: "stable", text: (context) => context.delegationDepth > 0 ? undefined : catalogPrompt(catalog(context)) }],
   };
 }
 

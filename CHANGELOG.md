@@ -66,6 +66,13 @@ licence terms.
   connected, its transport and tool count, any sync error, and Refresh. A
   broken server leaves the previous complete set in use; removing the last one
   removes its tools.
+- Harness can **delegate**. Its `task` tool runs a child agent in a separate,
+  hidden session with a narrower tool set, a 24-step cap and an optional model,
+  and reports back as a Subagent card with the job, status, duration and token
+  count. The child inherits the parent's permission mode and Plan mode, cannot
+  ask you for approval (such a call is refused, not left waiting), cannot
+  delegate more than two levels deep, and cannot widen its scope when resumed.
+  Its Transcript button opens the child's read-only transcript.
 - Settings → Diagnostics → Copy diagnostics now includes the app version,
   operating system and architecture, and the last 200 redacted lines from the
   app log. If the log cannot be read, the rest of the diagnostics are still
