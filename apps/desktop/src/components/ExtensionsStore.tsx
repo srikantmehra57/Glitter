@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { Check, Download, Package, RefreshCw, Search, Server, Store, Trash2, WandSparkles, X } from "lucide-react";
+import { Check, Download, RefreshCw, Search, Server, Store, Trash2, WandSparkles, X } from "lucide-react";
 import { describeError } from "../lib/errors";
 import { currentThread, currentWorkspace, useAppStore } from "../lib/store";
 import type { CatalogEntry, CatalogKind } from "../lib/types";
+import { ExtensionThumb } from "./ExtensionThumb";
 
 type Filter = "all" | CatalogKind;
 
@@ -15,8 +16,6 @@ const FILTERS: Array<{ id: Filter; label: string }> = [
 ];
 
 const KIND_LABEL: Record<CatalogKind, string> = { skill: "Skill", plugin: "Plugin", mcp: "MCP server" };
-
-const iconFor = (kind: CatalogKind) => kind === "skill" ? <WandSparkles size={14} aria-hidden="true" /> : kind === "plugin" ? <Package size={14} aria-hidden="true" /> : <Server size={14} aria-hidden="true" />;
 
 const matches = (entry: CatalogEntry, query: string) => {
   if (!query) return true;
@@ -139,16 +138,27 @@ export function ExtensionsStore() {
           const isBusy = busy === entry.id;
           const blocked = entry.requiresWorkspace && !workspace?.grantId;
           return (
-            <li key={entry.id} className="catalog-card">
+            <li key={entry.id} className={`catalog-card${entry.installed ? " installed" : ""}`}>
               <div className="catalog-card-head">
-                <span className="catalog-icon">{iconFor(entry.kind)}</span>
-                <span className="extension-copy">
-                  <span className="extension-name">{entry.name}
-                    <span className="picker-tag">{KIND_LABEL[entry.kind]}</span>
+                <ExtensionThumb kind={entry.kind} id={entry.id} name={entry.name} size={40} />
+                <span className="catalog-card-copy">
+                  <span className="catalog-name">{entry.name}
                     {entry.installed ? <span className="picker-tag free"><Check size={9} />Installed</span> : entry.installedParts > 0 ? <span className="picker-tag warm">{entry.installedParts}/{entry.totalParts} installed</span> : null}
                   </span>
-                  <span className="extension-meta">{entry.summary}</span>
+                  <span className="catalog-kind">{[KIND_LABEL[entry.kind], ...entry.tags].join(" · ")}</span>
                 </span>
+              </div>
+              <p className="catalog-description" title={entry.description}>{entry.summary}</p>
+              {/* A bundle lists what it installs; a single skill or server would only repeat its own name. */}
+              {entry.kind === "plugin" && (entry.skills.length || entry.servers.length) ? <div className="catalog-parts">
+                {entry.skills.length ? <span><WandSparkles size={11} aria-hidden="true" />{entry.skills.map((skill) => <code key={skill}>{skill}</code>)}</span> : null}
+                {entry.servers.length ? <span><Server size={11} aria-hidden="true" />{entry.servers.map((server) => <code key={server}>{server}</code>)}</span> : null}
+              </div> : null}
+              {entry.commands.length ? <div className="catalog-commands" aria-label="Commands this extension adds">
+                {entry.commands.map((command) => <code key={command} title={command}>{command}</code>)}
+              </div> : null}
+              <div className="catalog-card-foot">
+                {blocked ? <span className="extension-meta">Open a workspace to install this server.</span> : <span />}
                 <span className="extension-actions">
                   {entry.installed || entry.installedParts > 0 ? <button type="button" className="ghost-btn small" disabled={isBusy} title={`Remove ${entry.name}`} onClick={() => void remove(entry)}>
                     <Trash2 size={11} />{isBusy ? "Working…" : "Remove"}
@@ -164,16 +174,6 @@ export function ExtensionsStore() {
                   </button> : null}
                 </span>
               </div>
-              <p className="catalog-description">{entry.description}</p>
-              {entry.tags.length ? <div className="catalog-tags">{entry.tags.map((tag) => <span key={tag} className="picker-tag">{tag}</span>)}</div> : null}
-              {entry.skills.length || entry.servers.length ? <div className="catalog-parts">
-                {entry.skills.length ? <span><WandSparkles size={11} aria-hidden="true" />{entry.skills.map((skill) => <code key={skill}>{skill}</code>)}</span> : null}
-                {entry.servers.length ? <span><Server size={11} aria-hidden="true" />{entry.servers.map((server) => <code key={server}>{server}</code>)}</span> : null}
-              </div> : null}
-              {entry.commands.length ? <div className="catalog-commands" aria-label="Commands this extension adds">
-                {entry.commands.map((command) => <code key={command}>{command}</code>)}
-              </div> : null}
-              {blocked ? <span className="extension-meta">Open a workspace to install this server.</span> : null}
             </li>
           );
         })}

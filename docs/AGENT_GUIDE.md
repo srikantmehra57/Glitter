@@ -69,6 +69,11 @@ files (see the README's known limitations).
 | The usage record, its bounds, and the per-call Trajectory | `apps/desktop/src/lib/usageLedger.ts` (stored shape, compaction, `MAX_TURN_CALLS`), `UsageView.tsx`; Harness calls arrive as `modelCall` events and land in the entry's `calls` |
 | A harness tool, prompt section or hook | an `Extension` registered on `ExtensionRegistry` (`harness/registry.ts`); built-in tools are `BUILTIN_TOOLS` in `harness/tools.ts` |
 | Provider keys (BYOK) | `credentials.rs` (`provider_key_set`, `provider_keys_get`), Settings → Providers (`ProvidersPanel.tsx`, `lib/providers.ts`) |
+| Settings pages: names, groups, the line under each title, search words | `lib/settingsNav.ts`, read by `SettingsModal.tsx` (a full-window page) and the command palette |
+| The model picker: providers, then models | `ModelPicker.tsx` (and `SourceRail` in `AgentPicker.tsx`); a model from another agent's provider goes through `chooseAgentModel` in `store.ts` |
+| Models switched off in the picker | `lib/modelVisibility.ts` (`hiddenModels` in Settings), the switches in `ModelLibrary.tsx` (Settings → Models) |
+| Testing a model's reply | `testModel` in `harness/host.ts`, the `testModel` bridge verb (`index.ts`, `dto.rs`, `BRIDGE_METHODS`), `testModel` in `store.ts` |
+| Extension thumbnails | `lib/extensionArt.ts` (icon and tint per id or name) and `ExtensionThumb.tsx` |
 | Bridge request routing | `packages/glitter-bridge/src/index.ts` |
 | Child-process isolation, redaction | `packages/glitter-bridge/src/isolation.ts`, `redaction.ts` |
 | Types shared by the bridge and UI | `packages/glitter-bridge/src/protocol.ts` |
@@ -117,8 +122,9 @@ files (see the README's known limitations).
 - Keep diffs focused. Don't reformat or rename code you aren't changing.
 - Strict types: no `any`, `@ts-ignore` or blanket `as` casts to get past an
   error.
-- Follow [DESIGN_SYSTEM.md](DESIGN_SYSTEM.md) for tokens, spacing, copy and
-  terminology.
+- Follow [DESIGN_SYSTEM.md](DESIGN_SYSTEM.md) for tokens, the type scale,
+  spacing, copy and terminology. It is the one place design is decided: a change
+  to a design decision updates it in the same commit.
 
 ## Workflow
 

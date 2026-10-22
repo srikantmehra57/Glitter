@@ -77,13 +77,13 @@ describe("settings navigation", () => {
     await vi.waitFor(() => expect(useAppStore.getState().theme).toBe("dark"));
     expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
     expect(screen.getByText("Changes save as you make them")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close settings" }));
     view.unmount();
     expect(useAppStore.getState().theme).toBe("dark");
   });
 
   it("holds a connection setting for an explicit restart and drops it on Cancel", () => {
-    seedStore({ settingsTab: "Account", museBin: "" });
+    seedStore({ settingsTab: "Agents", museBin: "" });
     render(<SettingsModal />);
     expect(screen.getByRole("button", { name: "Restart connection" })).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Muse binary (optional)"), { target: { value: "/opt/muse" } });
@@ -96,7 +96,7 @@ describe("settings navigation", () => {
   });
 
   it("treats Contributor mode as an explicit host restart without changing the selected model", () => {
-    seedStore({ settingsTab: "Models", defaultModel: "muse-spark-1.3" });
+    seedStore({ settingsTab: "Agents", defaultModel: "muse-spark-1.3" });
     render(<SettingsModal />);
     fireEvent.click(screen.getByRole("button", { name: "Contributor mode" }));
     fireEvent.click(screen.getByRole("option", { name: /Standard mode/ }));
@@ -155,7 +155,7 @@ describe("settings navigation", () => {
   it("enables Contributor routing only after an eligible subscriber explicitly saves and restarts", async () => {
     const startHost = vi.fn(async () => {});
     seedStore({
-      settingsTab: "Models", preview: false, hostInfo: {}, startHost,
+      settingsTab: "Agents", preview: false, hostInfo: {}, startHost,
       detection: { found: true, authenticated: true, path: "/bin/muse", version: "1.4.7", method: "subscription", subscriptionAvailable: true },
       defaultModel: "muse-spark-1.3",
     });
@@ -182,7 +182,7 @@ describe("settings navigation", () => {
     await vi.waitFor(() => expect(useAppStore.getState().thinkingOrb).toBe("weaving"));
     expect(screen.getByTestId("orb-64")).toHaveAttribute("data-state", "weaving");
     expect(screen.getByTestId("orb-20")).toHaveAttribute("data-state", "weaving");
-    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close settings" }));
     view.unmount();
     act(() => useAppStore.getState().setSettingsOpen(true));
     render(<SettingsModal />);
@@ -233,6 +233,45 @@ describe("settings navigation", () => {
     expect(screen.getByRole("button", { name: "Orb animation" })).toBeInTheDocument();
   });
 
+  it("groups the pages under AI, Workspace, App and System, with Muse's connection under Agents", () => {
+    render(<SettingsModal />);
+    const nav = screen.getByRole("navigation", { name: "Settings categories" });
+    expect(within(nav).getByText("AI")).toBeInTheDocument();
+    expect(within(nav).getByRole("button", { name: "Theme" })).toHaveTextContent("Appearance");
+    expect(within(nav).getByRole("button", { name: "Shortcuts" })).toHaveTextContent("Commands & shortcuts");
+    // There is no Account page: Muse is one agent among others.
+    expect(within(nav).queryByRole("button", { name: "Account" })).toBeNull();
+    fireEvent.change(screen.getByRole("textbox", { name: "Search settings" }), { target: { value: "api key" } });
+    expect(within(nav).getByRole("button", { name: "Agents" })).toBeInTheDocument();
+    expect(within(nav).getByRole("button", { name: "Providers" })).toBeInTheDocument();
+    expect(within(nav).queryByRole("button", { name: "Theme" })).toBeNull();
+  });
+
+  it("switches a model out of the picker and back, and tests a Harness model's reply", async () => {
+    const models = [
+      { modelId: "anthropic/claude-sonnet-5", providerId: "anthropic", displayLabel: "Claude Sonnet 5" },
+      { modelId: "anthropic/claude-haiku-4-5", providerId: "anthropic", displayLabel: "Claude Haiku 4.5" },
+    ];
+    const testModel = vi.fn(async () => ({ latencyMs: 820, firstTokenMs: 400, reply: "ready" }));
+    seedStore({
+      settingsTab: "Models", hiddenModels: [], testModel,
+      peekModelCatalog: vi.fn(async () => models),
+      agents: [{ id: "harness", name: "Harness", protocol: "native", found: true, path: null, version: null, verified: true, signIn: "", authenticated: true }],
+    });
+    render(<SettingsModal />);
+    const group = await screen.findByRole("region", { name: "Anthropic" });
+    const haiku = await within(group).findByRole("switch", { name: "Show Claude Haiku 4.5 in the model picker" });
+    expect(haiku).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(haiku);
+    await vi.waitFor(() => expect(useAppStore.getState().hiddenModels).toEqual(["harness|anthropic|anthropic/claude-haiku-4-5"]));
+    expect(within(group).getByText("1 of 2 in the picker")).toBeInTheDocument();
+    fireEvent.click(within(group).getByRole("button", { name: "Test Claude Sonnet 5" }));
+    expect(testModel).toHaveBeenCalledWith("harness", models[0]);
+    expect(await within(group).findByText("820 ms")).toBeInTheDocument();
+    fireEvent.click(within(group).getByRole("button", { name: "Show all" }));
+    await vi.waitFor(() => expect(useAppStore.getState().hiddenModels).toEqual([]));
+  });
+
   it("keeps notifications on a General tab, saved on toggle", async () => {
     seedStore({ settingsTab: "General", notifications: true });
     render(<SettingsModal />);
@@ -241,7 +280,7 @@ describe("settings navigation", () => {
   });
 
   it("adds and removes custom commands, saving each change, and refuses a built-in name", async () => {
-    seedStore({ settingsTab: "General", customCommands: [] });
+    seedStore({ settingsTab: "Shortcuts", customCommands: [] });
     render(<SettingsModal />);
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "compact" } });
     fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Do it" } });

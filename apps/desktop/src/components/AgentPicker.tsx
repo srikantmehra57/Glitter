@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { Info, RefreshCw } from "lucide-react";
 import { brandSrc, modelBrand, providerBrand, type BrandMark } from "../lib/brands";
-import { AGENT_LABELS, type AgentId, type AgentInfo } from "../lib/types";
+import type { AgentId } from "../lib/types";
 
 const MARKS: Record<AgentId, { glyph: string; tone: string }> = {
   harness: { glyph: "H", tone: "harness" },
@@ -80,27 +80,16 @@ export function AgentMark({ id, size = 16 }: { id: AgentId; size?: number }) {
   return <span className={`agent-mark ${mark.tone}`} style={{ width: size, height: size, fontSize: size * (mark.glyph.length > 1 ? 0.5 : 0.62) }} aria-hidden="true">{mark.glyph}</span>;
 }
 
-function status(agent: AgentInfo) {
-  if (!agent.found) return "Not installed";
-  if (agent.id === "muse" && !agent.authenticated) return "Needs sign-in";
-  if (agent.id === "harness" && !agent.authenticated) return "Add a provider key";
-  return [agent.version ? `v${agent.version}` : null, agent.verified ? null : "Experimental"].filter(Boolean).join(" · ") || "Ready";
-}
-
-export type RailSource = { id: string; name: string; mark: ReactNode; count?: number };
+export type RailSource = { id: string; name: string; mark: ReactNode; count?: number; disabled?: boolean; live?: boolean; title?: string };
 
 type RailProps = {
-  agents: AgentInfo[];
-  value: AgentId;
-  disabled: boolean;
-  onChange: (id: AgentId) => void;
-  onRescan: () => Promise<void>;
-  onShowCapabilities?: () => void;
-  /** Where the current agent's models come from: Harness providers, or the labs an agent's catalog mixes. */
-  sources?: RailSource[];
+  sources: RailSource[];
+  /** The open provider; none while a search spans them all. */
   sourceId?: string;
-  sourcesLabel?: string;
-  onSourceChange?: (id: string) => void;
+  onSourceChange: (id: string) => void;
+  onRescan?: () => Promise<void>;
+  onShowCapabilities?: () => void;
+  capabilitiesLabel?: string;
 };
 
 /** Arrow keys move between a vertical tablist's tabs, as in a sidebar. */
@@ -115,77 +104,49 @@ function moveFocus(event: React.KeyboardEvent<HTMLElement>) {
 }
 
 /**
- * The model picker's left rail: every installed agent, each one click away,
- * then where the current agent's models come from. Picking an agent switches
- * this thread's agent; picking a source filters the list.
+ * The model picker's left rail: one row per provider. A Harness provider and
+ * another agent sit side by side; the dot marks where the thread's model is.
  */
-export function SourceRail({ agents, value, disabled, onChange, onRescan, onShowCapabilities, sources = [], sourceId, sourcesLabel, onSourceChange }: RailProps) {
+export function SourceRail({ sources, sourceId, onSourceChange, onRescan, onShowCapabilities, capabilitiesLabel }: RailProps) {
   const [scanning, setScanning] = useState(false);
-  const installed = agents.filter((agent) => agent.found);
-  const current = agents.find((agent) => agent.id === value);
-  const shown = installed.some((agent) => agent.id === value) || !current ? installed : [current, ...installed];
+  const focusId = sourceId ?? sources.find((source) => source.live)?.id ?? sources[0]?.id;
   return (
     <nav className="model-rail" aria-label="Model sources">
       <div className="model-rail-scroll">
-        {shown.length ? (
-          <section className="model-rail-section">
-            <h3 className="model-rail-label">Agents</h3>
-            <div role="tablist" aria-orientation="vertical" aria-label="Agent" onKeyDown={moveFocus}>
-              {shown.map((agent) => {
-                const signInNeeded = (agent.id === "muse" || agent.id === "harness") && !agent.authenticated;
-                const selected = agent.id === value;
-                return (
-                  <button
-                    key={`agent:${agent.id}`}
-                    type="button"
-                    role="tab"
-                    className="rail-tab agent"
-                    aria-selected={selected}
-                    aria-label={agent.name}
-                    tabIndex={selected ? 0 : -1}
-                    disabled={disabled || (signInNeeded && !selected)}
-                    title={`${agent.name} · ${status(agent)}`}
-                    onClick={() => { if (!selected) onChange(agent.id); }}
-                  >
-                    <AgentMark id={agent.id} size={18} />
-                    <span className="rail-tab-name">{agent.name}</span>
-                    {selected ? <span className="rail-tab-live" aria-hidden="true" /> : null}
-                  </button>
-                );
-              })}
-            </div>
-          </section>
-        ) : null}
-        {sources.length ? (
-          <section className="model-rail-section">
-            <h3 className="model-rail-label">{sourcesLabel}</h3>
-            <div role="tablist" aria-orientation="vertical" aria-label={sourcesLabel} onKeyDown={moveFocus}>
-              {sources.map((source) => (
-                <button
-                  key={`source:${source.id}`}
-                  type="button"
-                  role="tab"
-                  className="rail-tab"
-                  aria-selected={source.id === sourceId}
-                  aria-label={source.name}
-                  tabIndex={source.id === sourceId ? 0 : -1}
-                  onClick={() => { if (source.id !== sourceId) onSourceChange?.(source.id); }}
-                >
-                  {source.mark}
-                  <span className="rail-tab-name">{source.name}</span>
-                  {source.count != null ? <span className="rail-tab-count" aria-hidden="true">{source.count}</span> : null}
-                </button>
-              ))}
-            </div>
-          </section>
-        ) : null}
+        <section className="model-rail-section">
+          <h3 className="model-rail-label">Providers</h3>
+          <div role="tablist" aria-orientation="vertical" aria-label="Providers" onKeyDown={moveFocus}>
+            {sources.map((source) => (
+              <button
+                key={`source:${source.id}`}
+                type="button"
+                role="tab"
+                className="rail-tab"
+                aria-selected={source.id === sourceId}
+                aria-label={source.name}
+                tabIndex={source.id === focusId ? 0 : -1}
+                disabled={source.disabled}
+                title={source.title}
+                onClick={() => { if (source.id !== sourceId) onSourceChange(source.id); }}
+              >
+                {source.mark}
+                <span className="rail-tab-name">{source.name}</span>
+                {source.live ? <span className="rail-tab-live" aria-hidden="true" /> : source.count != null ? <span className="rail-tab-count" aria-hidden="true">{source.count}</span> : null}
+              </button>
+            ))}
+          </div>
+        </section>
       </div>
-      <div className="model-rail-foot">
-        {onShowCapabilities ? <button type="button" className="icon-btn" aria-label="Capabilities" data-tooltip={`${AGENT_LABELS[value]} capabilities`} data-tooltip-side="top" data-tooltip-align="start" onClick={onShowCapabilities}><Info size={13} aria-hidden="true" /></button> : null}
-        <button type="button" className="icon-btn" aria-label={scanning ? "Scanning agents" : "Rescan agents"} data-tooltip="Rescan agents" data-tooltip-side="top" data-tooltip-align="start" disabled={disabled || scanning} onClick={() => { setScanning(true); void onRescan().finally(() => setScanning(false)); }}>
-          <RefreshCw size={13} className={scanning ? "spin" : ""} aria-hidden="true" />
-        </button>
-      </div>
+      {onShowCapabilities || onRescan ? (
+        <div className="model-rail-foot">
+          {onShowCapabilities ? <button type="button" className="icon-btn" aria-label="Capabilities" data-tooltip={capabilitiesLabel ?? "Capabilities"} data-tooltip-side="top" data-tooltip-align="start" onClick={onShowCapabilities}><Info size={13} aria-hidden="true" /></button> : null}
+          {onRescan ? (
+            <button type="button" className="icon-btn" aria-label={scanning ? "Scanning agents" : "Rescan agents"} data-tooltip="Rescan agents" data-tooltip-side="top" data-tooltip-align="start" disabled={scanning} onClick={() => { setScanning(true); void onRescan().finally(() => setScanning(false)); }}>
+              <RefreshCw size={13} className={scanning ? "spin" : ""} aria-hidden="true" />
+            </button>
+          ) : null}
+        </div>
+      ) : null}
     </nav>
   );
 }

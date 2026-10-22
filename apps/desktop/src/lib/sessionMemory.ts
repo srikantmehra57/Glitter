@@ -179,6 +179,12 @@ type Store = {
   save(): Promise<unknown>;
 };
 
+/** Account was folded into Agents, where Muse's connection now lives with the other agents. */
+function settingsTabOf(saved: string | undefined): SettingsTab {
+  if (saved === "Account") return "Agents";
+  return SETTINGS_TABS.find((tab) => tab === saved) ?? "Models";
+}
+
 export function normalizeMemory(value: Partial<SessionMemory> | undefined): SessionMemory {
   const migrated = migrateMemory(value);
   const version = documentVersion(migrated);
@@ -187,7 +193,7 @@ export function normalizeMemory(value: Partial<SessionMemory> | undefined): Sess
     ...migrated,
     // A newer document keeps its version so a save can refuse the downgrade.
     version: version > SESSION_MEMORY_VERSION ? version : SESSION_MEMORY_VERSION,
-    settingsTab: migrated?.settingsTab && SETTINGS_TABS.includes(migrated.settingsTab) ? migrated.settingsTab : "Models",
+    settingsTab: settingsTabOf(migrated?.settingsTab),
     drafts: normalizeDrafts(migrated?.drafts),
     threadMeta: migrated?.threadMeta ?? {},
     promptHistory: normalizePromptHistory(migrated?.promptHistory),

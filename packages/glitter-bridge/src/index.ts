@@ -864,6 +864,8 @@ async function dispatchHarness(method: string, params: Record<string, unknown>) 
         timeoutMs: typeof params.timeoutMs === "number" ? params.timeoutMs : undefined,
       });
     }
+    case "testModel":
+      return harness.testModel({ modelId: String(params.modelId ?? "") });
     case "closeSession": {
       const closed = await harness.closeSession({ sessionId });
       release(sessionId);

@@ -201,7 +201,9 @@ describe("Sidebar", () => {
     expect(screen.queryByText("Glitter")).not.toBeInTheDocument();
     expect(screen.queryByRole("dialog", { name: "Usage" })).not.toBeInTheDocument();
     const usage = screen.getByRole("button", { name: "Usage" });
-    expect(usage.closest(".sidebar-bottom")).not.toBeNull();
+    // An icon in the title-bar group with the sidebar toggle and Settings, not a row in the foot.
+    expect(usage.closest(".sidebar-rail")).not.toBeNull();
+    expect(usage).not.toHaveTextContent("Usage");
     await user.click(usage);
     const card = screen.getByRole("dialog", { name: "Usage" });
     expect(within(card).getByText("No turns yet today")).toBeInTheDocument();

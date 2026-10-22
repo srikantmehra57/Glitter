@@ -9,6 +9,7 @@ import { needsAttention, threadMatches } from "../lib/format";
 import { paletteRows, type PaletteItem } from "../lib/palette";
 import { currentThread, currentWorkspace, useAppStore } from "../lib/store";
 import { agentEnabled, SETTINGS_TABS, type ThemeMode } from "../lib/types";
+import { SETTINGS_TAB_LABELS } from "../lib/settingsNav";
 
 type Command = PaletteItem & {
   icon: ReactNode;
@@ -145,7 +146,7 @@ export function CommandPalette() {
       }));
     const settings: Command[] = [
       { id: "settings", label: "Open settings", section: "Settings", icon: <Settings size={14} />, shortcut: shortcutText("settings"), run: () => s.setSettingsOpen(true) },
-      ...SETTINGS_TABS.map((tab) => ({ id: `settings-${tab}`, label: `Settings · ${tab}`, section: "Settings" as const, icon: <Settings size={14} />, keywords: tab === "Account" ? "connection sign in api key" : tab === "Extensions" ? "mcp skills plugins" : undefined, run: () => s.setSettingsOpen(true, tab) })),
+      ...SETTINGS_TABS.map((tab) => ({ id: `settings-${tab}`, label: `Settings · ${SETTINGS_TAB_LABELS[tab]}`, section: "Settings" as const, icon: <Settings size={14} />, keywords: tab === "Agents" ? "muse connection sign in api key" : tab === "Extensions" ? "mcp skills plugins" : tab === "Models" ? "hide show test" : undefined, run: () => s.setSettingsOpen(true, tab) })),
     ];
     return [...actions, ...threads, ...files, ...settings];
   }, [s, thread, workspace, query, searching]);

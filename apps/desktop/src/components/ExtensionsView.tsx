@@ -4,6 +4,7 @@ import { useShallow } from "zustand/react/shallow";
 import { Check, KeyRound, LogOut, Package, Plus, Puzzle, RefreshCw, Server, WandSparkles, X } from "lucide-react";
 import { mcpLogin, mcpLogout, pluginInspect, pluginReview, skillInspect, skillSet } from "../lib/bridge";
 import { skillSelectorText, skillUseText } from "../lib/composerText";
+import { ExtensionThumb } from "./ExtensionThumb";
 import { mcpServerNameProblem, mcpServerSummary, parseMcpArguments, parseMcpKeyValues } from "../lib/mcpConfig";
 import { currentThread, currentWorkspace, supportsSkills, useAppStore } from "../lib/store";
 import { skillScopeArg, type HarnessMcpConfigServer, type HarnessMcpScope, type HarnessMcpServerInput, type PluginDetail, type SkillDetail, type SkillEntry, type SkillRow } from "../lib/types";
@@ -14,7 +15,7 @@ const selectorText = (row: SkillRow) => skillSelectorText(row.selector);
 function SkillCard({ row, onUse }: { row: SkillRow; onUse: (row: SkillRow) => void }) {
   return (
     <li className="extension-card">
-      <WandSparkles size={16} aria-hidden="true" />
+      <ExtensionThumb kind="skill" id={row.selector} name={row.displayName ?? row.selector} size={32} />
       <span className="extension-copy">
         <span className="extension-name">{selectorText(row)}{row.displayName && row.displayName !== row.selector ? <span className="picker-tag">{row.displayName}</span> : null}{row.source ? <span className="picker-tag">{row.source}</span> : null}</span>
         {row.description ? <span className="extension-meta">{row.description}</span> : null}
@@ -333,7 +334,7 @@ export function ExtensionsView({ onOpenThreads, embedded = false }: { onOpenThre
               return (
                 <li key={entry.id}>
                   <div className="extension-card">
-                    <WandSparkles size={16} aria-hidden="true" />
+                    <ExtensionThumb kind="skill" id={entry.id} size={32} />
                     <span className="extension-copy">
                       <span className="extension-name">{entry.id}<span className="picker-tag">{entry.scope || "unknown"}</span><span className={on ? "picker-tag" : "picker-tag warm"}>{on ? "On" : "Off"}</span></span>
                       {entry.description ? <span className="extension-meta">{entry.description}</span> : null}
@@ -469,7 +470,7 @@ export function ExtensionsView({ onOpenThreads, embedded = false }: { onOpenThre
                 const tools = s.harnessMcp?.servers.find((row) => row.name === server.name)?.tools;
                 return (
                   <li key={`${server.source}:${server.name}`} className="extension-card">
-                    <Server size={16} aria-hidden="true" />
+                    <ExtensionThumb kind="mcp" id={server.name} size={32} />
                     <span className="extension-copy">
                       <span className="extension-name">{server.name}<span className="picker-tag">{server.source === "workspace" ? "Workspace" : "Home"}</span><span className="picker-tag">{server.transport}</span>{tools != null ? <span className="picker-tag">{tools} tool{tools === 1 ? "" : "s"}</span> : null}{server.error ? <span className="picker-tag warm">Needs attention</span> : null}</span>
                       <span className="extension-meta">{mcpServerSummary(server)}</span>
@@ -491,7 +492,7 @@ export function ExtensionsView({ onOpenThreads, embedded = false }: { onOpenThre
             {s.mcpServers.length ? <ul className="extension-list">
               {s.mcpServers.map((server) => (
                 <li key={server.name} className="extension-card">
-                  <Server size={16} aria-hidden="true" />
+                  <ExtensionThumb kind="mcp" id={server.name} size={32} />
                   <span className="extension-copy">
                     <span className="extension-name">{server.name}<span className="picker-tag">{server.transport}</span>{server.oauth ? <span className="picker-tag">OAuth</span> : null}</span>
                   </span>
@@ -534,7 +535,7 @@ export function ExtensionsView({ onOpenThreads, embedded = false }: { onOpenThre
             {s.pluginEntries.map((plugin) => (
               <li key={plugin.id}>
                 <div className="extension-card">
-                  <Package size={16} aria-hidden="true" />
+                  <ExtensionThumb kind="plugin" id={plugin.id} size={32} />
                   <span className="extension-copy">
                     <span className="extension-name">{plugin.id}{plugin.version ? <span className="picker-tag">v{plugin.version}</span> : null}{plugin.enabled == null ? null : plugin.enabled ? <span className="picker-tag">Enabled</span> : <span className="picker-tag warm">Disabled</span>}</span>
                     {plugin.description ? <span className="extension-meta">{plugin.description}</span> : null}

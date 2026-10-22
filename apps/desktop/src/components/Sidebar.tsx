@@ -196,7 +196,7 @@ function startOfToday(now: number): number {
 }
 
 /**
- * Glitter's own usage, beside Settings. The chip is today's tokens, counted
+ * Glitter's own usage, an icon beside Settings in the title bar. Today's tokens, counted
  * on this Mac across every agent. Meta's subscription meter is added only
  * while the Muse agent is enabled and a reading exists.
  */
@@ -226,14 +226,13 @@ function SidebarUsage() {
       <button
         ref={buttonRef}
         type="button"
-        className="nav-row"
+        className="icon-btn"
         aria-label={chip ? `Usage, ${chip} tokens today` : "Usage"}
         aria-expanded={open}
+        data-tooltip={open ? undefined : chip ? `Usage · ${chip} today` : "Usage"}
         onClick={() => setOpen((value) => !value)}
       >
-        <Gauge size={15} />
-        <span aria-hidden="true">Usage</span>
-        {chip ? <em className="usage-chip">{chip}</em> : null}
+        <Gauge size={16} />
       </button>
       {pop.mounted ? (
         <div className={`usage-anchor${pop.closing ? " closing" : ""}`} onClick={(event) => event.stopPropagation()}>
@@ -776,7 +775,7 @@ export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) 
     : checking ? { tone: "idle", label: "Checking agents…" }
     : s.offline ? { tone: "bad", label: "Offline" }
     : ready.length ? null
-    : installed.length ? { tone: "warn", label: "Sign in needed", tab: "Account" }
+    : installed.length ? { tone: "warn", label: "Sign in needed", tab: "Agents" }
     : { tone: "bad", label: "No agent CLI found", tab: "Agents" };
   const statusTitle = installed.map((agent) => `${agent.name}${agent.version ? ` ${agent.version}` : ""} — ${agent.path}`).join("\n") || undefined;
   const newThread = () => { onOpenThreads?.(); void s.newThread(); };
@@ -785,9 +784,10 @@ export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) 
 
   return (
     <>
-      {/* The sidebar's buttons in the title bar. The toggle is one button that keeps
-          its place after the window controls, so it never moves under the pointer;
-          the rest join it while the sidebar's own rows are out of reach. */}
+      {/* The sidebar's buttons in the title bar: Show/Hide sidebar, Settings and
+          Usage, as icons. Open, they sit at the sidebar's right edge; collapsed,
+          they slide to the window controls and the sidebar's other actions join
+          them. The toggle is one button throughout, so it never re-mounts. */}
       <div className="sidebar-rail" role="group" aria-label="Sidebar">
         <button
           className="icon-btn"
@@ -798,12 +798,13 @@ export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) 
           data-tooltip-align="start"
           onClick={() => s.setSidebarCollapsed(!s.sidebarCollapsed)}
         ><PanelLeft size={16} /></button>
+        <button className="icon-btn" aria-label="Settings" data-tooltip={`Settings  ${shortcutText("settings")}`} onClick={() => openSettings()}><Settings size={16} /></button>
+        <SidebarUsage />
         {railPop.mounted ? (
           <div className={`sidebar-rail-more${railPop.closing ? " closing" : ""}`} aria-hidden={railPop.closing || undefined} inert={railPop.closing}>
             <button className="icon-btn" aria-label="New thread" data-tooltip={`New thread  ${shortcutText("new-thread")}`} disabled={s.starting || !workspace} onClick={newThread}><SquarePen size={16} /></button>
             <button className="icon-btn" aria-label="Open workspace" data-tooltip={`Open workspace  ${shortcutText("open-workspace")}`} onClick={() => void s.chooseProject()}><Plus size={16} /></button>
             {updateAvailable ? <button className="icon-btn update-dot" aria-label="CLI update available — show sidebar" title="CLI update available" onClick={() => s.setSidebarCollapsed(false)}><Download size={16} /></button> : null}
-            <button className="icon-btn" aria-label="Settings" data-tooltip={`Settings  ${shortcutText("settings")}`} onClick={() => s.setSettingsOpen(true)}><Settings size={16} /></button>
           </div>
         ) : null}
       </div>
@@ -963,7 +964,8 @@ export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) 
         })}
       </div>
 
-      <div className="sidebar-bottom">
+      {/* The foot exists only while something needs saying: an update, or a blocked agent. */}
+      {(updateAvailable && s.cliUpdate) || alert ? <div className="sidebar-bottom">
         {updateAvailable && s.cliUpdate ? <div className="update-wrap" onKeyDown={(event) => { if (event.key === "Escape") setUpdateOpen(false); }}>
           <button
             type="button"
@@ -1003,16 +1005,8 @@ export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) 
               </div>
             )
           ) : null}
-          <div className="sidebar-utilities">
-            <button type="button" className="nav-row" aria-label="Settings" onClick={() => openSettings()}>
-              <Settings size={15} />
-              <span aria-hidden="true">Settings</span>
-              <kbd aria-hidden="true">{shortcutText("settings")}</kbd>
-            </button>
-            {!s.preview ? <SidebarUsage /> : null}
-          </div>
         </div>
-      </div>
+      </div> : null}
       {!s.sidebarCollapsed ? <SidebarResize /> : null}
       </aside> : null}
     </>

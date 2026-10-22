@@ -33,10 +33,10 @@ export function ProvidersPanel({ onChanged }: { onChanged: () => void }) {
         <KeyRound size={15} aria-hidden="true" />
         <div>
           <strong>Bring your own key</strong>
-          <span>The built-in Harness agent calls these providers directly. Keys stay in your Mac’s keychain and are sent only to the provider they belong to. Usage is billed by the provider to your account.</span>
+          <span>The built-in agent calls these providers directly. A key is sent only to the provider it belongs to, and that provider bills your account for what you use.</span>
         </div>
       </div>
-      <div className="settings-card-heading"><h4>Model providers</h4><p>{status ? configured ? `${configured} set up. Their models appear in the composer’s model picker.` : "Add a key for at least one provider to start." : "Reading saved providers…"}</p></div>
+      <div className="settings-card-heading"><h4>Model providers</h4><p>{status ? configured ? `${configured} connected. Their models appear in the composer’s model picker and under Models.` : "Add a key for at least one provider to start." : "Reading saved providers…"}</p></div>
       {error ? <p className="settings-note" role="alert">{error}</p> : null}
       <div className="settings-card provider-list">
         {PROVIDERS.map((provider) => (

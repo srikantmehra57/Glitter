@@ -372,6 +372,14 @@ struct HarnessMcpServerDefinition {
     timeout_ms: Option<u64>,
 }
 
+/// Settings → Models' Test: one Harness model, no session.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct TestModelParams {
+    agent_id: AgentId,
+    model_id: String,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct HarnessMcpConfigParams {
@@ -1007,6 +1015,16 @@ pub fn validate_params(method: &str, params: &Value) -> Result<Value, String> {
             let parsed: EmptyParams = parse(method, body)?;
             emit(method, &parsed)
         }
+        "testModel" => {
+            let parsed: TestModelParams = parse(method, body)?;
+            // Only the built-in agent calls a provider directly; a CLI agent would need a session.
+            if parsed.agent_id != AgentId::Harness {
+                return Err(format!("Invalid {method} parameters: only Harness models can be tested."));
+            }
+            required(method, "modelId", &parsed.model_id)?;
+            capped(method, "modelId", &parsed.model_id, MODEL_LIMIT)?;
+            emit(method, &parsed)
+        }
         "pageHistory" => {
             let parsed: PageHistoryParams = parse(method, body)?;
             check_id(method, "sessionId", &parsed.session_id)?;
@@ -1317,6 +1335,7 @@ mod tests {
             ("harnessMcp", json!({ "agentId": "harness", "sessionId": "h-1" })),
             ("harnessMcp", json!({ "sessionId": "h-1", "refresh": true })),
             ("harnessMcpConfig", json!({ "agentId": "harness", "sessionId": "h-1" })),
+            ("testModel", json!({ "agentId": "harness", "modelId": "anthropic/claude-sonnet-5" })),
             ("harnessMcpAddServer", json!({ "sessionId": "h-1", "scope": "workspace", "server": { "name": "docs", "transport": "stdio", "command": "npx", "args": ["-y", "server-filesystem", "."], "env": { "LOG_LEVEL": "warn" } } })),
             ("harnessMcpAddServer", json!({ "sessionId": "h-1", "scope": "home", "server": { "name": "docs", "transport": "http", "url": "https://example.com/mcp", "headers": { "Authorization": "Bearer token" }, "timeoutMs": 30000 } })),
             ("harnessMcpRemoveServer", json!({ "sessionId": "h-1", "scope": "workspace", "name": "docs" })),
@@ -1401,6 +1420,10 @@ mod tests {
         assert!(validate_params("harnessMcpAddServer", &json!({ "sessionId": "s", "scope": "workspace", "server": { "name": "x", "transport": "stdio", "command": "x", "env": { "TOKEN": "two\nlines" } } })).is_err());
         assert!(validate_params("harnessMcpAddServer", &json!({ "sessionId": "s", "scope": "workspace", "server": { "name": "x", "transport": "stdio", "command": "x", "timeoutMs": 100 } })).is_err());
         assert!(validate_params("harnessMcpAddServer", &json!({ "sessionId": "s", "scope": "workspace", "server": { "name": "x".repeat(65), "transport": "stdio", "command": "x" } })).is_err());
+        assert!(validate_params("testModel", &json!({ "agentId": "muse", "modelId": "m" })).is_err());
+        assert!(validate_params("testModel", &json!({ "agentId": "harness", "modelId": "" })).is_err());
+        assert!(validate_params("testModel", &json!({ "modelId": "anthropic/m" })).is_err());
+        assert!(validate_params("testModel", &json!({ "agentId": "harness", "modelId": "a/m", "providerKeys": {} })).is_err());
         assert!(validate_params("harnessMcpRemoveServer", &json!({ "sessionId": "s", "scope": "workspace" })).is_err());
         assert!(validate_params("harnessMcpRemoveServer", &json!({ "sessionId": "s", "scope": "workspace", "name": "" })).is_err());
         assert!(validate_params("bogus", &json!({})).is_err());

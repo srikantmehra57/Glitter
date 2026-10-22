@@ -287,6 +287,14 @@ function mockBridge(method: string, params: Record<string, unknown>): unknown {
       return { servers: previewMcpConfig.servers.map(({ name, transport }) => ({ name, transport, tools: 3 })), error: previewMcpConfig.error };
     case "harnessMcpConfig":
       return previewMcpConfig;
+    case "testModel": {
+      // A preview model answers after a short, varied wait; a "busy" one shows the failure path.
+      const modelId = String(params.modelId ?? "");
+      return new Promise((resolve, reject) => setTimeout(() => {
+        if (/kimi/i.test(modelId)) reject(bridgeError("The provider is overloaded. Try again shortly.", "SERVER", true));
+        else resolve({ latencyMs: 640 + (modelId.length % 9) * 97, firstTokenMs: 410 + (modelId.length % 5) * 60, reply: "ready" });
+      }, 500 + (modelId.length % 7) * 140));
+    }
     case "harnessMcpAddServer": {
       const scope = params.scope as HarnessMcpScope;
       const server = params.server as HarnessMcpServerInput;

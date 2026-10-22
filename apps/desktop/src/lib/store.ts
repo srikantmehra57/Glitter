@@ -23,6 +23,7 @@ import { DOCK_DEFAULT_WIDTH, normalizeDockWidth, normalizeSidebarWidth } from ".
 import { rekeyThreadState } from "./agentSwitch";
 import { resolveTheme, type ThemeSettings } from "./theme";
 import {
+  AGENT_LABELS,
   DEFAULT_SETTINGS,
   agentEnabled,
   approvalModeForAgent,
@@ -45,7 +46,7 @@ import {
   type ThreadWorktree,
   type WorkspaceFile,
   type Workspace,
-  type CliUpdateOutcome, type CliUpdateStatus, type ComposerImage, type ContextRef, type HostCompat, type HostInfo, type Model, type SessionConfig, type SessionMetadata, type SessionOpening, type SessionPreview,
+  type CliUpdateOutcome, type CliUpdateStatus, type ComposerImage, type ContextRef, type HostCompat, type HostInfo, type Model, type ModelTestResult, type SessionConfig, type SessionMetadata, type SessionOpening, type SessionPreview,
   type UserInputResponse, type GoalState, type ContextUsage, type TokenUsage, type SubscriptionUsage, type SubagentResult, type Suggestion, type TrustPreview, type SkillRow, type McpServer, type HarnessMcpStatus, type HarnessMcpConfig, type HarnessMcpScope, type HarnessMcpServerInput, type CatalogEntry, type CatalogInstallResult, type CatalogRemoveResult, type PluginEntry, type SkillEntry, type HostPosture, type EnterpriseStatus, type SettingsTab,
 } from "./types";
 
@@ -469,6 +470,12 @@ type AppStore = Settings & {
   showArchived: boolean;
   refreshModels: (refresh?: boolean) => Promise<void>;
   loadModelCatalog: (agentId: AgentId) => Promise<Model[]>;
+  /** An agent's catalog from cache when one is held, for the picker's other providers. */
+  peekModelCatalog: (agentId: AgentId) => Promise<Model[]>;
+  /** One short request to a Harness model, timed. Settings → Models' Test. */
+  testModel: (agentId: AgentId, model: Model) => Promise<ModelTestResult>;
+  /** Pick a model from another agent's provider: switch the thread's agent, then its model. */
+  chooseAgentModel: (agentId: AgentId, model: Model) => Promise<void>;
   setSessionConfig: (patch: Partial<SessionConfig>) => Promise<void>;
   dismissError: () => void;
   dismissPersistNotice: () => void;
@@ -1661,6 +1668,28 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
   loadModelCatalog: async (agentId) => {
     return (await readModelCatalog(agentId, get().preview, undefined, true)).models;
+  },
+
+  peekModelCatalog: async (agentId) => {
+    if (get().modelsAgentId === agentId && get().models.length) return get().models;
+    const held = modelCatalogs.get(agentId);
+    if (held?.length) return held;
+    return (await readModelCatalog(agentId, get().preview)).models;
+  },
+
+  testModel: async (agentId, model) => {
+    // Only the built-in agent calls a provider itself; a CLI agent's model would need a session.
+    if (agentId !== "harness") throw new Error(`${AGENT_LABELS[agentId]} models are tested by opening a thread on them.`);
+    return bridge<ModelTestResult>("testModel", { agentId, modelId: model.modelId }, { timeoutMs: 45_000 });
+  },
+
+  chooseAgentModel: async (agentId, model) => {
+    if (activeAgentId(get()) !== agentId) {
+      await get().switchThreadAgent(agentId);
+      // The switch can be refused (a turn started, the agent is off) or fail; then the model stays too.
+      if (activeAgentId(get()) !== agentId) return;
+    }
+    await get().setSessionConfig({ modelId: model.modelId, providerId: model.providerId });
   },
 
   refreshModels: async (refresh = false) => {

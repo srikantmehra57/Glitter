@@ -120,6 +120,9 @@ function ComposerView({ above }: { above?: ReactNode }) {
     sendPrompt: state.sendPrompt,
     stopTurn: state.stopTurn,
     switchThreadAgent: state.switchThreadAgent,
+    chooseAgentModel: state.chooseAgentModel,
+    peekModelCatalog: state.peekModelCatalog,
+    hiddenModels: state.hiddenModels,
     refreshDetection: state.refreshDetection,
     refreshModels: state.refreshModels,
     setSessionConfig: state.setSessionConfig,
@@ -164,6 +167,8 @@ function ComposerView({ above }: { above?: ReactNode }) {
     [agentId, catalog, config.modelId, config.providerId, s.defaultModel, s.defaultProviderId],
   );
   const model = modelFor(models, config);
+  // The built-in agent is addressed by its model, the way the picker shows it; a CLI agent by its own name.
+  const speaker = agentId === "harness" && model ? humanizeModelLabel(model.modelId, model.displayLabel) : agentName;
   const tiers = tiersFor(model, agentId);
   const fallbackTier = defaultTier(model, tiers);
   const peak = isPeak(config.effort ?? fallbackTier, tiers);
@@ -534,7 +539,7 @@ function ComposerView({ above }: { above?: ReactNode }) {
               aria-activedescendant={mentionOpen ? `${mentionListId}-${mentionIndex}` : slashOpen ? `${slashListId}-${slashIndex}` : undefined}
               value={s.composer}
               disabled={inputDisabled}
-              placeholder={!workspace ? "Open a workspace to start" : busySend ? disposition === "steer" ? "Steer the running turn…" : disposition === "replace" ? "Replace the running turn…" : "Queue a follow-up — runs when this turn finishes…" : running ? `${agentName} is working — Stop to send a new message` : thread?.hasItems ? "Ask a follow-up…" : `Ask ${agentName} to plan, edit, or run anything in ${workspace.name}`}
+              placeholder={!workspace ? "Open a workspace to start" : busySend ? disposition === "steer" ? "Steer the running turn…" : disposition === "replace" ? "Replace the running turn…" : "Queue a follow-up — runs when this turn finishes…" : running ? `${speaker} is working — Stop to send a new message` : thread?.hasItems ? "Ask a follow-up…" : `Ask ${speaker} to plan, edit, or run anything in ${workspace.name}`}
               rows={1}
               onChange={(event) => {
                 historyCursor.current = null;
@@ -756,12 +761,14 @@ function ComposerView({ above }: { above?: ReactNode }) {
               disabled={Boolean(pickerLocked)}
               applying={Boolean(thread?.configPending)}
               title={thread?.configPending ? "Applying your last change…" : lockReason}
+              hidden={s.hiddenModels}
               onChange={(next) => void s.setSessionConfig({ modelId: next.modelId, providerId: next.providerId })}
-              onAgentChange={(id) => void s.switchThreadAgent(id)}
+              onChooseOther={(id, next) => void s.chooseAgentModel(id, next)}
+              loadCatalog={s.peekModelCatalog}
               onRescan={async () => { await s.refreshDetection(); await s.refreshModels(true); }}
               onShowCapabilities={agentId !== "muse" && agentId !== "harness" ? showCapabilities : undefined}
-              onContributorSettings={agentId === "muse" ? () => s.setSettingsOpen(true, "Models") : undefined}
-              onManageProviders={agentId === "harness" ? () => s.setSettingsOpen(true, "Providers") : undefined}
+              onManageModels={() => s.setSettingsOpen(true, "Models")}
+              onManageProviders={() => s.setSettingsOpen(true, "Providers")}
             />
             {/* Effort is its own control, beside the model it applies to. */}
             {model && tiers.length && fallbackTier && !(s.modelsLoading && s.modelsAgentId !== agentId) ? (

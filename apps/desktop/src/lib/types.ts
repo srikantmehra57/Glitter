@@ -42,12 +42,16 @@ export type Workspace = {
   trustPrompted?: boolean;
 };
 
+/** Settings → Models' Test: how long a one-word reply took, and the start of it. */
+export type ModelTestResult = { latencyMs: number; firstTokenMs: number | null; reply: string };
+
 /** A user-defined slash command: a prompt template. `$ARGUMENTS` in the body marks where the user's input goes. */
 export type CustomCommand = { name: string; description: string; body: string };
 export const EDITOR_CHOICES = ["default", "vscode", "cursor", "zed", "idea"] as const;
 export type EditorChoice = (typeof EDITOR_CHOICES)[number];
 export const EDITOR_LABELS: Record<EditorChoice, string> = { default: "System default", vscode: "VS Code", cursor: "Cursor", zed: "Zed", idea: "IntelliJ IDEA" };
-export const SETTINGS_TABS = ["General", "Agents", "Providers", "Extensions", "Threads", "Theme", "Models", "Account", "Permissions", "Usage", "Shortcuts", "Diagnostics", "About"] as const;
+/** Settings pages, in navigation order. Names and groups are in `lib/settingsNav.ts`. */
+export const SETTINGS_TABS = ["Models", "Providers", "Agents", "Extensions", "Permissions", "Threads", "General", "Theme", "Shortcuts", "Usage", "Diagnostics", "About"] as const;
 export type SettingsTab = (typeof SETTINGS_TABS)[number];
 
 /** `harness` is the app's own agent: it calls model providers with the user's keys (Settings → Providers). */
@@ -638,7 +642,7 @@ export type Settings = {
   accentSidebar: boolean;
   /** How see-through the sidebar is, 0 (solid) to 100. Only shows where the window has a material behind it. */
   sidebarTranslucency: number;
-  /** Animation used while Muse thinks; automatic follows the run's effort. */
+  /** Animation used while an agent thinks; automatic follows the run's effort. */
   thinkingOrb?: ThinkingOrbStyle;
   defaultModel: string;
   defaultProviderId?: string;
@@ -669,6 +673,8 @@ export type Settings = {
   suggestionsAgentId?: AgentId;
   /** Model override for suggestions; absent means the agent's cheapest catalog model. */
   suggestionsModelId?: string;
+  /** Models switched off in Settings → Models, as `modelVisibilityKey` strings. They leave the model picker, not the catalog. */
+  hiddenModels?: string[];
   workspaces: Workspace[];
 };
 
@@ -699,6 +705,7 @@ export const DEFAULT_SETTINGS: Settings = {
   suggestionsAgentId: undefined,
   suggestionsModelId: undefined,
   shortcutOverrides: {},
+  hiddenModels: [],
   workspaces: [],
 };
 

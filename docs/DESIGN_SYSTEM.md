@@ -1,19 +1,28 @@
 # Glitter — Design System
 
-Implementation must follow this document. Tokens live in
-`apps/desktop/src/styles.css`; where this document and the stylesheet disagree,
-the stylesheet wins and this document should be corrected.
+This is the one place Glitter's design is decided. Every UI change follows it,
+and a change that alters a design decision — a new pattern, a token, a layout
+rule, a page's name — updates this document in the same commit. Before UI
+work, read the sections for the surfaces you touch; if what you need is not
+here, extend this document first rather than inventing a one-off.
+
+Tokens live in `apps/desktop/src/styles.css` (Settings adds `settings.css`);
+where this document and the stylesheet disagree, the stylesheet wins and this
+document should be corrected.
 
 ---
 
 ## Product principles
 
-1. **Protocol-honest.** Show what Muse is doing. Never invent chain-of-thought. Prefer host todos, goals, tool names, and exit codes.
+1. **Protocol-honest.** Show what the agent is doing. Never invent chain-of-thought. Prefer host todos, goals, tool names, and exit codes.
 2. **Frost and ember.** Matte grey canvas, frosted glass panels, soft diffuse elevation, an ember glow as the brand signal. Transcripts, code and diffs always sit on solid surfaces; glass is for chrome (composer, popovers, dialogs), and the sidebar sits on the shell, which can show the window's own material. Live agent state uses `thinking-orbs` (`components/Orb.tsx`) and a restrained pulsing composer rule.
 3. **Desktop, not web.** System type, overlay titlebar, dense lists, real menus/palettes, no remote fonts.
 4. **Density with hierarchy.** Developer sessions are long. Prefer 13px body, tight rows, collapsed tools. Hierarchy from contrast and spacing, not cards.
-5. **One vocabulary.** Workspace, Thread, Agent, Run, Plan, Changes, Terminal.
+5. **One vocabulary.** Workspace, Thread, Agent, Provider, Model, Run, Plan, Changes, Terminal.
 6. **Every control is real.** Hidden > disabled > fake.
+7. **Providers first.** Glitter is an agent harness. Its built-in agent and the
+   providers you connect come first; an agent CLI such as Muse is one more
+   provider, never the frame the app is described in.
 
 ---
 
@@ -29,6 +38,8 @@ the stylesheet wins and this document should be corrected.
 | Terminal | The integrated terminal pane: the user's own shell on a PTY. Not the shell card in a run (a “command” step) and not the composer's `!` escape (a “shell command”) |
 | Local / Worktree | Where a thread works: the workspace folder, or its own checkout on a `glitter/` branch. Not “sandbox”, “copy” or “isolated mode” |
 | Stop | Cancel turn (button label: Stop) |
+| Provider | Where models come from, as the model picker and Settings → Models list them: a provider the built-in agent calls with your key (Anthropic, OpenRouter…), or an agent CLI (Muse, Cline CLI…). Not “source”, “lab” or “backend” |
+| Built-in agent | Glitter’s own agent (`harness` in code). In copy it is “the built-in agent”; the composer addresses it by its model (“Ask Claude Sonnet 5…”) |
 | Allow in thread | An approval that reaches past this one call, for the rest of the thread. Its scope names what it covers (this exact command, a command prefix, one program, a file, a folder, the workspace). Not “session”, “rule” or “whitelist” |
 
 Copy: short, present tense, no “successfully been executed.”
@@ -101,17 +112,34 @@ carry a second hardcoded color palette.
 
 No Google Fonts. No webfont download.
 
+**The type scale.** UI text uses these tokens and nothing between them. A new
+or changed rule names a token, never a literal size; the only literals left are
+reading prose in replies (`.prose`, 14px body with its own heading steps) and
+display headings on the welcome stage.
+
+| Token | Size | Use |
+|---|---|---|
+| `--text-2xs` | 10.5px | Tags, counts, kbd hints, code inside meta lines |
+| `--text-xs` | 11px | Captions, section labels in navigation, timestamps |
+| `--text-sm` | 12px | Help text, meta lines, small buttons, notes |
+| `--text-md` | 13px | Body, row labels, controls, nav rows — the default |
+| `--text-lg` | 15px | Panel titles, the Settings navigation title, dialog titles |
+| `--text-xl` | 18px | Modal headings |
+| `--text-2xl` | 22px | Empty-state headings, the Settings title at phone widths |
+| `--text-3xl` | 28px | The Settings page title, onboarding heading |
+
 | Role | Size | Weight | Tracking |
 |---|---|---|---|
 | Display (welcome titles) | 34–38px (30px at compact widths) | 400 | -0.035em |
 | New-thread heading | 26–30px | 400 | -0.03em |
-| Settings page title | 28px | 500 | -0.04em |
+| Settings page title | `--text-3xl` | 600 | -0.035em |
+| Section heading in a page | `--text-md` | 600 | -0.01em |
 | Brand wordmark | 17px | 600 | -0.03em |
-| Title (thread name) | 13px | 600 | -0.01em |
-| Body | 13px | 400 | -0.01em |
-| Compact | 12px | 400 | 0 |
-| Caption | 10–11px | 400 | 0.02em |
-| Mono | 12px | 400 | 0 |
+| Title (thread name) | `--text-md` | 600 | -0.01em |
+| Body | `--text-md` | 400 | -0.01em |
+| Compact | `--text-sm` | 400 | 0 |
+| Caption | `--text-xs` | 400 | 0.02em |
+| Mono | `--text-sm` | 400 | 0 |
 
 ---
 
@@ -180,8 +208,16 @@ content never stays legible through it.
 One set: `lucide-react`, 13–16px, 1.75–2 stroke, monochrome `currentColor`.
 Status uses a 6px dot: muted idle, accent unread, success running, danger error.
 
-Rounded-square icon wells (`--well` fill, 26px in the settings navigation) may hold icons in list rows and navigation; never in
-transcript rows.
+Navigation rows (the sidebar, the Settings categories) carry a bare 15px icon
+in `--tertiary`, `--accent-text` on the current row; no icon wells.
+
+**Extension thumbnails.** Every skill, plugin and MCP server shows a thumbnail
+(`ExtensionThumb`, art from `lib/extensionArt.ts`): a rounded `--r-md` tile
+tinted with one of eight tones, holding the Lucide icon for what it does. Store
+entries are mapped by id; anything else is matched on its name, then falls back
+to its kind (wand, package, server) with a tint hashed from its name so it never
+changes between renders. 40px on Store cards, 32px in installed lists. Never
+repeat one generic glyph down a list of extensions.
 
 ---
 
@@ -285,13 +321,22 @@ vertically centred, and the find bar sits just inside its right edge.
 
 Third-party capabilities open in a dismissible dialog once per agent during
 the app session, with a persisted "Don’t show again" choice. The model picker's
-header has a Capabilities action to reopen the dialog at any time.
+rail foot has a Capabilities action to reopen the dialog at any time.
 
-The model picker opens above the composer and stays within the window. It
-holds the agent switcher, and for the built-in harness one badge per provider
-instead of a Harness tab. The catalog lists that badge's models, with search
-when there are more than six models, and the contributor disclosures; one
-click on a row picks it and closes.
+The model picker opens above the composer and stays within the window. It has
+exactly two levels: **providers**, then **models**. The rail lists providers —
+each provider the built-in agent has a key for (Anthropic, OpenAI, OpenRouter…)
+and each other installed agent as a provider of its own (Muse, Cline CLI…), in
+a fixed order — with no Agents section and no agent row nested over its
+providers. A dot marks the provider the thread's model comes from. The list
+shows that provider's models; an agent whose catalog mixes labs groups them
+under lab headings inside the list, never as a third level. Search spans every
+provider, with provider headings. Picking a model from a provider on another
+agent moves the thread to that agent, then sets the model; those rows are off
+while the thread cannot switch. Models switched off in Settings → Models leave
+the list (the thread's current model stays); the foot says how many are hidden
+and links to Manage models and Manage providers. One click on a row picks it
+and closes.
 
 Reasoning effort (`EffortPicker`) is the shared select menu: the chip names
 the level, and the menu lists the model's levels from least to most, each with
@@ -315,32 +360,77 @@ and interrupted turns retain their explicit state and recovery controls.
 
 ### Settings
 
-Select menus portal directly into their enclosing dialog, outside its body
-scroller. Their positions use the dialog's padding box, accounting for borders
-and animation scale; viewport coordinates belong only to menus outside a
-dialog. Keep every option within the dialog and choose the side with room.
+Settings is a full-window page, not a dialog. It takes the place of the app
+view: the app steps back (fades and hides) while it is open and fades back as it
+closes. The categories sit on the shell where the sidebar sits, so the tint and
+the window's translucency reach them, and the page fills the main panel on
+`--surface`, split from them by one hairline. The title-bar strip of the
+categories holds **Back** after the window controls; the page's own strip holds
+the save hint and Close (Esc). Both strips drag the window.
 
-New-thread defaults query the preferred new-thread agent's current catalog
-when Models opens. They never reuse or replace a conversation's model list.
-Show loading or query errors, and identify unlisted saved selections explicitly;
-preserve the preference until the user chooses another model or the host default.
+**Information architecture.** Pages are named once, in `lib/settingsNav.ts`,
+and the navigation, search and the command palette all read those names.
 
-A two-pane glass dialog (`--glass-strong`): categories on a frosted rail at the
-left — each a `--r-sm` row with a 26px `--well` icon well, the active one a
-`--raised` tile — and the page at the right on `--surface-2` cards. Every page
-uses one column (`.settings-column`, 680px) so cards line up from tab to tab.
+| Group | Pages |
+|---|---|
+| AI | Models · Providers · Agents |
+| Workspace | Extensions · Permissions · Threads |
+| App | General · Appearance · Commands & shortcuts · Usage |
+| System | Diagnostics · About |
+
+- **Models**: new-thread defaults, then the model library — every provider's
+  models, each with a switch that keeps it in or out of the picker, and for the
+  built-in agent's providers a **Test** that sends one word and shows the
+  reply time (or why it failed). Long lists fold after eight rows.
+- **Providers**: API keys for the built-in agent.
+- **Agents**: the default agent, the built-in agent, the agent CLIs, and the
+  Muse connection (credential, API key, binary, Contributor mode) while Muse is
+  shown. There is no Account page: Muse is one agent among others.
+- **Permissions**: approvals for new threads, then the Muse host sandbox.
+- Muse-only content (the subscription meter, the CLI updater, Muse diagnostics)
+  appears only while Muse is shown, and after the app's own content.
+
+**Layout.** One centred column (`.settings-column`, 760px) on every page. The
+page head is the title (`--text-3xl`) and one sentence, over a hairline. A
+section is a heading (`.settings-card-heading`, `--text-md` 600) with one line
+of help, then a card; 32px between sections.
 
 - A setting is a row in a card (`.setting-row`): name and one line of help on
   the left, the control on the right. Selects and text fields are 240px wide.
-- A group of rows gets a heading (`.settings-card-heading`); a sentence that
-  qualifies a card sits under it (`.settings-note`); context that needs a box
-  uses `.settings-callout`.
+- A sentence that qualifies a card sits under it (`.settings-note`); context
+  that needs a box uses `.settings-callout`; an empty state with a next action
+  uses `.settings-empty`.
 - Switches use `.toggle`: a 36×22 pill track in `--accent-fill` when on, with a
   round knob in `--accent-contrast`. Exclusive choices use the radio list.
 - A continuous value uses `.slider`: a thin track filled to a round thumb, with
   the value beside it. It repaints while it is dragged and saves once, when the
   gesture ends.
-- The footer shows connection state and, for host settings, the restart action.
+
+**Saving.** Preferences save as they change, and the page strip says so. A
+Muse host setting waits for an explicit restart: a bar rises from the foot of
+the page with Cancel and Save & restart connection. Messages (copied, signed
+out, a failed save) appear as a glass toast at the foot, never as a banner that
+shifts the page.
+
+Select menus portal directly into the page, outside its scroller. Their
+positions use the page's padding box; viewport coordinates belong only to menus
+outside a dialog. Keep every option within the page and choose the side with
+room.
+
+New-thread defaults query the preferred new-thread agent's current catalog
+when Models opens. They never reuse or replace a conversation's model list.
+Show loading or query errors, and identify unlisted saved selections explicitly;
+preserve the preference until the user chooses another model or the agent's
+default.
+
+At widths under 720px the categories become one scrolling row above the page.
+
+### Extension store
+
+The Store is a grid of cards (two columns, one under 720px): the thumbnail,
+the name and kind with its tags, one summary line (the full description is its
+tooltip), what a bundle installs, the command a server adds, and Install or
+Remove at the card's foot, aligned across a row.
 
 ### Prompt rail
 
@@ -359,17 +449,21 @@ reach it as they reach the sidebar. The main panel starts below it and holds
 only the thread; the title bar is never drawn inside the panel. Its title lines
 up with the panel's left edge and its last action with the panel's right edge.
 
-Show/Hide sidebar is one button, straight after the window controls whichever
-way the sidebar is, so it never moves under the pointer. Toggling the sidebar
-moves the rest of the title bar sideways only. Nothing in the panel shifts up or
+**The sidebar group.** Show/Hide sidebar, Settings and Usage are one group of
+28px icon buttons, in that order, with tooltips and no labels. With the sidebar
+open the group sits at the sidebar's right edge (12px in); collapsed, it slides
+with the sidebar to just after the window controls. It is one element whose box
+narrows with the sidebar, and the toggle is one button throughout, so nothing
+re-mounts under the pointer. Usage opens its card under the button. Toggling the
+sidebar moves the title bar sideways only; nothing in the panel shifts up or
 down.
 
 ### Collapsed sidebar
 
-The sidebar gives up its column entirely. New thread, Open workspace and
-Settings join Show sidebar in the title bar after the window controls
-(`--window-controls`), and the title starts after them. Nothing may sit under
-the window controls.
+The sidebar gives up its column entirely. New thread and Open workspace join
+the sidebar group after the window controls (`--window-controls`, group width
+`--rail-width`), and the title starts after them. Nothing may sit under the
+window controls.
 
 Clicking Show sidebar expands the sidebar again; hovering the toggle does
 nothing. Only an explicit toggle — the button or the keyboard shortcut —
@@ -469,11 +563,11 @@ accent tint and the window's translucency reach it. The main pane is opaque and
 takes neither. The sidebar is the session list. Under the title bar it offers
 New thread, a search field, and a filter for all threads, live ones, or ones
 that need you, then the workspaces and their threads. Each workspace row starts
-a thread in that workspace. The foot holds Settings and usage counted on
-this Mac. The Muse subscription meter is included only while the Muse agent
-is enabled. Offline, sign-in, and
-a missing agent each get a row above that foot while they last. Appearance,
-shortcuts and account live in Settings. The list scrolls vertically only —
+a thread in that workspace. Settings and Usage are icons in the title bar
+(see Title bar), so the list runs to the bottom. The foot exists only while
+something needs saying — a CLI update, or offline, sign-in and a missing agent,
+each while it lasts. The Muse subscription meter appears in the Usage card only
+while the Muse agent is enabled. The list scrolls vertically only —
 never sideways — and a thread name that does not fit rolls to its tail on
 hover instead of leaving a scrollbar.
 

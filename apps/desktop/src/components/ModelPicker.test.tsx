@@ -64,26 +64,30 @@ it("opens straight to the models in one click, and one click on a row picks it a
   expect(trigger).toHaveFocus();
 });
 
-it("switches agents from the rail, never a menu inside the menu", () => {
-  const onAgentChange = vi.fn();
-  render(<ModelPicker models={[{ modelId: "grok-4.7" }]} agentId="grok" agents={AGENTS} value={modelKey({ modelId: "grok-4.7" })} loading={false} disabled={false} onChange={vi.fn()} onAgentChange={onAgentChange} onRescan={vi.fn(async () => {})} />);
+it("lists other agents as providers, and a model from one switches the thread to it", async () => {
+  const onChooseOther = vi.fn();
+  const loadCatalog = vi.fn(async () => [{ modelId: "muse-spark-1.3" }] as Model[]);
+  render(<ModelPicker models={[{ modelId: "grok-4.7" }]} agentId="grok" agents={AGENTS} value={modelKey({ modelId: "grok-4.7" })} loading={false} disabled={false} onChange={vi.fn()} onChooseOther={onChooseOther} loadCatalog={loadCatalog} onRescan={vi.fn(async () => {})} />);
   fireEvent.click(screen.getByRole("button", { name: "Model" }));
+  // One level of providers: no Agents section, and no agent nested over its providers.
+  expect(screen.queryByRole("tablist", { name: "Agent" })).toBeNull();
   const tabs = screen.getAllByRole("tab");
   expect(tabs.map((tab) => tab.getAttribute("aria-label"))).toEqual(["Muse", "Grok"]);
-  expect(screen.getByRole("tab", { name: /Grok/ })).toHaveAttribute("aria-selected", "true");
-  expect(screen.queryByRole("listbox", { name: "Agent" })).toBeNull();
-  fireEvent.click(screen.getByRole("tab", { name: /Muse/ }));
-  expect(onAgentChange).toHaveBeenCalledWith("muse");
-  // The picker stays open on the new agent's models.
-  expect(screen.getByRole("dialog", { name: "Choose a model" })).toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: "Grok" })).toHaveAttribute("aria-selected", "true");
+  expect(loadCatalog).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("tab", { name: "Muse" }));
+  expect(loadCatalog).toHaveBeenCalledWith("muse");
+  const muse = await screen.findByRole("option", { name: /Muse Spark 1.3/ });
+  expect(muse).toHaveAttribute("aria-description", expect.stringContaining("Switches this thread to Muse"));
+  fireEvent.click(muse);
+  expect(onChooseOther).toHaveBeenCalledWith("muse", { modelId: "muse-spark-1.3" });
 });
 
-it("can switch away from a hidden current agent when only one enabled agent remains", () => {
-  const onAgentChange = vi.fn();
-  render(<ModelPicker models={[]} agentId="grok" agents={[AGENTS[0]]} loading={false} disabled={false} onChange={vi.fn()} onAgentChange={onAgentChange} onRescan={vi.fn(async () => {})} />);
+it("keeps another agent's provider out of reach while the thread cannot switch", () => {
+  render(<ModelPicker models={[{ modelId: "grok-4.7" }]} agentId="grok" agents={AGENTS} agentDisabled loading={false} disabled={false} onChange={vi.fn()} onChooseOther={vi.fn()} loadCatalog={vi.fn(async () => [])} onRescan={vi.fn(async () => {})} />);
   fireEvent.click(screen.getByRole("button", { name: "Model" }));
-  fireEvent.click(screen.getByRole("tab", { name: /Muse/ }));
-  expect(onAgentChange).toHaveBeenCalledWith("muse");
+  expect(screen.getByRole("tab", { name: "Muse" })).toBeDisabled();
+  expect(screen.getByRole("tab", { name: "Grok" })).not.toBeDisabled();
 });
 
 it("searches humanized model names and says when nothing matches", () => {
@@ -146,7 +150,7 @@ it("leaves an empty catalog recoverable, and points the built-in harness at its 
   expect(onManageProviders).toHaveBeenCalled();
 });
 
-it("gives each harness provider its own badge and lists only that provider's models", () => {
+it("lists each Harness provider as a provider of its own, with no Harness row over them", () => {
   const models: Model[] = [
     { modelId: "anthropic/claude-sonnet", providerId: "anthropic", displayLabel: "Claude Sonnet" },
     { modelId: "openai/gpt-5", providerId: "openai", displayLabel: "GPT-5" },
@@ -156,28 +160,24 @@ it("gives each harness provider its own badge and lists only that provider's mod
     { id: "harness", name: "Harness", protocol: "native", found: true, authenticated: true, path: null, version: null, verified: true, signIn: "" },
     { id: "grok", name: "Grok", protocol: "acp", found: true, path: "/bin/grok", version: "1", verified: true, signIn: "" },
   ];
-  render(<ModelPicker models={models} agentId="harness" agents={agents} value={modelKey(models[0])} loading={false} disabled={false} onChange={vi.fn()} onAgentChange={vi.fn()} onRescan={async () => {}} />);
+  render(<ModelPicker models={models} agentId="harness" agents={agents} value={modelKey(models[0])} loading={false} disabled={false} onChange={vi.fn()} onChooseOther={vi.fn()} loadCatalog={vi.fn(async () => [])} onRescan={async () => {}} />);
   const trigger = screen.getByRole("button", { name: "Model" });
   expect(trigger.querySelector(".agent-mark.harness")).toBeNull();
   expect(trigger.querySelector(".agent-mark.anthropic")).not.toBeNull();
   fireEvent.click(trigger);
-  expect(screen.getByRole("tablist", { name: "Agent" })).toContainElement(screen.getByRole("tab", { name: "Harness" }));
-  expect(screen.getByRole("tab", { name: "Harness" })).toHaveAttribute("aria-selected", "true");
-  expect(screen.getByRole("tablist", { name: "Providers" })).toContainElement(screen.getByRole("tab", { name: "Anthropic" }));
+  expect(screen.queryByRole("tab", { name: "Harness" })).toBeNull();
+  const providers = screen.getByRole("tablist", { name: "Providers" });
+  expect([...providers.querySelectorAll('[role="tab"]')].map((tab) => tab.getAttribute("aria-label"))).toEqual(["Anthropic", "OpenAI", "xAI", "Grok"]);
   expect(screen.getByRole("tab", { name: "Anthropic" })).toHaveAttribute("aria-selected", "true");
-  expect(screen.getByRole("tab", { name: "OpenAI" })).toHaveAttribute("aria-selected", "false");
-  expect(screen.getByRole("tab", { name: "xAI" })).toBeInTheDocument();
-  expect(screen.getByRole("tab", { name: "Grok" })).toBeInTheDocument();
   expect(screen.getByRole("option", { name: /Claude Sonnet/ })).toBeInTheDocument();
   expect(screen.queryByRole("option", { name: /GPT-5/ })).toBeNull();
-  expect(screen.queryByRole("option", { name: /Grok 4/ })).toBeNull();
   fireEvent.click(screen.getByRole("tab", { name: "OpenAI" }));
   expect(screen.getByRole("tab", { name: "OpenAI" })).toHaveAttribute("aria-selected", "true");
   expect(screen.getByRole("option", { name: /GPT-5/ })).toBeInTheDocument();
   expect(screen.queryByRole("option", { name: /Claude Sonnet/ })).toBeNull();
 });
 
-it("keeps the Cline API badge distinct from the Cline CLI agent", () => {
+it("keeps the Cline API provider distinct from the Cline CLI agent", () => {
   const models: Model[] = [
     { modelId: "cline/anthropic/claude-sonnet-5.5", providerId: "cline", displayLabel: "claude-sonnet-5.5", description: "Cline API" },
   ];
@@ -185,11 +185,26 @@ it("keeps the Cline API badge distinct from the Cline CLI agent", () => {
     { id: "harness", name: "Harness", protocol: "native", found: true, authenticated: true, path: null, version: null, verified: true, signIn: "" },
     { id: "cline", name: "Cline CLI", protocol: "acp", found: true, path: "/bin/cline", version: "1", verified: false, signIn: "" },
   ];
-  render(<ModelPicker models={models} agentId="harness" agents={agents} value={modelKey(models[0])} loading={false} disabled={false} onChange={vi.fn()} onAgentChange={vi.fn()} onRescan={async () => {}} />);
+  render(<ModelPicker models={models} agentId="harness" agents={agents} value={modelKey(models[0])} loading={false} disabled={false} onChange={vi.fn()} onChooseOther={vi.fn()} loadCatalog={vi.fn(async () => [])} onRescan={async () => {}} />);
   fireEvent.click(screen.getByRole("button", { name: "Model" }));
   expect(screen.getByRole("tab", { name: "Cline API" })).toHaveAttribute("aria-selected", "true");
   expect(screen.getByRole("tab", { name: "Cline CLI" })).toHaveAttribute("aria-selected", "false");
   expect(screen.getByRole("option", { name: /claude-sonnet-5.5/ })).toBeInTheDocument();
+});
+
+it("leaves switched-off models out, except the one the thread uses, and links to them", () => {
+  const models: Model[] = [
+    { modelId: "anthropic/claude-sonnet", providerId: "anthropic", displayLabel: "Claude Sonnet" },
+    { modelId: "anthropic/claude-haiku", providerId: "anthropic", displayLabel: "Claude Haiku" },
+    { modelId: "anthropic/claude-opus", providerId: "anthropic", displayLabel: "Claude Opus" },
+  ];
+  const onManageModels = vi.fn();
+  const hidden = ["harness|anthropic|anthropic/claude-sonnet", "harness|anthropic|anthropic/claude-haiku"];
+  render(<ModelPicker models={models} agentId="harness" value={modelKey(models[0])} hidden={hidden} loading={false} disabled={false} onChange={vi.fn()} onManageModels={onManageModels} />);
+  fireEvent.click(screen.getByRole("button", { name: "Model" }));
+  expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual(["Claude Sonnet", "Claude Opus"]);
+  fireEvent.click(screen.getByRole("button", { name: "1 hidden" }));
+  expect(onManageModels).toHaveBeenCalled();
 });
 
 it("shows the provider logo on the source and the model logo beside the name", () => {
@@ -201,7 +216,7 @@ it("shows the provider logo on the source and the model logo beside the name", (
   const agents: AgentInfo[] = [
     { id: "harness", name: "Harness", protocol: "native", found: true, authenticated: true, path: null, version: null, verified: true, signIn: "" },
   ];
-  render(<ModelPicker models={models} agentId="harness" agents={agents} value={modelKey(models[0])} loading={false} disabled={false} onChange={vi.fn()} onAgentChange={vi.fn()} onRescan={async () => {}} />);
+  render(<ModelPicker models={models} agentId="harness" agents={agents} value={modelKey(models[0])} loading={false} disabled={false} onChange={vi.fn()} onRescan={async () => {}} />);
   const trigger = screen.getByRole("button", { name: "Model" });
   expect(trigger.querySelector(".agent-mark.nvidia img")).toHaveAttribute("src", "/brands/nvidia.svg");
   expect(trigger.querySelector(".agent-mark.gemma img")).toHaveAttribute("src", "/brands/gemma.svg");
@@ -252,7 +267,7 @@ it("lists a fast variant as its own row, tagged Fast, and marks it on the trigge
   expect(screen.getByLabelText("Fast")).toBeInTheDocument();
 });
 
-it("filters an agent's mixed catalog by lab, searches across all of them, and gives every row an icon", () => {
+it("groups an agent's mixed catalog by lab under one provider, and gives every row an icon", () => {
   const models: Model[] = [
     { modelId: "nvidia/nemotron-3.5-super", displayLabel: "Nemotron 3.5 Super", providerId: "nvidia", free: true },
     { modelId: "reflection/beam-1.0", displayLabel: "Beam", providerId: "reflection", free: true },
@@ -263,16 +278,16 @@ it("filters an agent's mixed catalog by lab, searches across all of them, and gi
   const agents: AgentInfo[] = [
     { id: "cline", name: "Cline CLI", protocol: "acp", found: true, path: "/bin/cline", version: "3", verified: false, signIn: "" },
   ];
-  render(<ModelPicker models={models} agentId="cline" agents={agents} value={modelKey(models[0])} loading={false} disabled={false} onChange={vi.fn()} onAgentChange={vi.fn()} onRescan={async () => {}} />);
+  render(<ModelPicker models={models} agentId="cline" agents={agents} value={modelKey(models[0])} loading={false} disabled={false} onChange={vi.fn()} onRescan={async () => {}} />);
   fireEvent.click(screen.getByRole("button", { name: "Model" }));
-  expect(screen.getByRole("tab", { name: "All models" })).toHaveAttribute("aria-selected", "true");
+  // The labs are headings in the list, not a third level in the rail.
+  expect(screen.getAllByRole("tab").map((tab) => tab.getAttribute("aria-label"))).toEqual(["Cline CLI"]);
   expect(screen.getAllByRole("option")).toHaveLength(8);
   expect(screen.getByText("Free right now")).toBeInTheDocument();
+  expect(screen.getByText("Anthropic")).toBeInTheDocument();
   // A lab with no logo of its own still shows a mark, never an empty slot.
   expect(screen.getByRole("option", { name: /Beam/ }).querySelector(".agent-mark")).toHaveTextContent("R");
   expect(screen.getByRole("option", { name: /Claude Haiku/ }).querySelector("img")).toHaveAttribute("src", "/brands/claude.svg");
-  fireEvent.click(screen.getByRole("tab", { name: "Anthropic" }));
-  expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual(["Claude Haiku 5.5"]);
   fireEvent.change(screen.getByRole("combobox", { name: "Search models" }), { target: { value: "gpt" } });
   expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual(["GPT-6.1 Sol"]);
 });

@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import { describeError } from "../lib/errors";
 import { Eye, EyeOff } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
-import { openUrl } from "../lib/bridge";
 import { isTauri } from "../lib/format";
 import { useModalDialog } from "../lib/dialogFocus";
 import { usePresence } from "../lib/presence";
@@ -35,17 +34,17 @@ export function Onboarding() {
   const [checking, setChecking] = useState(false);
   const [apiKey, setApiKey] = useState(s.museApiKey);
   const [showKey, setShowKey] = useState(false);
-  const [copiedInstall, setCopiedInstall] = useState(false);
   const browserPreview = !isTauri();
-  // Any ready agent (Muse, OpenCode, Grok, …) is enough to start working.
+  // Any ready agent (the built-in agent with a provider key, Muse, OpenCode, …) is enough to start working.
   const anyReady = readyAgents(s).length > 0;
-  // The window opens before agent detection finishes. Until it has, "no CLI" and
+  // The window opens before agent detection finishes. Until it has, "no key" and
   // "not signed in" are not facts yet, so none of these welcome states may show.
   const settled = s.detectionChecked;
-  const needsAuth = Boolean(!browserPreview && settled && !anyReady && s.detection?.found && !s.detection.authenticated);
-  const noCli = !browserPreview && settled && !s.detection?.found && !s.agents.some((agent) => agent.found);
+  const needsSetup = Boolean(!browserPreview && settled && !anyReady);
+  // Muse is one way in, offered only when its CLI is installed and waiting for a credential.
+  const museWaiting = Boolean(needsSetup && s.detection?.found && !s.detection.authenticated);
   const needsProject = Boolean(!browserPreview && settled && !s.workspaces.length && anyReady);
-  const show = !dismissed && !s.preview && !s.settingsOpen && (browserPreview || needsAuth || checking || Boolean(error) || (!s.workspaces.length && noCli) || needsProject);
+  const show = !dismissed && !s.preview && !s.settingsOpen && (browserPreview || needsSetup || checking || Boolean(error) || needsProject);
   // The dialog stays mounted for one exit after it is dismissed, so it can animate out.
   const { mounted } = usePresence(show);
   useModalDialog(show, dialog);
@@ -59,8 +58,8 @@ export function Onboarding() {
       await s.commitSettings(patch);
       await s.refreshDetection();
       const detection = useAppStore.getState().detection;
-      if (!detection?.found) throw new Error("Muse CLI was not found. Install it or set a custom binary path in Settings.");
-      if (!detection.authenticated) throw new Error(patch.museAuthMode === "subscription" ? "No Muse Code sign-in was found. Use Sign in with Meta above, then choose Recheck." : "Muse did not accept that credential.");
+      if (!detection?.found) throw new Error("Muse CLI was not found. Install it or set a custom binary path in Settings → Agents.");
+      if (!detection.authenticated) throw new Error(patch.museAuthMode === "subscription" ? "No Muse sign-in was found. Use Sign in with Meta above, then choose Recheck." : "Muse did not accept that credential.");
       await s.startHost(true);
       setDismissed(true);
     } catch (cause) {
@@ -72,58 +71,50 @@ export function Onboarding() {
     if (!value) { setError("Paste your Muse API key to continue."); return; }
     await connect({ museApiKey: value, museAuthMode: "apiKey" });
   };
+  const openProviders = () => { setDismissed(true); s.setSettingsOpen(true, "Providers"); };
   if (!mounted) return null;
   return <dialog ref={dialog} className="hero" aria-labelledby="onboarding-title" onCancel={(event) => { event.preventDefault(); setDismissed(true); }}>
     <EmberTiles />
     <div className="brand" style={{ paddingLeft: 0 }}><img src="/spark.svg" alt="" /><span>Glitter</span></div>
     <h2 id="onboarding-title">
-      {browserPreview ? "This tab cannot see the Muse CLI"
-        : needsAuth ? "Connect your Muse account"
+      {browserPreview ? "This tab cannot reach your agents"
+        : needsSetup ? "Connect a model to start"
         : needsProject ? "Open a workspace"
         : "Welcome to Glitter"}
     </h2>
     <p>
-      {browserPreview ? "The browser preview never talks to your local Muse CLI, even if the CLI is installed. Use the Glitter desktop window for live detection, or explore the interface here."
-        : needsAuth ? "The Muse CLI is installed but has no credential yet. Use the Muse Code subscription you signed into with the CLI, or pay per token with an API key."
-        : needsProject ? "The Muse CLI is connected. Open a workspace, then start a thread."
-        : "This independent desktop client uses your installed Muse CLI. Install the Muse CLI or set a custom binary path in Settings."}
+      {browserPreview ? "The browser preview never calls a model provider or an agent CLI. Use the Glitter desktop window to work for real, or explore the interface here."
+        : needsSetup ? "Glitter’s built-in agent runs on this Mac and calls the model provider you choose — Anthropic, OpenAI, OpenRouter and more — with your own API key. Keys stay in your Mac’s keychain."
+        : needsProject ? "Your agent is ready. Open a workspace, then start a thread."
+        : "Glitter is an agent harness for your code. Connect a model provider, or use an agent CLI you already have."}
     </p>
-    {needsAuth ? <div className="field"><label htmlFor="onboarding-api-key">Muse API key</label><div className="input-with-action"><input id="onboarding-api-key" type={showKey ? "text" : "password"} value={apiKey} placeholder="Paste API key" autoComplete="off" spellCheck={false} onChange={(event) => setApiKey(event.target.value)} /><button type="button" className="icon-btn input-action" aria-label={showKey ? "Hide API key" : "Show API key"} aria-pressed={showKey} title={showKey ? "Hide API key" : "Show API key"} onClick={() => setShowKey(!showKey)}>{showKey ? <EyeOff size={15} /> : <Eye size={15} />}</button></div><span className="field-help">Optional. Your key stays local and is only passed to Muse. Leave it empty if your subscription should pay.</span></div> : null}
-    {needsAuth && !s.detection?.subscriptionAvailable ? <LoginPanel /> : null}
     {(error || s.error) && <p role="alert">{error || s.error}</p>}
     <div className="row" style={{ justifyContent: "flex-start", flexWrap: "wrap" }}>
       {browserPreview ? (
         <button className="primary" onClick={s.enterPreview}>Explore the interface</button>
-      ) : needsAuth ? (
-        <>
-          <button className="primary" disabled={checking} onClick={() => void connect({ museAuthMode: "subscription" })}>{checking ? "Connecting…" : "Use my subscription"}</button>
-          <button className="chip" disabled={checking} onClick={() => void connectWithApiKey()}>Use an API key</button>
-        </>
       ) : needsProject ? (
         <button className="primary" onClick={() => { setDismissed(true); void s.chooseProject(); }}>Open a workspace</button>
       ) : (
-        <button className="primary" onClick={() => void openUrl("https://dev.meta.ai/docs/muse-code/").catch((cause) => setError(describeError("Could not continue", cause)))}>Install the Muse CLI</button>
+        <button className="primary" onClick={openProviders}>Add a provider key</button>
       )}
-      {noCli ? (
-        <button className="chip" onClick={() => {
-          const command = /^win/i.test(typeof navigator !== "undefined" ? navigator.platform ?? "" : "") ? "irm https://dev.meta.ai/install.ps1 | iex" : "curl -fsSL https://dev.meta.ai/install.sh | sh";
-          void navigator.clipboard.writeText(command).then(() => {
-            setCopiedInstall(true);
-            window.setTimeout(() => setCopiedInstall(false), 2000);
-          }).catch((cause) => setError(describeError("Could not continue", cause)));
-        }}>{copiedInstall ? "Copied" : "Copy install command"}</button>
-      ) : null}
       {!browserPreview && !needsProject ? (
         <button className="chip" disabled={checking} onClick={() => { setChecking(true); setError(""); void s.refreshDetection().catch((cause) => setError(describeError("Could not continue", cause))).finally(() => setChecking(false)); }}>{checking ? "Checking…" : "Recheck"}</button>
-      ) : null}
-      {!browserPreview && !needsAuth && !needsProject ? (
-        <button className="chip" onClick={() => { setDismissed(true); s.setSettingsOpen(true); }}>Settings</button>
       ) : null}
       {!browserPreview ? (
         <button className="chip" onClick={s.enterPreview}>Explore the interface</button>
       ) : null}
       <button className="text-btn" onClick={() => setDismissed(true)}>Close</button>
     </div>
-    <p className="muted" style={{ marginTop: 16, marginBottom: 0 }}>Not affiliated with Meta. Requires an installed Muse CLI for live work.</p>
+    {museWaiting ? <details className="onboarding-alt">
+      <summary>Use Muse instead</summary>
+      <p>The Muse CLI is installed but has no credential yet. Use the subscription you signed into with the CLI, or pay per token with an API key.</p>
+      <div className="field"><label htmlFor="onboarding-api-key">Muse API key</label><div className="input-with-action"><input id="onboarding-api-key" type={showKey ? "text" : "password"} value={apiKey} placeholder="Paste API key" autoComplete="off" spellCheck={false} onChange={(event) => setApiKey(event.target.value)} /><button type="button" className="icon-btn input-action" aria-label={showKey ? "Hide API key" : "Show API key"} aria-pressed={showKey} title={showKey ? "Hide API key" : "Show API key"} onClick={() => setShowKey(!showKey)}>{showKey ? <EyeOff size={15} /> : <Eye size={15} />}</button></div><span className="field-help">Optional. Your key stays local and is only passed to Muse. Leave it empty if your subscription should pay.</span></div>
+      {!s.detection?.subscriptionAvailable ? <LoginPanel /> : null}
+      <div className="row" style={{ justifyContent: "flex-start", flexWrap: "wrap" }}>
+        <button className="chip" disabled={checking} onClick={() => void connect({ museAuthMode: "subscription" })}>{checking ? "Connecting…" : "Use my subscription"}</button>
+        <button className="chip" disabled={checking} onClick={() => void connectWithApiKey()}>Use an API key</button>
+      </div>
+    </details> : null}
+    <p className="muted" style={{ marginTop: 16, marginBottom: 0 }}>Independent. Not affiliated with Meta or any model provider.</p>
   </dialog>;
 }

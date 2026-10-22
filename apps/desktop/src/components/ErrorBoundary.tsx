@@ -23,7 +23,7 @@ export class ErrorBoundary extends Component<Props, State> {
     return (
       <div className="empty">
         <h2>Glitter hit a display error</h2>
-        <p>Your threads on the Muse host were not deleted. Reload the window to continue.</p>
+        <p>Your threads were not deleted. Reload the window to continue.</p>
         <p className="muted">{this.state.error}</p>
         <button className="primary" onClick={() => this.setState({ error: null })}>Try again</button>
       </div>

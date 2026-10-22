@@ -271,7 +271,7 @@ export function ThreadView() {
     </header>
     <main id="main-content" tabIndex={-1} className={`main ${s.dockOpen ? "" : "solo"}${s.dockExpanded && s.dockOpen ? " dock-focused" : ""}`}>
     {/* Banners grow in and shrink out, so the panel below them slides instead of jumping. */}
-    <Collapse open={s.offline}>{() => <div className="banner warn" role="status"><WifiOff size={14} aria-hidden="true" /><span>You are offline. Muse can’t reach the host until the network returns.</span></div>}</Collapse>
+    <Collapse open={s.offline}>{() => <div className="banner warn" role="status"><WifiOff size={14} aria-hidden="true" /><span>You are offline. Agents can’t reach their model providers until the network returns.</span></div>}</Collapse>
     <Collapse open={Boolean(s.persistNotice)}>{() => <div className="banner warn" role="status"><TriangleAlert size={14} aria-hidden="true" /><span>{persistNotice}</span><button className="icon-btn small" aria-label="Dismiss" onClick={s.dismissPersistNotice}><X size={13} /></button></div>}</Collapse>
     <Collapse open={Boolean(error)}>{() => <div className="banner" role="alert"><CircleAlert size={14} aria-hidden="true" /><span>{shownError}</span>{needsGrant(shownError ?? "") && <button className="ghost-btn small" onClick={() => void s.chooseProject()}><FolderOpen size={13} />Open workspace</button>}{needsWorkspace(shownError ?? "") && <button className="ghost-btn small" onClick={() => void s.chooseProject()}><FolderOpen size={13} />Open a workspace</button>}{thread && (thread.viewGap?.state === "failed" || thread.historyFailed) && <button className="ghost-btn small" onClick={() => void s.rebuildThread()}>Retry rebuild</button>}{thread && !thread.opened && <button className="ghost-btn small" onClick={() => void s.selectThread(thread.sessionId)}>Reconnect</button>}<button className="ghost-btn small" onClick={() => s.setSettingsOpen(true)}>Settings</button><button className="icon-btn small" aria-label="Dismiss" onClick={s.dismissError}><X size={13} /></button></div>}</Collapse>
     <Collapse open={thread?.viewGap?.state === "filling"}>{() => <div className="banner info" role="status"><LoaderCircle size={14} className="spin" aria-hidden="true" /><span>Recovering dropped events…</span></div>}</Collapse>
@@ -288,7 +288,7 @@ export function ThreadView() {
         <section className="welcome-card" aria-labelledby="workspace-welcome-title">
         <span className="eyebrow">Local workspace / Endless possibilities</span>
         <h2 id="workspace-welcome-title">Open a workspace<span className="welcome-subtitle">Make room for your next idea.</span></h2>
-        <p>Pick a folder. Muse can plan, edit files, and run commands inside it.</p>
+        <p>Pick a folder. An agent can plan, edit files, and run commands inside it.</p>
         <button className="primary lg" onClick={() => void s.chooseProject()}><FolderOpen size={15} />Open a workspace<kbd>{shortcutText("open-workspace")}</kbd></button>
         </section>
       </div>
@@ -308,7 +308,7 @@ export function ThreadView() {
     ) : newThreadView ? (
       <div className="empty welcome-stage thread-welcome">
         <section className="welcome-card" aria-labelledby="thread-welcome-title">
-        {thread?.opening || restoring ? <Orb state="connecting" size={64} aria-label="Muse" /> : null}
+        {thread?.opening || restoring ? <Orb state="connecting" size={64} aria-label="Connecting" /> : null}
         <h2 id="thread-welcome-title">{thread?.opening ? "Opening thread…" : restoring ? "Restoring your last thread…" : "What should we build next?"}</h2>
         {restoring ? <p className="welcome-meta">Reconnecting to your workspace.</p> : (
           <p className="welcome-meta">

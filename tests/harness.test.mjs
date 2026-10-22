@@ -1957,3 +1957,19 @@ test('a child with no approval channel has its asks refused instead of waiting',
 });
 
 test.after(async () => { await rm(temporary, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
+
+test('testModel times a one-word reply, keeps it off every transcript, and names a missing key', async () => {
+  const { calls, fetchImpl } = anthropicStub([() => textReply('Ready, here.')]);
+  const store = new SessionStore(await mkdtemp(join(temporary, 'store-')));
+  const { instance, events } = host(fetchImpl, store);
+  const result = await instance.testModel({ modelId: 'anthropic/claude-sonnet-9' });
+  assert.equal(result.reply, 'Ready, here.');
+  assert.ok(result.latencyMs >= 0 && typeof result.firstTokenMs === 'number');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].body.model, 'claude-sonnet-9');
+  assert.deepEqual(calls[0].body.tools ?? [], [], 'a test offers no tools');
+  assert.equal(events.length, 0, 'a test emits nothing a thread would show');
+  assert.deepEqual(await store.list(), [], 'and writes no session');
+  await assert.rejects(() => instance.testModel({ modelId: 'openai/gpt-5' }), (error) => error.code === 'MISSING_CREDENTIAL' && /OpenAI has no key/.test(error.message));
+  await assert.rejects(() => instance.testModel({ modelId: 'no-provider' }), /does not name a provider/);
+});

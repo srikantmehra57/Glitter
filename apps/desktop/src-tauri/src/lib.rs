@@ -175,6 +175,7 @@ const BRIDGE_METHODS: &[&str] = &[
     "harnessMcpConfig",
     "harnessMcpAddServer",
     "harnessMcpRemoveServer",
+    "testModel",
     "mcpServers",
     "userShell",
     "readOutput",
@@ -991,7 +992,7 @@ fn bridge_request_impl<R: Runtime>(state: &AppState, app: &AppHandle<R>, id: Str
     }
     if matches!(
         method.as_str(),
-        "startHost" | "stopHost" | "listSessions" | "listModels" | "suggest" | "startSession" | "resumeSession" | "forkSession" | "compactSession" | "readSession" | "readChildSession" | "pageHistory" | "listSkills" | "harnessMcp" | "harnessMcpConfig" | "harnessMcpAddServer" | "harnessMcpRemoveServer" | "mcpServers" | "readOutput" | "setReasoningEffort" | "subagentControl" | "taskControl" | "workflowControl" | "goalControl" | "sendTurn" | "steerTurn" | "unqueueTurn" | "cancelTurn" | "setModel" | "setSessionOption"
+        "startHost" | "stopHost" | "listSessions" | "listModels" | "suggest" | "startSession" | "resumeSession" | "forkSession" | "compactSession" | "readSession" | "readChildSession" | "pageHistory" | "listSkills" | "harnessMcp" | "harnessMcpConfig" | "harnessMcpAddServer" | "harnessMcpRemoveServer" | "testModel" | "mcpServers" | "readOutput" | "setReasoningEffort" | "subagentControl" | "taskControl" | "workflowControl" | "goalControl" | "sendTurn" | "steerTurn" | "unqueueTurn" | "cancelTurn" | "setModel" | "setSessionOption"
     ) {
         inject_agent_bin(state, &mut params)?;
     }

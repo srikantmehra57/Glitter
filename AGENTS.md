@@ -3,6 +3,14 @@
 Read [docs/AGENT_GUIDE.md](docs/AGENT_GUIDE.md) before making changes. It covers
 where code lives, the rules to preserve, and the workflow.
 
+## Design
+
+[docs/DESIGN_SYSTEM.md](docs/DESIGN_SYSTEM.md) is the single source of design
+decisions: tokens, the type scale, layout, components, naming and the Settings
+information architecture. Follow it for any UI change, and when a change alters
+a design decision, update that document in the same commit. Do not invent a new
+pattern, size or colour outside it.
+
 To verify a change, run `npm run verify`. It runs every gate in order. Never run
 `node --test` and `cargo test` at the same time.
 

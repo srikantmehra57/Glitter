@@ -26,6 +26,10 @@ const { settingsFields } = await bundle('apps/desktop/src/lib/settingsPersistenc
 const { resolveTheme, shellOpacity, normalizeTranslucency } = await bundle('apps/desktop/src/lib/theme.ts');
 const { rekeyThreadState, projectDraftForAgent } = await bundle('apps/desktop/src/lib/agentSwitch.ts');
 const { mcpServerNameProblem, mcpServerSummary, parseMcpArguments, parseMcpKeyValues } = await bundle('apps/desktop/src/lib/mcpConfig.ts');
+const { modelVisibilityKey, normalizeHiddenModels, isModelHidden, pickerModels, withModelsHidden } = await bundle('apps/desktop/src/lib/modelVisibility.ts');
+const { extensionArt, EXTENSION_TONES } = await bundle('apps/desktop/src/lib/extensionArt.ts');
+const { SETTINGS_NAV_GROUPS, SETTINGS_TAB_LABELS, SETTINGS_TAB_COPY, settingsTabsMatching } = await bundle('apps/desktop/src/lib/settingsNav.ts');
+const { SETTINGS_TABS } = await bundle('apps/desktop/src/lib/types.ts');
 
 test('groups transcript items into agent runs by turnId', () => {
   const runs = groupAgentRuns([
@@ -991,3 +995,50 @@ test('MCP names and row summaries match what the bridge writes', () => {
   assert.equal(mcpServerSummary({ name: 'search', source: 'home', transport: 'http', url: 'https://example.test/mcp', args: 0, envKeys: [], headerKeys: ['Authorization'] }), 'https://example.test/mcp · 1 header');
 });
 
+
+test('hidden models leave the picker by agent, provider and model, except the one in use', () => {
+  const sonnet = { modelId: 'anthropic/claude-sonnet', providerId: 'anthropic' };
+  const haiku = { modelId: 'anthropic/claude-haiku', providerId: 'anthropic' };
+  const routed = { modelId: 'anthropic/claude-haiku', providerId: 'openrouter' };
+  assert.equal(modelVisibilityKey('harness', haiku), 'harness|anthropic|anthropic/claude-haiku');
+  const hidden = withModelsHidden([], 'harness', [haiku, sonnet], true);
+  assert.deepEqual(pickerModels([sonnet, haiku, routed], 'harness', hidden).map((model) => model.providerId + model.modelId), ['openrouteranthropic/claude-haiku'], 'the same id under another provider stays');
+  assert.deepEqual(pickerModels([sonnet, haiku], 'harness', hidden, sonnet), [sonnet], 'the model a thread uses is kept');
+  assert.equal(isModelHidden(hidden, 'muse', haiku), false, 'another agent keeps its own choices');
+  assert.deepEqual(withModelsHidden(hidden, 'harness', [haiku], false), ['harness|anthropic|anthropic/claude-sonnet']);
+  assert.deepEqual(normalizeHiddenModels(['a|b|c', 'a|b|c', 7, 'no-pipes', 'x'.repeat(700)]), ['a|b|c']);
+  assert.deepEqual(normalizeHiddenModels('a|b|c'), []);
+});
+
+test('an extension gets its own icon and tint: by id in the store, by name otherwise, stable by kind', () => {
+  assert.deepEqual(extensionArt('skill', 'code-review'), { icon: 'review', tone: 'blue' });
+  assert.deepEqual(extensionArt('mcp', 'playwright'), { icon: 'browser', tone: 'green' });
+  assert.equal(extensionArt('skill', 'my-sql-helper').icon, 'database');
+  assert.equal(extensionArt('mcp', 'github', 'GitHub').icon, 'api');
+  assert.equal(extensionArt('plugin', 'zzz').icon, 'plugin');
+  assert.equal(extensionArt('mcp', 'zzz').icon, 'server');
+  assert.ok(EXTENSION_TONES.includes(extensionArt('skill', 'anything').tone));
+  assert.deepEqual(extensionArt('skill', 'anything'), extensionArt('skill', 'anything'), 'the tint does not change between renders');
+});
+
+test('every Settings page has one name, one group and a line under its title, and search finds it', () => {
+  const grouped = SETTINGS_NAV_GROUPS.flatMap((group) => group.tabs);
+  assert.deepEqual([...grouped].sort(), [...SETTINGS_TABS].sort(), 'each page sits in exactly one group');
+  assert.equal(new Set(grouped).size, grouped.length);
+  for (const tab of SETTINGS_TABS) {
+    assert.ok(SETTINGS_TAB_LABELS[tab], `${tab} has a name`);
+    assert.ok(SETTINGS_TAB_COPY[tab]?.endsWith('.'), `${tab} has a sentence under its title`);
+  }
+  assert.ok(!SETTINGS_TABS.includes('Account'), 'Muse has no page of its own');
+  assert.deepEqual(settingsTabsMatching(''), [...SETTINGS_TABS]);
+  assert.ok(settingsTabsMatching('contributor').includes('Agents'));
+  assert.ok(settingsTabsMatching('test latency').includes('Models'));
+  assert.ok(settingsTabsMatching('slash').includes('Shortcuts'));
+  assert.deepEqual(settingsTabsMatching('zzzz'), []);
+});
+
+test('a remembered Account page opens Agents, where the Muse connection moved', () => {
+  assert.equal(normalizeMemory({ settingsTab: 'Account' }).settingsTab, 'Agents');
+  assert.equal(normalizeMemory({ settingsTab: 'Theme' }).settingsTab, 'Theme');
+  assert.equal(normalizeMemory({ settingsTab: 'Gone' }).settingsTab, 'Models');
+});

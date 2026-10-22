@@ -37,3 +37,23 @@ export const PROVIDERS: ProviderEntry[] = [
 ];
 
 export const PROVIDER_IDS = PROVIDERS.map((provider) => provider.id);
+
+/** Labs a catalog names that are not providers in the list above. */
+const LAB_NAMES: Record<string, string> = { opencode: "OpenCode Zen", meta: "Meta", grok: "xAI", "x-ai": "xAI", "z-ai": "Z.ai", moonshotai: "Moonshot AI", mistralai: "Mistral", "meta-llama": "Meta", "deepseek-ai": "DeepSeek", qwen: "Qwen", "cline-free": "Cline" };
+
+/** A provider's or lab's display name. */
+export function providerName(id?: string): string {
+  if (!id) return "Models";
+  return PROVIDERS.find((provider) => provider.id === id)?.name ?? LAB_NAMES[id] ?? id.charAt(0).toUpperCase() + id.slice(1);
+}
+
+/** The provider ids a catalog uses, in Settings order, then any id the catalog adds. */
+export function providerIds(models: ReadonlyArray<{ providerId?: string }>): string[] {
+  const ids = [...new Set(models.map((model) => model.providerId).filter((id): id is string => Boolean(id)))];
+  const order = PROVIDER_IDS;
+  return ids.sort((a, b) => {
+    const ia = order.indexOf(a);
+    const ib = order.indexOf(b);
+    return (ia < 0 ? order.length : ia) - (ib < 0 ? order.length : ib) || a.localeCompare(b);
+  });
+}

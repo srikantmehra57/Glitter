@@ -16,7 +16,7 @@ export function snippet(item: TranscriptItem): string {
 
 export function role(item: TranscriptItem): string {
   if (item.kind === "userMessage") return "You";
-  if (item.kind === "agentMessage") return "Muse";
+  if (item.kind === "agentMessage") return "Agent";
   if (item.kind === "toolCall") return item.tool ? `Tool · ${item.tool}` : "Tool";
   if (item.kind === "compaction") return "Compaction";
   return item.kind;

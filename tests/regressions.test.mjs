@@ -935,6 +935,7 @@ async function settingsComponent() {
   const state = { ...DEFAULT_SETTINGS, models: [], agents: [], settingsOpen: true, settingsTab: "Models", preview: false, hostInfo: null,
     setSettingsOpen: (value, tab) => { state.settingsOpen = value; if (tab) state.settingsTab = tab; },
     loadModelCatalog: async () => state.models,
+    agentIdentities: [], refreshAgentIdentities: async () => {},
     commitSettings: async patch => { commits.push(patch); Object.assign(state, patch); },
     startHost: async () => { state.restarts = (state.restarts ?? 0) + 1; },
   };
@@ -945,10 +946,11 @@ async function settingsComponent() {
     'zustand/react/shallow': 'export const useShallow=(selector)=>selector;',
     '../lib/store': 'export const useAppStore=()=>globalThis.componentState;useAppStore.getState=()=>globalThis.componentState;export const applyTheme=()=>{};export const hasWindowMaterial=()=>false;export const currentThread=()=>undefined;export const currentWorkspace=()=>undefined;export const preferredAgent=()=>"muse";',
     '../lib/bridge': 'export const openLogFolder=async()=>"/preview/logs/app.log";export const diagnosticsSnapshot=async()=>({os:"browser-preview",arch:"",logTail:[]});export const providerKeysGet=async(ids)=>ids.map((id)=>({id,configured:false,keyHint:null,baseUrl:null}));export const providerKeySet=async()=>[];export const openUrl=async()=>{};',
-    'lucide-react': 'const I=()=>null;export const Activity=I,Archive=I,ArchiveRestore=I,Bot=I,ChartNoAxesColumn=I,Check=I,Command=I,Cpu=I,Eye=I,EyeOff=I,ExternalLink=I,FilePlus=I,FolderOpen=I,Info=I,KeyRound=I,LoaderCircle=I,Lock=I,MessagesSquare=I,Monitor=I,Moon=I,Palette=I,PanelLeft=I,Plug=I,Puzzle=I,RefreshCw=I,Search=I,Settings2=I,ShieldCheck=I,Sun=I,Trash2=I,TriangleAlert=I,X=I;',
+    'lucide-react': 'const I=()=>null;export const Activity=I,Archive=I,ArchiveRestore=I,ArrowLeft=I,Bot=I,ChartNoAxesColumn=I,Check=I,ChevronDown=I,Command=I,Cpu=I,Eye=I,EyeOff=I,ExternalLink=I,FilePlus=I,FolderOpen=I,Info=I,KeyRound=I,LoaderCircle=I,Lock=I,MessagesSquare=I,Monitor=I,Moon=I,Palette=I,PanelLeft=I,Plug=I,Puzzle=I,RefreshCw=I,Search=I,Settings2=I,ShieldCheck=I,Sun=I,Trash2=I,TriangleAlert=I,X=I;',
     './SelectMenu': 'export const SelectMenu=()=>null;',
     './AgentPicker': 'export const AgentMark=()=>null;export const ProviderMark=()=>null;export const ModelIcon=()=>null;',
     './ExtensionsView': 'export const ExtensionsView=()=>null;',
+    './ModelLibrary': 'export const ModelLibrary=()=>null;',
     './UsageView': 'export const UsageView=()=>null;',
     './LoginPanel': 'export const LoginPanel=()=>null;',
   });
@@ -966,7 +968,8 @@ test('Settings saves preferences as they change, and Cancel discards only a pend
   await new Promise(setImmediate);
   assert.deepEqual(commits, [{ defaultApprovalMode: 'denyUnmatched' }]);
   tree = nodes(render());
-  tree.find(node => node.props?.['aria-label'] === 'Account').props.onClick();
+  // Muse's connection lives on the Agents page.
+  tree.find(node => node.props?.['aria-label'] === 'Agents').props.onClick();
   tree = nodes(render());
   tree.find(node => node.props?.id === 'muse-bin').props.onChange({ target: { value: '/other/muse' } });
   tree.find(node => node.props?.['aria-label'] === 'Theme').props.onClick();

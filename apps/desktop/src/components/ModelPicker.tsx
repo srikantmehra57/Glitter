@@ -1,13 +1,14 @@
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { EXIT_FAST_MS, usePresence } from "../lib/presence";
-import { Check, ChevronDown, Info, KeyRound, Search, Sparkles, X, Zap } from "lucide-react";
+import { Check, ChevronDown, EyeOff, Info, KeyRound, Search, SlidersHorizontal, Sparkles, X, Zap } from "lucide-react";
 import { isFastModel } from "../lib/effort";
 import { humanizeModelLabel } from "../lib/format";
 import { menuPosition } from "../lib/menuPosition";
 import { leadingBrandSlug, modelBrand } from "../lib/brands";
-import { PROVIDERS } from "../lib/providers";
-import { AGENT_LABELS, type AgentId, type AgentInfo, type Model } from "../lib/types";
+import { pickerModels } from "../lib/modelVisibility";
+import { providerIds, providerName } from "../lib/providers";
+import { AGENT_IDS, AGENT_LABELS, type AgentId, type AgentInfo, type Model } from "../lib/types";
 import { AgentMark, ModelIcon, ModelMark, ProviderMark, SourceRail, type RailSource } from "./AgentPicker";
 
 export function modelKey(model: { modelId: string; providerId?: string }) {
@@ -34,24 +35,6 @@ function unlistedNote(names: string[]) {
   return `${names.join(" and ")} ${many ? "are" : "is"} not in the current model list. ${many ? "They stay" : "It stays"} here because this thread or your default model uses ${many ? "them" : "it"}.`;
 }
 
-const PROVIDER_NAMES: Record<string, string> = { opencode: "OpenCode Zen", meta: "Meta", grok: "xAI", "x-ai": "xAI", "z-ai": "Z.ai", moonshotai: "Moonshot AI", mistralai: "Mistral", "meta-llama": "Meta", "deepseek-ai": "DeepSeek", qwen: "Qwen", "cline-free": "Cline" };
-
-function providerName(id?: string) {
-  if (!id) return "Models";
-  return PROVIDERS.find((provider) => provider.id === id)?.name ?? PROVIDER_NAMES[id] ?? id.charAt(0).toUpperCase() + id.slice(1);
-}
-
-/** Providers in Settings order, then any id the catalog adds. */
-function providerIds(models: Model[]): string[] {
-  const ids = [...new Set(models.map((model) => model.providerId).filter((id): id is string => Boolean(id)))];
-  const order = PROVIDERS.map((provider) => provider.id);
-  return ids.sort((a, b) => {
-    const ia = order.indexOf(a);
-    const ib = order.indexOf(b);
-    return (ia < 0 ? order.length : ia) - (ib < 0 ? order.length : ib) || a.localeCompare(b);
-  });
-}
-
 function isFree(model: Model, agentId: AgentId) {
   // Cline retires promotions without renaming the id, so only its live list counts.
   if (agentId === "cline") return model.free === true;
@@ -59,14 +42,14 @@ function isFree(model: Model, agentId: AgentId) {
 }
 
 /** Drop a retired "(free)" from what a search can match. The live free rows keep it. */
-function searchText(model: Model, agentId: AgentId) {
+function searchText(model: Model, agentId: AgentId, source: string) {
   const name = modelName(model);
   const provider = providerName(model.providerId);
   // Only a model Cline has positively retired loses the word. An unknown mark
   // still matches, so a failed promotion lookup cannot hide every free row.
-  if (agentId !== "cline" || model.free !== false) return `${model.modelId} ${name} ${provider}${model.free ? " free" : ""}`;
+  if (agentId !== "cline" || model.free !== false) return `${model.modelId} ${name} ${provider} ${source}${model.free ? " free" : ""}`;
   const strip = (value: string) => value.replace(/\s*\(free\)/gi, " ").replace(/\bfree\b/gi, "");
-  return `${strip(model.modelId)} ${strip(name)} ${strip(provider)}`;
+  return `${strip(model.modelId)} ${strip(name)} ${strip(provider)} ${source}`;
 }
 
 function shownName(model: Model, agentId: AgentId) {
@@ -92,37 +75,50 @@ function costParts(cost: Model["cost"]): [string, string] | null {
   return [`${sign}${cost.input}`, `${sign}${cost.output}`];
 }
 
+type Catalog = { models: Model[]; loading: boolean; error?: string | null };
+
+/**
+ * One provider in the rail. A Harness provider (Anthropic, OpenRouter…) is the
+ * built-in agent calling that provider with the user's key; every other agent
+ * (Muse, Cline CLI…) is a provider of its own models. Picking a model from a
+ * provider on another agent moves the thread to that agent.
+ */
+type Source = RailSource & { agentId: AgentId; providerId?: string; catalog: Catalog; models: Model[]; hidden: number };
+
 type Props = {
   models: Model[];
   agentId: AgentId;
   agents?: AgentInfo[];
+  /** Other agents' providers cannot be picked (a turn is running, no workspace). */
   agentDisabled?: boolean;
   value?: string;
   loading: boolean;
   disabled: boolean;
   applying?: boolean;
   title?: string;
+  /** Settings → Models' switched-off models, as `modelVisibilityKey` strings. */
+  hidden?: readonly string[];
   onChange: (model: Model) => void;
-  onAgentChange?: (id: AgentId) => void;
+  /** A model from a provider on another agent: the thread switches agent, then model. */
+  onChooseOther?: (agentId: AgentId, model: Model) => void;
+  /** Another agent's catalog, read when its provider is opened or a search needs it. */
+  loadCatalog?: (agentId: AgentId) => Promise<Model[]>;
   onRescan?: () => Promise<void>;
   onShowCapabilities?: () => void;
-  onContributorSettings?: () => void;
-  /** The built-in harness: open Settings → Providers to add a key. */
+  onManageModels?: () => void;
+  /** Settings → Providers, to add a key. */
   onManageProviders?: () => void;
 };
 
-const ALL = "all";
-const RAIL_SIZE = { width: 620, height: 480, short: 372 };
-const PLAIN_SIZE = { width: 400, height: 460 };
+const SIZE = { width: 640, height: 480, short: 380 };
+const PLAIN_SIZE = { width: 420, height: 460 };
 
 /**
- * The model chip in the composer. One click opens the models straight away;
- * one click on a row picks it and closes. A rail on the left lists where
- * models come from (Harness providers, or the labs an agent's catalog mixes)
- * and the installed agents, so nothing here opens a second menu. Effort is
- * its own control (EffortPicker).
+ * The model chip in the composer. One click opens it; one click on a row picks
+ * it and closes. The rail lists providers and the list shows that provider's
+ * models — two levels, nothing nested. Effort is its own control (EffortPicker).
  */
-export function ModelPicker({ models, agentId, agents = [], agentDisabled, value, loading, disabled, applying, title, onChange, onAgentChange, onRescan, onShowCapabilities, onContributorSettings, onManageProviders }: Props) {
+export function ModelPicker({ models, agentId, agents = [], agentDisabled, value, loading, disabled, applying, title, hidden, onChange, onChooseOther, loadCatalog, onRescan, onShowCapabilities, onManageModels, onManageProviders }: Props) {
   const root = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
@@ -134,54 +130,100 @@ export function ModelPicker({ models, agentId, agents = [], agentDisabled, value
   const pop = usePresence(open, EXIT_FAST_MS);
   const [active, setActive] = useState(0);
   const [query, setQuery] = useState("");
-  const [pinnedSource, setPinnedSource] = useState<string | null>(null);
+  const [pinned, setPinned] = useState<string | null>(null);
   const [position, setPosition] = useState<ReturnType<typeof menuPosition> | null>(null);
+  const [catalogs, setCatalogs] = useState<Partial<Record<AgentId, Catalog>>>({});
+  const requested = useRef(new Set<AgentId>());
   const selected = models.find((model) => modelKey(model) === value);
-  const agentName = agents.find((agent) => agent.id === agentId)?.name ?? AGENT_LABELS[agentId];
-  const harness = agentId === "harness";
-  // Harness: one provider at a time, as in Settings. Other agents: their catalog's labs, or all of them.
-  const labs = providerIds(models);
-  const harnessProviders = harness ? labs : [];
-  const showLabs = !harness && labs.length > 1;
-  const pinned = pinnedSource && (pinnedSource === ALL || labs.includes(pinnedSource)) ? pinnedSource : undefined;
-  const activeProvider = harness ? (pinned && pinned !== ALL ? pinned : selected?.providerId && labs.includes(selected.providerId) ? selected.providerId : labs[0]) : undefined;
-  const activeLab = showLabs ? pinned ?? ALL : ALL;
-  const sourceId = harness ? activeProvider : activeLab;
-  const chipProvider = harness ? (selected?.providerId && labs.includes(selected.providerId) ? selected.providerId : activeProvider) : undefined;
-  const listedProvider = open ? activeProvider : chipProvider;
-  const sourceName = listedProvider ? providerName(listedProvider) : activeLab !== ALL ? providerName(activeLab) : agentName;
-  const selectionLocked = disabled || loading || applying;
-  const searchable = models.length > 6;
-  const railed = Boolean(onAgentChange && onRescan) || showLabs;
-  // A short catalog with few sources gets a shorter panel; a long one keeps the full height.
-  const tall = models.length > 4 || labs.length + agents.length > 6;
   const needle = query.trim().toLowerCase();
-  const visible = useMemo(() => {
-    // A search looks through every source of this agent, not only the one picked.
-    const pool = needle ? models : activeProvider ? models.filter((model) => model.providerId === activeProvider) : activeLab !== ALL ? models.filter((model) => model.providerId === activeLab) : models;
-    const matches = pool.filter((model) => !needle || searchText(model, agentId).toLowerCase().includes(needle));
-    const order = [...new Set([selected?.providerId, ...matches.map((model) => model.providerId)])];
-    return matches.slice().sort((a, b) => {
-      const unavailable = Number(Boolean(a.unavailable)) - Number(Boolean(b.unavailable));
-      const promoted = agentId === "cline" ? Number(b.free === true) - Number(a.free === true) : 0;
-      return unavailable || promoted || order.indexOf(a.providerId) - order.indexOf(b.providerId);
-    });
-  }, [models, needle, selected?.providerId, activeProvider, activeLab, agentId]);
-  const selectedIndex = visible.findIndex((model) => modelKey(model) === value);
-  const activeIndex = Math.max(0, Math.min(active, visible.length - 1));
-  const unlisted = models.filter((model) => model.unlisted);
-  const grouped = new Set(visible.map((item) => sectionOf(item, agentId))).size > 1;
-  // A list that mixes providers marks each row's provider in the corner of its icon.
-  const mixed = new Set(visible.map((item) => item.providerId)).size > 1;
-  const freeCount = visible.filter((model) => isFree(model, agentId)).length;
-  const contains = (target: Node | null) => Boolean(root.current?.contains(target) || panel.current?.contains(target));
+  const selectionLocked = disabled || loading || applying;
 
-  const sources: RailSource[] = harness
-    ? harnessProviders.map((id) => ({ id, name: providerName(id), mark: <ProviderMark id={id} size={18} />, count: models.filter((model) => model.providerId === id).length }))
-    : showLabs ? [
-      { id: ALL, name: "All models", mark: <AgentMark id={agentId} size={18} />, count: models.length },
-      ...labs.map((id) => ({ id, name: providerName(id), mark: <ProviderMark id={id} size={18} />, count: models.filter((model) => model.providerId === id).length })),
-    ] : [];
+  // Agents shown as providers: the current one always, then every other installed one, in a fixed order.
+  const shownAgents = useMemo(() => {
+    const ids = new Set<AgentId>([agentId, ...agents.filter((agent) => agent.found).map((agent) => agent.id)]);
+    return AGENT_IDS.filter((id) => ids.has(id));
+  }, [agentId, agents]);
+  const others = onChooseOther && loadCatalog ? shownAgents.filter((id) => id !== agentId) : [];
+
+  const fetchCatalog = (id: AgentId) => {
+    if (!loadCatalog || requested.current.has(id)) return;
+    requested.current.add(id);
+    setCatalogs((all) => ({ ...all, [id]: { models: all[id]?.models ?? [], loading: true } }));
+    void loadCatalog(id).then(
+      (list) => setCatalogs((all) => ({ ...all, [id]: { models: list, loading: false } })),
+      (error) => { requested.current.delete(id); setCatalogs((all) => ({ ...all, [id]: { models: [], loading: false, error: error instanceof Error ? error.message : String(error) } })); },
+    );
+  };
+  // Harness providers are listed from the start: they are local and cheap to read. CLI agents load when opened.
+  useEffect(() => { if (open && others.includes("harness")) fetchCatalog("harness"); }, [open, others.join(",")]);
+  useEffect(() => { if (open && needle) for (const id of others) fetchCatalog(id); }, [open, needle.length > 0]);
+  useEffect(() => { if (!open) requested.current.clear(); }, [open]);
+
+  const sources: Source[] = useMemo(() => {
+    const list: Source[] = [];
+    for (const id of shownAgents) {
+      const current = id === agentId;
+      if (!current && !others.includes(id)) continue;
+      const catalog: Catalog = current ? { models, loading } : catalogs[id] ?? { models: [], loading: false };
+      const info = agents.find((agent) => agent.id === id);
+      const signIn = !current && (id === "muse" || id === "harness") && info?.authenticated === false;
+      const visibleModels = pickerModels(catalog.models, id, hidden, current ? selected : undefined);
+      if (id === "harness") {
+        const providers = providerIds(catalog.models);
+        if (!providers.length) {
+          // With no key yet, the built-in agent still gets a row that leads to Providers.
+          if (current || catalog.loading) list.push({ id: "harness:", agentId: id, name: catalog.loading ? "Your providers" : "Add a provider", mark: <span className="rail-key"><KeyRound size={12} aria-hidden="true" /></span>, catalog, models: [], hidden: 0, disabled: !current && Boolean(agentDisabled) });
+          continue;
+        }
+        for (const providerId of providers) {
+          const own = visibleModels.filter((model) => model.providerId === providerId);
+          list.push({ id: `harness:${providerId}`, agentId: id, providerId, name: providerName(providerId), mark: <ProviderMark id={providerId} size={18} />, count: own.length, catalog, models: own, hidden: catalog.models.filter((model) => model.providerId === providerId).length - own.length, disabled: !current && (Boolean(agentDisabled) || signIn), live: current && selected?.providerId === providerId });
+        }
+        continue;
+      }
+      list.push({ id: `${id}:`, agentId: id, name: info?.name ?? AGENT_LABELS[id], mark: <AgentMark id={id} size={18} />, count: catalog.models.length ? visibleModels.length : undefined, catalog, models: visibleModels, hidden: catalog.models.length - visibleModels.length, disabled: !current && (Boolean(agentDisabled) || signIn), title: signIn ? `${info?.name ?? AGENT_LABELS[id]} · sign in from Settings → Agents` : undefined, live: current });
+    }
+    return list;
+  }, [shownAgents, others.join(","), agentId, models, loading, catalogs, agents, hidden, selected, agentDisabled]);
+
+  const homeId = agentId === "harness" ? `harness:${selected?.providerId ?? ""}` : `${agentId}:`;
+  const sourceId = pinned && sources.some((source) => source.id === pinned) ? pinned : sources.some((source) => source.id === homeId) ? homeId : sources.find((source) => source.agentId === agentId)?.id ?? sources[0]?.id;
+  const source = sources.find((item) => item.id === sourceId);
+  useEffect(() => { if (open && source && source.agentId !== agentId) fetchCatalog(source.agentId); }, [open, source?.agentId]);
+
+  const railed = sources.length > 1 || Boolean(onRescan);
+  const searchable = sources.reduce((total, item) => total + item.models.length, 0) > 6;
+  const tall = (source?.models.length ?? 0) > 4 || sources.length > 6;
+
+  // A search looks through every provider, not only the open one.
+  const rows = useMemo(() => {
+    const pool = needle ? sources : source ? [source] : [];
+    const out: Array<{ model: Model; source: Source }> = [];
+    for (const item of pool) {
+      const matches = item.models.filter((model) => !needle || searchText(model, item.agentId, item.name).toLowerCase().includes(needle));
+      const order = [...new Set([selected?.providerId, ...matches.map((model) => model.providerId)])];
+      const sorted = matches.slice().sort((a, b) => {
+        const unavailable = Number(Boolean(a.unavailable)) - Number(Boolean(b.unavailable));
+        const promoted = item.agentId === "cline" ? Number(b.free === true) - Number(a.free === true) : 0;
+        return unavailable || promoted || order.indexOf(a.providerId) - order.indexOf(b.providerId);
+      });
+      for (const model of sorted) out.push({ model, source: item });
+    }
+    return out;
+  }, [sources, source, needle, selected?.providerId]);
+  const isSelected = (row: { model: Model; source: Source }) => row.source.agentId === agentId && modelKey(row.model) === value;
+  const selectedIndex = rows.findIndex(isSelected);
+  const activeIndex = Math.max(0, Math.min(active, rows.length - 1));
+  const listModels = rows.map((row) => row.model);
+  const unlisted = listModels.filter((model) => model.unlisted);
+  // Headings: per provider while searching, per lab inside an agent that mixes labs.
+  const groupOf = (row: { model: Model; source: Source }) => needle ? row.source.id : sectionOf(row.model, row.source.agentId);
+  const grouped = new Set(rows.map(groupOf)).size > 1;
+  // A list that mixes providers marks each row's provider in the corner of its icon.
+  const mixed = new Set(listModels.map((item) => item.providerId)).size > 1;
+  const freeCount = rows.filter((row) => isFree(row.model, row.source.agentId)).length;
+  const sourceLoading = Boolean(source?.catalog.loading && !source.models.length);
+  const contains = (target: Node | null) => Boolean(root.current?.contains(target) || panel.current?.contains(target));
 
   useEffect(() => {
     if (!open) return;
@@ -196,10 +238,9 @@ export function ModelPicker({ models, agentId, agents = [], agentDisabled, value
     const popover = panel.current;
     const update = () => {
       const bounds = root.current?.closest("dialog")?.getBoundingClientRect() ?? { left: 0, top: 0, right: window.innerWidth, bottom: window.innerHeight };
-      // With a rail the panel keeps one height, so switching sources does not make it jump.
-      // Without one, block layout keeps the content's natural height while a catalog loads.
-      const height = railed ? (tall ? RAIL_SIZE.height : RAIL_SIZE.short) : Math.min(PLAIN_SIZE.height, popover.scrollHeight + popover.offsetHeight - popover.clientHeight);
-      setPosition(menuPosition(anchor.getBoundingClientRect(), { width: railed ? RAIL_SIZE.width : PLAIN_SIZE.width, height }, bounds, false));
+      // With a rail the panel keeps one height, so switching providers does not make it jump.
+      const height = railed ? (tall ? SIZE.height : SIZE.short) : Math.min(PLAIN_SIZE.height, popover.scrollHeight + popover.offsetHeight - popover.clientHeight);
+      setPosition(menuPosition(anchor.getBoundingClientRect(), { width: railed ? SIZE.width : PLAIN_SIZE.width, height }, bounds, false));
     };
     const dismissOnScroll = (event: Event) => { if (!contains(event.target as Node)) setOpen(false); };
     update();
@@ -218,8 +259,8 @@ export function ModelPicker({ models, agentId, agents = [], agentDisabled, value
     (searchable ? search.current : items.current[activeIndex])?.focus();
   }, [open, loading, agentId, searchable, disabled, position !== null]);
 
-  useEffect(() => { setQuery(""); setActive(0); setPinnedSource(null); }, [agentId]);
-  useEffect(() => { if (!open) setPinnedSource(null); }, [open]);
+  useEffect(() => { setQuery(""); setActive(0); setPinned(null); }, [agentId]);
+  useEffect(() => { if (!open) setPinned(null); }, [open]);
   useEffect(() => {
     if (!open) return;
     // Scroll the catalog only; scrollIntoView can move the anchor's thread.
@@ -233,9 +274,10 @@ export function ModelPicker({ models, agentId, agents = [], agentDisabled, value
   }, [open, activeIndex]);
 
   const close = () => { setOpen(false); trigger.current?.focus(); };
-  const choose = (model: Model) => {
-    if (selectionLocked) return;
-    if (modelKey(model) !== value) onChange(model);
+  const choose = (row: { model: Model; source: Source }) => {
+    if (selectionLocked || row.source.disabled) return;
+    if (row.source.agentId !== agentId) onChooseOther?.(row.source.agentId, row.model);
+    else if (modelKey(row.model) !== value) onChange(row.model);
     close();
   };
   const openPanel = () => {
@@ -244,17 +286,26 @@ export function ModelPicker({ models, agentId, agents = [], agentDisabled, value
     setOpen(true);
   };
   const pickSource = (id: string) => {
-    setPinnedSource(id);
+    setPinned(id);
     setQuery("");
     setActive(0);
     const catalog = panel.current?.querySelector(".model-catalog");
     if (catalog) catalog.scrollTop = 0;
   };
+
+  const chipProvider = agentId === "harness" ? selected?.providerId : undefined;
   const label = selected ? shownName(selected, agentId) : loading ? "Loading…" : !models.length ? "No models" : "Choose model";
   const selectedBrand = selected ? modelBrand(selected.modelId, selected.providerId) : null;
   const showModelIcon = Boolean(selected && selectedBrand && "slug" in selectedBrand && selectedBrand.slug !== leadingBrandSlug(agentId, chipProvider));
-  const headMark = listedProvider ? <ProviderMark id={listedProvider} size={28} /> : activeLab !== ALL ? <ProviderMark id={activeLab} size={28} /> : <AgentMark id={agentId} size={28} />;
-  const summary = loading ? "Loading…" : needle ? `${visible.length} ${visible.length === 1 ? "match" : "matches"}` : `${visible.length} ${visible.length === 1 ? "model" : "models"}${freeCount ? ` · ${freeCount} free` : ""}`;
+  const chipSource = chipProvider ? providerName(chipProvider) : agents.find((agent) => agent.id === agentId)?.name ?? AGENT_LABELS[agentId];
+  const headTitle = needle ? "All providers" : source?.name ?? chipSource;
+  const headMark: ReactNode = needle ? <span className="rail-key"><Search size={13} aria-hidden="true" /></span> : source?.mark ?? <AgentMark id={agentId} size={28} />;
+  const summary = sourceLoading ? "Loading…" : needle ? `${rows.length} ${rows.length === 1 ? "match" : "matches"}` : `${rows.length} ${rows.length === 1 ? "model" : "models"}${freeCount ? ` · ${freeCount} free` : ""}`;
+  const emptyText = query ? `No models match “${query}”.`
+    : source?.catalog.error ? `${source.name} could not list its models. ${source.catalog.error}`
+    : source?.agentId === "harness" ? "No models yet. Add a provider key to see its models."
+    : source?.hidden ? "Every model here is switched off. Turn some back on in Settings → Models."
+    : "No models available. Rescan agents to try again.";
 
   return (
     <div ref={root} className="picker model-picker" title={title}>
@@ -267,7 +318,7 @@ export function ModelPicker({ models, agentId, agents = [], agentDisabled, value
         aria-expanded={open}
         aria-controls={pop.mounted ? dialogId : undefined}
         aria-label="Model"
-        aria-description={`${sourceName} · ${label}`}
+        aria-description={`${chipSource} · ${label}`}
         disabled={disabled}
         onClick={() => { if (open) setOpen(false); else openPanel(); }}
         onKeyDown={(event) => {
@@ -301,23 +352,19 @@ export function ModelPicker({ models, agentId, agents = [], agentDisabled, value
         >
           {railed ? (
             <SourceRail
-              agents={onAgentChange ? agents : []}
-              value={agentId}
-              disabled={Boolean(agentDisabled || disabled || applying)}
-              onChange={(id) => onAgentChange?.(id)}
-              onRescan={onRescan ?? (async () => {})}
-              onShowCapabilities={onShowCapabilities ? () => { close(); onShowCapabilities(); } : undefined}
               sources={sources}
-              sourceId={sourceId}
-              sourcesLabel={harness ? "Providers" : "Labs"}
+              sourceId={needle ? undefined : sourceId}
               onSourceChange={pickSource}
+              onRescan={onRescan}
+              onShowCapabilities={onShowCapabilities ? () => { close(); onShowCapabilities(); } : undefined}
+              capabilitiesLabel={`${AGENT_LABELS[agentId]} capabilities`}
             />
           ) : null}
           <div className="model-main">
             <div className="model-picker-head">
-              <span className="model-head-mark" key={`${agentId}:${sourceId ?? ""}`}>{headMark}</span>
+              <span className="model-head-mark" key={needle ? "search" : sourceId ?? ""}>{headMark}</span>
               <span className="model-head-copy">
-                <span className="model-picker-title">{sourceName}</span>
+                <span className="model-picker-title">{headTitle}</span>
                 <span className="model-head-summary" aria-live="polite">{summary}</span>
               </span>
               <button type="button" className="icon-btn" aria-label="Close model picker" onClick={close}><X size={13} aria-hidden="true" /></button>
@@ -330,37 +377,39 @@ export function ModelPicker({ models, agentId, agents = [], agentDisabled, value
                 aria-autocomplete="list"
                 aria-expanded="true"
                 aria-controls={listId}
-                aria-activedescendant={visible.length ? `${listId}-${activeIndex}` : undefined}
+                aria-activedescendant={rows.length ? `${listId}-${activeIndex}` : undefined}
                 value={query}
-                placeholder={railed ? `Search all ${agentName} models` : `Search ${sourceName} models`}
+                placeholder={railed ? "Search every provider’s models" : "Search models"}
                 aria-label="Search models"
                 disabled={disabled || loading}
                 onChange={(event) => { setQuery(event.target.value); setActive(0); }}
                 onKeyDown={(event) => {
-                  if (event.key === "ArrowDown") { event.preventDefault(); setActive((index) => Math.min(visible.length - 1, index + 1)); }
+                  if (event.key === "ArrowDown") { event.preventDefault(); setActive((index) => Math.min(rows.length - 1, index + 1)); }
                   else if (event.key === "ArrowUp") { event.preventDefault(); setActive((index) => Math.max(0, index - 1)); }
-                  else if (event.key === "Enter" && visible[activeIndex]) { event.preventDefault(); choose(visible[activeIndex]); }
+                  else if (event.key === "Enter" && rows[activeIndex]) { event.preventDefault(); choose(rows[activeIndex]); }
                 }}
               />
               {query ? <button type="button" className="icon-btn" aria-label="Clear model search" onClick={() => { setQuery(""); setActive(0); search.current?.focus(); }}><X size={12} aria-hidden="true" /></button> : null}
             </label> : null}
             <div className="model-catalog">
-              <div key={`${agentId}:${sourceId ?? ""}`} id={listId} role="listbox" aria-label="Model" aria-busy={Boolean(loading || applying)}>
-                {loading ? <p className="picker-empty" role="status">Loading {sourceName} models…</p> : !visible.length ? <p className="picker-empty">{query ? `No models match “${query}”.` : harness ? "No models yet. Add a provider key to see its models." : "No models available. Rescan agents to try again."}</p> : null}
-                {visible.map((model, index) => {
+              <div key={needle ? "search" : sourceId ?? ""} id={listId} role="listbox" aria-label="Model" aria-busy={Boolean(sourceLoading || applying)}>
+                {sourceLoading && !needle ? <p className="picker-empty" role="status">Loading {source?.name ?? "models"}…</p> : !rows.length ? <p className="picker-empty">{emptyText}</p> : null}
+                {rows.map((row, index) => {
+                  const { model } = row;
+                  const owner = row.source.agentId;
                   const price = costParts(model.cost);
                   const contributor = CONTRIBUTOR.test(model.modelId);
                   const specs = [contextLabel(model.contextLimit), !contributor && model.description !== "Free" && model.description !== providerName(model.providerId) ? model.description : null].filter(Boolean).join(" · ");
-                  const free = isFree(model, agentId);
-                  const name = shownName(model, agentId);
-                  const section = sectionOf(model, agentId);
-                  const group = index === 0 || sectionOf(visible[index - 1], agentId) !== section;
-                  const rowSelected = index === selectedIndex;
+                  const free = isFree(model, owner);
+                  const name = shownName(model, owner);
+                  const group = groupOf(row);
+                  const heading = grouped && (index === 0 || groupOf(rows[index - 1]) !== group);
+                  const rowSelected = isSelected(row);
                   return (
-                    <div key={modelKey(model)} role="presentation" className="model-row" style={{ "--i": Math.min(index, 12) } as React.CSSProperties}>
-                      {group && grouped ? (
-                        <div className={`menu-heading group${section === "free" ? " free" : ""}`}>
-                          {section === "free" ? <><Sparkles size={12} aria-hidden="true" />Free right now</> : <>{model.providerId ? <ProviderMark id={model.providerId} size={14} /> : null}{providerName(model.providerId)}</>}
+                    <div key={`${row.source.id}\u0000${modelKey(model)}`} role="presentation" className="model-row" style={{ "--i": Math.min(index, 12) } as React.CSSProperties}>
+                      {heading ? (
+                        <div className={`menu-heading group${group === "free" ? " free" : ""}`}>
+                          {needle ? <>{row.source.mark}{row.source.name}</> : group === "free" ? <><Sparkles size={12} aria-hidden="true" />Free right now</> : <>{model.providerId ? <ProviderMark id={model.providerId} size={14} /> : null}{providerName(model.providerId)}</>}
                         </div>
                       ) : null}
                       <button
@@ -369,20 +418,20 @@ export function ModelPicker({ models, agentId, agents = [], agentDisabled, value
                         type="button"
                         role="option"
                         aria-selected={rowSelected}
-                        aria-description={[model.unlisted ? unlistedNote([name]) : "", contributor ? dataNote(model) : model.description ?? ""].filter(Boolean).join(" ") || undefined}
+                        aria-description={[model.unlisted ? unlistedNote([name]) : "", contributor ? dataNote(model) : model.description ?? "", owner !== agentId ? `Switches this thread to ${row.source.agentId === "harness" ? "the built-in agent" : row.source.name}` : ""].filter(Boolean).join(" ") || undefined}
                         tabIndex={index === activeIndex ? 0 : -1}
-                        disabled={Boolean(selectionLocked)}
+                        disabled={Boolean(selectionLocked || row.source.disabled)}
                         className={`model-option ${index === activeIndex ? "active" : ""} ${model.unavailable ? "unavailable" : ""}`}
                         onMouseEnter={() => setActive(index)}
-                        onClick={() => choose(model)}
+                        onClick={() => choose(row)}
                         onKeyDown={(event) => {
                           const step = event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : 0;
-                          const next = event.key === "Home" ? 0 : event.key === "End" ? visible.length - 1 : step ? (index + step + visible.length) % visible.length : -1;
+                          const next = event.key === "Home" ? 0 : event.key === "End" ? rows.length - 1 : step ? (index + step + rows.length) % rows.length : -1;
                           if (next < 0) return;
                           event.preventDefault(); setActive(next); items.current[next]?.focus();
                         }}
                       >
-                        <span className="model-icon"><ModelIcon modelId={model.modelId} providerId={model.providerId} size={22} badge={mixed} fallback={<AgentMark id={agentId} size={22} />} /></span>
+                        <span className="model-icon"><ModelIcon modelId={model.modelId} providerId={model.providerId} size={22} badge={mixed} fallback={<AgentMark id={owner} size={22} />} /></span>
                         <span className="model-copy">
                           <span className="model-name">
                             <span className="model-label" title={name}>{name}</span>
@@ -399,14 +448,17 @@ export function ModelPicker({ models, agentId, agents = [], agentDisabled, value
                   );
                 })}
               </div>
-              {models.some((model) => costParts(model.cost)) ? <p className="model-pricing-note">Prices per 1M tokens</p> : null}
+              {listModels.some((model) => costParts(model.cost)) ? <p className="model-pricing-note">Prices per 1M tokens</p> : null}
               {unlisted.length ? <p className="picker-note"><Info size={11} aria-hidden="true" />{unlistedNote(unlisted.map((model) => shownName(model, agentId)))}</p> : null}
-              {models.some((model) => CONTRIBUTOR.test(model.modelId)) ? <p className="picker-note"><Info size={11} aria-hidden="true" />Contributor models are discounted because your content, including inter-session messages, may be used for product improvement.</p> : null}
+              {listModels.some((model) => CONTRIBUTOR.test(model.modelId)) ? <p className="picker-note"><Info size={11} aria-hidden="true" />Contributor models are discounted because your content, including inter-session messages, may be used for product improvement.</p> : null}
             </div>
-            {(agentId === "muse" && onContributorSettings) || (harness && onManageProviders) ? (
+            {onManageModels || onManageProviders ? (
               <div className="model-picker-foot">
-                {harness && onManageProviders ? <button type="button" className="ghost-btn small" onClick={() => { close(); onManageProviders(); }}><KeyRound size={11} aria-hidden="true" />Manage providers</button> : null}
-                {agentId === "muse" && onContributorSettings ? <button type="button" className="ghost-btn small" onClick={() => { close(); onContributorSettings(); }}>Contributor settings</button> : null}
+                {source?.hidden && !needle ? <button type="button" className="ghost-btn small quiet" onClick={() => { close(); onManageModels?.(); }}><EyeOff size={11} aria-hidden="true" />{source.hidden} hidden</button> : <span />}
+                <span className="model-picker-foot-actions">
+                  {onManageProviders ? <button type="button" className="ghost-btn small" onClick={() => { close(); onManageProviders(); }}><KeyRound size={11} aria-hidden="true" />Manage providers</button> : null}
+                  {onManageModels ? <button type="button" className="ghost-btn small" onClick={() => { close(); onManageModels(); }}><SlidersHorizontal size={11} aria-hidden="true" />Manage models</button> : null}
+                </span>
               </div>
             ) : null}
           </div>

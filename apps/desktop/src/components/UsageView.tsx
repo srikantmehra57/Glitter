@@ -397,7 +397,6 @@ export function UsageView({ embedded = false }: { embedded?: boolean } = {}) {
       )}
 
       <div className="usage-scroll">
-        {museOn ? <PlanUsage now={nowMs} /> : null}
         <section className="usage-summary" aria-label="Usage summary">
           <div><span>Tokens</span><strong>{approx}{formatTokens(total)}</strong></div>
           <div title={cached ? `${formatTokens(cached)} of it from prompt caches` : undefined}><span>Input</span><strong>{formatTokens(input)}</strong></div>
@@ -475,6 +474,8 @@ export function UsageView({ embedded = false }: { embedded?: boolean } = {}) {
           </section>
         </div>
         <Trajectory turns={trajectory} slots={slots} />
+        {/* Muse's own plan meter, for people who also run Muse: after Glitter's counts, not ahead of them. */}
+        {museOn ? <PlanUsage now={nowMs} /> : null}
         <p className="usage-note">
           <Clock3 size={12} aria-hidden />
           <span>Counted as each turn finishes, from the tokens each agent reports, and kept on this Mac.{estimated ? ` ≈ marks ${plural(estimated, "turn")} whose agent reported no counts; those are estimated from the reply.` : ""}</span>

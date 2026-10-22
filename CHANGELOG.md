@@ -12,6 +12,15 @@ licence terms.
 
 ### Added
 
+- Settings → Models has a **model library**: every provider's models, each with
+  a switch that keeps it in or out of the composer's model picker, so a
+  provider with hundreds of models can show the two you use. A model a thread is
+  already on stays in its picker. Models the built-in agent calls directly have
+  **Test**, which sends one word and shows how long the reply took — or why it
+  failed — so a busy or retired model shows up before you rely on it. Test
+  shown runs the whole list, two at a time.
+- Skills, plugins and MCP servers have **thumbnails**: a tinted tile with an
+  icon for what each one does, in the Store and in the installed lists.
 - A built-in agent, **Harness**, that works without any agent CLI installed.
   Add your own key in Settings → Providers (Anthropic, OpenAI, Google Gemini,
   OpenRouter, xAI, DeepSeek, Groq, Mistral, NVIDIA NIM, a custom
@@ -111,6 +120,32 @@ licence terms.
 
 ### Changed
 
+- **Settings is a full-window page.** It takes the place of the app view, with
+  its categories on the sidebar's surface and Back beside the window controls.
+  The pages are regrouped and renamed — AI (Models, Providers, Agents),
+  Workspace (Extensions, Permissions, Threads), App (General, Appearance,
+  Commands & shortcuts, Usage) and System (Diagnostics, About) — and search
+  matches every word you type. A host setting that needs a restart raises a bar
+  at the foot of the page; other messages appear as a toast.
+- **The model picker has two levels: providers, then models.** The built-in
+  agent's providers (Anthropic, OpenAI, OpenRouter…) and each other installed
+  agent (Muse, Cline CLI…) sit side by side in one list; there is no Agents
+  section and no Harness row above its providers. Choosing a model from another
+  agent's provider moves the thread to that agent. Search covers every provider.
+- **Muse is one agent among others.** The Account page is gone: Muse's
+  credential, API key, binary path and Contributor mode are on Agents, shown
+  while Muse is. Onboarding leads with connecting a model provider and offers
+  Muse sign-in as an alternative when the Muse CLI is installed. The Muse
+  subscription meter moved to the end of Usage, and app copy no longer assumes
+  Muse is the agent.
+- Settings and Usage are **icons in the title bar**, beside Show/Hide sidebar
+  at the sidebar's right edge, and slide with it when it collapses. The sidebar
+  foot appears only for an update or an agent that needs attention.
+- The Store is a **grid of cards** with the summary, what a bundle installs and
+  the command a server adds, and Install at each card's foot.
+- Text across the app follows one **type scale** (11, 12, 13, 15px and up), so
+  sizes and alignment agree from surface to surface. The composer addresses the
+  built-in agent by its model: "Ask Claude Sonnet 5 to plan…".
 - Glitter has its own mark. The app icon, the boot splash, Settings, About,
   the Muse agent badge and the website now show a geometric G around a
   four-pointed faceted spark, replacing the ember M carried over from the Muse

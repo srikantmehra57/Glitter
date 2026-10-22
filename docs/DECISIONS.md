@@ -7,6 +7,35 @@ must respect. Don't log routine changes here; they belong in git history and
 
 ---
 
+### Settings is a page, and the picker lists providers, not agents
+
+- **Date:** 2026-10-22
+- **Context:** Glitter grew from a Muse client into an agent harness, but its
+  surfaces still framed it as one: Settings opened on a Muse Account page, and
+  the model picker nested the built-in agent's providers under an "Agents"
+  section with Harness as one more row, so picking a model took three levels.
+- **Decision:** The model picker has two levels, providers then models. Each
+  provider the built-in agent has a key for is a provider, and every other
+  installed agent (Muse, Cline CLI…) is one provider of its own. Choosing a
+  model from another agent's provider switches the thread's agent
+  (`chooseAgentModel`), exactly as the old agent row did. Settings is a
+  full-window page with four groups (AI, Workspace, App, System) named once in
+  `lib/settingsNav.ts`; the Account page is gone and Muse's connection lives on
+  Agents. A remembered Account page opens Agents.
+- **Hidden models:** `hiddenModels` (agent, provider and model, so the same id
+  under two providers stays distinct) takes a model out of the picker only. The
+  catalog, a thread already on it and the default-model menu are unaffected, and
+  the thread's current model is never hidden from its own picker.
+- **Testing a model:** a `testModel` bridge verb runs one tool-less, one-word
+  completion through the built-in agent and returns only its timing and a short
+  reply. It reaches no session, transcript or log, and the DTO refuses any agent
+  but the built-in one: a CLI agent's model could only be checked by starting a
+  session, which the app will not do behind the user's back. Keys are injected
+  natively, as for every built-in agent call.
+- **Consequences:** Another agent's catalog loads when its provider is opened or
+  a search needs it, so opening the picker never starts an agent CLI by itself.
+
+
 ### The extension store ships inside the app
 
 - **Date:** 2026-10-22

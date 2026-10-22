@@ -1316,4 +1316,34 @@ export class HarnessHost {
     }
     return { text };
   }
+
+  /**
+   * Settings → Models' Test: a one-word, tool-less, off-transcript request, so
+   * a busy or retired model shows up before a thread depends on it. The reply
+   * is cut to a short line; only the timing and that line come back.
+   */
+  async testModel(options: { modelId: string; timeoutMs?: number }) {
+    const { providerId } = splitModelId(options.modelId);
+    if (!providerId) throw new Error(`${options.modelId} does not name a provider.`);
+    const provider = resolveProvider(providerId, this.credentials);
+    if (!provider) throw new ProviderError(`${providerSpec(providerId)?.name ?? providerId} has no key.`, undefined, "MISSING_CREDENTIAL");
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 30_000);
+    timer.unref?.();
+    const started = Date.now();
+    let firstTokenMs: number | null = null;
+    let text = "";
+    try {
+      for await (const event of streamChat({ provider, modelId: options.modelId, system: { stable: "Reply with one word.", volatile: "" }, messages: [{ role: "user", content: [{ type: "text", text: "Reply with the word: ready" }] }], tools: [], signal: controller.signal, fetchImpl: this.fetchImpl })) {
+        if ((event.type === "text" || event.type === "reasoning") && firstTokenMs === null) firstTokenMs = Date.now() - started;
+        if (event.type === "text") text += event.delta;
+      }
+    } catch (error) {
+      if (controller.signal.aborted) throw new ProviderError(`No reply within ${Math.round((options.timeoutMs ?? 30_000) / 1000)} seconds.`, undefined, "TIMEOUT");
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
+    return { latencyMs: Date.now() - started, firstTokenMs, reply: text.trim().replace(/\s+/g, " ").slice(0, 80) };
+  }
 }
