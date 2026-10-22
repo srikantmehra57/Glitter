@@ -122,6 +122,22 @@ describe("Composer", () => {
     expect(within(museMenu).getAllByRole("option")).toHaveLength(4);
   });
 
+  it("gives an agent CLI a permissions menu of the three answers Glitter can give its requests", () => {
+    const setSessionConfig = vi.fn(async () => {});
+    seedWorkspace({ agentId: "grok", config: { agentId: "grok", approvalMode: "onRequest" } });
+    useAppStore.setState({ setSessionConfig });
+    render(<Composer />);
+    // Auto-review has no meaning for an agent CLI, so the thread shows Ask me.
+    const trigger = screen.getByRole("button", { name: "Permissions" });
+    expect(trigger).toHaveTextContent("Ask me");
+    fireEvent.click(trigger);
+    const menu = screen.getByRole("listbox", { name: "Permissions" });
+    expect(within(menu).getAllByRole("option")).toHaveLength(3);
+    expect(within(menu).queryByRole("option", { name: /Auto-review/ })).toBeNull();
+    fireEvent.click(within(menu).getByRole("option", { name: /Unrestricted/ }));
+    expect(setSessionConfig).toHaveBeenCalledWith({ approvalMode: "allowAll" });
+  });
+
   it("keeps Stop-to-send for an ACP agent while a turn runs", () => {
     seedWorkspace({ agentId: "opencode", status: "running", activeTurnId: "t1" });
     useAppStore.setState({ composer: "follow up" });

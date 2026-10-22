@@ -301,7 +301,11 @@ controls (`.picker-trigger`, and `.select-trigger` inside `.composer-foot`)
 that fill a capsule on hover; short 16px hairlines separate model, effort and
 permissions, as one separates attach and mention from them. The model control
 pairs the agent mark with the model name; effort is its own control beside it.
-A mode never changes its shape, only its tone: Unrestricted takes the warning
+Every agent has the permissions control. Muse offers its four modes and the
+built-in agent adds Autonomous; an agent CLI offers Read only, Ask me and
+Unrestricted, which say how Glitter answers the permission requests that agent
+sends (its own configuration decides what it asks about), under the heading
+“When {agent} asks permission”. A mode never changes its shape, only its tone: Unrestricted takes the warning
 colour for as long as it is selected. When the composer
 narrows, the model name truncates first, then labels fold to their icons; the
 row never wraps.

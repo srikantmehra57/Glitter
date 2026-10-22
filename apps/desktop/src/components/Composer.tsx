@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useId, useMemo, useRef, useState, type Re
 import { describeError } from "../lib/errors";
 import { useShallow } from "zustand/react/shallow";
 import { ArrowUp, AtSign, FileText, FileUp, GitBranch, Hammer, Lock, Paperclip, Play, RotateCcw, ShieldAlert, ShieldCheck, Square, Terminal, TriangleAlert, X } from "lucide-react";
-import { AGENT_LABELS, APPROVAL_DESCRIPTIONS, APPROVAL_LABELS, APPROVAL_ORDER, HARNESS_APPROVAL_ORDER, agentEnabled, type ApprovalMode, type ContextRef, type Thread, type TranscriptItem } from "../lib/types";
+import { ACP_APPROVAL_DESCRIPTIONS, ACP_APPROVAL_ORDER, AGENT_LABELS, APPROVAL_DESCRIPTIONS, APPROVAL_LABELS, APPROVAL_ORDER, HARNESS_APPROVAL_ORDER, agentEnabled, approvalModeForAgent, type ApprovalMode, type ContextRef, type Thread, type TranscriptItem } from "../lib/types";
 import { defaultTier, isPeak, modelFor, tiersFor, withUnlistedModels } from "../lib/effort";
 import { formatTokens, humanizeModelLabel, isTauri, uid } from "../lib/format";
 import { fuzzyScore } from "../lib/fuzzy";
@@ -142,6 +142,8 @@ function ComposerView({ above }: { above?: ReactNode }) {
   const pickerAgents = s.agents.filter((item) => agentEnabled(s, item.id));
   const agent = s.agents.find((item) => item.id === agentId);
   const agentName = agent?.name ?? AGENT_LABELS[agentId];
+  // An agent CLI's own configuration decides what it asks about; the app answers what it asks.
+  const cliAgent = agentId !== "muse" && agentId !== "harness";
   // A draft has no session to report its modes yet; the agent's catalog lists
   // them, so Build/Plan shows before the first message as well as after it.
   const agentModes = thread ? thread.modes : agentId !== "muse" ? s.agentModes[agentId]?.modes : undefined;
@@ -784,21 +786,23 @@ function ComposerView({ above }: { above?: ReactNode }) {
                 onChange={(effort) => void s.setSessionConfig({ effort })}
               />
             ) : null}
-            {/* Muse and the built-in harness enforce the app's permission modes; ACP agents keep their own. */}
-            {agentId === "muse" || agentId === "harness" ? (
+            {/* Every agent has permissions. Muse and the built-in agent enforce the app's modes; for an
+                agent CLI the bridge answers the permission requests it sends, by the same mode. */}
+            {(
+              
               <div className={`selector-chip${config.approvalMode === "allowAll" ? " danger" : ""}`} title={lockReason ?? "Approval mode"}>
                 <SelectMenu
                   id="approval"
                   icon={config.approvalMode === "allowAll" ? <TriangleAlert size={13} aria-hidden="true" /> : config.approvalMode === "guarded" ? <ShieldAlert size={13} aria-hidden="true" /> : <ShieldCheck size={13} aria-hidden="true" />}
                   ariaLabel="Permissions"
-                  heading="Permissions"
+                  heading={cliAgent ? `When ${agentName} asks permission` : "Permissions"}
                   className="approval-select"
-                  value={config.approvalMode}
+                  value={approvalModeForAgent(agentId, config.approvalMode)}
                   placeholder="Permissions"
-                  options={(agentId === "harness" ? HARNESS_APPROVAL_ORDER : APPROVAL_ORDER).map((mode) => ({
+                  options={(agentId === "harness" ? HARNESS_APPROVAL_ORDER : cliAgent ? ACP_APPROVAL_ORDER : APPROVAL_ORDER).map((mode) => ({
                     value: mode,
                     label: APPROVAL_LABELS[mode],
-                    description: APPROVAL_DESCRIPTIONS[mode],
+                    description: (cliAgent ? ACP_APPROVAL_DESCRIPTIONS[mode] : undefined) ?? APPROVAL_DESCRIPTIONS[mode],
                     icon: mode === "allowAll" ? <TriangleAlert size={14} aria-hidden="true" /> : mode === "denyUnmatched" ? <Lock size={14} aria-hidden="true" /> : mode === "guarded" ? <ShieldAlert size={14} aria-hidden="true" /> : <ShieldCheck size={14} aria-hidden="true" />,
                     ...(mode === "allowAll" ? { tone: "danger" as const } : {}),
                   }))}
@@ -806,7 +810,7 @@ function ComposerView({ above }: { above?: ReactNode }) {
                   onChange={(value) => void s.setSessionConfig({ approvalMode: value as ApprovalMode })}
                 />
               </div>
-            ) : null}
+            )}
             {agentModes?.length ? (
               <div className="selector-chip" title={lockReason ?? `${agentName} mode`}>
                 <SelectMenu

@@ -181,7 +181,29 @@ type SessionState = {
    */
   muted?: boolean;
   collected?: string;
+  /**
+   * How the app answers this session's permission requests: show each one
+   * (`promptUnmatched`, the default), decline any that would change files or
+   * run commands (`denyUnmatched`), or approve each once (`allowAll`). The
+   * agent's own configuration still decides which actions it asks about.
+   */
+  approvalMode?: AcpApprovalMode;
 };
+
+export type AcpApprovalMode = "promptUnmatched" | "denyUnmatched" | "allowAll";
+const ACP_APPROVAL_MODES: readonly AcpApprovalMode[] = ["promptUnmatched", "denyUnmatched", "allowAll"];
+/** ACP tool kinds that only look: Read only lets these through and declines the rest. */
+const READ_KINDS = new Set(["read", "search", "think", "fetch"]);
+
+/** The option an automatic answer picks: once, never "always", so no rule outlives the thread's mode. */
+function automaticChoice(options: Json[], allow: boolean): string | null {
+  const kinds = allow ? ["allow_once", "allow_always"] : ["reject_once", "reject_always"];
+  for (const kind of kinds) {
+    const match = options.find((option) => option.kind === kind && typeof option.optionId === "string");
+    if (match) return String(match.optionId);
+  }
+  return null;
+}
 
 export type AcpModel = {
   modelId: string;
@@ -726,7 +748,16 @@ export class AcpAgentHost {
     };
   }
 
-  async startSession(options: { workspaceRoot: string; modelId?: string; effort?: string; mode?: string }) {
+  /** The app's permission mode for one session; see `SessionState.approvalMode`. */
+  setApprovalMode(sessionId: string, mode: string) {
+    const session = this.sessions.get(sessionId);
+    if (!session) throw new Error(`Unknown ${this.spec.name} session: ${sessionId}`);
+    const next = ACP_APPROVAL_MODES.find((item) => item === mode) ?? "promptUnmatched";
+    session.approvalMode = next;
+    return { status: "accepted" as const, effectiveMode: { mode: next } };
+  }
+
+  async startSession(options: { workspaceRoot: string; modelId?: string; effort?: string; mode?: string; approvalMode?: string }) {
     // A new Cline session starts in a process already at its level: an empty session cannot be reloaded later.
     if (this.spec.id === "cline" && options.effort && CLINE_THINKING.includes(options.effort)) this.thinking.wanted = options.effort;
     await this.start({ workspaceRoot: options.workspaceRoot });
@@ -751,6 +782,7 @@ export class AcpAgentHost {
     if (options.effort) await this.setEffort(sessionId, options.effort).catch(() => {});
     // The mode the draft showed (OpenCode: build or plan) carries into the thread.
     if (options.mode && options.mode !== this.sessionConfig(sessionId).mode) await this.setMode(sessionId, options.mode).catch(() => {});
+    if (options.approvalMode) this.setApprovalMode(sessionId, options.approvalMode);
     const config = this.sessionConfig(sessionId);
     return { sessionId, opening: { result: { session: { sessionId, workspaceRoot: options.workspaceRoot, modelId: config.modelId ?? null, providerId: config.modelId?.includes("/") ? config.modelId.split("/")[0] : this.spec.id } } }, agentConfig: config };
   }
@@ -1088,6 +1120,18 @@ export class AcpAgentHost {
       const options = Array.isArray(params.options) ? params.options as Json[] : [];
       const choices = new Set(options.map((option) => String(option.optionId ?? "")).filter(Boolean));
       const approvalId = randomUUID();
+      // The thread's mode may answer for the user. Every automatic answer is audited like a click.
+      const mode = session?.approvalMode ?? "promptUnmatched";
+      const kind = str(toolCall.kind) ?? "other";
+      const automatic = mode === "allowAll" ? automaticChoice(options, true)
+        : mode === "denyUnmatched" && !READ_KINDS.has(kind) ? automaticChoice(options, false)
+        : null;
+      if (automatic) {
+        this.emit("approvalAudit", { approvalId, sessionId, turnId: session?.turnId ?? null, choiceId: automatic, outcome: mode === "allowAll" ? "auto-approved" : "auto-denied" });
+        return { outcome: { outcome: "selected", optionId: automatic } };
+      }
+      // Read only with no decline option on offer: cancel rather than ask or allow.
+      if (mode === "denyUnmatched" && !READ_KINDS.has(kind)) return { outcome: { outcome: "cancelled" } };
       const expiresAt = approvalExpiry();
       const expiresAtMono = approvalExpiryMono();
       const choice = await new Promise<string | null>((resolve) => {

@@ -130,6 +130,10 @@ licence terms.
   Commands & shortcuts, Usage) and System (Diagnostics, About) — and search
   matches every word you type. A host setting that needs a restart raises a bar
   at the foot of the page; other messages appear as a toast.
+- Agent CLIs (Grok, OpenCode, Cline CLI…) have a **permissions menu** in the
+  composer too: Read only declines any edit or command they ask to run, Ask me
+  shows every request, and Unrestricted approves each one without asking. Each
+  automatic answer is recorded in the security log like a click.
 - **The model picker has two levels: providers, then models.** Providers are a
   column of icons, named as you hover, and ones you switched off (or whose
   models are all off) are left out. The built-in
@@ -231,6 +235,9 @@ licence terms.
 
 ### Fixed
 
+- Changing permissions on a built-in agent thread failed in the desktop app
+  with "Settings unchanged": the native check refused the agent the request
+  named. It now applies.
 - Reasoning effort shows for more models. Cline CLI now offers None to Extra
   high on every model and runs at the level you pick (it used to run with
   reasoning off). Harness offers effort for the Cline API's and OpenRouter's

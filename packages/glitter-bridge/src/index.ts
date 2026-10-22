@@ -701,6 +701,7 @@ async function dispatchAcp(agent: AcpAgentHost, hostKey: string, method: string,
         modelId: typeof params.modelId === "string" ? params.modelId : undefined,
         effort: typeof params.reasoningEffort === "string" ? params.reasoningEffort : undefined,
         mode: typeof params.mode === "string" ? params.mode : undefined,
+        approvalMode: typeof params.approvalMode === "string" ? params.approvalMode : undefined,
       }));
       rememberCreate("startSession", agentId, params, started);
       return started;
@@ -768,7 +769,7 @@ async function dispatchAcp(agent: AcpAgentHost, hostKey: string, method: string,
       return closed;
     }
     case "setApprovalMode":
-      throw new Error(`${agent.spec.name} controls permissions in its own configuration; Muse Desktop cannot change them for this agent.`);
+      return agent.setApprovalMode(sessionId, String(params.mode ?? ""));
     default:
       throw new Error(`${agent.spec.name} does not support ${method}.`);
   }

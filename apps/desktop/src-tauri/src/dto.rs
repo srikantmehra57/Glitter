@@ -646,6 +646,9 @@ struct DecideApprovalParams {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SetApprovalModeParams {
+    /// The renderer names the agent; the bridge still routes by the session's owner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    agent_id: Option<AgentId>,
     session_id: String,
     mode: ApprovalMode,
 }
@@ -1352,6 +1355,8 @@ mod tests {
             ("decideApproval", json!({ "approvalId": "a-1", "choiceId": "c", "sessionId": "s-1" })),
             ("setApprovalMode", json!({ "sessionId": "s-1", "mode": "denyUnmatched" })),
             ("setApprovalMode", json!({ "sessionId": "s-1", "mode": "guarded" })),
+            ("setApprovalMode", json!({ "agentId": "harness", "sessionId": "h-1", "mode": "allowAll" })),
+            ("setApprovalMode", json!({ "agentId": "grok", "sessionId": "g-1", "mode": "denyUnmatched" })),
             ("setModel", json!({ "sessionId": "s-1", "modelId": "m", "providerId": "p" })),
             ("setModel", json!({ "agentId": "grok", "sessionId": "s-1", "modelId": "grok-4.6" })),
             ("setSessionOption", json!({ "agentId": "opencode", "sessionId": "s-1", "option": "effort", "value": "high" })),

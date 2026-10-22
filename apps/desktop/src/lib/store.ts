@@ -1189,8 +1189,8 @@ async function applyThreadConfig(get: () => AppStore, set: (patch: Partial<AppSt
       if (patch.modelId !== undefined) applied = (await bridge<{ agentConfig?: AgentSessionConfig }>("setModel", { agentId, sessionId, modelId: patch.modelId })).agentConfig;
       if (patch.effort !== undefined) applied = (await bridge<{ agentConfig?: AgentSessionConfig }>("setSessionOption", { agentId, sessionId, option: "effort", value: patch.effort })).agentConfig ?? applied;
       if (patch.mode !== undefined) applied = (await bridge<{ agentConfig?: AgentSessionConfig }>("setSessionOption", { agentId, sessionId, option: "mode", value: patch.mode })).agentConfig ?? applied;
-      // The built-in harness enforces the app's permission modes itself.
-      if (patch.approvalMode !== undefined && agentId === "harness") await bridge("setApprovalMode", { agentId, sessionId, mode: patch.approvalMode });
+      // The built-in agent enforces the app's permission modes itself; for an agent CLI the bridge answers its permission requests by the mode.
+      if (patch.approvalMode !== undefined) patch = { ...patch, approvalMode: (await bridge<{ effectiveMode?: { mode: SessionConfig["approvalMode"] } }>("setApprovalMode", { agentId, sessionId, mode: approvalModeForAgent(agentId, patch.approvalMode) })).effectiveMode?.mode ?? approvalModeForAgent(agentId, patch.approvalMode) };
       const latest = get().threads.find((item) => item.sessionId === sessionId);
       update({ config: { ...latest?.config, ...patch, ...agentConfigPatch(applied), agentId }, ...(applied?.modes ? { modes: applied.modes } : {}) });
       if (patch.modelId !== undefined) void get().refreshModels();
@@ -2794,8 +2794,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
     if (thread.agentId) {
       try {
         const opened = await bridge<{ agentConfig?: AgentSessionConfig; alreadyOpen?: boolean }>("resumeSession", { agentId: thread.agentId, sessionId });
-        // A reopened harness thread keeps the permission mode it was left in.
-        if (thread.agentId === "harness" && thread.config?.approvalMode) await bridge("setApprovalMode", { agentId: "harness", sessionId, mode: thread.config.approvalMode }).catch(() => {});
+        // A reopened thread keeps the permission mode it was left in, on any agent.
+        if (thread.config?.approvalMode) await bridge("setApprovalMode", { agentId: thread.agentId, sessionId, mode: approvalModeForAgent(thread.agentId, thread.config.approvalMode) }).catch(() => {});
         void get().refreshTurnSnapshots(sessionId);
         update({ opened: true, config: { ...thread.config, ...agentConfigPatch(opened.agentConfig), agentId: thread.agentId }, modes: opened.agentConfig?.modes ?? thread.modes });
         // The picker keeps showing the last catalog meanwhile; opening does not wait on it.
@@ -2905,7 +2905,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         const ownModel = get().modelsAgentId === agentId && get().models.some((model) => model.modelId === config.modelId);
         const gated = agentId === "opencode" && /(?:^|[/:])[^/]*-free$/i.test(config.modelId ?? "");
         const mode = config.mode ?? get().agentModes[agentId]?.defaultMode;
-        const opened = await bridge<{ sessionId: string; agentConfig?: AgentSessionConfig }>("startSession", { agentId, grantId: workspace.grantId ?? undefined, modelId: ownModel && !gated ? config.modelId : undefined, reasoningEffort: config.effort, ...(mode ? { mode } : {}), ...(agentId === "harness" && approvalMode ? { approvalMode } : {}) });
+        const opened = await bridge<{ sessionId: string; agentConfig?: AgentSessionConfig }>("startSession", { agentId, grantId: workspace.grantId ?? undefined, modelId: ownModel && !gated ? config.modelId : undefined, reasoningEffort: config.effort, ...(mode ? { mode } : {}), ...(approvalMode ? { approvalMode } : {}) });
         thread = { sessionId: opened.sessionId, agentId, workspacePath: workspace.path, title, order: Date.now(), updatedAt: new Date().toISOString(), status: "idle", unread: false, items: [], opened: true, config: { ...config, ...agentConfigPatch(opened.agentConfig), ...(approvalMode ? { approvalMode } : {}), agentId }, modes: opened.agentConfig?.modes };
       } else {
         if (!get().preview) await get().startHost();

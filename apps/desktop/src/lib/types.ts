@@ -736,9 +736,27 @@ export const APPROVAL_ORDER: CliApprovalMode[] = ["denyUnmatched", "promptUnmatc
 /** The harness also offers Autonomous, between Auto-review and Unrestricted. */
 export const HARNESS_APPROVAL_ORDER: ApprovalMode[] = ["denyUnmatched", "promptUnmatched", "onRequest", "guarded", "allowAll"];
 
-/** `guarded` is harness-only: any other agent falls back to Auto-review, the closest mode it knows. */
-export const approvalModeForAgent = (agentId: AgentId | undefined, mode: ApprovalMode | undefined): ApprovalMode | undefined =>
-  mode === "guarded" && agentId !== "harness" ? "onRequest" : mode;
+/**
+ * An agent CLI (ACP) asks the app before a tool runs, and the app answers by
+ * the thread's mode (`acp.ts`): decline changes, ask, or approve each request.
+ */
+export const ACP_APPROVAL_ORDER: ApprovalMode[] = ["denyUnmatched", "promptUnmatched", "allowAll"];
+export const ACP_APPROVAL_DESCRIPTIONS: Partial<Record<ApprovalMode, string>> = {
+  denyUnmatched: "Lets reads and searches through; declines any edit or command it asks to run.",
+  promptUnmatched: "Shows every permission request, for you to allow or deny.",
+  allowAll: "Approves every permission request, once each, without asking.",
+};
+
+const isCliAgent = (agentId: AgentId | undefined) => agentId != null && agentId !== "muse" && agentId !== "harness";
+
+/**
+ * `guarded` is harness-only: Muse falls back to Auto-review, the closest mode it
+ * knows. An agent CLI has neither Auto-review nor Autonomous, so both become Ask me.
+ */
+export const approvalModeForAgent = (agentId: AgentId | undefined, mode: ApprovalMode | undefined): ApprovalMode | undefined => {
+  if (isCliAgent(agentId)) return mode === "denyUnmatched" || mode === "allowAll" ? mode : "promptUnmatched";
+  return mode === "guarded" && agentId !== "harness" ? "onRequest" : mode;
+};
 
 export const AUTH_MODE_ORDER: AuthMode[] = ["auto", "subscription", "apiKey"];
 

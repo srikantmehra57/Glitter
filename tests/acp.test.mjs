@@ -346,3 +346,27 @@ test('a model rescan returns the freshly probed catalog and keeps the session ro
     assert.equal(fresh.models.find((model) => model.modelId === 'zen/c').isActive, false);
   } finally { await host.stop(); }
 });
+
+test('an agent CLI thread answers permission requests by its mode, and audits each automatic answer', async () => {
+  for (const [mode, expected] of [['allowAll', { status: 'completed', choice: 'yes', outcome: 'auto-approved' }], ['denyUnmatched', { status: 'failed', choice: 'no', outcome: 'auto-denied' }]]) {
+    const events = [];
+    const spec = { id: 'fake', name: 'Fake', protocol: 'acp', bins: [], acpArgs: [resolve('tests/fixtures/fake-acp-agent.mjs')], verified: true, signIn: '' };
+    const host = new AcpAgentHost(spec, process.execPath, (event, payload) => events.push({ event, payload }));
+    try {
+      await host.startSession({ workspaceRoot: '/tmp/ws', approvalMode: mode });
+      await host.sendTurn({ sessionId: 's1', text: 'list files' });
+      await until(events, (e) => e.event === 'turnCompleted');
+      assert.ok(!events.some((e) => e.event === 'approval'), `${mode} answers without a card`);
+      const tool = events.filter((e) => e.event === 'item' && e.payload.item.itemId === 't1').at(-1).payload.item;
+      assert.equal(tool.status, expected.status, `${mode}: the command ${expected.status === 'completed' ? 'ran' : 'was declined'}`);
+      const audit = events.find((e) => e.event === 'approvalAudit').payload;
+      assert.deepEqual({ choice: audit.choiceId, outcome: audit.outcome }, { choice: expected.choice, outcome: expected.outcome });
+    } finally { await host.stop(); }
+  }
+  const { host } = fakeAgent();
+  try {
+    await host.startSession({ workspaceRoot: '/tmp/ws' });
+    assert.deepEqual(host.setApprovalMode('s1', 'onRequest').effectiveMode, { mode: 'promptUnmatched' }, 'a mode an agent CLI cannot honour falls back to Ask me');
+    assert.throws(() => host.setApprovalMode('nope', 'allowAll'), /Unknown Fake session/);
+  } finally { await host.stop(); }
+});
