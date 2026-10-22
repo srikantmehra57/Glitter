@@ -416,6 +416,37 @@ approved to leave plan mode.
 
 ## Phase 6 — MCP
 
+**Status: complete.** 6.1–6.5 are done (2026-10-22, with the DECISIONS entry
+"MCP servers are user configuration, synced all or nothing"). The client is
+`harness/mcp.ts`, registered as an extension beside the built-in tools.
+
+- [x] 6.1 Servers are read from `.glitter/mcp.json` in the workspace, then in
+      the home folder, with the workspace winning a duplicate name. A stdio
+      server starts through `spawnIsolated` (scrubbed environment, seatbelt on
+      macOS, its own process group); an HTTP server is reached through `fetch`
+      with the configured headers and the `mcp-session-id` it issues. Connect
+      and call timeouts are bounded, and neither transport adds a dependency.
+- [x] 6.2 Tools are named `mcp__server__tool`, with a short hash when
+      normalization changes the name or it would exceed 64 characters. They
+      join the same registry and `decide` pipeline as built-in tools: a call
+      asks unless a thread grant names that tool or server, and the card offers
+      this tool, then every tool on that server. The one exception is Full
+      access; Autonomous still asks, because the harness cannot audit an
+      external server.
+- [x] 6.3 A sync builds the whole next generation (connect, `tools/list`,
+      definitions) before swapping it in. Any failure closes every exchange it
+      opened, reports to the thread, and leaves the previous complete
+      generation in use. A generation is reference-counted by turn and closed
+      when the last turn using it finishes; `close()` reaps retired ones too.
+- [x] 6.4 MCP tools are `deferred`: a request carries `tool_search`, and a
+      match activates the named tools for the rest of the turn. The stable
+      prompt lists servers and a few tool names, and says it replaces any
+      earlier list. Revoking the last server removes `tool_search` too.
+- [x] 6.5 Extensions → MCP is agent-aware: a Harness thread shows the servers
+      this client launched, their transport and tool count, a sync error, and a
+      Refresh that reconnects; Muse keeps its CLI servers and OAuth actions.
+      The `harnessMcp` bridge verb takes only a session id and a refresh flag.
+
 **Goal.** External tools, with the same guarantees as built-in ones.
 
 | # | Change | Source | Effort |

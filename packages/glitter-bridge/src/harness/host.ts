@@ -9,6 +9,7 @@ import { decide, type ApprovalMode, type Verdict } from "./permission/policy.js"
 import { TIERS, configuredProviders, effortTiers, providerSpec, resolveProvider, splitModelId, type ProviderCredentials, type ResolvedProvider } from "./providers.js";
 import { ExtensionRegistry, type HookEvents, type HookFailure, type HookName, type TurnContributions } from "./registry.js";
 import type { UserInputResponse } from "../protocol.js";
+import { McpManager, mcpExtension } from "./mcp.js";
 import { ASK_USER_TOOL, EXIT_PLAN_TOOL, questionRequest, settlement, type Asked, type PendingQuestion } from "./questions.js";
 import { discoverSkills, expandInvocation, skillsExtension } from "./skills.js";
 import { SessionStore, type SessionMeta } from "./store.js";
@@ -154,7 +155,7 @@ type Live = {
 };
 
 /** One call's result. A call that asks the user also carries its questions and its transcript item. */
-type CallResult = { id: string; name: string; output: string; isError?: boolean; question?: Asked; item?: Json };
+type CallResult = { id: string; name: string; output: string; isError?: boolean; question?: Asked; item?: Json; activate?: readonly string[] };
 
 type HostLimits = {
   idleMs?: number;
@@ -177,6 +178,7 @@ export class HarnessHost {
   /** The listing in flight and the keys it was started with; a newly added key starts a new one. */
   private catalogLoading: { key: string; run: Promise<HarnessModel[]> } | null = null;
   private readonly emit: Emit;
+  private readonly mcp: McpManager;
   /** Tools, prompt sections and hooks. Each turn works from a snapshot taken when it starts. */
   readonly registry = new ExtensionRegistry();
 
@@ -184,6 +186,8 @@ export class HarnessHost {
     this.emit = emit;
     this.registry.register(BUILTIN_EXTENSION);
     this.registry.register(skillsExtension(this.homeDir));
+    this.mcp = new McpManager(this.homeDir, emit);
+    this.registry.register(mcpExtension(this.mcp));
     // With no one to answer, the model is not offered a way to ask, nor a plan review to leave Plan mode by.
     if (this.limits.approvalChannel !== false) this.registry.register({
       id: "questions",
@@ -212,6 +216,7 @@ export class HarnessHost {
     this.approvals.clear();
     for (const live of this.sessions.values()) live.controller?.abort();
     this.sessions.clear();
+    await this.mcp.close();
   }
 
   // ─── Models ───────────────────────────────────────────────────────────────
@@ -471,6 +476,13 @@ export class HarnessHost {
     return { skills: discoverSkills(live.meta.workspaceRoot, this.homeDir).map((skill) => ({ selector: skill.name, description: skill.description, source: skill.scope })) };
   }
 
+  /** The MCP servers this thread's workspace sees. `refresh` re-reads the config files even when the fingerprint matches. */
+  async mcpStatus(options: { sessionId: string; refresh?: boolean }) {
+    const live = this.requireLive(options.sessionId);
+    await this.mcp.ensure(live.meta.workspaceRoot, options.sessionId, options.refresh === true);
+    return this.mcp.status(live.meta.workspaceRoot);
+  }
+
   async sendTurn(options: { sessionId: string; text: string; reasoningEffort?: string; images?: Array<{ mediaType: string; base64Data: string }>; ifBusy?: "queue" | "steer" | "replace"; skill?: SkillInvocation }) {
     const live = this.requireLive(options.sessionId);
     // A typed `/skill` is expanded now, so a queued turn runs the skill as it was when sent.
@@ -548,6 +560,9 @@ export class HarnessHost {
         void this.store.update(live.meta.sessionId, {});
       }
       if (fromQueue) this.emit("turnStarted", { sessionId: live.meta.sessionId, turnId: request.turnId });
+      // Sync before the snapshot, so this turn sees the config as it is now. A
+      // broken config reports and keeps the previous complete generation.
+      await this.mcp.ensure(live.meta.workspaceRoot, live.meta.sessionId);
       void this.runTurn(live, request.turnId);
     } catch (error) {
       if (!durable) {
@@ -681,7 +696,7 @@ export class HarnessHost {
   }
 
   /** Ask the user about one call. Thread choices come from the policy, narrowest first. */
-  private ask(live: Live, call: ToolCall, kind: ToolKind, verdict: Extract<Verdict, { kind: "ask" }>): Promise<ApprovalOutcome> {
+  private ask(live: Live, call: ToolCall, kind: ToolKind, subject: Subject, verdict: Extract<Verdict, { kind: "ask" }>): Promise<ApprovalOutcome> {
     if (this.limits.approvalChannel === false) return Promise.resolve({ kind: "unavailable" });
     const approvalId = randomUUID();
     const choices = [
@@ -711,7 +726,9 @@ export class HarnessHost {
         turnId: live.turnId,
         toolName: call.name,
         rawArgs: JSON.stringify(call.input),
-        subject: { kind: kind === "shell" ? "command" : "edit", ...(verdict.risk ? { risk: verdict.risk } : {}) },
+        subject: subject.kind === "mcp"
+          ? { kind: "mcp", server: subject.server, tool: subject.tool, path: `${subject.server} › ${subject.tool}`, ...(verdict.risk ? { risk: verdict.risk } : {}) }
+          : { kind: kind === "shell" ? "command" : "edit", ...(verdict.risk ? { risk: verdict.risk } : {}) },
         expiresAt: approvalExpiry(),
         availableChoices: choices,
       });
@@ -753,6 +770,10 @@ export class HarnessHost {
       await this.hook(contributions, "turnStarted", { context: contributions.context });
       // Once per turn: a mid-turn edit of AGENTS.md must not change the cached prefix.
       const system = await this.systemPrompt(live, contributions);
+      // Deferred tools (MCP) stay out of every request until tool_search names
+      // them; an activated name is advertised for the rest of this turn.
+      const active = new Set<string>();
+      const offered = () => contributions.schemas.filter((schema) => !contributions.tools.get(schema.name)?.deferred || active.has(schema.name));
       for (let step = 0; step < MAX_STEPS; step += 1) {
         if (controller.signal.aborted) { cancelled(); break; }
         // Steering that arrived during tools waits until the results are in the history.
@@ -764,7 +785,7 @@ export class HarnessHost {
         const { providerId, model } = splitModelId(modelId);
         const provider = resolveProvider(providerId, this.credentials);
         if (!provider) throw new ProviderError(`${providerSpec(providerId)?.name ?? providerId} has no key. Add it in Settings → Providers, or pick another model.`, undefined, "MISSING_CREDENTIAL");
-        const { message: reply, stopReason } = await this.callModel(live, provider, modelId, model, system, contributions.schemas, controller.signal);
+        const { message: reply, stopReason } = await this.callModel(live, provider, modelId, model, system, offered(), controller.signal);
         live.messages.push(reply);
         await this.store.append(sessionId, [{ type: "message", message: reply }]);
         // A cut-off reply can carry valid JSON that is still an incomplete tool call. Do not run it.
@@ -797,6 +818,9 @@ export class HarnessHost {
             return this.runToolCall(live, contributions, calls[index], controller.signal, reminders[index]);
           },
         });
+        for (const result of results) {
+          for (const name of result.activate ?? []) if (contributions.tools.has(name)) active.add(name);
+        }
         if (results.some((result) => result.question)) {
           // The turn ends with the questions. Their answer completes this tool message in a new turn.
           await this.parkQuestion(live, turnId, results);
@@ -974,7 +998,7 @@ export class HarnessHost {
       return { id: call.id, name: call.name, output, isError: true };
     }
     if (verdict.kind === "ask") {
-      const outcome = await this.ask(live, call, kind, verdict);
+      const outcome = await this.ask(live, call, kind, subject ?? { kind: "none" }, verdict);
       if (outcome.kind !== "allowed") {
         const output = noted(REFUSALS[outcome.kind]);
         this.emitItem(live, { ...base, status: outcome.kind === "cancelled" ? "cancelled" : "failed", failureReason: output, visibleOutput: output }, true);
@@ -1011,7 +1035,7 @@ export class HarnessHost {
       ...(result.exitCode != null ? { exitCode: result.exitCode } : {}),
       ...(result.isError ? { failureReason: visible.split("\n")[0].slice(0, 300) } : {}),
     }, true);
-    return { id: call.id, name: call.name, output, ...(result.isError ? { isError: true } : {}) };
+    return { id: call.id, name: call.name, output, ...(result.isError ? { isError: true } : {}), ...(result.activate?.length ? { activate: result.activate } : {}) };
   }
 
   /** The question this thread is waiting on, as the app's card renders it. */

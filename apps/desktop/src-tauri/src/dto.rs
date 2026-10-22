@@ -302,6 +302,18 @@ struct ListSkillsParams {
     session_id: String,
 }
 
+/// The harness's own MCP servers, read from `.glitter/mcp.json`; `refresh`
+/// reconnects even when the files have not changed.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct HarnessMcpParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    agent_id: Option<AgentId>,
+    session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    refresh: Option<bool>,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct PageHistoryParams {
@@ -831,6 +843,11 @@ pub fn validate_params(method: &str, params: &Value) -> Result<Value, String> {
             check_id(method, "sessionId", &parsed.session_id)?;
             emit(method, &parsed)
         }
+        "harnessMcp" => {
+            let parsed: HarnessMcpParams = parse(method, body)?;
+            check_id(method, "sessionId", &parsed.session_id)?;
+            emit(method, &parsed)
+        }
         "mcpServers" => {
             let parsed: EmptyParams = parse(method, body)?;
             emit(method, &parsed)
@@ -1140,6 +1157,8 @@ mod tests {
             ("sendTurn", json!({ "sessionId": "s-1", "text": "later", "ifBusy": "queue" })),
             ("sendTurn", json!({ "sessionId": "s-1", "text": "", "skill": { "selector": "fix-bug", "arguments": "auth.ts" } })),
             ("listSkills", json!({ "sessionId": "s-1" })),
+            ("harnessMcp", json!({ "agentId": "harness", "sessionId": "h-1" })),
+            ("harnessMcp", json!({ "sessionId": "h-1", "refresh": true })),
             ("mcpServers", json!({})),
             ("sendTurn", json!({ "sessionId": "s-1", "text": "instead", "ifBusy": "replace" })),
             ("steerTurn", json!({ "sessionId": "s-1", "text": "more tests" })),

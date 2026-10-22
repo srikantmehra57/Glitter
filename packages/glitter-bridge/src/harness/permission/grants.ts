@@ -4,22 +4,27 @@ import { commandsOf, parseScript, programName, writesFile, type SimpleCommand } 
 /**
  * What a call acts on, and the thread grants that can cover it. A grant names
  * the subject the user approved: one command, a command prefix, one file or a
- * folder. Never a whole tool kind: "allow `git status`" cannot cover
- * `git push --force`. The approval card offers the narrowest scope first, so a
- * client that shows only the first thread choice grants the least.
+ * folder, or one MCP tool or server. Never a whole tool kind: "allow
+ * `git status`" cannot cover `git push --force`. The approval card offers the
+ * narrowest scope first, so a client that shows only the first thread choice
+ * grants the least.
  */
 
 export type Subject =
   | { kind: "command"; command: string }
   /** Workspace-relative, `/`-separated. */
   | { kind: "path"; path: string }
+  /** One tool on one external MCP server. */
+  | { kind: "mcp"; server: string; tool: string }
   | { kind: "none" };
 
 export type Grant =
   | { kind: "command"; match: "exact"; command: string }
   | { kind: "command"; match: "prefix"; argv: readonly string[] }
   /** `folder` with an empty path is the whole workspace. */
-  | { kind: "path"; match: "file" | "folder"; path: string };
+  | { kind: "path"; match: "file" | "folder"; path: string }
+  | { kind: "mcp"; match: "tool"; server: string; tool: string }
+  | { kind: "mcp"; match: "server"; server: string };
 
 export type GrantScope = {
   choiceId: string;
@@ -55,6 +60,9 @@ function prefixCovers(prefix: readonly string[], argv: readonly string[]): boole
  */
 export function covers(grants: readonly Grant[], subject: Subject): boolean {
   if (subject.kind === "none") return false;
+  if (subject.kind === "mcp") {
+    return grants.some((grant) => grant.kind === "mcp" && grant.server === subject.server && (grant.match === "server" || grant.tool === subject.tool));
+  }
   if (subject.kind === "path") {
     return grants.some((grant) => grant.kind === "path" && (grant.match === "file" ? grant.path === subject.path : grant.path === "" || subject.path.startsWith(`${grant.path}/`)));
   }
@@ -76,6 +84,12 @@ export function covers(grants: readonly Grant[], subject: Subject): boolean {
 /** The thread grants to offer for a subject, narrowest first. */
 export function scopesFor(subject: Subject): GrantScope[] {
   if (subject.kind === "none") return [];
+  if (subject.kind === "mcp") {
+    return [
+      { choiceId: "allow-session", label: `Allow ${code(subject.tool)} on ${code(subject.server)} in this thread`, scopeLabel: "This tool", grant: { kind: "mcp", match: "tool", server: subject.server, tool: subject.tool } },
+      { choiceId: "allow-session-server", label: `Allow every tool on ${code(subject.server)} in this thread`, scopeLabel: `Any tool on ${subject.server}`, grant: { kind: "mcp", match: "server", server: subject.server } },
+    ];
+  }
   if (subject.kind === "path") {
     const scopes: GrantScope[] = [{ choiceId: "allow-session", label: "Allow edits to this file in this thread", scopeLabel: "This file", grant: { kind: "path", match: "file", path: subject.path } }];
     const folder = subject.path.includes("/") ? subject.path.slice(0, subject.path.lastIndexOf("/")) : "";

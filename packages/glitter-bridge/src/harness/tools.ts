@@ -17,7 +17,7 @@ import type { ToolSchema } from "./wire.js";
  * never sees provider keys and cannot write outside the workspace and temp.
  */
 
-export type ToolKind = "read" | "edit" | "shell" | "plan";
+export type ToolKind = "read" | "edit" | "shell" | "plan" | "mcp";
 export type OffsetUnit = "line" | "match" | "file";
 
 /** The truth a tool produced. Frozen by `runTool` before anyone renders it. */
@@ -30,6 +30,8 @@ export type ToolValue =
   | { kind: "plan"; plan: Array<{ content: string; status: string }> }
   /** Questions for the user: the call waits for their answer, which ends the turn. */
   | { kind: "question"; questions: Question[]; intent?: UserInputIntent }
+  /** A tool on an external MCP server; the text is the server's own result. */
+  | { kind: "mcp"; server: string; tool: string; text: string; isError?: boolean }
   | { kind: "error"; message: string };
 
 /** Replayable card state. Pure: no I/O, no clock, no session. */
@@ -77,6 +79,8 @@ export type ToolOutcome = {
   /** Set when the call asks the user: the host ends the turn and completes the call from the answer. */
   question?: Asked;
   continuation?: Continuation;
+  /** Deferred tools this call makes callable for the rest of the turn, by advertised name. */
+  activate?: readonly string[];
 };
 
 const READ_LIMIT_LINES = 2000;
@@ -95,7 +99,7 @@ const ARTIFACT_DIR = join(".muse", "tool-output");
 const SKIP_DIRS = new Set([".git", "node_modules", ".next", "dist", "build", "target", ".venv", "venv", "__pycache__", ".cache", ".turbo", "coverage", ".muse"]);
 
 /** What a handler produces before it is rendered, packed and possibly saved to an artifact. */
-export type ToolProduced = { value: ToolValue; continuation?: Continuation };
+export type ToolProduced = { value: ToolValue; continuation?: Continuation; activate?: readonly string[] };
 
 /**
  * One tool, as an extension contributes it. The host reads only these fields:
@@ -109,6 +113,8 @@ export type ToolDefinition = {
   concurrencySafe?: boolean;
   /** What the call acts on, for guards and thread grants. Called only after `validate` passed. */
   subject?: (root: string, input: Readonly<Record<string, unknown>>) => Subject;
+  /** Kept out of the model's tool list until a tool call activates it. */
+  deferred?: boolean;
   /** Why the frozen arguments are refused before any approval card, or undefined. May throw a ToolError. */
   validate?: (root: string, input: Readonly<Record<string, unknown>>) => Promise<string | undefined> | string | undefined;
   run: (root: string, input: Readonly<Record<string, unknown>>, signal?: AbortSignal) => Promise<ToolProduced> | ToolProduced;
@@ -354,6 +360,9 @@ export function render(value: ToolValue, continuation?: Continuation): string {
     case "question":
       text = "Waiting for the user's answer.";
       break;
+    case "mcp":
+      text = value.text.trim() || (value.isError ? "The MCP server reported an error." : "(no output)");
+      break;
     case "error":
       text = value.message;
       break;
@@ -377,6 +386,8 @@ export function presentationMeta(value: ToolValue): PresentationMeta {
       return { kind: "plan" };
     case "question":
       return { kind: "question" };
+    case "mcp":
+      return { kind: "mcp", path: `${value.server} › ${value.tool}` };
     case "error":
       return { kind: "error" };
   }
@@ -762,16 +773,19 @@ function failure(message: string): ToolOutcome {
   return { output: message, value, presentation: presentationMeta(value), isError: true };
 }
 
-function pack(produced: { value: ToolValue; continuation?: Continuation }): ToolOutcome {
-  const { value, continuation } = produced;
-  const outcome: ToolOutcome = { output: render(value, continuation), value, presentation: presentationMeta(value), ...(continuation ? { continuation } : {}) };
+function pack(produced: ToolProduced): ToolOutcome {
+  const { value, continuation, activate } = produced;
+  const outcome: ToolOutcome = { output: render(value, continuation), value, presentation: presentationMeta(value), ...(continuation ? { continuation } : {}), ...(activate?.length ? { activate } : {}) };
   if (value.kind === "terminal") {
     outcome.exitCode = value.exitCode;
     outcome.command = value.command;
     if (value.exitCode !== 0) outcome.isError = true;
   } else if (value.kind === "plan") outcome.plan = value.plan;
   else if (value.kind === "question") outcome.question = { questions: value.questions, ...(value.intent ? { intent: value.intent } : {}) };
-  else if (value.kind !== "error") outcome.path = value.path;
+  else if (value.kind === "mcp") {
+    outcome.path = `${value.server} › ${value.tool}`;
+    if (value.isError) outcome.isError = true;
+  } else if (value.kind !== "error") outcome.path = value.path;
   return outcome;
 }
 

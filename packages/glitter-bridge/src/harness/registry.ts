@@ -98,12 +98,16 @@ export class ExtensionRegistry {
    * unknown profile, or a profile naming a tool this turn does not have.
    */
   snapshot(context: TurnContext, profileId?: string): TurnContributions {
+    // One object per turn. A factory that keys state by the context must see
+    // the same object later in hooks; passing the caller's object to factories
+    // and a copy as `turn.context` would split that identity.
+    const turnContext: TurnContext = Object.freeze({ ...context });
     const extensions = [...this.extensions.values()];
     const all = new Map<string, ToolDefinition>();
     const owners = new Map<string, string>();
     for (const extension of extensions) {
       for (const entry of extension.tools ?? []) {
-        const produced = typeof entry === "function" ? entry(context) : entry;
+        const produced = typeof entry === "function" ? entry(turnContext) : entry;
         const list: readonly ToolDefinition[] = produced == null ? [] : "schema" in produced ? [produced] : produced;
         for (const definition of list) {
           const name = definition.schema.name;
@@ -129,7 +133,7 @@ export class ExtensionRegistry {
     const volatile: string[] = [];
     for (const extension of extensions) {
       for (const section of extension.prompt ?? []) {
-        const text = typeof section.text === "function" ? section.text(context) : section.text;
+        const text = typeof section.text === "function" ? section.text(turnContext) : section.text;
         if (text) (section.placement === "stable" ? stable : volatile).push(text);
       }
     }
@@ -147,7 +151,7 @@ export class ExtensionRegistry {
       return failures;
     };
     return Object.freeze({
-      context: Object.freeze({ ...context }),
+      context: turnContext,
       tools,
       schemas: Object.freeze([...tools.values()].map((definition) => definition.schema)),
       guards: Object.freeze(extensions.flatMap((extension) => extension.guards ?? [])),

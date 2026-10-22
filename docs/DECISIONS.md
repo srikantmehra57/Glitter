@@ -878,3 +878,29 @@ must respect. Don't log routine changes here; they belong in git history and
   to Auto-review whenever a thread switches to Muse, the Muse host rejects it
   outright if it arrives anyway, and hydration clamps it to Ask me rather than
   keeping it as the default for new threads.
+
+### MCP servers are user configuration, synced all or nothing
+
+- **Date:** 2026-10-22
+- **Decision:** The harness reads MCP servers from `.glitter/mcp.json` in the
+  workspace and in the home folder, with the workspace winning a duplicate
+  name. A sync connects and lists every server in the next generation before
+  swapping it in; one failure closes what it opened and keeps the previous
+  generation. Tools are `mcp__server__tool`, join the same registry and
+  ask-policy as built-in tools, and every call asks unless a thread grant names
+  that tool or server, or the mode is Full access. MCP tools are deferred: a
+  turn starts with `tool_search` and activates what it names.
+- **Why:** MCP is user configuration, never renderer input, and a server runs
+  with its own authority. An all-or-nothing swap keeps the tool list consistent
+  with what is actually running, and reference counting lets an in-flight turn
+  keep the generation it started with while a new one is swapped in. Deferring
+  their schemas keeps every request small while the full catalog stays one
+  `tool_search` away. MCP is the one tool kind that still asks in Autonomous:
+  the harness cannot audit what an external server does with a call.
+- **Bounds:** Server names, env and header keys, argument counts, timeouts,
+  tool counts, description sizes and result sizes are bounded. `NODE_OPTIONS`
+  is refused, and a stdio server starts under `spawnIsolated` with its
+  configured env merged after the environment scrub.
+- **Consequences:** Extensions → MCP shows the harness's own generation for a
+  harness thread and the CLI's servers for Muse; the two are not merged. A
+  broken config is reported as a notice and does not fail the turn.

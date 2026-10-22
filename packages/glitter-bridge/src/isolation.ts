@@ -260,10 +260,17 @@ export type IsolatedSpawn = {
 export function spawnIsolated(
   bin: string,
   args: string[],
-  options: { agentId?: string; workspace?: string; sandbox?: boolean; env?: NodeJS.ProcessEnv; denyReadRoots?: string[]; cwd?: string } = {},
+  options: { agentId?: string; workspace?: string; sandbox?: boolean; env?: NodeJS.ProcessEnv; extraEnv?: NodeJS.ProcessEnv; denyReadRoots?: string[]; cwd?: string } = {},
 ): IsolatedSpawn {
   const cwd = options.cwd ?? confinedCwd(options.workspace);
-  const env = { ...filterChildEnv(options.env ?? process.env, options.agentId), NODE_NO_WARNINGS: "1" };
+  // `extraEnv` is configuration the user wrote for this child (an MCP server's
+  // own credentials), not the inherited environment. It is merged explicitly
+  // after the scrub; NODE_OPTIONS stays out either way.
+  const extra: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(options.extraEnv ?? {})) {
+    if (key !== "NODE_OPTIONS" && typeof value === "string" && value !== "") extra[key] = value;
+  }
+  const env = { ...filterChildEnv(options.env ?? process.env, options.agentId), ...extra, NODE_NO_WARNINGS: "1" };
   const knownAgent = Boolean(options.agentId && ["muse", "opencode", "grok", "gemini", "qwen", "goose", "cline", "harness"].includes(options.agentId));
   // Known agents are sandboxed even without a workspace: a session-less start
   // (model listing before any thread is open) still confines writes to the

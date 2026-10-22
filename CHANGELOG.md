@@ -58,6 +58,14 @@ licence terms.
   stopped and which attempt landed when one was retried. Other agents report
   totals only, so their turns do not appear. Per-call detail is kept for the
   newest 25 recorded turns; older ones keep their totals.
+- Harness can use **MCP servers**. Add them to `.glitter/mcp.json` in the
+  workspace or your home folder; stdio and streamable-HTTP servers both work.
+  Their tools appear as `mcp__server__tool`, ask before they run unless a
+  thread grant names that tool or server, and are discovered on demand so their
+  schemas do not fill every request. Extensions → MCP shows what the harness
+  connected, its transport and tool count, any sync error, and Refresh. A
+  broken server leaves the previous complete set in use; removing the last one
+  removes its tools.
 - Settings → Diagnostics → Copy diagnostics now includes the app version,
   operating system and architecture, and the last 200 redacted lines from the
   app log. If the log cannot be read, the rest of the diagnostics are still

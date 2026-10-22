@@ -160,7 +160,8 @@ const TOOL_LABELS: Record<string, string> = {
 export function humanizeToolName(tool?: string, kind?: string): string {
   if (tool && TOOL_LABELS[tool]) return TOOL_LABELS[tool];
   if (tool) {
-    const clean = tool.replace(/^mcp__[^_]+__/, "").replace(/_/g, " ").trim();
+    // The server segment may itself contain single underscores; the next `__` ends it.
+    const clean = tool.replace(/^mcp__(?:.+?)__/, "").replace(/_/g, " ").trim();
     if (clean) return clean.charAt(0).toUpperCase() + clean.slice(1);
   }
   if (kind === "userShell") return "Terminal";

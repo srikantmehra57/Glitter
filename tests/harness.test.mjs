@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { build } from 'esbuild';
+import { createServer } from 'node:http';
 import { mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -22,9 +23,10 @@ export { decide } from ${JSON.stringify(resolve('packages/glitter-bridge/src/har
 export { catalogPrompt, discoverSkills, parseFrontmatter } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/skills.ts'))};
 export { isTruncatedStop, repairHistory, classifyProviderFailure } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/wire.ts'))};
 export { effortTiers, resolveProvider } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/providers.ts'))};
+export { McpManager, readMcpServers, mcpToolName } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/mcp.ts'))};
 `);
 await build({ entryPoints: [join(temporary, 'entry.ts')], bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'silent' });
-const { HarnessHost, SessionStore, BUILTIN_TOOLS, ExtensionRegistry, parseScript, isReadOnly, assessCommand, covers, scopesFor, runGuards, decide, catalogPrompt, discoverSkills, parseFrontmatter, confine, globRegex, runTool, scheduleToolCalls, encodeSegment, repairHistory, isTruncatedStop, retryBudgetOpen, effortTiers, resolveProvider, classifyProviderFailure } = await import(pathToFileURL(outfile).href);
+const { HarnessHost, SessionStore, BUILTIN_TOOLS, ExtensionRegistry, parseScript, isReadOnly, assessCommand, covers, scopesFor, runGuards, decide, catalogPrompt, discoverSkills, parseFrontmatter, confine, globRegex, runTool, scheduleToolCalls, encodeSegment, repairHistory, isTruncatedStop, retryBudgetOpen, effortTiers, resolveProvider, classifyProviderFailure, McpManager, readMcpServers, mcpToolName } = await import(pathToFileURL(outfile).href);
 
 const sse = (frames) => new Response(new ReadableStream({
   start(controller) {
@@ -1441,6 +1443,229 @@ test('plan feedback is the user\'s own message, and keeping the plan costs no mo
   await instance.sendTurn({ sessionId, text: 'ok, later' });
   await settled(events, 3);
   assert.match(calls.at(-1).body.messages.at(-1).content[0].content, /is staying in Plan mode/, 'the kept review stays in the history ahead of the next message');
+});
+
+/** A newline-delimited JSON-RPC MCP server with one `echo` tool. */
+const MCP_ECHO_SERVER = String.raw`
+import { createInterface } from 'node:readline';
+const send = (message) => process.stdout.write(JSON.stringify(message) + '\n');
+createInterface({ input: process.stdin }).on('line', (line) => {
+  if (!line.trim()) return;
+  let message;
+  try { message = JSON.parse(line); } catch { return; }
+  if (message.id == null) return;
+  if (message.method === 'initialize') {
+    send({ jsonrpc: '2.0', id: message.id, result: { protocolVersion: '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'echo', version: '1.0.0' } } });
+  } else if (message.method === 'tools/list') {
+    send({ jsonrpc: '2.0', id: message.id, result: { tools: [{ name: 'echo', description: 'Echo the given text back.', inputSchema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] } }] } });
+  } else if (message.method === 'tools/call') {
+    send({ jsonrpc: '2.0', id: message.id, result: { content: [{ type: 'text', text: 'echo: ' + String(message.params && message.params.arguments ? message.params.arguments.text : '') }] } });
+  } else {
+    send({ jsonrpc: '2.0', id: message.id, error: { code: -32601, message: 'unknown method' } });
+  }
+});
+`;
+
+test('MCP config merges the workspace over home and refuses unsafe values', async () => {
+  const root = await workspace();
+  const home = await mkdtemp(join(temporary, 'home-'));
+  await mkdir(join(root, '.glitter'));
+  await mkdir(join(home, '.glitter'));
+  await writeFile(join(home, '.glitter', 'mcp.json'), JSON.stringify({ mcpServers: {
+    'home-remote': { url: 'https://home.example/rpc' },
+    shared: { command: 'node', args: ['home.js'] },
+  } }));
+  await writeFile(join(root, '.glitter', 'mcp.json'), JSON.stringify({ mcpServers: {
+    docs: { command: 'node', args: ['docs.js'] },
+    remote: { type: 'http', url: 'https://workspace.example/rpc', headers: { Authorization: 'Bearer ws' } },
+    shared: { command: 'node', args: ['workspace.js'], env: { TOKEN: 'one' } },
+  } }));
+  const servers = await readMcpServers(root, home);
+  assert.deepEqual(servers.map((server) => server.name), ['docs', 'home-remote', 'remote', 'shared'], 'sorted, and the workspace file wins a duplicate name');
+  assert.equal(servers[1].transport, 'http', 'a bare url means streamable HTTP');
+  assert.equal(servers[2].transport, 'http');
+  assert.equal(servers[2].url, 'https://workspace.example/rpc');
+  assert.equal(servers[2].headers.Authorization, 'Bearer ws');
+  assert.deepEqual(servers[3].args, ['workspace.js']);
+  assert.equal(servers[3].env.TOKEN, 'one');
+  const invalid = async (body, pattern) => {
+    await writeFile(join(root, '.glitter', 'mcp.json'), JSON.stringify({ mcpServers: body }));
+    await assert.rejects(readMcpServers(root, home), pattern);
+  };
+  await invalid({ 'bad name': { command: 'node' } }, /not a valid server name/);
+  await invalid({ node: { command: 'node', env: { NODE_OPTIONS: '--require evil' } } }, /cannot set NODE_OPTIONS/);
+  await invalid({ node: { type: 'http', url: 'ftp://example.test/rpc' } }, /http or https/);
+});
+
+test('an HTTP MCP server is reached with its configured headers and session', async () => {
+  const root = await workspace();
+  const home = await mkdtemp(join(temporary, 'home-'));
+  await mkdir(join(root, '.glitter'));
+  const seen = [];
+  const http = createServer(async (req, res) => {
+    let text = '';
+    for await (const chunk of req) text += chunk;
+    const body = text ? JSON.parse(text) : {};
+    seen.push({ method: body.method, headers: req.headers, params: body.params });
+    if (body.id == null) { res.writeHead(202).end(); return; }
+    const result = body.method === 'initialize'
+      ? { protocolVersion: '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'remote', version: '1.0.0' } }
+      : body.method === 'tools/list'
+        ? { tools: [{ name: 'lookup', description: 'Look something up.', inputSchema: { type: 'object', properties: { q: { type: 'string' } } } }] }
+        : { content: [{ type: 'text', text: `found ${body.params.arguments.q}` }] };
+    res.writeHead(200, { 'content-type': 'application/json', ...(body.method === 'initialize' ? { 'mcp-session-id': 's-42' } : {}) });
+    res.end(JSON.stringify({ jsonrpc: '2.0', id: body.id, result }));
+  });
+  await new Promise((done) => http.listen(0, '127.0.0.1', done));
+  try {
+    const { port } = http.address();
+    await writeFile(join(root, '.glitter', 'mcp.json'), JSON.stringify({ mcpServers: {
+      remote: { type: 'http', url: `http://127.0.0.1:${port}/rpc`, headers: { Authorization: 'Bearer test-token' } },
+    } }));
+    const manager = new McpManager(home, () => {});
+    await manager.ensure(root, 's-1');
+    assert.deepEqual(manager.status(root), { servers: [{ name: 'remote', transport: 'http', tools: 1 }], error: null });
+    const context = { sessionId: 's-1', turnId: 't-1', workspaceRoot: root, mode: 'build' };
+    const generation = manager.acquire(context);
+    const row = generation.byName.get(mcpToolName('remote', 'lookup'));
+    assert.ok(row, 'the tool is registered under its model-facing name');
+    const produced = await row.definition.run(root, { q: 'cats' });
+    assert.deepEqual(produced.value, { kind: 'mcp', server: 'remote', tool: 'lookup', text: 'found cats' });
+    manager.release(context);
+    await manager.close();
+    assert.equal(seen[0].params.protocolVersion, '2025-06-18');
+    assert.equal(seen[0].headers.authorization, 'Bearer test-token');
+    assert.ok(seen.some(({ method }) => method === 'notifications/initialized'));
+    const call = seen.find(({ method }) => method === 'tools/call');
+    assert.equal(call.headers['mcp-session-id'], 's-42', 'later requests carry the negotiated session');
+    assert.equal(call.headers['mcp-protocol-version'], '2025-06-18');
+  } finally {
+    await new Promise((done) => { http.closeAllConnections(); http.close(done); });
+  }
+});
+
+test('a failing server rolls back the whole MCP generation and keeps the previous one', async () => {
+  const root = await workspace();
+  const home = await mkdtemp(join(temporary, 'home-'));
+  const scriptPath = join(temporary, 'mcp-echo-server.mjs');
+  await writeFile(scriptPath, MCP_ECHO_SERVER);
+  await mkdir(join(root, '.glitter'));
+  const config = (servers) => writeFile(join(root, '.glitter', 'mcp.json'), JSON.stringify({ mcpServers: servers }));
+  await config({ echo: { command: process.execPath, args: [scriptPath] } });
+  const notices = [];
+  const manager = new McpManager(home, (event, payload) => notices.push({ event, payload }));
+  try {
+    await manager.ensure(root, 's-1');
+    assert.deepEqual(manager.status(root), { servers: [{ name: 'echo', transport: 'stdio', tools: 1 }], error: null });
+    await config({
+      echo: { command: process.execPath, args: [scriptPath] },
+      broken: { command: '/bin/sh', args: ['-c', 'exit 3'] },
+    });
+    await manager.ensure(root, 's-1');
+    const failed = manager.status(root);
+    assert.deepEqual(failed.servers.map((server) => server.name), ['echo'], 'the previous complete generation is still in use');
+    assert.match(failed.error, /broken/);
+    assert.match(failed.error, /previous 1 MCP server is still in use/);
+    assert.ok(notices.some(({ event, payload }) => event === 'agentNotice' && /MCP sync failed/.test(payload.message)));
+    // Removing the broken server restores the config the live generation was built from; no reconnect is needed.
+    await config({ echo: { command: process.execPath, args: [scriptPath] } });
+    await manager.ensure(root, 's-1');
+    assert.deepEqual(manager.status(root), { servers: [{ name: 'echo', transport: 'stdio', tools: 1 }], error: null });
+  } finally {
+    await manager.close();
+  }
+});
+
+test('MCP calls ask in every mode but full access, and a grant names one tool or a server', () => {
+  const subject = { kind: 'mcp', server: 'docs', tool: 'search' };
+  const base = { kind: 'mcp', subject, planMode: false, grants: [] };
+  for (const mode of ['promptUnmatched', 'onRequest', 'guarded']) {
+    const verdict = decide({ ...base, mode });
+    assert.equal(verdict.kind, 'ask', mode);
+    assert.deepEqual(verdict.scopes.map((scope) => scope.choiceId), ['allow-session', 'allow-session-server']);
+    assert.equal(verdict.scopes[0].scopeLabel, 'This tool');
+    assert.equal(verdict.scopes[1].scopeLabel, 'Any tool on docs');
+  }
+  assert.equal(decide({ ...base, mode: 'onRequest', planMode: true }).kind, 'ask', 'an external tool can read, so Plan mode still asks');
+  const denied = decide({ ...base, mode: 'denyUnmatched' });
+  assert.equal(denied.kind, 'deny');
+  assert.match(denied.reason, /MCP tool calls/);
+  assert.equal(decide({ ...base, mode: 'allowAll' }).kind, 'allow');
+  assert.equal(decide({ ...base, mode: 'guarded', grants: [{ kind: 'mcp', match: 'tool', server: 'docs', tool: 'search' }] }).kind, 'allow');
+  assert.equal(decide({ ...base, mode: 'guarded', grants: [{ kind: 'mcp', match: 'server', server: 'docs' }] }).kind, 'allow');
+  assert.equal(decide({ ...base, mode: 'guarded', grants: [{ kind: 'mcp', match: 'tool', server: 'docs', tool: 'write' }] }).kind, 'ask', 'a grant on another tool does not cover');
+  assert.equal(covers([{ kind: 'mcp', match: 'server', server: 'docs' }], { kind: 'mcp', server: 'docs', tool: 'anything' }), true);
+  assert.equal(covers([{ kind: 'mcp', match: 'tool', server: 'docs', tool: 'search' }], subject), true);
+  assert.equal(covers([{ kind: 'mcp', match: 'tool', server: 'docs', tool: 'other' }], subject), false);
+  assert.equal(covers([{ kind: 'mcp', match: 'server', server: 'other' }], subject), false);
+});
+
+test('one turn context reaches factories, prompts and hooks unchanged', async () => {
+  const registry = new ExtensionRegistry();
+  const seen = [];
+  registry.register({
+    id: 'probe',
+    tools: [(context) => { seen.push(context); return undefined; }],
+    prompt: [{ placement: 'stable', text: (context) => { seen.push(context); return undefined; } }],
+    hooks: { turnFinished: ({ context }) => { seen.push(context); } },
+  });
+  const turn = registry.snapshot({ sessionId: 's', turnId: 't', workspaceRoot: '/w', mode: 'build' });
+  await turn.runHook('turnFinished', { context: turn.context, outcome: {} });
+  assert.equal(seen.length, 3);
+  assert.equal(new Set(seen).size, 1, 'an extension may key per-turn state by the context object');
+  assert.equal(seen[0], turn.context);
+});
+
+test('MCP tools are discovered on demand, ask, run, and are revoked without a partial set', async () => {
+  const root = await workspace();
+  const home = await mkdtemp(join(temporary, 'home-'));
+  const scriptPath = join(temporary, 'mcp-echo-server.mjs');
+  await writeFile(scriptPath, MCP_ECHO_SERVER);
+  await mkdir(join(root, '.glitter'));
+  const config = (servers) => writeFile(join(root, '.glitter', 'mcp.json'), JSON.stringify({ mcpServers: servers }));
+  await config({ echo: { command: process.execPath, args: [scriptPath] } });
+  const { calls, fetchImpl } = anthropicStub([
+    () => toolReply('s1', 'tool_search', { query: 'echo' }),
+    () => toolReply('m1', 'mcp__echo__echo', { text: 'hi' }),
+    () => textReply('It said echo: hi.'),
+    () => textReply('The MCP tools are gone.'),
+  ]);
+  const { instance, events } = host(fetchImpl, new SessionStore(await mkdtemp(join(temporary, 'store-'))), { homeDir: home });
+  try {
+    const { sessionId } = await instance.startSession({ workspaceRoot: root });
+    assert.deepEqual(await instance.mcpStatus({ sessionId }), { servers: [{ name: 'echo', transport: 'stdio', tools: 1 }], error: null });
+    await instance.sendTurn({ sessionId, text: 'use the echo server' });
+    for (let waited = 0; waited < 4000 && !calls.length; waited += 10) await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.ok(calls[0], 'the turn reached the model');
+    assert.ok(toolNames(calls[0].body).includes('tool_search'));
+    assert.equal(toolNames(calls[0].body).includes('mcp__echo__echo'), false, 'a deferred MCP tool is not in the first request');
+    assert.match(calls[0].body.system.map((block) => block.text).join('\n'), /MCP servers are connected[\s\S]*echo \(1 tool\): echo/);
+    const approval = await until(events, ({ event }) => event === 'approval');
+    assert.ok(approval, 'an MCP call asks before it runs');
+    assert.equal(approval.payload.toolName, 'mcp__echo__echo');
+    assert.deepEqual(approval.payload.subject, { kind: 'mcp', server: 'echo', tool: 'echo', path: 'echo › echo' });
+    assert.deepEqual(approval.payload.availableChoices.map((choice) => choice.choiceId), ['allow-once', 'allow-session', 'allow-session-server', 'deny']);
+    assert.ok(toolNames(calls[1].body).includes('mcp__echo__echo'), 'tool_search activates the tool for the next step');
+    instance.decideApproval({ approvalId: approval.payload.approvalId, choiceId: 'allow-once' });
+    await settled(events, 1);
+    assert.match(JSON.stringify(calls[2].body.messages.at(-1)), /echo: hi/);
+    const tool = events.filter(({ event, payload }) => event === 'item' && payload.item.kind === 'toolCall' && payload.item.tool === 'mcp__echo__echo').at(-1);
+    assert.equal(tool.payload.item.status, 'completed');
+    const old = instance.mcp.generations.get(root);
+    // Revoking every server removes the whole generation, search tool included.
+    await config({});
+    assert.deepEqual(await instance.mcpStatus({ sessionId }), { servers: [], error: null });
+    assert.equal(old.refs, 0, 'the finished turn released the generation it used');
+    const stopped = ({ exchange }) => exchange.child.exitCode != null || exchange.child.signalCode != null;
+    for (let waited = 0; waited < 3000 && !old.servers.every(stopped); waited += 20) await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.ok(old.servers.every(stopped), 'the revoked generation\'s server is stopped');
+    await instance.sendTurn({ sessionId, text: 'anything left?' });
+    await settled(events, 2);
+    assert.equal(toolNames(calls[3].body).includes('tool_search'), false, 'no MCP generation leaves no search tool behind');
+    assert.doesNotMatch(calls[3].body.system.map((block) => block.text).join('\n'), /MCP servers are connected/);
+  } finally {
+    await instance.stop();
+  }
 });
 
 test.after(async () => { await rm(temporary, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });

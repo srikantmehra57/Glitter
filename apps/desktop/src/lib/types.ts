@@ -215,6 +215,9 @@ export type SkillRow = {
 
 /** A CLI-configured MCP server: OAuth applies to streamable-HTTP servers. */
 export type McpServer = { name: string; transport: string; oauth: boolean };
+/** A server the Harness started from `.glitter/mcp.json`; `tools` is what its last listing returned. */
+export type HarnessMcpServer = { name: string; transport: string; tools: number };
+export type HarnessMcpStatus = { servers: HarnessMcpServer[]; error: string | null };
 
 export type PluginEntry = { id: string; version?: string | null; description: string; enabled?: boolean | null };
 /** One CLI skill row (`skills list`): `activation` is `on`/`off`, `scope` is user/project/bundled/plugin. */

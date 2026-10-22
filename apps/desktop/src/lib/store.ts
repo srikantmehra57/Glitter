@@ -46,7 +46,7 @@ import {
   type WorkspaceFile,
   type Workspace,
   type CliUpdateOutcome, type CliUpdateStatus, type ComposerImage, type ContextRef, type HostCompat, type HostInfo, type Model, type SessionConfig, type SessionMetadata, type SessionOpening, type SessionPreview,
-  type UserInputResponse, type GoalState, type ContextUsage, type TokenUsage, type SubscriptionUsage, type SubagentResult, type Suggestion, type TrustPreview, type SkillRow, type McpServer, type PluginEntry, type SkillEntry, type HostPosture, type EnterpriseStatus, type SettingsTab,
+  type UserInputResponse, type GoalState, type ContextUsage, type TokenUsage, type SubscriptionUsage, type SubagentResult, type Suggestion, type TrustPreview, type SkillRow, type McpServer, type HarnessMcpStatus, type PluginEntry, type SkillEntry, type HostPosture, type EnterpriseStatus, type SettingsTab,
 } from "./types";
 
 const persist = isTauri() ? new LazyStore("glitter.json", { autoSave: false, defaults: {} }) : null;
@@ -357,6 +357,11 @@ type AppStore = Settings & {
   mcpLoading: boolean;
   mcpError: string | null;
   refreshMcpServers: () => Promise<void>;
+  /** The Harness's own MCP generation for the thread's workspace; null until loaded. */
+  harnessMcp: HarnessMcpStatus | null;
+  harnessMcpLoading: boolean;
+  harnessMcpError: string | null;
+  refreshHarnessMcp: (sessionId: string, refresh?: boolean) => Promise<void>;
   /** Plugin inventory (`plugin_list`); `availableShown` selects marketplace-available rows. */
   pluginEntries: PluginEntry[];
   pluginsAvailableShown: boolean;
@@ -1222,6 +1227,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
   mcpServers: [],
   mcpLoading: false,
   mcpError: null,
+  harnessMcp: null,
+  harnessMcpLoading: false,
+  harnessMcpError: null,
   pluginEntries: [],
   pluginsAvailableShown: false,
   pluginsLoading: false,
@@ -2431,6 +2439,19 @@ export const useAppStore = create<AppStore>((set, get) => ({
       set({ mcpError: describeError("Could not load MCP servers", error) });
     } finally {
       set({ mcpLoading: false });
+    }
+  },
+
+  refreshHarnessMcp: async (sessionId, refresh = false) => {
+    if (get().harnessMcpLoading) return;
+    set({ harnessMcpLoading: true, harnessMcpError: null });
+    try {
+      const status = await bridge<HarnessMcpStatus>("harnessMcp", { sessionId, agentId: "harness", ...(refresh ? { refresh: true } : {}) });
+      set({ harnessMcp: { servers: status.servers ?? [], error: status.error ?? null } });
+    } catch (error) {
+      set({ harnessMcpError: describeError("Could not load the Harness MCP servers", error) });
+    } finally {
+      set({ harnessMcpLoading: false });
     }
   },
 

@@ -251,6 +251,8 @@ function mockBridge(method: string, params: Record<string, unknown>): unknown {
       ]) };
     case "listSkills":
       return { skills: [{ selector: "review", displayName: "Review", description: "Review the working tree", source: "user" }] };
+    case "harnessMcp":
+      return { servers: [{ name: "preview-docs", transport: "stdio", tools: 3 }], error: null };
     case "mcpServers":
       return { servers: [{ name: "preview-docs", transport: "streamableHttp", oauth: true }] };
     case "checkCliUpdate":

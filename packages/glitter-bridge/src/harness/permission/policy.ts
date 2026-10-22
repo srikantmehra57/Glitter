@@ -32,8 +32,15 @@ export function decide(input: PolicyInput): Verdict {
   // Known read-only commands need no approval in any mode, Plan mode and read-only threads included.
   if (kind === "shell" && subject.kind === "command" && isReadOnly(subject.command)) return { kind: "allow" };
   if (kind === "edit" && input.planMode) return { kind: "deny", reason: "Plan mode is on: files are not edited. Finish the plan, or ask the user to switch to Build." };
-  if (mode === "denyUnmatched") return { kind: "deny", reason: `The thread is read-only: ${kind === "edit" ? "file edits" : "commands"} are refused. Ask the user to change the permission mode if this is needed.` };
+  if (mode === "denyUnmatched") return { kind: "deny", reason: `The thread is read-only: ${kind === "edit" ? "file edits" : kind === "mcp" ? "MCP tool calls" : "commands"} are refused. Ask the user to change the permission mode if this is needed.` };
   if (mode === "allowAll") return { kind: "allow" };
+  // An external server runs with its own authority, so a call meets the user in
+  // every mode short of full access — Autonomous included — unless this thread
+  // already granted that tool or server.
+  if (kind === "mcp") {
+    if (covers(input.grants, subject)) return { kind: "allow" };
+    return { kind: "ask", scopes: scopesFor(subject) };
+  }
   if (mode === "onRequest" && kind === "edit") return { kind: "allow" };
   const risks = subject.kind === "command" ? assessCommand(subject.command).filter((risk) => risk.level === "ask") : [];
   if (risks.length) return { kind: "ask", scopes: [], risk: risks.map((risk) => risk.reason).join(" ") };

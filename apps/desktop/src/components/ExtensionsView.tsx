@@ -35,6 +35,9 @@ export function ExtensionsView({ onOpenThreads, embedded = false }: { onOpenThre
     mcpServers: state.mcpServers,
     mcpLoading: state.mcpLoading,
     mcpError: state.mcpError,
+    harnessMcp: state.harnessMcp,
+    harnessMcpLoading: state.harnessMcpLoading,
+    harnessMcpError: state.harnessMcpError,
     pluginEntries: state.pluginEntries,
     pluginsAvailableShown: state.pluginsAvailableShown,
     pluginsLoading: state.pluginsLoading,
@@ -43,6 +46,7 @@ export function ExtensionsView({ onOpenThreads, embedded = false }: { onOpenThre
     skillsLoading: state.skillsLoading,
     skillsError: state.skillsError,
     refreshMcpServers: state.refreshMcpServers,
+    refreshHarnessMcp: state.refreshHarnessMcp,
     refreshSkills: state.refreshSkills,
     refreshManagedSkills: state.refreshManagedSkills,
     refreshPlugins: state.refreshPlugins,
@@ -80,6 +84,12 @@ export function ExtensionsView({ onOpenThreads, embedded = false }: { onOpenThre
     // Load the catalog once; per-session skills refresh with the thread lifecycle.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [s.preview]);
+
+  const harnessThread = thread?.agentId === "harness" ? thread : null;
+  useEffect(() => {
+    if (harnessThread) void s.refreshHarnessMcp(harnessThread.sessionId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [harnessThread?.sessionId]);
 
   const refreshSkills = async () => {
     if (!thread || skillsBusy) return;
@@ -298,34 +308,56 @@ export function ExtensionsView({ onOpenThreads, embedded = false }: { onOpenThre
         <section className="extensions-section" aria-labelledby="extensions-mcp-title">
           <div className="extensions-section-head">
             <h2 id="extensions-mcp-title"><Server size={15} aria-hidden="true" />MCP servers</h2>
-            <button type="button" className="ghost-btn small" disabled={s.mcpLoading} onClick={() => void s.refreshMcpServers()}>
-              <RefreshCw size={11} className={s.mcpLoading ? "spin" : ""} />{s.mcpLoading ? "Refreshing…" : "Refresh"}
+            <button
+              type="button"
+              className="ghost-btn small"
+              disabled={harnessThread ? s.harnessMcpLoading : s.mcpLoading}
+              onClick={() => { if (harnessThread) void s.refreshHarnessMcp(harnessThread.sessionId, true); else void s.refreshMcpServers(); }}
+            >
+              <RefreshCw size={11} className={(harnessThread ? s.harnessMcpLoading : s.mcpLoading) ? "spin" : ""} />{(harnessThread ? s.harnessMcpLoading : s.mcpLoading) ? "Refreshing…" : "Refresh"}
             </button>
           </div>
-          <p className="permission-note">Servers configured for the Muse CLI. OAuth servers need a sign-in before their tools work.</p>
-          {s.mcpError ? <p className="permission-note" role="alert">{s.mcpError}</p> : null}
-          {authError ? <p className="permission-note" role="alert">{authError}</p> : null}
-          {!s.mcpServers.length && !s.mcpLoading ? <p className="permission-note extension-empty">No MCP servers are configured. Add them with the Muse CLI, then refresh.</p> : null}
-          {s.mcpServers.length ? <ul className="extension-list">
-            {s.mcpServers.map((server) => (
-              <li key={server.name} className="extension-card">
-                <Server size={16} aria-hidden="true" />
-                <span className="extension-copy">
-                  <span className="extension-name">{server.name}<span className="picker-tag">{server.transport}</span>{server.oauth ? <span className="picker-tag">OAuth</span> : null}</span>
-                </span>
-                {server.oauth ? (
-                  <span className="extension-actions">
-                    <button type="button" className="ghost-btn small" disabled={authBusy === server.name} title={`Sign in to ${server.name}`} onClick={() => void authServer(server.name, true)}>
-                      <KeyRound size={11} />{authBusy === server.name ? "Working…" : "Sign in"}
-                    </button>
-                    <button type="button" className="ghost-btn small" disabled={authBusy === server.name} title={`Remove the saved credential for ${server.name}`} onClick={() => { void s.confirm({ title: `Remove the saved credential for ${server.name}?`, body: "The next connection asks you to sign in to this server again.", confirmLabel: "Remove", danger: true }).then((ok) => { if (ok) void authServer(server.name, false); }); }}>
-                      <LogOut size={11} />Sign out
-                    </button>
+          {harnessThread ? <>
+            <p className="permission-note">Servers configured for the Harness in .glitter/mcp.json: this workspace's file first, then your home folder. Their tools load on demand, and each call asks before it runs.</p>
+            {s.harnessMcpError ? <p className="permission-note" role="alert">{s.harnessMcpError}</p> : null}
+            {s.harnessMcp?.error ? <p className="permission-note" role="alert">{s.harnessMcp.error}</p> : null}
+            {s.harnessMcp && !s.harnessMcp.servers.length && !s.harnessMcpLoading ? <p className="permission-note extension-empty">No MCP servers are configured. Add them to .glitter/mcp.json in this workspace, then refresh.</p> : null}
+            {s.harnessMcp?.servers.length ? <ul className="extension-list">
+              {s.harnessMcp.servers.map((server) => (
+                <li key={server.name} className="extension-card">
+                  <Server size={16} aria-hidden="true" />
+                  <span className="extension-copy">
+                    <span className="extension-name">{server.name}<span className="picker-tag">{server.transport}</span><span className="picker-tag">{server.tools} tool{server.tools === 1 ? "" : "s"}</span></span>
                   </span>
-                ) : null}
-              </li>
-            ))}
-          </ul> : null}
+                </li>
+              ))}
+            </ul> : null}
+          </> : <>
+            <p className="permission-note">Servers configured for the Muse CLI. OAuth servers need a sign-in before their tools work.</p>
+            {s.mcpError ? <p className="permission-note" role="alert">{s.mcpError}</p> : null}
+            {authError ? <p className="permission-note" role="alert">{authError}</p> : null}
+            {!s.mcpServers.length && !s.mcpLoading ? <p className="permission-note extension-empty">No MCP servers are configured. Add them with the Muse CLI, then refresh.</p> : null}
+            {s.mcpServers.length ? <ul className="extension-list">
+              {s.mcpServers.map((server) => (
+                <li key={server.name} className="extension-card">
+                  <Server size={16} aria-hidden="true" />
+                  <span className="extension-copy">
+                    <span className="extension-name">{server.name}<span className="picker-tag">{server.transport}</span>{server.oauth ? <span className="picker-tag">OAuth</span> : null}</span>
+                  </span>
+                  {server.oauth ? (
+                    <span className="extension-actions">
+                      <button type="button" className="ghost-btn small" disabled={authBusy === server.name} title={`Sign in to ${server.name}`} onClick={() => void authServer(server.name, true)}>
+                        <KeyRound size={11} />{authBusy === server.name ? "Working…" : "Sign in"}
+                      </button>
+                      <button type="button" className="ghost-btn small" disabled={authBusy === server.name} title={`Remove the saved credential for ${server.name}`} onClick={() => { void s.confirm({ title: `Remove the saved credential for ${server.name}?`, body: "The next connection asks you to sign in to this server again.", confirmLabel: "Remove", danger: true }).then((ok) => { if (ok) void authServer(server.name, false); }); }}>
+                        <LogOut size={11} />Sign out
+                      </button>
+                    </span>
+                  ) : null}
+                </li>
+              ))}
+            </ul> : null}
+          </>}
         </section>
         <section className="extensions-section" aria-labelledby="extensions-plugins-title">
           <div className="extensions-section-head">
