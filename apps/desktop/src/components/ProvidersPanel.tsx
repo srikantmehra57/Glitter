@@ -3,6 +3,7 @@ import { ExternalLink, KeyRound, LoaderCircle } from "lucide-react";
 import { openUrl, providerKeySet, providerKeysGet, type ProviderStatus } from "../lib/bridge";
 import { describeError } from "../lib/errors";
 import { PROVIDER_IDS, PROVIDERS, type ProviderEntry } from "../lib/providers";
+import { ProviderMark } from "./AgentPicker";
 import { Collapse } from "./Presence";
 
 /**
@@ -87,7 +88,7 @@ function ProviderRow({ provider, status, editing, onEdit, onSave }: { provider: 
     <div ref={row} className={`provider-row${configured ? " configured" : ""}`}>
       <div className="setting-row">
         <div className="setting-copy">
-          <span className="setting-label">{provider.name}{configured ? <span className="provider-badge">Connected</span> : null}</span>
+          <span className="setting-label"><ProviderMark id={provider.id} size={16} />{provider.name}{configured ? <span className="provider-badge">Connected</span> : null}</span>
           <span className="field-help">{summary}</span>
         </div>
         <div className="setting-control">

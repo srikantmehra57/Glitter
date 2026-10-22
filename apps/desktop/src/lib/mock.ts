@@ -366,7 +366,7 @@ export const MOCK_AGENTS: AgentInfo[] = [
   { id: "gemini", name: "Gemini CLI", protocol: "acp", found: false, path: null, version: null, verified: false, signIn: "" },
   { id: "qwen", name: "Qwen Code", protocol: "acp", found: false, path: null, version: null, verified: false, signIn: "" },
   { id: "goose", name: "Goose", protocol: "acp", found: false, path: null, version: null, verified: false, signIn: "" },
-  { id: "cline", name: "Cline CLI", protocol: "acp", found: false, path: null, version: null, verified: false, signIn: "" },
+  { id: "cline", name: "Cline CLI", protocol: "acp", found: true, path: "/opt/homebrew/bin/cline", version: "3.0.73", verified: false, signIn: "" },
 ];
 
 const zen = (id: string, name: string, input: string, output: string, efforts: Model["reasoningEfforts"] = [], context = 200000): Model =>
@@ -377,8 +377,9 @@ export const MOCK_AGENT_MODELS: Record<string, Model[]> = {
     { modelId: "anthropic/claude-sonnet-5", displayLabel: "Claude Sonnet 5", providerId: "anthropic", description: "Anthropic", contextLimit: 200000, reasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"], defaultReasoningEffort: "medium", effortSource: "host", isDefault: true },
     { modelId: "anthropic/claude-haiku-4-5", displayLabel: "Claude Haiku 4.5", providerId: "anthropic", description: "Anthropic", contextLimit: 200000, reasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"], defaultReasoningEffort: "medium", effortSource: "host" },
     { modelId: "openai/gpt-5.5", displayLabel: "gpt-5.5", providerId: "openai", description: "OpenAI", contextLimit: 400000, reasoningEfforts: ["minimal", "low", "medium", "high"], defaultReasoningEffort: "medium", effortSource: "host" },
-    { modelId: "nvidia/moonshotai/kimi-k2.6", displayLabel: "moonshotai/kimi-k2.6", providerId: "nvidia", description: "NVIDIA NIM", contextLimit: null, reasoningEfforts: [], effortSource: "host" },
-    { modelId: "cline/anthropic/claude-sonnet-5.5", displayLabel: "anthropic/claude-sonnet-5.5", providerId: "cline", description: "Cline API", contextLimit: 200000, reasoningEfforts: [], effortSource: "host" },
+    { modelId: "nvidia/moonshotai/kimi-k2.6", displayLabel: "moonshotai/kimi-k2.6", providerId: "nvidia", description: "NVIDIA NIM", contextLimit: null, reasoningEfforts: ["none", "high"], defaultReasoningEffort: "high", effortSource: "host" },
+    { modelId: "nvidia/openai/gpt-oss-120b", displayLabel: "openai/gpt-oss-120b", providerId: "nvidia", description: "NVIDIA NIM", contextLimit: null, reasoningEfforts: ["low", "medium", "high"], defaultReasoningEffort: "medium", effortSource: "host" },
+    { modelId: "cline/anthropic/claude-sonnet-5.5", displayLabel: "anthropic/claude-sonnet-5.5", providerId: "cline", description: "Cline API", contextLimit: 200000, reasoningEfforts: ["none", "low", "medium", "high", "xhigh"], defaultReasoningEffort: "medium", effortSource: "host" },
     { modelId: "ollama/qwen3-coder", displayLabel: "qwen3-coder", providerId: "ollama", description: "Ollama", contextLimit: null, reasoningEfforts: [], effortSource: "host" },
   ],
   opencode: [
@@ -393,6 +394,21 @@ export const MOCK_AGENT_MODELS: Record<string, Model[]> = {
     zen("muse-spark-1.3-contributor-free", "Muse Spark 1.3 Contributor (free)", "0", "0"),
     zen("glm-5.3", "GLM-5.3", "0.6", "2.2", [], 200000),
     { modelId: "openrouter/qwen/qwen3.8-27b:free", displayLabel: "Qwen3.8 27B (free)", providerId: "openrouter", reasoningEfforts: [], effortSource: "host", description: "Free" },
+  ],
+  cline: [
+    ...[
+      ["nvidia/nemotron-3.5-super", "Nemotron 3.5 Super", "NVIDIA’s latest mixture-of-experts reasoning model", true],
+      ["upstage/solar-mini4", "Solar Mini 4", "Compact 35-billion parameter model", true],
+      ["reflection/beam-1.0-501b-a23b", "Beam", null, true],
+      ["nvidia/nemotron-3.5-lightning", "Nemotron 3.5 Lightning", null, true],
+      ["poolside/laguna-s-2.1", "Laguna S 2.1", null, true],
+      ["anthropic/claude-haiku-5.5", "Claude Haiku 5.5", null, false],
+      ["anthropic/claude-sonnet-5.5", "Claude Sonnet 5.5", null, false],
+      ["openai/gpt-6.1-sol", "GPT-6.1 Sol", null, false],
+      ["google/gemini-4-argon", "Gemini 4 Argon", null, false],
+      ["z-ai/glm-5.3-prime", "GLM 5.3 Prime", null, false],
+      ["meta/muse-spark-open", "Muse Spark Open", null, false],
+    ].map(([modelId, displayLabel, description, free]): Model => ({ modelId: modelId as string, displayLabel: displayLabel as string, providerId: (modelId as string).split("/")[0], description: description as string | null, free: free as boolean, reasoningEfforts: ["none", "low", "medium", "high", "xhigh"], defaultReasoningEffort: "medium", effortSource: "host" })),
   ],
   grok: [
     { modelId: "grok-4.7", displayLabel: "Grok 4.7", providerId: "grok", contextLimit: 256000, isDefault: true, reasoningEfforts: ["low", "medium", "high", "xhigh"], defaultReasoningEffort: "high", effortSource: "host" },

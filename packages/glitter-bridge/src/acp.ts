@@ -196,7 +196,96 @@ export type AcpModel = {
   isDefault?: boolean;
   isActive?: boolean;
   unavailable?: boolean;
+  /**
+   * Cline's current free promotion. A `-free` or `:free` id is not enough:
+   * those names stay in the catalog after the promotion ends.
+   */
+  free?: boolean;
 };
+
+const CLINE_FREE_URL = "https://api.cline.bot/api/v1/ai/cline/recommended-models";
+const CLINE_FREE_TTL_MS = 10 * 60 * 1000;
+const STALE_FREE_LABEL = /\s*\(free\)/gi;
+
+export type ClineFreeModel = { id: string; name?: string; description?: string };
+
+type FetchLike = (url: string, init?: { signal?: AbortSignal }) => Promise<{ ok: boolean; json: () => Promise<unknown> }>;
+
+/** The `free` lane of Cline's model picker. Null when the list cannot be read. */
+export async function fetchClineFreeIds(fetchImpl: FetchLike = fetch): Promise<ClineFreeModel[] | null> {
+  try {
+    const response = await fetchImpl(CLINE_FREE_URL, { signal: AbortSignal.timeout(8000) });
+    if (!response.ok) return null;
+    const body = await response.json() as { free?: unknown };
+    const rows = Array.isArray(body?.free) ? body.free : [];
+    const models = rows.flatMap((row): ClineFreeModel[] => {
+      if (!row || typeof row !== "object") return [];
+      const id = (row as { id?: unknown }).id;
+      if (typeof id !== "string" || !id) return [];
+      const name = (row as { name?: unknown }).name;
+      const description = (row as { description?: unknown }).description;
+      return [{ id, ...(typeof name === "string" && name ? { name } : {}), ...(typeof description === "string" && description ? { description } : {}) }];
+    });
+    return models.length ? models : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Same model when the catalog omits a provider prefix, or the other way around. */
+export function clineModelMatches(catalogId: string, freeId: string): boolean {
+  const catalog = catalogId.trim().toLowerCase();
+  const free = freeId.trim().toLowerCase();
+  if (!catalog || !free) return false;
+  if (catalog === free) return true;
+  const catalogSlug = catalog.slice(catalog.lastIndexOf("/") + 1);
+  const freeSlug = free.slice(free.lastIndexOf("/") + 1);
+  if (catalogSlug !== freeSlug) return false;
+  const catalogProvider = catalog.includes("/") ? catalog.slice(0, catalog.lastIndexOf("/")) : "";
+  const freeProvider = free.includes("/") ? free.slice(0, free.lastIndexOf("/")) : "";
+  return !catalogProvider || !freeProvider || catalogProvider === freeProvider;
+}
+
+function clineFreeLabel(model: ClineFreeModel): string {
+  const name = model.name?.trim();
+  if (name && !name.includes("/") && name.toLowerCase() !== model.id.toLowerCase()) return name;
+  const slug = model.id.slice(model.id.lastIndexOf("/") + 1).replace(/[:-]free$/i, "");
+  return slug.replace(/-/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+/**
+ * Keep the Free mark for models Cline still promotes, and take it off the rest.
+ * A retired promotion often keeps "(free)" in its catalog name. A promotion the
+ * catalog has not caught up with is added, so the Free section is not empty.
+ */
+export function applyClineFree<T extends { modelId: string; displayLabel?: string; providerId?: string; description?: string | null; free?: boolean }>(models: T[], freeModels: readonly ClineFreeModel[]): T[] {
+  const claimed = new Set<string>();
+  const annotated = models.map((model) => {
+    const hit = freeModels.find((free) => clineModelMatches(model.modelId, free.id));
+    if (hit) {
+      claimed.add(hit.id);
+      return { ...model, free: true };
+    }
+    const next: T = { ...model, free: false };
+    if (next.description === "Free") next.description = null;
+    if (next.displayLabel) {
+      const label = next.displayLabel.replace(STALE_FREE_LABEL, "").replace(/[ \t]{2,}/g, " ").trim();
+      next.displayLabel = label || undefined;
+    }
+    return next;
+  });
+  const missing = freeModels.filter((free) => !claimed.has(free.id)).map((free) => {
+    const slash = free.id.indexOf("/");
+    return {
+      modelId: free.id,
+      displayLabel: clineFreeLabel(free),
+      providerId: slash > 0 ? free.id.slice(0, slash) : "cline",
+      description: free.description || "Free",
+      free: true,
+    } as T;
+  });
+  return [...missing, ...annotated];
+}
 
 /** OpenCode Zen promo models (`mimo-v2.5-free`, `*:free`) that often reject with "Model access is disabled". */
 export function zenFreeModel(modelId: string) {
@@ -243,6 +332,13 @@ export function fatalProviderError(message: string) {
   return /model access is disabled|rate limit|quota(?: exceeded)?|insufficient (?:account )?funds|insufficient (?:credit|quota)|payment required|unauthori[sz]ed|forbidden|\b403\b|\b401\b/i.test(message);
 }
 
+/**
+ * Cline's `--thinking` levels. Its ACP server takes no reasoning option per
+ * session; it reads this flag once, when the process starts.
+ */
+const CLINE_THINKING = ["none", "low", "medium", "high", "xhigh"];
+const CLINE_DEFAULT_THINKING = "medium";
+
 /** Normalizes agent effort ids (`xhigh`, `x-high`, `default`, …) onto the app's tier vocabulary. */
 function tierOf(value: string): string | null {
   const id = value.toLowerCase().replace(/[^a-z]/g, "");
@@ -267,7 +363,13 @@ export class AcpAgentHost {
    */
   private probe: { sessionId: string; config: AcpConfigOption[] } | null = null;
   private efforts = new Map<string, { reasoningEfforts: string[]; defaultReasoningEffort?: string }>();
+  /** Cline's promoted free models, so a stale `-free` id is not offered as free. */
+  private clineFree: { at: number; models: ClineFreeModel[] } | null = null;
   private describing: Promise<unknown> = Promise.resolve();
+  /** Cline only: the level the process was launched with, and the level the next turn wants. */
+  private thinking = { launched: CLINE_DEFAULT_THINKING, wanted: CLINE_DEFAULT_THINKING };
+  /** The workspace the process was started for, so a relaunch keeps the same sandbox. */
+  private workspaceRoot?: string;
   private blocked = new Set<string>();
   private turnSeq = 0;
   private isolationReport: IsolationReport | null = null;
@@ -303,10 +405,13 @@ export class AcpAgentHost {
       // A suggestion host does not receive the workspace as a write root, and
       // its cwd is a temp directory. The profile denies reading the project.
       const suggest = options?.suggest;
-      const spawned = spawnIsolated(this.bin, this.spec.acpArgs ?? [], suggest
+      const thinking = this.spec.id === "cline" ? ["--thinking", this.thinking.wanted] : [];
+      if (!suggest) this.workspaceRoot = options?.workspaceRoot;
+      const spawned = spawnIsolated(this.bin, [...(this.spec.acpArgs ?? []), ...thinking], suggest
         ? { agentId: this.spec.id, denyReadRoots: [suggest.denyReadRoot], cwd: confinedCwd() }
         : { agentId: this.spec.id, workspace: options?.workspaceRoot });
       this.isolationReport = spawned.isolation;
+      this.thinking.launched = this.thinking.wanted;
       const child = spawned.child;
       const conn = new AcpConnection(child);
       conn.onNotification = (method, params) => this.onNotification(method, params);
@@ -415,21 +520,39 @@ export class AcpAgentHost {
       // for the model it has picked, that model's effort levels.
       const described = modelId ? await this.describeModel(catalog, modelId) : null;
       const models = described ? catalog.map((model) => model.modelId === modelId ? { ...model, ...described } : model) : catalog;
-      return { models: this.markUnavailable(models), source: "catalog", ...(this.catalogModes?.modes.length ? this.catalogModes : {}) };
+      return { models: await this.present(models), source: "catalog", ...(this.catalogModes?.modes.length ? this.catalogModes : {}) };
     }
     // A rescan must return the probe catalog for every agent. The open session
     // only contributes which row is active; keeping its old option list is how
     // a composer refresh used to stay stale for everyone but Grok.
     if (refresh && catalog.length) {
       const selected = new Map(fromSession.map((model) => [model.modelId, model]));
-      return { models: this.markUnavailable(catalog.map((model) => {
+      return { models: await this.present(catalog.map((model) => {
         const current = selected.get(model.modelId);
         return { ...model, ...current, isActive: current?.isActive === true };
       })), source: "session" };
     }
     // Session options are authoritative for availability; the catalog adds metadata.
     const byId = new Map(catalog.map((model) => [model.modelId, model]));
-    return { models: this.markUnavailable(fromSession.map((model) => ({ ...byId.get(model.modelId), ...model, ...(byId.get(model.modelId)?.reasoningEfforts && !model.reasoningEfforts ? { reasoningEfforts: byId.get(model.modelId)!.reasoningEfforts } : {}) }))), source: "session" };
+    return { models: await this.present(fromSession.map((model) => ({ ...byId.get(model.modelId), ...model, ...(byId.get(model.modelId)?.reasoningEfforts && !model.reasoningEfforts ? { reasoningEfforts: byId.get(model.modelId)!.reasoningEfforts } : {}) }))), source: "session" };
+  }
+
+  /** Cline's Free section is the live promotion list, not every id that says free. */
+  private async present(models: AcpModel[]): Promise<AcpModel[]> {
+    const marked = this.markUnavailable(models);
+    if (this.spec.id !== "cline") return marked;
+    const ids = await this.clineFreeIds();
+    const listed = ids ? applyClineFree(marked, ids) : marked;
+    // Every Cline model takes `--thinking`; Cline drops the level for a model that cannot reason.
+    return listed.map((model) => model.reasoningEfforts?.length ? model : { ...model, reasoningEfforts: CLINE_THINKING, defaultReasoningEffort: CLINE_DEFAULT_THINKING, effortSource: "host" as const });
+  }
+
+  private async clineFreeIds(): Promise<ClineFreeModel[] | null> {
+    if (this.clineFree && Date.now() - this.clineFree.at < CLINE_FREE_TTL_MS) return this.clineFree.models;
+    const models = await fetchClineFreeIds();
+    if (!models) return this.clineFree?.models ?? null;
+    this.clineFree = { at: Date.now(), models };
+    return models;
   }
 
   private modelsFromConfig(config: AcpConfigOption[]): AcpModel[] {
@@ -597,14 +720,17 @@ export class AcpAgentHost {
     const pick = (category: string) => session?.config.find((item) => item.category === category);
     return {
       modelId: modelOption(session?.config ?? [])?.currentValue,
-      effort: tierOf(pick("thought_level")?.currentValue ?? "") ?? undefined,
+      effort: this.spec.id === "cline" ? this.thinking.wanted : tierOf(pick("thought_level")?.currentValue ?? "") ?? undefined,
       mode: pick("mode")?.currentValue,
       modes: pick("mode")?.options ?? [],
     };
   }
 
   async startSession(options: { workspaceRoot: string; modelId?: string; effort?: string; mode?: string }) {
+    // A new Cline session starts in a process already at its level: an empty session cannot be reloaded later.
+    if (this.spec.id === "cline" && options.effort && CLINE_THINKING.includes(options.effort)) this.thinking.wanted = options.effort;
     await this.start({ workspaceRoot: options.workspaceRoot });
+    await this.relaunchForThinking();
     let result: Json;
     try {
       result = await this.requireConn().request<Json>("session/new", { cwd: options.workspaceRoot, mcpServers: [] }, 60000);
@@ -672,11 +798,67 @@ export class AcpAgentHost {
   }
 
   async setEffort(sessionId: string, effort: string) {
+    if (this.spec.id === "cline") return this.wantThinking(sessionId, effort);
     const option = this.sessions.get(sessionId)?.config.find((item) => item.category === "thought_level");
     if (!option) return { status: "unsupported" };
     const match = option.options?.find((item) => tierOf(item.value) === effort);
     if (!match || match.value === option.currentValue) return { status: "accepted" };
     return this.setOption(sessionId, option.id, match.value);
+  }
+
+  /** The level applies from the next turn, which relaunches Cline at it (see `relaunchForThinking`). */
+  private wantThinking(sessionId: string, effort: string) {
+    if (!this.sessions.has(sessionId)) throw new Error("Session is not open.");
+    if (!CLINE_THINKING.includes(effort)) return { status: "unsupported" };
+    const changed = effort !== this.thinking.wanted;
+    this.thinking.wanted = effort;
+    if (changed && !this.sessions.get(sessionId)?.muted) this.emit("agentConfig", { sessionId, config: this.sessionConfig(sessionId) });
+    return { status: "accepted", agentConfig: this.sessionConfig(sessionId) };
+  }
+
+  /**
+   * Cline reads its reasoning level only from `--thinking` at launch. A new
+   * level relaunches the process while no turn is running, and the open
+   * sessions are reloaded into it with their model and mode. A turn already
+   * running elsewhere keeps the old level; the relaunch waits for idle.
+   */
+  private async relaunchForThinking() {
+    if (this.spec.id !== "cline" || !this.conn || this.thinking.wanted === this.thinking.launched) return;
+    if ([...this.sessions.values()].some((session) => session.prompting)) return;
+    const open = [...this.sessions.entries()].filter(([, session]) => !session.muted).map(([sessionId, session]) => ({ sessionId, cwd: session.cwd, config: this.sessionConfig(sessionId) }));
+    const { catalog, catalogModes, workspaceRoot } = this;
+    await this.stop();
+    await this.start({ workspaceRoot });
+    // The catalog does not depend on the level; keep it instead of probing again.
+    this.catalog = catalog;
+    this.catalogModes = catalogModes;
+    for (const { sessionId, cwd, config } of open) {
+      try {
+        await this.reload(sessionId, cwd);
+        const now = this.sessionConfig(sessionId);
+        if (config.modelId && config.modelId !== now.modelId) await this.setModel({ sessionId, modelId: config.modelId });
+        if (config.mode && config.mode !== now.mode) await this.setMode(sessionId, config.mode);
+      } catch (error) {
+        this.emit("agentNotice", { sessionId, level: "warning", message: `${this.spec.name} restarted to change its reasoning level and could not reopen this thread: ${this.explain(error)}` });
+      }
+    }
+  }
+
+  /** Reopens a session in a relaunched process. Its history is already in the thread, so the replay is muted. */
+  private async reload(sessionId: string, cwd: string) {
+    const session = this.track(sessionId, cwd, []);
+    session.muted = true;
+    try {
+      const result = await this.requireConn().request<Json>("session/load", { sessionId, cwd, mcpServers: [] }, 120000);
+      session.config = this.configFrom(asRecord(result));
+    } catch (error) {
+      this.sessions.delete(sessionId);
+      throw error;
+    } finally {
+      session.muted = false;
+      session.collected = undefined;
+      session.turnId = "idle";
+    }
   }
 
   async setMode(sessionId: string, mode: string) {
@@ -689,6 +871,10 @@ export class AcpAgentHost {
   // ─── Turns ────────────────────────────────────────────────────────────────
 
   async sendTurn(options: { sessionId: string; text: string; reasoningEffort?: string; images?: Array<{ mediaType: string; base64Data: string }> }) {
+    if (this.spec.id === "cline" && this.sessions.has(options.sessionId)) {
+      if (options.reasoningEffort) this.wantThinking(options.sessionId, options.reasoningEffort);
+      await this.relaunchForThinking();
+    }
     const session = this.sessions.get(options.sessionId);
     if (!session) throw new Error("Session is not open. Reopen the thread.");
     if (session.prompting) throw new Error(`${this.spec.name} is still working on the previous message.`);

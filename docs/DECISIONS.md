@@ -934,3 +934,40 @@ must respect. Don't log routine changes here; they belong in git history and
   logs are complete (muted only suppresses live events), so a crash and resume
   behaves like any other harness session. A thread's mode and permission mode
   are immutable while it is a child; an attempt to change either explains why.
+
+### Cline CLI's reasoning level is a launch flag
+
+- **Date:** 2026-10-22
+- **Decision:** Cline CLI's ACP server offers no effort option per session; it
+  reads `--thinking <none|low|medium|high|xhigh>` once, when the process starts,
+  and without the flag runs with reasoning off. The host starts Cline with the
+  level the thread wants (`medium` by default) and lists those five levels on
+  every Cline model. A new level is recorded at once and applied before the
+  next turn: the host relaunches Cline while no turn is running and reloads the
+  open sessions into the new process with `session/load`, muted so their
+  history does not replay into the thread, then restores each session's model
+  and mode.
+- **Why:** The only per-session alternative is writing Cline's own settings
+  file, which the app does not own. One process per level would multiply
+  sandboxes and probes.
+- **Consequences:** The level is process-wide, so two Cline threads at
+  different levels relaunch Cline as they alternate. A turn running in another
+  thread defers the relaunch, so the new level then waits for idle. Cline
+  cannot reload a session that has never had a turn; a new thread therefore
+  starts in a process already at its level, and a reload that fails posts a
+  notice on that thread.
+
+### Harness effort follows each provider's own switch
+
+- **Date:** 2026-10-22
+- **Decision:** Effort tiers stay per provider and model family
+  (`effortTiers`). Gateways (OpenRouter, the Cline API) take OpenRouter's
+  vocabulary, None to Extra high, for reasoning families. The Cline API gets the
+  pair its own CLI sends, `reasoning_effort` and `reasoning.enabled`. NIM's
+  gpt-oss models take `reasoning_effort`; its hybrid thinkers have only on and
+  off, shown as None and High and sent as `chat_template_kwargs` with both
+  `thinking` and `enable_thinking`, since templates read one or the other.
+  None is sent explicitly only where the wire has an off switch (`SENDS_NONE`);
+  elsewhere it leaves the provider's default.
+- **Why:** Providers do not report reasoning support in their model lists, and
+  a field a provider does not accept fails the call.

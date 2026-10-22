@@ -946,7 +946,7 @@ async function settingsComponent() {
     '../lib/bridge': 'export const openLogFolder=async()=>"/preview/logs/app.log";export const diagnosticsSnapshot=async()=>({os:"browser-preview",arch:"",logTail:[]});export const providerKeysGet=async(ids)=>ids.map((id)=>({id,configured:false,keyHint:null,baseUrl:null}));export const providerKeySet=async()=>[];export const openUrl=async()=>{};',
     'lucide-react': 'const I=()=>null;export const Activity=I,Archive=I,ArchiveRestore=I,Bot=I,ChartNoAxesColumn=I,Check=I,Command=I,Cpu=I,Eye=I,EyeOff=I,ExternalLink=I,FilePlus=I,FolderOpen=I,Info=I,KeyRound=I,LoaderCircle=I,Lock=I,MessagesSquare=I,Monitor=I,Moon=I,Palette=I,PanelLeft=I,Plug=I,Puzzle=I,RefreshCw=I,Search=I,Settings2=I,ShieldCheck=I,Sun=I,Trash2=I,TriangleAlert=I,X=I;',
     './SelectMenu': 'export const SelectMenu=()=>null;',
-    './AgentPicker': 'export const AgentMark=()=>null;',
+    './AgentPicker': 'export const AgentMark=()=>null;export const ProviderMark=()=>null;export const ModelIcon=()=>null;',
     './ExtensionsView': 'export const ExtensionsView=()=>null;',
     './UsageView': 'export const UsageView=()=>null;',
     './LoginPanel': 'export const LoginPanel=()=>null;',

@@ -84,6 +84,14 @@ describe("EffortPicker", () => {
     expect(document.querySelector(".effort-select .peak, .effort-ripple")).toBeNull();
   });
 
+  it("draws each level as a dial on the scale from None to Max", () => {
+    render(<EffortPicker value="low" tiers={["none", "low", "high", "max"]} fallback="high" disabled={false} onChange={vi.fn()} />);
+    expect(chip().querySelector(".effort-gauge")).toHaveAttribute("data-level", "2");
+    fireEvent.click(chip());
+    expect(screen.getAllByRole("option").map((option) => option.querySelector(".effort-gauge")?.getAttribute("data-level"))).toEqual(["0", "2", "4", "6"]);
+    expect(row(/^Max/).querySelector(".effort-gauge")).toHaveAttribute("data-peak", "true");
+  });
+
   it("moves through the menu with the arrow keys and closes on Escape", () => {
     const onChange = vi.fn();
     render(<EffortPicker value="medium" tiers={["low", "medium", "high", "max"]} fallback="medium" disabled={false} onChange={onChange} />);

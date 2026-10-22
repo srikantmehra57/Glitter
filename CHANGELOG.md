@@ -89,10 +89,17 @@ licence terms.
 
 ### Changed
 
-- The model picker gives each harness provider its own badge. Anthropic, OpenAI,
-  xAI and the rest are no longer grouped under a Harness tab; choosing a badge
-  lists only that provider's models. Muse and the other agent CLIs stay their
-  own badges.
+- The model picker is a two-pane panel. A rail on the left lists your agents,
+  then where the current agent's models come from: Harness providers, or the
+  labs an agent such as Cline CLI mixes, with a count for each and All models
+  on top. Every model row shows its family's logo (or its provider's), a
+  corner badge when the list mixes providers, and Cline's current free models
+  sit in their own Free right now section. Search looks across all of the
+  agent's models. A narrow window keeps the rail as logos only.
+- The effort picker shows each level as a small dial that fills and warms from
+  None to Max, on the chip and on every row.
+- Cline CLI uses its own logo, and the model in use shows with its logo on the
+  turn receipt in the thread and in Settings' model menus.
 - The sidebar is a session list. New thread, search, and filters for live
   threads and threads that need you sit where the Glitter wordmark was. The
   foot is Settings and usage counted on this Mac. The Muse subscription
@@ -142,6 +149,12 @@ licence terms.
 
 ### Fixed
 
+- Reasoning effort shows for more models. Cline CLI now offers None to Extra
+  high on every model and runs at the level you pick (it used to run with
+  reasoning off). Harness offers effort for the Cline API's and OpenRouter's
+  reasoning models, NVIDIA NIM's gpt-oss models and its hybrid thinkers
+  (Nemotron 3 and later, Qwen3, DeepSeek V3.1+, GLM 4.5+, Kimi K2.5+) as None
+  or High, and Groq's gpt-oss models.
 - OpenCode and Grok no longer show "Waiting on… the provider may be busy or
   retrying" while they work. A running command or an open approval counts as
   work, the quiet notice waits 45 seconds instead of 15, it no longer labels

@@ -7,7 +7,7 @@ import { diagnosticsSnapshot, openLogFolder } from "../lib/bridge";
 import { isMacPlatform, isTauri } from "../lib/format";
 import { modelFor, VOCABULARY } from "../lib/effort";
 import { APP_VERSION } from "../lib/version";
-import { AgentMark } from "./AgentPicker";
+import { AgentMark, ModelIcon } from "./AgentPicker";
 import { AGENT_IDS, AGENT_LABELS, APPROVAL_DESCRIPTIONS, APPROVAL_LABELS, APPROVAL_ORDER, AUTH_MODE_DESCRIPTIONS, AUTH_MODE_LABELS, AUTH_MODE_ORDER, AUTH_SOURCE_LABELS, AUTH_SOURCE_SHORT, DEFAULT_ENABLED_AGENTS, EDITOR_CHOICES, EDITOR_LABELS, EFFORT_LABELS, SETTINGS_TABS, THINKING_ORBS, agentEnabled, type CustomCommand, type EditorChoice, type AccentColor, type AgentId, type AgentInfo, type CliApprovalMode, type AuthMode, type CliUpdateOutcome, type CliUpdateStatus, type Detection, type HostPosture, type ReasoningEffort, type SandboxNetwork, type SettingsTab, type ThemeMode, type ThinkingOrbStyle, type Settings } from "../lib/types";
 import { humanizeModelLabel, humanizeProvider, relativeTime, shortCliVersion, shortHash, shortcutLabel, worktreeRemovalNote } from "../lib/format";
 import { settingsFields } from "../lib/settingsPersistence";
@@ -545,6 +545,7 @@ export function SettingsModal() {
     value: modelKey(model),
     label: humanizeModelLabel(model.modelId, model.displayLabel),
     description: humanizeProvider(model.providerId),
+    icon: <ModelIcon modelId={model.modelId} providerId={model.providerId} size={18} fallback={<AgentMark id={defaultsAgentId} size={18} />} />,
   }));
   const selectedDefault = modelFor(defaultModels, { modelId: draft.defaultModel, providerId: draft.defaultProviderId });
   const defaultModelValue = draft.defaultModel ? modelKey(selectedDefault ?? { modelId: draft.defaultModel, providerId: draft.defaultProviderId }) : undefined;
@@ -575,6 +576,7 @@ export function SettingsModal() {
       value: modelKey(model),
       label: humanizeModelLabel(model.modelId, model.displayLabel),
       description: [humanizeProvider(model.providerId), model.cost?.input ? `${model.cost.input}/M in` : ""].filter(Boolean).join(" · "),
+      icon: <ModelIcon modelId={model.modelId} providerId={model.providerId} size={18} fallback={<AgentMark id={suggestionAgentId} size={18} />} />,
     })),
   ];
   const selectedSuggest = modelFor(suggestModels, { modelId: draft.suggestionsModelId });
@@ -717,7 +719,7 @@ export function SettingsModal() {
               ]} onChange={(value) => edit({ suggestionsAgentId: (value || undefined) as AgentId | undefined, suggestionsModelId: undefined })} />
             </SettingRow>
             <SettingRow label={<label htmlFor="suggestions-model">Suggestion model</label>} help={suggestCatalog.error ?? undefined}>
-              <SelectMenu id="suggestions-model" ariaLabel="Suggestion model" value={suggestModelValue} placeholder={suggestCatalog.loading ? "Loading models…" : "Cheapest available"} options={suggestModelOptions} disabled={suggestCatalog.loading} onChange={(value) => { const model = suggestByKey.get(value); if (model) edit({ suggestionsModelId: model.modelId }); else if (!value) edit({ suggestionsModelId: undefined }); }} />
+              <SelectMenu id="suggestions-model" ariaLabel="Suggestion model" icon={draft.suggestionsModelId && selectedSuggest ? <ModelIcon modelId={selectedSuggest.modelId} providerId={selectedSuggest.providerId} size={15} fallback={<AgentMark id={suggestionAgentId} size={15} />} /> : undefined} value={suggestModelValue} placeholder={suggestCatalog.loading ? "Loading models…" : "Cheapest available"} options={suggestModelOptions} disabled={suggestCatalog.loading} onChange={(value) => { const model = suggestByKey.get(value); if (model) edit({ suggestionsModelId: model.modelId }); else if (!value) edit({ suggestionsModelId: undefined }); }} />
             </SettingRow>
           </> : null}
         </section> : null}
@@ -727,7 +729,7 @@ export function SettingsModal() {
           <div className="settings-card-heading with-action"><div><h4>New thread defaults</h4><p>Models from {AGENT_LABELS[defaultsAgentId]} for new threads. You can adjust these in the composer.</p></div><button type="button" className="ghost-btn small" aria-label="Refresh default models" disabled={modelCatalog.loading} onClick={() => setCatalogRefresh((value) => value + 1)}><RefreshCw size={11} className={modelCatalog.loading ? "spin" : ""} aria-hidden="true" />Refresh</button></div>
           {modelCatalog.error ? <p className="settings-note" role="alert">{modelCatalog.error} Refresh the list or check the connection under Account.</p> : modelCatalog.loading ? <p className="settings-note" role="status">Loading {AGENT_LABELS[defaultsAgentId]} models…</p> : !defaultModels.length ? <p className="settings-note" role="status">{AGENT_LABELS[defaultsAgentId]} did not report any models.</p> : null}
           <section className="settings-card" aria-label="New thread defaults">
-          <SettingRow label={<label htmlFor="default-model">Default model</label>} help={<>{savedUnlisted ? <span>This saved model is no longer listed. Choose a current model; subscriber Contributor mode applies separately. </span> : null}{draft.defaultModel ? <button className="text-btn" type="button" onClick={() => edit({ defaultModel: "", defaultProviderId: undefined })}>Use host default</button> : "New threads start on the host's default model."}</>}><SelectMenu id="default-model" ariaLabel="Default model" value={defaultModelValue} placeholder={modelCatalog.loading ? "Loading models…" : defaultModels.length ? "Use host default" : "Connect to load models"} options={modelOptions} disabled={modelCatalog.loading || !defaultModels.length} onChange={(value) => { const model = modelByKey.get(value); if (model) edit({ defaultModel: model.modelId, defaultProviderId: model.providerId }); }} /></SettingRow>
+          <SettingRow label={<label htmlFor="default-model">Default model</label>} help={<>{savedUnlisted ? <span>This saved model is no longer listed. Choose a current model; subscriber Contributor mode applies separately. </span> : null}{draft.defaultModel ? <button className="text-btn" type="button" onClick={() => edit({ defaultModel: "", defaultProviderId: undefined })}>Use host default</button> : "New threads start on the host's default model."}</>}><SelectMenu id="default-model" ariaLabel="Default model" icon={draft.defaultModel && selectedDefault ? <ModelIcon modelId={selectedDefault.modelId} providerId={selectedDefault.providerId} size={15} fallback={<AgentMark id={defaultsAgentId} size={15} />} /> : undefined} value={defaultModelValue} placeholder={modelCatalog.loading ? "Loading models…" : defaultModels.length ? "Use host default" : "Connect to load models"} options={modelOptions} disabled={modelCatalog.loading || !defaultModels.length} onChange={(value) => { const model = modelByKey.get(value); if (model) edit({ defaultModel: model.modelId, defaultProviderId: model.providerId }); }} /></SettingRow>
           <SettingRow label={<label htmlFor="default-effort">Default reasoning effort</label>} help="Higher effort gives the model more time on complex tasks. Lower effort suits quick edits and everyday questions."><SelectMenu id="default-effort" ariaLabel="Default reasoning effort" value={draft.defaultEffort} placeholder="Use host default" options={EFFORTS.map((effort) => ({ value: effort, label: EFFORT_LABELS[effort] }))} onChange={(value) => edit({ defaultEffort: value as ReasoningEffort })} /></SettingRow>
           </section>
           <div className="settings-card-heading"><h4>Muse subscription</h4><p>Contributor mode is a setting, separate from the model you choose.</p></div>

@@ -413,6 +413,13 @@ function effortField(providerId: string, model: string, effort?: string): Record
   const tiers = effortTiers(providerId, model) as string[];
   if (!tiers.includes(effort)) return {};
   if (providerId === "openrouter") return { reasoning: { effort } };
+  // The Cline API takes the same pair its own CLI sends: the level and an on/off switch.
+  if (providerId === "cline") return { reasoning_effort: effort, reasoning: { enabled: effort !== "none" } };
+  if (providerId === "nvidia" && tiers.includes("none")) {
+    // Hybrid thinkers read one of these two template switches; the other is ignored.
+    const on = effort !== "none";
+    return { chat_template_kwargs: { thinking: on, enable_thinking: on } };
+  }
   return { reasoning_effort: effort };
 }
 

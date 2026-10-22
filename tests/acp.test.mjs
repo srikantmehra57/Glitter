@@ -9,7 +9,7 @@ import { pathToFileURL } from 'node:url';
 const temporary = await mkdtemp(join(tmpdir(), 'muse-acp-'));
 const outfile = join(temporary, 'acp.mjs');
 await build({ entryPoints: [resolve('packages/glitter-bridge/src/acp.ts')], bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'silent' });
-const { AcpAgentHost, fatalProviderError, zenFreeModel, fallbackOpencodeModel, modelIdsFromError, modelOption } = await import(pathToFileURL(outfile).href);
+const { AcpAgentHost, fatalProviderError, zenFreeModel, fallbackOpencodeModel, modelIdsFromError, modelOption, applyClineFree, fetchClineFreeIds } = await import(pathToFileURL(outfile).href);
 
 test('rate limits and disabled models are fatal provider errors', () => {
   assert.equal(fatalProviderError('mimo-v2.5-free: Rate limit exceeded. Please try again later.'), true);
@@ -50,6 +50,30 @@ const clineConfig = [
   { id: 'model', category: 'model', type: 'select', currentValue: 'anthropic/claude-sonnet-5.5', options: [{ value: 'anthropic/claude-sonnet-5.5', name: 'Claude Sonnet 5.5' }, { value: 'openai/gpt-5.6', name: 'GPT-5.6' }] },
   { id: 'mode', category: 'mode', type: 'select', currentValue: 'act', options: [{ value: 'plan', name: 'Plan' }, { value: 'act', name: 'Act' }] },
 ];
+
+test('a Cline model is free only while Cline still promotes it', async () => {
+  const listed = await fetchClineFreeIds(async () => ({ ok: true, json: async () => ({ free: [{ id: 'cline-free/minimax-m3.1-flash', name: 'Minimax M3.1 Flash' }, { id: '' }, { name: 'skipped' }] }) }));
+  assert.deepEqual(listed, [{ id: 'cline-free/minimax-m3.1-flash', name: 'Minimax M3.1 Flash' }]);
+  assert.equal(await fetchClineFreeIds(async () => { throw new Error('offline'); }), null);
+  const models = [
+    { modelId: 'nvidia/nemotron-3-ultra:free', displayLabel: 'Nemotron 3 Ultra (free)', description: 'Free' },
+    { modelId: 'nemotron-3.5-lightning-free', displayLabel: 'Nemotron 3.5 Lightning (free)', providerId: 'nvidia' },
+    { modelId: 'cline-free/solar-mini4', displayLabel: 'Solar Mini 4 (free)' },
+  ];
+  const free = [
+    { id: 'nvidia/nemotron-3.5-lightning-free', name: 'Nemotron 3.5 Lightning' },
+    { id: 'cline-free/solar-mini4', name: 'Solar Mini 4' },
+    { id: 'cline-free/minimax-m3.1-flash', name: 'Minimax M3.1 Flash', description: 'Next-generation Flash model' },
+  ];
+  const applied = applyClineFree(models, free);
+  assert.equal(applied[0].modelId, 'cline-free/minimax-m3.1-flash');
+  assert.equal(applied[0].free, true);
+  assert.equal(applied[0].displayLabel, 'Minimax M3.1 Flash');
+  assert.equal(applied.find((model) => model.modelId === 'nvidia/nemotron-3-ultra:free').free, false);
+  assert.equal(applied.find((model) => model.modelId === 'nvidia/nemotron-3-ultra:free').displayLabel, 'Nemotron 3 Ultra');
+  assert.equal(applied.find((model) => model.modelId === 'nemotron-3.5-lightning-free').free, true);
+  assert.equal(applied.find((model) => model.modelId === 'cline-free/solar-mini4').free, true);
+});
 
 test('a provider picker filed under the model category is not mistaken for the model list', () => {
   assert.equal(modelOption(clineConfig)?.id, 'model', 'the option named model wins');
@@ -207,6 +231,36 @@ test('ACP models, effort tiers, and sessions come from the agent', async () => {
     const effort = await host.setEffort('s1', 'max');
     assert.equal(effort.agentConfig.effort, 'max');
   } finally { await host.stop(); }
+});
+
+test('Cline runs at the picked reasoning level, relaunching with its open sessions when the level changes', async () => {
+  const { host, events } = fakeAgent('cline', ['--cline']);
+  // Cline's free-promotion list is fetched from its API; the test stays offline.
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({ ok: false, json: async () => ({}) });
+  const reply = async (sessionId, text, reasoningEffort) => {
+    const before = events.filter(({ event }) => event === 'turnCompleted').length;
+    await host.sendTurn({ sessionId, text, reasoningEffort });
+    for (let waited = 0; waited < 4000 && events.filter(({ event }) => event === 'turnCompleted').length === before; waited += 10) await new Promise((r) => setTimeout(r, 10));
+    return events.filter(({ event, payload }) => event === 'item' && payload.item.kind === 'agentMessage' && payload.sessionId === sessionId).at(-1)?.payload.item.text;
+  };
+  try {
+    const { models } = await host.listModels();
+    assert.deepEqual(models[0].reasoningEfforts, ['none', 'low', 'medium', 'high', 'xhigh'], 'every Cline model offers its --thinking levels');
+    assert.equal(models[0].defaultReasoningEffort, 'medium');
+    const started = await host.startSession({ workspaceRoot: '/tmp/ws', effort: 'high' });
+    assert.equal(started.agentConfig.effort, 'high');
+    const { sessionId } = started;
+    assert.match(await reply(sessionId, 'hi'), /^thinking=high /, 'a new thread starts in a process at its level');
+    await host.setModel({ sessionId, modelId: 'nvidia/nemotron-3.5-super' });
+    await host.setMode(sessionId, 'plan');
+    const picked = await host.setEffort(sessionId, 'low');
+    assert.deepEqual({ status: picked.status, effort: picked.agentConfig.effort }, { status: 'accepted', effort: 'low' });
+    const replayed = events.length;
+    assert.equal(await reply(sessionId, 'again'), 'thinking=low model=nvidia/nemotron-3.5-super mode=plan', 'the relaunch keeps the session, its model and its mode');
+    assert.ok(!events.slice(replayed).some(({ payload }) => payload?.item?.text === 'replayed history'), 'the reload does not replay history into the thread');
+    assert.equal((await host.setEffort(sessionId, 'max')).status, 'unsupported', 'Cline has no max');
+  } finally { globalThis.fetch = realFetch; await host.stop(); }
 });
 
 test('ACP cancel waits for a terminal state and kills a hanging process tree', { timeout: 8000 }, async () => {

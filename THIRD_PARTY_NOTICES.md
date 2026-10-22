@@ -30,9 +30,12 @@ Meta's separately distributed CLI.
 | `tauri-plugin-single-instance` | 2.4.1 | Apache-2.0 OR MIT | Rust crate compiled into the native shell; focuses the existing app when opened again |
 | `esbuild` | 0.25.12 | MIT — © 2020 Evan Wallace | Build tool only; not redistributed at runtime |
 
-Agent identity marks (`apps/desktop/public/agents/*.svg` and the bundled
-copies) are the trademarks of their respective owners and are used only to
-identify interoperating third-party CLIs. No endorsement is implied.
+Agent and model identity marks (`apps/desktop/public/agents/*.svg`,
+`apps/desktop/public/brands/*.svg`, and the bundled copies) are trademarks of
+their respective owners and are used only to identify interoperating agents,
+providers, and models. The files in `brands/` are avatar plates derived from
+[Lobe Icons](https://github.com/lobehub/lobe-icons) 1.97.0 (MIT, © lobehub).
+No endorsement is implied.
 
 ## Development and website tooling only (not redistributed)
 

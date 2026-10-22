@@ -6,7 +6,7 @@ import { approvalAlive, approvalExpiry, approvalExpiryMono, APPROVAL_TTL_MS, des
 import type { Grant, Subject } from "./permission/grants.js";
 import { runGuards } from "./permission/guards.js";
 import { decide, type ApprovalMode, type Verdict } from "./permission/policy.js";
-import { TIERS, configuredProviders, effortTiers, providerSpec, resolveProvider, splitModelId, type ProviderCredentials, type ResolvedProvider } from "./providers.js";
+import { SENDS_NONE, TIERS, configuredProviders, effortTiers, providerSpec, resolveProvider, splitModelId, type ProviderCredentials, type ResolvedProvider } from "./providers.js";
 import { ExtensionRegistry, type HookEvents, type HookFailure, type HookName, type TurnContext, type TurnContributions } from "./registry.js";
 import type { UserInputResponse } from "../protocol.js";
 import { McpManager, mcpExtension } from "./mcp.js";
@@ -994,7 +994,7 @@ export class HarnessHost {
 
   /** One model call, streamed into reasoning and message items, with retries for transient failures. */
   private async callModel(live: Live, provider: ResolvedProvider, modelId: string, model: string, system: SystemPrompt, tools: readonly ToolSchema[], signal: AbortSignal): Promise<{ message: AssistantMessage; stopReason: string }> {
-    let effort = live.meta.effort && live.meta.effort !== "none" ? live.meta.effort : undefined;
+    let effort = live.meta.effort && (live.meta.effort !== "none" || SENDS_NONE.has(provider.id)) ? live.meta.effort : undefined;
     const tiers = effortTiers(provider.id, model) as string[];
     if (effort && !tiers.includes(effort)) effort = undefined;
     const startedAt = Date.now();

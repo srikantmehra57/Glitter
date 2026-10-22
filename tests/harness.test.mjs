@@ -98,6 +98,12 @@ test('providers need a key unless they are local, and custom endpoints use the U
   assert.deepEqual(effortTiers('anthropic', 'claude-3-5-haiku-latest'), [], 'pre-3.7 Claude has no thinking');
   assert.ok(effortTiers('anthropic', 'claude-sonnet-4-5').includes('high'));
   assert.deepEqual(effortTiers('openai', 'gpt-4o'), []);
+  assert.deepEqual(effortTiers('nvidia', 'openai/gpt-oss-120b'), ['low', 'medium', 'high'], 'NIM gpt-oss takes reasoning_effort');
+  assert.deepEqual(effortTiers('nvidia', 'nvidia/nemotron-3.5-super'), ['none', 'high'], 'a NIM hybrid thinker is a switch');
+  assert.deepEqual(effortTiers('nvidia', 'meta/llama-3.3-70b-instruct'), [], 'a plain NIM model has no effort');
+  assert.deepEqual(effortTiers('cline', 'anthropic/claude-haiku-5.5'), ['none', 'low', 'medium', 'high', 'xhigh'], 'the Cline API routes reasoning');
+  assert.deepEqual(effortTiers('cline', 'openai/gpt-6.1-sol'), ['none', 'low', 'medium', 'high', 'xhigh']);
+  assert.deepEqual(effortTiers('cline', 'upstage/solar-mini4'), [], 'a non-reasoning model behind a gateway has none');
 });
 
 test('paths stay inside the workspace, symlinks included', async () => {
@@ -300,7 +306,8 @@ test('NVIDIA NIM lists its chat models and runs a tool-call turn over the OpenAI
   assert.equal(listed.models.find((model) => model.isDefault)?.modelId, 'nvidia/moonshotai/kimi-k2.6');
   assert.equal(listed.models[0].description, 'NVIDIA NIM');
   assert.deepEqual(listed.models.find((model) => model.modelId === 'nvidia/openai/gpt-oss-20b').reasoningEfforts, ['low', 'medium', 'high']);
-  assert.deepEqual(listed.models.find((model) => model.modelId === 'nvidia/moonshotai/kimi-k2.6').reasoningEfforts, []);
+  assert.deepEqual(listed.models.find((model) => model.modelId === 'nvidia/moonshotai/kimi-k2.6').reasoningEfforts, ['none', 'high'], 'Kimi K2.6 thinks behind a template switch');
+  assert.equal(listed.models.find((model) => model.modelId === 'nvidia/moonshotai/kimi-k2.6').defaultReasoningEffort, 'high');
 
   const { sessionId } = await instance.startSession({ workspaceRoot: root });
   await instance.sendTurn({ sessionId, text: 'list text files' });
@@ -310,11 +317,19 @@ test('NVIDIA NIM lists its chat models and runs a tool-call turn over the OpenAI
   assert.equal(requests[0].body.model, 'moonshotai/kimi-k2.6', 'the provider prefix is stripped, the org prefix kept');
   assert.equal(requests[0].body.stream, true);
   assert.equal(requests[0].body.stream_options, undefined, 'NIM rejects fields its schema does not list');
+  assert.equal(requests[0].body.chat_template_kwargs, undefined, 'the template switch is sent only once a level is picked');
   assert.equal(requests[0].body.tools[0].type, 'function');
   assert.equal(requests[1].body.messages.at(-1).role, 'tool');
   assert.equal(requests[1].body.messages.at(-1).tool_call_id, 'chatcmpl-tool-1');
   assert.match(requests[1].body.messages.at(-1).content, /hello\.txt/);
   assert.equal(events.filter(({ payload }) => payload.item?.kind === 'agentMessage').at(-1).payload.item.text, 'There is hello.txt.');
+
+  events.length = 0;
+  await instance.setEffort(sessionId, 'none');
+  await instance.sendTurn({ sessionId, text: 'quickly' });
+  await until(events, ({ event }) => event === 'turnCompleted');
+  assert.deepEqual(requests.at(-1).body.chat_template_kwargs, { thinking: false, enable_thinking: false }, 'None turns a hybrid thinker off');
+  assert.equal(requests.at(-1).body.reasoning_effort, undefined);
 
   events.length = 0;
   await instance.setModel({ sessionId, modelId: 'nvidia/openai/gpt-oss-20b' });
@@ -343,7 +358,7 @@ test('the Cline API lists its models and keeps each vendor prefix in the request
   assert.equal(listed.models.find((model) => model.modelId === 'cline/anthropic/claude-sonnet-5.5').contextLimit, 200000, 'the window follows the vendor behind the model');
   assert.equal(listed.models.find((model) => model.modelId === 'cline/x-ai/grok-4.7').contextLimit, 256000, 'Cline writes xAI as x-ai');
   assert.equal(listed.models.find((model) => model.modelId === 'cline/~anthropic/claude-sonnet-latest').contextLimit, 200000, 'a rolling alias still names its vendor');
-  assert.deepEqual(listed.models.find((model) => model.modelId === 'cline/anthropic/claude-sonnet-5.5').reasoningEfforts, [], 'Cline documents no reasoning effort');
+  assert.deepEqual(listed.models.find((model) => model.modelId === 'cline/anthropic/claude-sonnet-5.5').reasoningEfforts, ['none', 'low', 'medium', 'high', 'xhigh'], 'Cline routes reasoning for Claude');
 
   const { sessionId } = await instance.startSession({ workspaceRoot: root, modelId: 'cline/anthropic/claude-sonnet-5.5' });
   await instance.sendTurn({ sessionId, text: 'list text files' });
@@ -351,7 +366,15 @@ test('the Cline API lists its models and keeps each vendor prefix in the request
   assert.equal(requests[0].url, 'https://api.cline.bot/api/v1/chat/completions');
   assert.equal(requests[0].headers.authorization, 'Bearer sk-cline-test');
   assert.equal(requests[0].body.model, 'anthropic/claude-sonnet-5.5', 'the vendor prefix reaches Cline, the provider prefix does not');
-  assert.equal(requests[0].body.reasoning_effort, undefined, 'Cline documents no reasoning effort, so none is sent');
+  assert.equal(requests[0].body.reasoning_effort, undefined, 'no effort is sent until one is picked');
+  for (const [effort, enabled] of [['high', true], ['none', false]]) {
+    await instance.setEffort(sessionId, effort);
+    const before = events.filter(({ event }) => event === 'turnCompleted').length;
+    await instance.sendTurn({ sessionId, text: `again at ${effort}` });
+    await until(events, () => events.filter(({ event }) => event === 'turnCompleted').length > before);
+    const body = requests.at(-1).body;
+    assert.deepEqual({ effort: body.reasoning_effort, reasoning: body.reasoning }, { effort, reasoning: { enabled } }, `Cline gets the level and the switch at ${effort}`);
+  }
   assert.equal(requests[0].body.stream_options, undefined, 'Cline answers usage without being asked');
   assert.equal(events.filter(({ payload }) => payload.item?.kind === 'agentMessage').at(-1).payload.item.text, 'There is hello.txt.');
 });

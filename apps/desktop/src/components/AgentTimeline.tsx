@@ -6,7 +6,7 @@ import {
 } from "lucide-react";
 import { Orb } from "./Orb";
 import { ACTIVITY_KINDS, agentCounts, backgroundAgents, computeVirtualWindow, estimateRunHeight, groupAgentRuns, messageRewindBoundary, parseWorkflowMessage, type AgentState, relativeToWorkspace, runSummary, showTerminalReceipt, stabilizeRuns, type AgentRun, type AgentStep, type AgentStepKind } from "../lib/agent";
-import { copyText, formatArgs, formatBytes, formatDuration, formatTokens, humanizeToolName, shortcutLabel, summarizeArgs } from "../lib/format";
+import { copyText, formatArgs, formatBytes, formatDuration, formatTokens, humanizeModelLabel, humanizeProvider, humanizeToolName, shortcutLabel, summarizeArgs } from "../lib/format";
 import { estimateCost, formatCost } from "../lib/cost";
 import { modelFor } from "../lib/effort";
 import { currentThread, useAppStore } from "../lib/store";
@@ -16,7 +16,7 @@ import { approvalPreview } from "../lib/approvalPreview";
 import { EditPreview } from "./EditPreview";
 import { Markdown } from "./Markdown";
 import { Collapse } from "./Presence";
-import { AgentMark as ProductAgentMark } from "./AgentPicker";
+import { AgentMark as ProductAgentMark, ModelIcon } from "./AgentPicker";
 
 
 const LABELS: Partial<Record<AgentStepKind, [running: string, done: string]>> = {
@@ -500,6 +500,7 @@ function ReceiptView({ run, isLast }: { run: AgentRun; isLast: boolean }) {
   });
   const turnCost = stats && costModel ? estimateCost({ promptTokens: stats.inputTokens, outputTokens: stats.outputTokens }, costModel.cost) : undefined;
   const metrics = stats ? <span className="turn-stats" aria-label="Turn usage">
+    {costModel ? <span className="turn-model" title={costModel.providerId ? `${humanizeModelLabel(costModel.modelId, costModel.displayLabel)} via ${humanizeProvider(costModel.providerId)}` : undefined}><ModelIcon modelId={costModel.modelId} providerId={costModel.providerId} size={14} badge fallback={<ProductAgentMark id={agentId} size={14} />} />{humanizeModelLabel(costModel.modelId, costModel.displayLabel)}</span> : null}
     <span className="turn-duration" title="Time spent on this turn"><Clock3 size={12} aria-hidden="true" />{formatDuration(stats.durationMs)}</span>
     {stats.outputTokens ? <span title="Output tokens for this turn">{stats.estimated ? "~" : ""}{formatTokens(stats.outputTokens)} tokens</span> : null}
     {turnCost != null && costModel ? <span title="Estimated cost for this turn">≈{formatCost(turnCost, costModel.cost?.currency)}</span> : null}

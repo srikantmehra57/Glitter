@@ -75,6 +75,18 @@ export function splitModelId(modelId: string): { providerId: string; model: stri
 export const TIERS = ["none", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type Tier = (typeof TIERS)[number];
 
+/** Reasoning families a gateway (OpenRouter, the Cline API) routes to, by the vendor's own model names. */
+const GATEWAY_REASONING = /(^|\/)(o\d|gpt-([5-9]|\d\d)|gpt-oss)|codex|claude-(3-7|sonnet-4|opus-4|[a-z]+-[4-9])|gemini-(2\.5|[3-9])|deepseek-(r1|v3\.[1-9]|v[4-9])|grok-([3-9]|code)|qwen3|qwq|glm-(4\.[5-9]|[5-9])|kimi-k2|minimax-m|nemotron|magistral|reasoning|thinking/;
+
+/**
+ * NIM models whose chat template takes a thinking switch. They have no
+ * levels, only on and off, which the app shows as None and High.
+ */
+const NIM_THINKING_SWITCH = /nemotron-(nano-9b-v2|[3-9])|qwen3|deepseek-v3\.[1-9]|deepseek-v[4-9]|glm-(4\.[5-9]|[5-9])|kimi-k2\.[5-9]/;
+
+/** Providers whose wire carries an explicit "none" (thinking off). The rest treat None as their default. */
+export const SENDS_NONE = new Set(["nvidia", "cline", "openrouter"]);
+
 /**
  * The effort tiers a model takes, or none when it has no reasoning control.
  * Providers do not report this, so it follows their published model families;
@@ -89,14 +101,11 @@ export function effortTiers(providerId: string, model: string): Tier[] {
   if (providerId === "openai") return /^(o\d|gpt-5|codex)/.test(id) ? ["minimal", "low", "medium", "high"] : [];
   if (providerId === "xai") return /grok-3-mini/.test(id) ? ["low", "high"] : [];
   if (providerId === "google") return /gemini-(2\.5|[3-9])/.test(id) ? ["none", "low", "medium", "high"] : [];
-  // NIM documents `reasoning_effort` only for its gpt-oss models.
-  if (providerId === "nvidia") return /(^|\/)gpt-oss/.test(id) ? ["low", "medium", "high"] : [];
-  if (providerId === "openrouter") {
-    return /(^|\/)(o\d|gpt-5)|claude-(3-7|sonnet-4|opus-4|[a-z]+-[4-9])|gemini-(2\.5|[3-9])|deepseek-r1|grok-3-mini|qwq|reasoning|thinking/.test(id) ? ["low", "medium", "high"] : [];
-  }
-  // Cline's API documents no reasoning-effort parameter. Sending one it does
-  // not accept would fail the call, so its models show no effort picker.
-  if (providerId === "cline") return [];
+  // NIM documents `reasoning_effort` for gpt-oss, and a template switch for its hybrid thinkers.
+  if (providerId === "nvidia") return /(^|\/)gpt-oss/.test(id) ? ["low", "medium", "high"] : NIM_THINKING_SWITCH.test(id) ? ["none", "high"] : [];
+  if (providerId === "groq") return /(^|\/)gpt-oss/.test(id) ? ["low", "medium", "high"] : [];
+  // Gateways take OpenRouter's effort vocabulary and drop what a model cannot use.
+  if (providerId === "openrouter" || providerId === "cline") return GATEWAY_REASONING.test(id) ? ["none", "low", "medium", "high", "xhigh"] : [];
   return [];
 }
 

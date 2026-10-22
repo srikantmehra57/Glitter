@@ -11,6 +11,15 @@ const growCatalog = process.argv.includes("--grow-catalog");
 // The first discovery lists no models (a provider still warming up); later ones list them.
 const lateCatalog = process.argv.includes("--late-catalog");
 let catalogPasses = 0;
+// Cline: no effort option; the level comes from `--thinking` at launch, and sessions reload across processes.
+const cline = process.argv.includes("--cline");
+const thinkingAt = process.argv.indexOf("--thinking");
+const thinking = thinkingAt > 0 ? process.argv[thinkingAt + 1] : "off";
+const clineConfig = (model = "anthropic/claude-haiku-5.5", mode = "act") => [
+  { id: "model", category: "model", type: "select", currentValue: model, options: [{ value: "anthropic/claude-haiku-5.5", name: "Claude Haiku 5.5" }, { value: "nvidia/nemotron-3.5-super", name: "Nemotron 3.5 Super" }] },
+  { id: "mode", category: "mode", type: "select", currentValue: mode, options: [{ value: "plan", name: "Plan" }, { value: "act", name: "Act" }] },
+];
+const clineSessions = new Map();
 const grokModels = [
   { modelId: "grok-4.7", name: "Grok 4.7", _meta: { totalContextTokens: 256000, reasoningEfforts: [{ value: "high", default: true }, { value: "low" }, { value: "xhigh" }] } },
   { modelId: "grok-4.7-build-fast", name: "Grok 4.7 Fast", description: "Fast variant. 2x the price.", _meta: { totalContextTokens: 256000, reasoningEfforts: [{ value: "high", default: true }, { value: "low" }] } },
@@ -19,6 +28,32 @@ const grokModels = [
 createInterface({ input: process.stdin }).on("line", (line) => {
   const message = JSON.parse(line);
   const { id, method, params } = message;
+  if (cline) {
+    if (method === "initialize") return send({ id, result: { protocolVersion: 1, agentCapabilities: { loadSession: true, promptCapabilities: { image: false } } } });
+    if (method === "session/new") {
+      const sessionId = `c-${process.pid}-${nextSession++}`;
+      clineSessions.set(sessionId, { model: "anthropic/claude-haiku-5.5", mode: "act" });
+      return send({ id, result: { sessionId, configOptions: clineConfig() } });
+    }
+    // A new process reloads with Cline's defaults; the host restores the model and mode.
+    if (method === "session/load") {
+      clineSessions.set(params.sessionId, { model: "anthropic/claude-haiku-5.5", mode: "act" });
+      update(params.sessionId, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "replayed history" } });
+      return send({ id, result: { configOptions: clineConfig() } });
+    }
+    if (method === "session/set_config_option") {
+      const state = clineSessions.get(params.sessionId);
+      if (!state) return send({ id, error: { code: -32602, message: `unknown session: ${params.sessionId}` } });
+      state[params.configId] = params.value;
+      return send({ id, result: { configOptions: clineConfig(state.model, state.mode) } });
+    }
+    if (method === "session/prompt") {
+      if (!clineSessions.has(params.sessionId)) return send({ id, error: { code: -32602, message: `unknown session: ${params.sessionId}` } });
+      const state = clineSessions.get(params.sessionId);
+      update(params.sessionId, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: `thinking=${thinking} model=${state.model} mode=${state.mode}` } });
+      return send({ id, result: { stopReason: "end_turn" } });
+    }
+  }
   if (method === "initialize") return send({ id, result: { protocolVersion: 1, agentCapabilities: { loadSession: false, promptCapabilities: { image: false }, sessionCapabilities: { list: {}, close: {} } }, ...(grokCatalog ? { _meta: { modelState: { currentModelId: "grok-4.6", availableModels: [grokModels[2]] } } } : {}) } });
   if (method === "session/list") return send({ id, result: { sessions: [{ sessionId: "s-old", cwd: params.cwd, title: "Earlier work", updatedAt: "2026-09-19T00:00:00Z" }] } });
   if (method === "session/new" && authRequired) return send({ id, error: { code: -32000, message: "Authentication required. Sign in to load models." } });

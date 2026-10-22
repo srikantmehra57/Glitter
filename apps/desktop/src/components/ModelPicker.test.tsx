@@ -64,7 +64,7 @@ it("opens straight to the models in one click, and one click on a row picks it a
   expect(trigger).toHaveFocus();
 });
 
-it("switches agents with tabs in the header, never a menu inside the menu", () => {
+it("switches agents from the rail, never a menu inside the menu", () => {
   const onAgentChange = vi.fn();
   render(<ModelPicker models={[{ modelId: "grok-4.7" }]} agentId="grok" agents={AGENTS} value={modelKey({ modelId: "grok-4.7" })} loading={false} disabled={false} onChange={vi.fn()} onAgentChange={onAgentChange} onRescan={vi.fn(async () => {})} />);
   fireEvent.click(screen.getByRole("button", { name: "Model" }));
@@ -161,7 +161,9 @@ it("gives each harness provider its own badge and lists only that provider's mod
   expect(trigger.querySelector(".agent-mark.harness")).toBeNull();
   expect(trigger.querySelector(".agent-mark.anthropic")).not.toBeNull();
   fireEvent.click(trigger);
-  expect(screen.queryByRole("tab", { name: "Harness" })).toBeNull();
+  expect(screen.getByRole("tablist", { name: "Agent" })).toContainElement(screen.getByRole("tab", { name: "Harness" }));
+  expect(screen.getByRole("tab", { name: "Harness" })).toHaveAttribute("aria-selected", "true");
+  expect(screen.getByRole("tablist", { name: "Providers" })).toContainElement(screen.getByRole("tab", { name: "Anthropic" }));
   expect(screen.getByRole("tab", { name: "Anthropic" })).toHaveAttribute("aria-selected", "true");
   expect(screen.getByRole("tab", { name: "OpenAI" })).toHaveAttribute("aria-selected", "false");
   expect(screen.getByRole("tab", { name: "xAI" })).toBeInTheDocument();
@@ -190,6 +192,50 @@ it("keeps the Cline API badge distinct from the Cline CLI agent", () => {
   expect(screen.getByRole("option", { name: /claude-sonnet-5.5/ })).toBeInTheDocument();
 });
 
+it("shows the provider logo on the source and the model logo beside the name", () => {
+  const models: Model[] = [
+    { modelId: "nvidia/google/codegemma-7b", providerId: "nvidia", displayLabel: "google/codegemma-7b" },
+    { modelId: "nvidia/adept/fuyu-8b", providerId: "nvidia", displayLabel: "adept/fuyu-8b" },
+    { modelId: "openai/gpt-5", providerId: "openai", displayLabel: "GPT-5" },
+  ];
+  const agents: AgentInfo[] = [
+    { id: "harness", name: "Harness", protocol: "native", found: true, authenticated: true, path: null, version: null, verified: true, signIn: "" },
+  ];
+  render(<ModelPicker models={models} agentId="harness" agents={agents} value={modelKey(models[0])} loading={false} disabled={false} onChange={vi.fn()} onAgentChange={vi.fn()} onRescan={async () => {}} />);
+  const trigger = screen.getByRole("button", { name: "Model" });
+  expect(trigger.querySelector(".agent-mark.nvidia img")).toHaveAttribute("src", "/brands/nvidia.svg");
+  expect(trigger.querySelector(".agent-mark.gemma img")).toHaveAttribute("src", "/brands/gemma.svg");
+  fireEvent.click(trigger);
+  expect(screen.getByRole("tab", { name: "NVIDIA NIM" }).querySelector("img")).toHaveAttribute("src", "/brands/nvidia.svg");
+  const gemma = screen.getByRole("option", { name: "google/codegemma-7b" });
+  expect(gemma.querySelector("img")).toHaveAttribute("src", "/brands/gemma.svg");
+  const adept = screen.getByRole("option", { name: "adept/fuyu-8b" });
+  expect(adept.querySelector("img")).toBeNull();
+  expect(adept.querySelector(".agent-mark")).toHaveTextContent("Ad");
+  fireEvent.click(screen.getByRole("tab", { name: "OpenAI" }));
+  expect(screen.getByRole("option", { name: "GPT-5" }).querySelector("img")).toHaveAttribute("src", "/brands/openai.svg");
+});
+
+it("tags only Cline's current free models, and a search for free leaves retired ones out", () => {
+  const models: Model[] = [
+    { modelId: "cline-free/minimax-m3.1-flash", displayLabel: "Minimax M3.1 Flash", providerId: "cline-free", free: true },
+    { modelId: "nvidia/nemotron-3.5-lightning-free", displayLabel: "Nemotron 3.5 Lightning (free)", providerId: "nvidia", free: true },
+    { modelId: "nvidia/nemotron-3-ultra:free", displayLabel: "Nemotron 3 Ultra (free)", providerId: "nvidia", free: false },
+    ...Array.from({ length: 4 }, (_, index) => ({ modelId: `openai/gpt-${index}`, displayLabel: `GPT ${index}`, providerId: "openai" })),
+  ];
+  render(<ModelPicker models={models} agentId="cline" value={modelKey(models[0])} loading={false} disabled={false} onChange={vi.fn()} />);
+  fireEvent.click(screen.getByRole("button", { name: "Model" }));
+  const retired = screen.getByRole("option", { name: "Nemotron 3 Ultra" });
+  expect(retired).not.toHaveTextContent("Free");
+  expect(retired).not.toHaveTextContent("(free)");
+  expect(screen.getByRole("option", { name: /Minimax M3.1 Flash/ })).toHaveTextContent("Free");
+  fireEvent.change(screen.getByRole("combobox", { name: "Search models" }), { target: { value: "free" } });
+  const names = screen.getAllByRole("option").map((option) => option.textContent);
+  expect(names.some((name) => name?.includes("Minimax"))).toBe(true);
+  expect(names.some((name) => name?.includes("Lightning"))).toBe(true);
+  expect(names.some((name) => name?.includes("Ultra"))).toBe(false);
+});
+
 it("lists a fast variant as its own row, tagged Fast, and marks it on the trigger when chosen", () => {
   const models: Model[] = [
     { modelId: "grok-4.7", displayLabel: "Grok 4.7", providerId: "grok" },
@@ -204,4 +250,36 @@ it("lists a fast variant as its own row, tagged Fast, and marks it on the trigge
   expect(onChange).toHaveBeenCalledWith(models[1]);
   view.rerender(<ModelPicker models={models} agentId="grok" value={modelKey(models[1])} loading={false} disabled={false} onChange={onChange} />);
   expect(screen.getByLabelText("Fast")).toBeInTheDocument();
+});
+
+it("filters an agent's mixed catalog by lab, searches across all of them, and gives every row an icon", () => {
+  const models: Model[] = [
+    { modelId: "nvidia/nemotron-3.5-super", displayLabel: "Nemotron 3.5 Super", providerId: "nvidia", free: true },
+    { modelId: "reflection/beam-1.0", displayLabel: "Beam", providerId: "reflection", free: true },
+    { modelId: "anthropic/claude-haiku-5.5", displayLabel: "Claude Haiku 5.5", providerId: "anthropic", free: false },
+    { modelId: "openai/gpt-6.1-sol", displayLabel: "GPT-6.1 Sol", providerId: "openai", free: false },
+    ...Array.from({ length: 4 }, (_, index) => ({ modelId: `upstage/solar-${index}`, displayLabel: `Solar ${index}`, providerId: "upstage", free: false })),
+  ];
+  const agents: AgentInfo[] = [
+    { id: "cline", name: "Cline CLI", protocol: "acp", found: true, path: "/bin/cline", version: "3", verified: false, signIn: "" },
+  ];
+  render(<ModelPicker models={models} agentId="cline" agents={agents} value={modelKey(models[0])} loading={false} disabled={false} onChange={vi.fn()} onAgentChange={vi.fn()} onRescan={async () => {}} />);
+  fireEvent.click(screen.getByRole("button", { name: "Model" }));
+  expect(screen.getByRole("tab", { name: "All models" })).toHaveAttribute("aria-selected", "true");
+  expect(screen.getAllByRole("option")).toHaveLength(8);
+  expect(screen.getByText("Free right now")).toBeInTheDocument();
+  // A lab with no logo of its own still shows a mark, never an empty slot.
+  expect(screen.getByRole("option", { name: /Beam/ }).querySelector(".agent-mark")).toHaveTextContent("R");
+  expect(screen.getByRole("option", { name: /Claude Haiku/ }).querySelector("img")).toHaveAttribute("src", "/brands/claude.svg");
+  fireEvent.click(screen.getByRole("tab", { name: "Anthropic" }));
+  expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual(["Claude Haiku 5.5"]);
+  fireEvent.change(screen.getByRole("combobox", { name: "Search models" }), { target: { value: "gpt" } });
+  expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual(["GPT-6.1 Sol"]);
+});
+
+it("shows the agent's own mark for a model with no family or provider logo", () => {
+  const models = [{ modelId: "muse-spark-1.3" }];
+  render(<ModelPicker models={models} agentId="muse" value={modelKey(models[0])} loading={false} disabled={false} onChange={vi.fn()} />);
+  fireEvent.click(screen.getByRole("button", { name: "Model" }));
+  expect(screen.getByRole("option").querySelector(".agent-mark.img img")).toHaveAttribute("src", "/spark.svg");
 });
