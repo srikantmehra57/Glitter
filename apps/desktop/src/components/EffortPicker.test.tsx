@@ -62,12 +62,13 @@ describe("EffortPicker", () => {
     expect(row(/^Extra high/)).toHaveAttribute("aria-selected", "true");
   });
 
-  it("says what each level trades and tags the model default", () => {
+  it("tags the model default and does not describe each level", () => {
     render(<EffortPicker value="low" tiers={["low", "medium", "high"]} fallback="medium" disabled={false} onChange={vi.fn()} />);
     fireEvent.click(chip());
-    expect(row(/^Medium/)).toHaveTextContent("MediumDefaultBalanced speed and depth");
-    expect(row(/^High/)).toHaveTextContent("Thinks it through before acting");
+    expect(row(/^Medium/)).toHaveTextContent("MediumDefault");
+    expect(row(/^Medium/).querySelector("small")).toBeNull();
     expect(row(/^High/)).not.toHaveTextContent("Default");
+    expect(row(/^High/).querySelector("small")).toBeNull();
   });
 
   it("picks a level with one click and closes, back on the chip, with no special treatment for the top tier", async () => {

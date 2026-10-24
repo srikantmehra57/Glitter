@@ -13,6 +13,7 @@ import { humanizeModelLabel, humanizeProvider, relativeTime, shortCliVersion, sh
 import { settingsFields } from "../lib/settingsPersistence";
 import { SETTINGS_NAV_GROUPS, SETTINGS_TAB_COPY, SETTINGS_TAB_LABELS, settingsTabsMatching } from "../lib/settingsNav";
 import { customCommandProblem } from "../lib/composerText";
+import { customProviders, providerName } from "../lib/providers";
 import { FIXED_SHORTCUTS, REMAPPABLE, SHORTCUT_IDS, bindingFor, bindingProblem, chordLabel, chordOf, type ShortcutId, type ShortcutOverrides } from "../lib/shortcuts";
 import { applyTheme, currentThread, currentWorkspace, hasWindowMaterial, preferredAgent, useAppStore } from "../lib/store";
 import type { Model } from "../lib/types";
@@ -440,6 +441,7 @@ export function SettingsModal() {
     cliUpdateResult: state.cliUpdateResult,
     hostInfo: state.hostInfo,
     hostTrust: state.hostTrust,
+    providerStatus: state.providerStatus,
     models: state.models,
     loadModelCatalog: state.loadModelCatalog,
     peekModelCatalog: state.peekModelCatalog,
@@ -724,16 +726,28 @@ export function SettingsModal() {
       <fieldset disabled={connecting} className="settings-fields settings-content">
         <div ref={bodyRef} className={`settings-section-body settings-page-${page.toLowerCase()}`} role="region" aria-labelledby="settings-page-title" tabIndex={0}>
           <div key={page} className="settings-column settings-page">
-            <header className="settings-section-head"><h3 id="settings-page-title">{SETTINGS_TAB_LABELS[page]}</h3><p>{SETTINGS_TAB_COPY[page]}</p></header>
+            <header className={`settings-section-head${page === "Usage" ? " is-usage" : ""}`}>
+              {page === "Usage" ? (
+                <div className="usage-page-title">
+                  <h3 id="settings-page-title">Usage stats</h3>
+                  <span className="usage-scope">App usage</span>
+                </div>
+              ) : (
+                <>
+                  <h3 id="settings-page-title">{SETTINGS_TAB_LABELS[page]}</h3>
+                  <p>{SETTINGS_TAB_COPY[page]}</p>
+                </>
+              )}
+            </header>
         {page === "Models" ? <>
           <SectionHead title="New thread defaults" help={`From ${AGENT_LABELS[defaultsAgentId]}, your default agent. The composer can change both for any thread.`} action={<button type="button" className="ghost-btn small" aria-label="Refresh default models" disabled={modelCatalog.loading} onClick={() => setCatalogRefresh((value) => value + 1)}><RefreshCw size={11} className={modelCatalog.loading ? "spin" : ""} aria-hidden="true" />Refresh</button>} />
           {modelCatalog.error ? <p className="settings-note" role="alert">{modelCatalog.error} Refresh the list, or check the agent under Agents.</p> : modelCatalog.loading ? <p className="settings-note" role="status">Loading {AGENT_LABELS[defaultsAgentId]} models…</p> : !defaultModels.length ? <p className="settings-note" role="status">{AGENT_LABELS[defaultsAgentId]} did not report any models.</p> : null}
           <section className="settings-card" aria-label="New thread defaults">
-          <SettingRow label={<label htmlFor="default-model">Default model</label>} help={<>{savedUnlisted ? <span>This saved model is no longer listed. Choose a current model. </span> : null}{draft.defaultModel ? <button className="text-btn" type="button" onClick={() => edit({ defaultModel: "", defaultProviderId: undefined })}>Use the agent’s default</button> : "New threads start on the agent’s own default."}</>}><SelectMenu id="default-model" ariaLabel="Default model" icon={draft.defaultModel && selectedDefault ? <ModelIcon modelId={selectedDefault.modelId} providerId={selectedDefault.providerId} size={15} fallback={<AgentMark id={defaultsAgentId} size={15} />} /> : undefined} value={defaultModelValue} placeholder={modelCatalog.loading ? "Loading models…" : defaultModels.length ? "Agent default" : "Connect to load models"} options={modelOptions} disabled={modelCatalog.loading || !defaultModels.length} onChange={(value) => { const model = modelByKey.get(value); if (model) edit({ defaultModel: model.modelId, defaultProviderId: model.providerId }); }} /></SettingRow>
+          <SettingRow label={<label htmlFor="default-model">Default model</label>} help={<>{savedUnlisted ? <span>This saved model is no longer listed. Choose a current model. </span> : null}{draft.defaultModel ? <button className="text-btn" type="button" onClick={() => edit({ defaultModel: "", defaultProviderId: undefined })}>Use the agent’s default</button> : "New threads start on the agent’s own default."}</>}><SelectMenu id="default-model" ariaLabel="Default model" icon={draft.defaultModel && selectedDefault ? <ModelIcon modelId={selectedDefault.modelId} providerId={selectedDefault.providerId} size={15} hostName={providerName(selectedDefault.providerId, customProviders(s.providerStatus ?? []))} fallback={<AgentMark id={defaultsAgentId} size={15} />} /> : undefined} value={defaultModelValue} placeholder={modelCatalog.loading ? "Loading models…" : defaultModels.length ? "Agent default" : "Connect to load models"} options={modelOptions} disabled={modelCatalog.loading || !defaultModels.length} onChange={(value) => { const model = modelByKey.get(value); if (model) edit({ defaultModel: model.modelId, defaultProviderId: model.providerId }); }} /></SettingRow>
           <SettingRow label={<label htmlFor="default-effort">Default reasoning effort</label>} help="More effort gives the model longer on hard problems; less suits quick edits and questions."><SelectMenu id="default-effort" ariaLabel="Default reasoning effort" value={draft.defaultEffort} placeholder="Agent default" options={EFFORTS.map((effort) => ({ value: effort, label: EFFORT_LABELS[effort] }))} onChange={(value) => edit({ defaultEffort: value as ReasoningEffort })} /></SettingRow>
           </section>
           <SectionHead title="Model library" help="Switch a provider or a single model off to keep it out of the composer’s picker. Test sends one word and times the reply, so a busy or retired model shows up before you rely on it." />
-          <ModelLibrary agents={libraryAgents} hidden={draft.hiddenModels ?? []} onHiddenChange={(hiddenModels) => edit({ hiddenModels })} hiddenProviders={draft.hiddenProviders ?? []} onHiddenProvidersChange={(hiddenProviders) => edit({ hiddenProviders })} loadCatalog={s.peekModelCatalog} testModel={s.testModel} onManageProviders={() => setTab("Providers")} />
+          <ModelLibrary agents={libraryAgents} customProviders={customProviders(s.providerStatus ?? [])} hidden={draft.hiddenModels ?? []} onHiddenChange={(hiddenModels) => edit({ hiddenModels })} hiddenProviders={draft.hiddenProviders ?? []} onHiddenProvidersChange={(hiddenProviders) => edit({ hiddenProviders })} loadCatalog={s.peekModelCatalog} testModel={s.testModel} onManageProviders={() => setTab("Providers")} />
         </> : null}
         {page === "Providers" ? <ProvidersPanel onChanged={() => { void s.refreshDetection().then(() => useAppStore.getState().refreshModels(true)); }} /> : null}
         {page === "Agents" ? <div className="agents-panel">

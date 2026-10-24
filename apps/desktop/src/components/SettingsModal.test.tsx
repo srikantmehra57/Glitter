@@ -22,6 +22,15 @@ describe("settings navigation", () => {
     seedStore({ settingsOpen: true, preview: true, theme: "light" });
   });
 
+  it("titles the usage page Usage stats, with the app scope beside it", () => {
+    seedStore({ settingsTab: "Usage" });
+    render(<SettingsModal />);
+    expect(screen.getByRole("heading", { name: "Usage stats" })).toBeInTheDocument();
+    expect(screen.getByText("App usage")).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Usage stats" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Usage" })).toHaveAttribute("aria-current", "page");
+  });
+
   it("remembers the last tab after closing and remounting, with explicit links taking precedence", () => {
     const view = render(<SettingsModal />);
     fireEvent.click(screen.getByRole("button", { name: "About" }));

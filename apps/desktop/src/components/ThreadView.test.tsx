@@ -304,11 +304,11 @@ describe("completion usage", () => {
     expect(screen.queryByLabelText("Turn usage")).toBeNull();
   });
 
-  it("keeps unavailable Undo notes visible alongside usage and Fork", () => {
+  it("leaves Undo out without a note when no file state was saved", () => {
     seedStore({ threads: useAppStore.getState().threads.map((thread) => ({ ...thread, snapshots: { t1: { snapshotId: "snap", sessionId: "s1", turnId: "t1", state: "unavailable", files: [], reason: "Undo is unavailable: workspace capture took too long.", createdAt: 1 } } })) });
     render(<ThreadView />);
     const receipt = screen.getByRole("region", { name: "Done" });
-    expect(within(receipt).getByText("Undo is unavailable: workspace capture took too long.")).toBeInTheDocument();
+    expect(within(receipt).queryByText(/Undo is unavailable/)).toBeNull();
     expect(within(receipt).getByLabelText("Turn usage")).toBeInTheDocument();
     expect(within(receipt).queryByRole("button", { name: "Undo" })).toBeNull();
   });

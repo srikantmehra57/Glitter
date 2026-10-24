@@ -79,25 +79,29 @@ describe("Sidebar", () => {
     expect(within(list).getAllByLabelText("Running")).toHaveLength(1);
   });
 
-  it("flags a collapsed workspace that holds a blocked thread", () => {
+  it("flags a blocked thread in another workspace on its visible row", () => {
     seedTwo([thread("a"), thread("z", { workspacePath: "/other", title: "Blocked", status: "running", pendingApproval: approval("z") })]);
     render(<Sidebar />);
     const other = screen.getByRole("button", { name: /^other/ });
     expect(within(other).getByLabelText("A thread needs your attention")).toBeInTheDocument();
+    // Only the folder in view's threads are listed.
     expect(screen.queryByText("Blocked")).toBeNull();
   });
 
-  it("finds threads in collapsed workspaces without expanding them for good", async () => {
-    const { loadWorkspaceThreads } = seedTwo([thread("a", { title: "Alpha" }), thread("z", { workspacePath: "/other", title: "Deploy notes" })]);
+  it("spans every workspace in a search, opening each folder with a match for that search only", async () => {
+    const { loadWorkspaceThreads } = seedTwo([thread("a", { title: "Redeploy plan" }), thread("b", { title: "Lint fixes" }), thread("z", { workspacePath: "/other", title: "Deploy notes" })]);
     render(<Sidebar />);
     expect(screen.queryByText("Deploy notes")).toBeNull();
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Search threads" }));
     await user.type(screen.getByRole("textbox", { name: "Search threads" }), "deploy");
     await screen.findByText("Deploy notes");
-    expect(screen.queryByText("Alpha")).toBeNull();
     expect(loadWorkspaceThreads).toHaveBeenCalledWith("w2");
-    // The caret hides a revealed group for this search only.
+    // The matches sit under their own folder rows; nothing else is listed.
+    expect(within(screen.getByRole("list", { name: "Threads in other" })).getByText("Deploy notes")).toBeInTheDocument();
+    expect(within(screen.getByRole("list", { name: "Threads in repo" })).getByText("Redeploy plan")).toBeInTheDocument();
+    expect(screen.queryByText("Lint fixes")).toBeNull();
+    // The caret hides a revealed folder for this search only.
     await user.click(screen.getByRole("button", { name: "Collapse other" }));
     expect(screen.queryByText("Deploy notes")).toBeNull();
     await user.click(screen.getByRole("button", { name: "Expand other" }));
@@ -107,7 +111,62 @@ describe("Sidebar", () => {
     expect(screen.getByRole("button", { name: "Expand other" })).toBeInTheDocument();
   });
 
-  it("archives from the thread menu and opens the archive from the sidebar", async () => {
+  it("opens another workspace from its caret without leaving the folder in view", async () => {
+    const { loadWorkspaceThreads } = seedTwo([thread("a", { title: "Alpha" }), thread("z", { workspacePath: "/other", title: "Elsewhere" })]);
+    render(<Sidebar />);
+    expect(screen.queryByText("Elsewhere")).toBeNull();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Expand other" }));
+    expect(loadWorkspaceThreads).toHaveBeenCalledWith("w2");
+    expect(screen.getByText("Elsewhere")).toBeInTheDocument();
+    // Both lists stay open side by side; the selection did not move.
+    expect(screen.getByText("Alpha")).toBeInTheDocument();
+    expect(useAppStore.getState().selectedWorkspaceId).toBe("w");
+    await user.click(screen.getByRole("button", { name: "Collapse other" }));
+    await waitFor(() => expect(screen.queryByText("Elsewhere")).toBeNull());
+  });
+
+  it("folds a long list after eight threads, keeping the open one and any waiting or running in place", async () => {
+    const many = Array.from({ length: 14 }, (_, index) => thread(`t${index}`, { title: `Task ${index}`, order: 100 - index }));
+    many[11] = { ...many[11], status: "running" };
+    seed(many, "t12");
+    render(<Sidebar />);
+    const list = screen.getByRole("list", { name: "Threads in repo" });
+    // Eight, plus the running one and the open one past the cap.
+    expect(within(list).getAllByRole("listitem")).toHaveLength(10);
+    expect(within(list).getByText("Task 11")).toBeInTheDocument();
+    expect(within(list).getByText("Task 12")).toBeInTheDocument();
+    expect(within(list).queryByText("Task 13")).toBeNull();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Show 4 more" }));
+    expect(within(screen.getByRole("list", { name: "Threads in repo" })).getAllByRole("listitem")).toHaveLength(14);
+    await user.click(screen.getByRole("button", { name: "Show less" }));
+    expect(within(screen.getByRole("list", { name: "Threads in repo" })).getAllByRole("listitem")).toHaveLength(10);
+  });
+
+  it("keeps Remove behind the workspace's menu, beside opening the folder and copying its path", async () => {
+    seedTwo([thread("a")]);
+    const confirm = vi.fn(async () => true);
+    const removeWorkspace = vi.fn();
+    const openTrustDialog = vi.fn(async () => {});
+    seedStore({ confirm, removeWorkspace, openTrustDialog });
+    render(<Sidebar />);
+    // No bare Remove button on the row, one slip from New thread.
+    expect(screen.queryByRole("button", { name: /^Remove/ })).toBeNull();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Actions for other" }));
+    const menu = screen.getByRole("menu", { name: "Actions for other" });
+    expect(within(menu).getByRole("menuitem", { name: "Copy path" })).toBeInTheDocument();
+    expect(within(menu).getByRole("menuitem", { name: /Show in Finder|Open folder/ })).toBeInTheDocument();
+    await user.click(within(menu).getByRole("menuitem", { name: "Trust workspace…" }));
+    expect(openTrustDialog).toHaveBeenCalledWith("w2");
+    await user.click(screen.getByRole("button", { name: "Actions for other" }));
+    await user.click(screen.getByRole("menuitem", { name: "Remove from sidebar" }));
+    await waitFor(() => expect(removeWorkspace).toHaveBeenCalledWith("w2"));
+    expect(confirm).toHaveBeenCalledWith(expect.objectContaining({ title: "Remove other from the sidebar?", danger: true }));
+  });
+
+  it("archives from the thread menu and opens the archive from the Workspaces label", async () => {
     seed([thread("a", { title: "Alpha" }), thread("b", { title: "Beta" })]);
     render(<Sidebar />);
     expect(screen.queryByRole("button", { name: /Archived threads/ })).toBeNull();
@@ -184,37 +243,25 @@ describe("Sidebar", () => {
     expect(useAppStore.getState().settingsTab).toBe("Agents");
   });
 
-  it("opens usage from the footer when a reading exists, and does not show an account name or Ready", async () => {
+  it("opens the Usage page straight from the footer, with no popup, and shows no account name or Ready", async () => {
     seed([]);
     seedStore({
       detection: { found: true, path: "/bin/muse", version: "Muse Code 3.14.3", authenticated: true, method: "auth.json", accountName: "Ada" },
       agents: [{ id: "muse", name: "Muse", protocol: "msp", found: true, path: "/bin/muse", version: "3.14.3", verified: true, signIn: "", authenticated: true }],
-      subscriptionUsage: {
-        observedAtMs: Date.now(),
-        tier: "pro",
-        window: { usedPercent: 42, resetsAtMs: Date.now() + 60 * 60_000, windowDurationMins: 300 },
-        weekly: { usedPercent: 18, resetsAtMs: Date.now() + 3 * 24 * 60 * 60_000 },
-      },
     });
     render(<Sidebar />);
-    const user = userEvent.setup();
     expect(screen.queryByText("Ada")).not.toBeInTheDocument();
     expect(screen.queryByText("Ready")).not.toBeInTheDocument();
     expect(screen.queryByText("Glitter")).not.toBeInTheDocument();
-    expect(screen.queryByRole("dialog", { name: "Usage" })).not.toBeInTheDocument();
     const usage = screen.getByRole("button", { name: "Usage" });
-    // An icon in the sidebar's foot beside Settings, not a labelled row.
+    // In the sidebar's foot at the end of the Settings row, carrying a figure rather than a label.
     expect(usage.closest(".sidebar-foot")).not.toBeNull();
     expect(usage).not.toHaveTextContent("Usage");
-    await user.click(usage);
-    const card = screen.getByRole("dialog", { name: "Usage" });
-    expect(within(card).getByText("No turns yet today")).toBeInTheDocument();
-    const meter = within(card).getByRole("status", { name: "Subscription usage" });
-    expect(within(meter).getByText("42%")).toBeInTheDocument();
-    expect(within(meter).getByText("18%")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Settings" }));
+    expect(screen.getByRole("button", { name: "Settings" })).toHaveTextContent("Settings");
+    await userEvent.setup().click(usage);
     expect(screen.queryByRole("dialog", { name: "Usage" })).not.toBeInTheDocument();
     expect(useAppStore.getState().settingsOpen).toBe(true);
+    expect(useAppStore.getState().settingsTab).toBe("Usage");
   });
 
   it("puts New thread and Settings in the sidebar, and leaves Extensions to Settings", async () => {
@@ -228,26 +275,38 @@ describe("Sidebar", () => {
     expect(useAppStore.getState().settingsOpen).toBe(true);
   });
 
-  it("filters the list to running threads and to ones that need you", async () => {
+  it("keeps each list in sidebar order and gathers work waiting on you, anywhere, into one row", async () => {
+    const selectNextAttentionThread = vi.fn(async () => {});
     seedTwo([
-      thread("a", { status: "running", title: "Running one" }),
-      thread("b", { title: "Idle one" }),
+      thread("b", { title: "Idle one", order: 3 }),
+      thread("a", { status: "running", title: "Running one", order: 2 }),
+      thread("q", { title: "Waiting", status: "running", pendingApproval: approval("q"), order: 1 }),
       thread("z", { workspacePath: "/other", title: "Blocked", status: "running", pendingApproval: approval("z") }),
     ]);
+    seedStore({ selectNextAttentionThread });
     render(<Sidebar />);
-    const user = userEvent.setup();
-    expect(screen.getByRole("button", { name: "Live 2" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Needs you 1" })).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Live 2" }));
-    expect(screen.getByText("Running one")).toBeInTheDocument();
-    expect(screen.queryByText("Idle one")).toBeNull();
-    expect(screen.getByText("Blocked")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Needs you 1" }));
-    expect(screen.queryByText("Running one")).toBeNull();
-    expect(screen.getByText("Blocked")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "All" }));
-    expect(screen.getByText("Idle one")).toBeInTheDocument();
+    // The list does not reshuffle as threads start and stop: the order is the one the shortcuts walk.
+    expect(within(screen.getByRole("list")).getAllByRole("listitem").map((item) => item.textContent)).toEqual([
+      expect.stringContaining("Idle one"),
+      expect.stringContaining("Running one"),
+      expect.stringContaining("Waiting"),
+    ]);
+    // A closed workspace flags its blocked thread on its row instead of listing it.
+    expect(within(screen.getByRole("button", { name: /^other/ })).getByLabelText("A thread needs your attention")).toBeInTheDocument();
     expect(screen.queryByText("Blocked")).toBeNull();
+    // No filter control anywhere.
+    expect(screen.queryByRole("button", { name: "All" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Live/ })).toBeNull();
+    await userEvent.setup().click(screen.getByRole("button", { name: "2 threads need you" }));
+    expect(selectNextAttentionThread).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows no attention row while nothing waits on you", () => {
+    seedTwo([thread("a", { status: "running" }), thread("z", { workspacePath: "/other", status: "running" })]);
+    render(<Sidebar />);
+    expect(screen.queryByRole("button", { name: /need(s)? you/ })).toBeNull();
+    // A closed workspace with work in flight says so on its row.
+    expect(within(screen.getByRole("button", { name: /^other/ })).getByLabelText("A thread is running")).toBeInTheDocument();
   });
 
   it("keeps thread search behind its title-bar icon until it is opened, and folds it on Escape", async () => {
@@ -286,25 +345,15 @@ describe("Sidebar", () => {
     expect(screen.getByRole("button", { name: "Show sidebar" })).toBe(toggle);
   });
 
-  it("closes usage on Escape and on an outside click", async () => {
+  it("shows today's tokens beside the Usage mark in the foot, and only the mark when there are none", () => {
     seed([]);
-    seedStore({
-      subscriptionUsage: {
-        observedAtMs: Date.now(),
-        tier: "pro",
-        window: { usedPercent: 10, resetsAtMs: Date.now() + 60 * 60_000, windowDurationMins: 300 },
-        weekly: { usedPercent: 4, resetsAtMs: Date.now() + 3 * 24 * 60 * 60_000 },
-      },
-    });
+    seedStore({ usageLedger: { version: 1, days: [], turns: [{ key: "k", at: Date.now() - 60_000, agentId: "muse", providerId: "meta", inputTokens: 38_200, cachedTokens: 0, outputTokens: 9_900, estimated: false, durationMs: 1_000, threadId: "a", workspace: "/repo", tools: {} }] } });
     render(<Sidebar />);
-    const user = userEvent.setup();
-    const usage = screen.getByRole("button", { name: /Usage/ });
-    await user.click(usage);
-    await user.keyboard("{Escape}");
-    expect(screen.queryByRole("dialog", { name: "Usage" })).not.toBeInTheDocument();
-    await user.click(usage);
-    expect(screen.getByRole("dialog", { name: "Usage" })).toBeInTheDocument();
-    await waitFor(async () => { await user.click(document.body); expect(screen.queryByRole("dialog", { name: "Usage" })).not.toBeInTheDocument(); });
+    const usage = screen.getByRole("button", { name: /^Usage, .+ tokens today$/ });
+    expect(usage.closest(".sidebar-foot")).not.toBeNull();
+    expect(usage.textContent).toMatch(/48/);
+    act(() => { useAppStore.setState({ usageLedger: { version: 1, days: [], turns: [] } }); });
+    expect(screen.getByRole("button", { name: "Usage" })).toHaveTextContent("");
   });
 
   it("shows the CLI update row with release notes when an update is available", async () => {

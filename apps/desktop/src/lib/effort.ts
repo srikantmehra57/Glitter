@@ -5,15 +5,15 @@ export const TIER_ORDER: ReasoningEffort[] = ["none", "minimal", "low", "medium"
 export const VOCABULARY: ReasoningEffort[] = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
 export const HOST_DEFAULT: ReasoningEffort = "high";
 
-export const TIER_COPY: Record<ReasoningEffort, { label: string; short: string; blurb: string }> = {
-  none: { label: "None", short: "None", blurb: "Answers straight away, no reasoning" },
-  minimal: { label: "Minimal", short: "Min", blurb: "A glance before acting" },
-  low: { label: "Low", short: "Low", blurb: "Quick, light reasoning" },
-  medium: { label: "Medium", short: "Med", blurb: "Balanced speed and depth" },
-  high: { label: "High", short: "High", blurb: "Thinks it through before acting" },
-  xhigh: { label: "Extra high", short: "XHigh", blurb: "Careful, multi-step reasoning" },
-  max: { label: "Max", short: "Max", blurb: "Everything it's got: slowest, deepest" },
-  ultra: { label: "Ultra", short: "Ultra", blurb: "Experimental beyond-max reasoning" },
+export const TIER_COPY: Record<ReasoningEffort, { label: string; short: string }> = {
+  none: { label: "None", short: "None" },
+  minimal: { label: "Minimal", short: "Min" },
+  low: { label: "Low", short: "Low" },
+  medium: { label: "Medium", short: "Med" },
+  high: { label: "High", short: "High" },
+  xhigh: { label: "Extra high", short: "XHigh" },
+  max: { label: "Max", short: "Max" },
+  ultra: { label: "Ultra", short: "Ultra" },
 };
 
 export function modelFor(models: Model[], config: Pick<SessionConfig, "modelId" | "providerId">): Model | undefined {

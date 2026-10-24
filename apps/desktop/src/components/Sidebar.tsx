@@ -1,7 +1,9 @@
 import { memo, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type DragEvent, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { Archive, ChevronRight, Download, FileText, Folder, FolderOpen, Gauge, GitBranch, GitFork, LoaderCircle, LogOut, MoreHorizontal, PanelLeft, Pencil, Pin, PinOff, Plus, RotateCcw, ScanSearch, Search, Settings, ShieldCheck, SquarePen, Trash2, X } from "lucide-react";
-import { formatResetIn, formatTokens, needsAttention, relativeTime, shortCliVersion, threadMatches, usageWindowLabel, windowPercent, worktreeRemovalNote } from "../lib/format";
+import { Archive, ChartColumn, ChevronRight, Copy, Download, ExternalLink, FileText, Folder, FolderOpen, GitBranch, GitFork, LoaderCircle, LogOut, MoreHorizontal, PanelLeft, Pencil, Pin, PinOff, Plus, RotateCcw, ScanSearch, Search, Settings, ShieldCheck, SquarePen, Trash2, X } from "lucide-react";
+import { formatResetIn, formatTokens, isMacPlatform, needsAttention, relativeTime, shortCliVersion, threadMatches, usageWindowLabel, windowPercent, worktreeRemovalNote } from "../lib/format";
+import { openPath } from "../lib/bridge";
+import { describeError } from "../lib/errors";
 import { exportThread, shortcutText } from "../lib/commands";
 import { activeWorkspace, currentWorkspace, readyAgents, useAppStore } from "../lib/store";
 import { threadChangeCounts } from "../lib/agent";
@@ -13,7 +15,7 @@ const SIDEBAR_EXIT_MS = 240;
 import { sidebarWidthBounds, sidebarWidthFor, subscribeResize } from "../lib/reviewLayout";
 import { Collapse } from "./Presence";
 import { totalsSince } from "../lib/usageLedger";
-import { agentEnabled, type AgentId, type CliUpdateOutcome, type CliUpdateStatus, type SettingsTab, type SubscriptionUsage, type Thread, type Workspace } from "../lib/types";
+import { EDITOR_LABELS, agentEnabled, type AgentId, type CliUpdateOutcome, type CliUpdateStatus, type EditorChoice, type SettingsTab, type SubscriptionUsage, type Thread, type Workspace } from "../lib/types";
 
 /**
  * What one sidebar row needs from a thread, and nothing that changes while a
@@ -196,60 +198,28 @@ function startOfToday(now: number): number {
 }
 
 /**
- * Glitter's own usage, an icon beside Settings in the title bar. Today's tokens, counted
- * on this Mac across every agent. Meta's subscription meter is added only
- * while the Muse agent is enabled and a reading exists.
+ * Glitter's own usage: a button that opens the Usage page. In the sidebar's
+ * foot it carries today's tokens, counted on this Mac across every agent,
+ * beside its mark; in the collapsed title-bar group it is the bare icon.
  */
-function SidebarUsage() {
-  const usage = useAppStore((state) => state.subscriptionUsage);
+function SidebarUsage({ showToday = false }: { showToday?: boolean }) {
   const ledger = useAppStore((state) => state.usageLedger);
-  const museOn = useAppStore((state) => agentEnabled(state, "muse") && state.agents.some((agent) => agent.id === "muse" && agent.found));
-  const [open, setOpen] = useState(false);
-  const pop = usePresence(open, EXIT_FAST_MS);
-  const buttonRef = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const close = () => setOpen(false);
-    const timer = window.setTimeout(() => document.addEventListener("click", close), 0);
-    return () => { window.clearTimeout(timer); document.removeEventListener("click", close); };
-  }, [open]);
   const now = Date.now();
   const today = totalsSince(ledger, startOfToday(now), now);
   const chip = today.tokens > 0 ? `${today.estimated ? "≈" : ""}${formatTokens(today.tokens)}` : null;
-  const close = () => { setOpen(false); buttonRef.current?.focus(); };
-  const openAll = () => {
-    setOpen(false);
-    useAppStore.getState().setSettingsOpen(true, "Usage");
-  };
   return (
-    <div className="usage-wrap" onKeyDown={(event) => { if (event.key === "Escape" && open) { event.preventDefault(); close(); } }}>
-      <button
-        ref={buttonRef}
-        type="button"
-        className="icon-btn"
-        aria-label={chip ? `Usage, ${chip} tokens today` : "Usage"}
-        aria-expanded={open}
-        data-tooltip={open ? undefined : chip ? `Usage · ${chip} today` : "Usage"}
-        onClick={() => setOpen((value) => !value)}
-      >
-        <Gauge size={16} />
-      </button>
-      {pop.mounted ? (
-        <div className={`usage-anchor${pop.closing ? " closing" : ""}`} onClick={(event) => event.stopPropagation()}>
-          <div className="usage-pop sidebar-usage usage-local" role="dialog" aria-label="Usage">
-            <div className="usage-head">
-              <span className="usage-title">Usage</span>
-            </div>
-            <div className="usage-row">
-              <div className="usage-row-head"><span>Today</span><span className="usage-pct">{chip ?? "0"}</span></div>
-              <div className="usage-sub">{today.turns === 0 ? "No turns yet today" : `${today.turns === 1 ? "1 turn" : `${today.turns} turns`} on this Mac`}</div>
-            </div>
-            <button type="button" className="ghost-btn small" onClick={(event) => { event.stopPropagation(); openAll(); }}>All usage</button>
-            {museOn && usage ? <AccountUsage /> : null}
-          </div>
-        </div>
-      ) : null}
-    </div>
+    <button
+      type="button"
+      className={`icon-btn${showToday && chip ? " usage-today" : ""}`}
+      aria-label={chip ? `Usage, ${chip} tokens today` : "Usage"}
+      data-tooltip={chip ? `Usage · ${chip} today` : "Usage"}
+      data-tooltip-side={showToday ? "top" : undefined}
+      data-tooltip-align={showToday ? "end" : undefined}
+      onClick={() => useAppStore.getState().setSettingsOpen(true, "Usage")}
+    >
+      <ChartColumn size={showToday ? 15 : 16} />
+      {showToday && chip ? <span aria-hidden="true">{chip}</span> : null}
+    </button>
   );
 }
 
@@ -434,12 +404,14 @@ function ThreadItemView({ row, active, menuOpen, renaming, dragging, dropTarget,
             onContextMenu={(event) => { event.preventDefault(); actions.showMenu(row.sessionId); }}
             onDoubleClick={() => actions.startRename(row.sessionId)}
           >
-            {row.pinned ? <Pin size={11} className="pin-mark" aria-label="Pinned" /> : null}
-            {row.agentId ? <span className="thread-agent" title={agentName}><AgentMark id={row.agentId} size={14} /></span> : null}
+            {/* The status sits in the sidebar's icon column, under the workspace's
+                folder, so every title starts on the same line as the names above it. */}
+            <span className="thread-dot"><ThreadStatus thread={row} /></span>
             <span className="title"><span className="title-text">{row.title}</span></span>
-            {row.branch ? <GitBranch size={11} className="worktree-mark" aria-label={`Worktree on ${row.branch}`} /> : null}
+            {row.pinned ? <Pin size={11} className="pin-mark" aria-label="Pinned" /> : null}
+            {row.agentId ? <span className="thread-agent" title={agentName}><AgentMark id={row.agentId} size={12} /></span> : null}
+            {row.branch ? <span className="thread-branch" title={`Worktree on ${row.branch}`}><GitBranch size={10} aria-hidden="true" />{row.branch}</span> : null}
             {row.added || row.removed ? <span className="thread-changes" title="Uncommitted lines in files this thread edited">{row.added ? <span className="add">+{row.added}</span> : null}{row.removed ? <span className="del">−{row.removed}</span> : null}</span> : null}
-            <ThreadStatus thread={row} />
             <span className="time">{row.time}</span>
           </button>
           <button
@@ -568,6 +540,48 @@ function SidebarResize() {
   );
 }
 
+type WorkspaceAction = "finder" | "editor" | "copy" | "trust" | "regrant" | "remove";
+
+/**
+ * A workspace's ⋯ menu: opening the folder, copying its path, trust, and
+ * removal. Removal lives here rather than as a bare button on the row, where it
+ * sat one slip away from New thread.
+ */
+function WorkspaceMenu({ workspace, editor, closing, onClose, onPick }: {
+  workspace: Workspace;
+  editor: EditorChoice;
+  closing: boolean;
+  onClose: () => void;
+  onPick: (action: WorkspaceAction) => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  // Hangs below its row, or opens upward when the list would clip it.
+  const [up, setUp] = useState(false);
+  useLayoutEffect(() => {
+    const node = ref.current;
+    const list = node?.closest(".scroll");
+    if (!node || !list) return;
+    setUp(list.getBoundingClientRect().bottom - node.parentElement!.getBoundingClientRect().bottom < node.scrollHeight + 8);
+  }, []);
+  useEffect(() => { ref.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus(); }, []);
+  const granted = Boolean(workspace.grantId);
+  return (
+    <div ref={ref} className={`menu workspace-menu${up ? " up" : ""}${closing ? " closing" : ""}`} role="menu" aria-label={`Actions for ${workspace.name}`} onKeyDown={(event) => menuKeys(event, onClose)}>
+      {granted ? <>
+        <button type="button" role="menuitem" onClick={() => onPick("finder")}><FolderOpen size={13} />{isMacPlatform() ? "Show in Finder" : "Open folder"}</button>
+        {editor !== "default" ? <button type="button" role="menuitem" onClick={() => onPick("editor")}><ExternalLink size={13} />Open in {EDITOR_LABELS[editor]}</button> : null}
+      </> : <button type="button" role="menuitem" onClick={() => onPick("regrant")}><RotateCcw size={13} />Choose folder again…</button>}
+      <button type="button" role="menuitem" onClick={() => onPick("copy")}><Copy size={13} />Copy path</button>
+      {granted && !workspace.trusted ? <button type="button" role="menuitem" onClick={() => onPick("trust")}><ShieldCheck size={13} />Trust workspace…</button> : null}
+      <div className="menu-sep" />
+      <button type="button" role="menuitem" className="danger" onClick={() => onPick("remove")}><X size={13} />Remove from sidebar</button>
+    </div>
+  );
+}
+
+/** A long list shows this many threads until asked for the rest. One only a couple longer shows them all. */
+const LIST_CAP = 8;
+
 export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) {
   const s = useAppStore(useShallow((state) => ({
     threadsLoading: state.threadsLoading,
@@ -583,6 +597,7 @@ export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) 
     detectionChecked: state.detectionChecked,
     agents: state.agents,
     starting: state.starting,
+    editor: state.editor,
     sidebarCollapsed: state.sidebarCollapsed,
     shortcutOverrides: state.shortcutOverrides,
     cliUpdate: state.cliUpdate,
@@ -597,14 +612,15 @@ export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) 
     setThreadSearch: state.setThreadSearch,
     setThreadSearchOpen: state.setThreadSearchOpen,
     selectWorkspace: state.selectWorkspace,
+    selectNextAttentionThread: state.selectNextAttentionThread,
     chooseProject: state.chooseProject,
     removeWorkspace: state.removeWorkspace,
+    openTrustDialog: state.openTrustDialog,
     setSidebarCollapsed: state.setSidebarCollapsed,
     setSettingsOpen: state.setSettingsOpen,
     refreshCliUpdate: state.refreshCliUpdate,
     updateCli: state.updateCli,
     confirm: state.confirm,
-    openTrustDialog: state.openTrustDialog,
   })));
   // The rows, not the threads: identical objects until something a row shows changes.
   const rowSelector = useRef<ReturnType<typeof createRowSelector> | null>(null);
@@ -612,25 +628,31 @@ export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) 
   const rows = useAppStore(rowSelector.current);
   const workspace = useAppStore(currentWorkspace);
   const [menu, setMenu] = useState<string | null>(null);
+  const [wsMenu, setWsMenu] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [updateOpen, setUpdateOpen] = useState(false);
-  /** Which sessions the list shows. All is the workspace tree; the other two are the orchestrator's view of work in flight. */
-  const [filter, setFilter] = useState<"all" | "live" | "attention">("all");
   const updatePop = usePresence(updateOpen, EXIT_FAST_MS);
+  const wsMenuPop = usePresence(wsMenu !== null, EXIT_FAST_MS);
+  // A closing workspace menu still names its workspace until it unmounts.
+  const wsMenuFor = useRef<string | null>(null);
+  if (wsMenu) wsMenuFor.current = wsMenu;
   const railPop = usePresence(s.sidebarCollapsed, EXIT_FAST_MS);
   // The sidebar stays drawn while its column closes, clipped to it and fading, so
   // hiding it is the open animation in reverse rather than a blank column sliding shut.
   const sidebarPop = usePresence(!s.sidebarCollapsed, SIDEBAR_EXIT_MS);
-  // Every workspace expands on its own; selecting one opens it.
+  // The folder in view opens on its own; any other opens from its caret and
+  // stays open beside it, so work in several projects can be watched at once.
   const [expanded, setExpanded] = useState<string[]>(() => s.selectedWorkspaceId ? [s.selectedWorkspaceId] : []);
+  // The workspace the user just opened: only that list animates open, never one restored on launch.
+  const [revealed, setRevealed] = useState<string | null>(null);
+  // Workspaces listing every thread, past the first LIST_CAP.
+  const [showAll, setShowAll] = useState<string[]>([]);
+  // A search opens every folder with a match; the caret hides one for this search only.
+  const [hiddenInSearch, setHiddenInSearch] = useState<string[]>([]);
   const loaded = useRef(new Set<string>());
   const [dragging, setDragging] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
-  // The workspace the user just opened: only that list animates open, never one restored on launch.
-  const [revealed, setRevealed] = useState<string | null>(null);
-  const isOpen = (id: string) => expanded.includes(id);
-  // The caret toggles expansion without touching the selection; collapsing
-  // drops the loaded mark so the next expand refetches the list.
+  // Collapsing drops the loaded mark, so the next expand refetches the list.
   const toggleOpen = (id: string) => {
     setRevealed(id);
     setExpanded((ids) => {
@@ -639,6 +661,7 @@ export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) 
       return ids.filter((item) => item !== id);
     });
   };
+  const toggleInSearch = (id: string) => setHiddenInSearch((ids) => ids.includes(id) ? ids.filter((item) => item !== id) : [...ids, id]);
 
   // Typing in the search box stays instant; the list catches up a beat later.
   const search = useDeferredValue(s.threadSearch);
@@ -652,37 +675,35 @@ export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) 
       .slice()
       .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.order - a.order);
   }, [rows, search, s.enabledAgents]);
-  // Live is a turn in progress. Needs you is a turn blocked on an approval or an answer.
-  const visible = useMemo(() => {
-    if (filter === "live") return listed.filter((row) => row.status === "running");
-    if (filter === "attention") return listed.filter((row) => row.attention);
-    return listed;
-  }, [listed, filter]);
-  const liveCount = listed.reduce((count, row) => count + (row.status === "running" ? 1 : 0), 0);
-  const attentionCount = listed.reduce((count, row) => count + (row.attention ? 1 : 0), 0);
-  const threadsFor = (item: Workspace) => visible.filter((row) => row.workspacePath === item.path);
-  // Collapsed workspaces still flag a blocked thread, or it would sit unseen.
-  const attentionPaths = useMemo(() => new Set(rows.filter((row) => row.attention && !row.archived && agentEnabled(s, row.agentId ?? "muse")).map((row) => row.workspacePath)), [rows, s.enabledAgents]);
-  const archivedCount = useMemo(() => rows.filter((row) => row.archived).length, [rows]);
-  // A search or a status filter shows matches in collapsed workspaces without
-  // touching their saved expansion; the caret on such a group only hides it
-  // until the narrowing ends.
-  const [hiddenInSearch, setHiddenInSearch] = useState<string[]>([]);
-  const narrowing = Boolean(search) || filter !== "all";
-
-  useEffect(() => {
-    if (s.selectedWorkspaceId) setExpanded((ids) => ids.includes(s.selectedWorkspaceId!) ? ids : [...ids, s.selectedWorkspaceId!]);
-  }, [s.selectedWorkspaceId]);
-
-  // Workspaces never expanded have no threads listed yet, so the first search or filter lists them.
-  useEffect(() => {
-    if (!narrowing) { setHiddenInSearch([]); return; }
-    for (const item of s.workspaces) {
-      if (loaded.current.has(item.id)) continue;
-      loaded.current.add(item.id);
-      if (item.id !== s.selectedWorkspaceId) void s.loadWorkspaceThreads(item.id);
+  // One group per workspace, in the store's sidebar order, so the thread shortcuts walk what is drawn.
+  const groups = useMemo(() => s.workspaces.map((item) => ({ item, threads: listed.filter((row) => row.workspacePath === item.path) })), [s.workspaces, listed]);
+  // What a closed folder flags on its row. Read from every thread, not just a search's matches.
+  const flags = useMemo(() => {
+    const byPath = new Map<string, { attention: boolean; running: boolean }>();
+    for (const row of rows) {
+      if (row.archived || !agentEnabled(s, row.agentId ?? "muse")) continue;
+      const flag = byPath.get(row.workspacePath) ?? { attention: false, running: false };
+      flag.attention ||= row.attention;
+      flag.running ||= row.status === "running";
+      byPath.set(row.workspacePath, flag);
     }
-  }, [narrowing, s.workspaces, s.selectedWorkspaceId, s.loadWorkspaceThreads]);
+    return byPath;
+  }, [rows, s.enabledAgents]);
+  // Work blocked on the user, in every workspace.
+  const attentionCount = useMemo(() => {
+    const paths = new Set(s.workspaces.map((item) => item.path));
+    return rows.reduce((count, row) => count + (row.attention && !row.archived && paths.has(row.workspacePath) && agentEnabled(s, row.agentId ?? "muse") ? 1 : 0), 0);
+  }, [rows, s.workspaces, s.enabledAgents]);
+  // The row keeps its last count while it folds away, rather than reading "0 threads".
+  const attentionShown = useRef(attentionCount);
+  if (attentionCount) attentionShown.current = attentionCount;
+  const archivedCount = useMemo(() => rows.filter((row) => row.archived).length, [rows]);
+
+  // Selecting a workspace, or opening one of its threads from anywhere, opens its folder.
+  useEffect(() => {
+    const id = s.selectedWorkspaceId;
+    if (id) setExpanded((ids) => ids.includes(id) ? ids : [...ids, id]);
+  }, [s.selectedWorkspaceId]);
 
   // An expanded workspace fills its own list; the selected one is already
   // loading through selectWorkspace, so mark it instead of listing twice.
@@ -695,12 +716,29 @@ export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) 
     }
   }, [expanded, s.selectedWorkspaceId]);
 
+  // A search spans every workspace, so it lists the threads of folders never opened.
+  useEffect(() => {
+    if (!search) { setHiddenInSearch([]); return; }
+    for (const item of s.workspaces) {
+      if (loaded.current.has(item.id)) continue;
+      loaded.current.add(item.id);
+      if (item.id !== s.selectedWorkspaceId) void s.loadWorkspaceThreads(item.id);
+    }
+  }, [Boolean(search), s.workspaces, s.selectedWorkspaceId, s.loadWorkspaceThreads]);
+
   useEffect(() => {
     if (!menu) return;
     const close = () => setMenu(null);
     const timer = window.setTimeout(() => document.addEventListener("click", close), 0);
     return () => { window.clearTimeout(timer); document.removeEventListener("click", close); };
   }, [menu]);
+
+  useEffect(() => {
+    if (!wsMenu) return;
+    const close = () => setWsMenu(null);
+    const timer = window.setTimeout(() => document.addEventListener("click", close), 0);
+    return () => { window.clearTimeout(timer); document.removeEventListener("click", close); };
+  }, [wsMenu]);
 
   useEffect(() => {
     if (!updateOpen) return;
@@ -724,8 +762,8 @@ export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) 
     };
     return {
       open: (id) => { onOpenThreadsRef.current?.(); void store().selectThread(id); },
-      toggleMenu: (id) => setMenu((current) => current === id ? null : id),
-      showMenu: (id) => setMenu(id),
+      toggleMenu: (id) => { setWsMenu(null); setMenu((current) => current === id ? null : id); },
+      showMenu: (id) => { setWsMenu(null); setMenu(id); },
       closeMenu: () => setMenu(null),
       startRename: (id) => { setRenaming(id); setMenu(null); },
       finishRename: (id, title) => { store().renameThread(id, title); setRenaming(null); },
@@ -781,9 +819,46 @@ export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) 
     : { tone: "bad", label: "No agent CLI found", tab: "Agents" };
   const statusTitle = installed.map((agent) => `${agent.name}${agent.version ? ` ${agent.version}` : ""} — ${agent.path}`).join("\n") || undefined;
   const newThread = () => { onOpenThreads?.(); void s.newThread(); };
+  // Selecting a workspace opens its draft, so a new thread elsewhere is one click too.
+  const newThreadIn = (item: Workspace) => {
+    if (item.id !== s.selectedWorkspaceId) void s.selectWorkspace(item.id);
+    newThread();
+  };
   const openSettings = (tab?: SettingsTab) => { s.setSettingsOpen(true, tab); };
   const searchShown = s.threadSearchOpen || Boolean(s.threadSearch);
   const updateAvailable = !s.preview && s.cliUpdate?.available === true && Boolean(s.cliUpdate.latest);
+  const closeWorkspaceMenu = (id: string) => {
+    setWsMenu(null);
+    document.getElementById(`workspace-more-${id}`)?.focus();
+  };
+  const workspaceAction = (item: Workspace, action: WorkspaceAction) => {
+    setWsMenu(null);
+    if (action === "remove") {
+      void s.confirm({ title: `Remove ${item.name} from the sidebar?`, body: `Running turns in this workspace will be stopped.${useAppStore.getState().threads.some((thread) => thread.worktree && thread.workspacePath === item.path) ? " Its worktrees are removed too, except any with uncommitted changes, which stay on disk." : ""}`, confirmLabel: "Remove", danger: true }).then((ok) => { if (ok) s.removeWorkspace(item.id); });
+      return;
+    }
+    if (action === "regrant") { void s.chooseProject(); return; }
+    if (action === "trust") { void s.openTrustDialog(item.id); return; }
+    if (action === "copy") { void navigator.clipboard?.writeText(item.path); return; }
+    const editor = action === "editor" ? s.editor ?? "default" : "default";
+    void openPath(item.path, item.grantId ?? "preview", editor).catch((cause) => useAppStore.setState({ error: describeError(`Could not open ${item.name}`, cause) }));
+  };
+  const rowNode = (row: ThreadRow, reorderable: boolean) => (
+    <ThreadItem
+      key={row.sessionId}
+      row={row}
+      active={row.sessionId === s.selectedSessionId}
+      menuOpen={menu === row.sessionId}
+      renaming={renaming === row.sessionId}
+      dragging={dragging === row.sessionId}
+      dropTarget={dropTarget === row.sessionId}
+      reorderable={reorderable}
+      preview={s.preview}
+      agentName={row.agentId ? s.agents.find((agent) => agent.id === row.agentId)?.name : undefined}
+      actions={actions}
+    />
+  );
+  const anyMatch = groups.some((group) => group.threads.length > 0);
 
   return (
     <>
@@ -830,7 +905,8 @@ export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) 
       {/* Clears the title bar. Session tools start below the window controls. */}
       <div className="sidebar-top" />
 
-      {/* The list is the product. Start a session, find one, or narrow to work in flight. */}
+      {/* Start a thread, find one, and — only while something is blocked — get to
+          the work waiting on you. */}
       <div className="sidebar-tools">
         <button type="button" className="nav-row new-thread" aria-label="New thread" disabled={s.starting || !workspace} onClick={newThread}>
           <SquarePen size={15} />
@@ -853,11 +929,20 @@ export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) 
             {s.threadSearch ? <button type="button" className="search-clear" aria-label="Clear search" onClick={() => s.setThreadSearch("")}><X size={12} /></button> : null}
           </label>
         )}</Collapse>
-        <div className="segmented thread-filter" role="group" aria-label="Show threads">
-          <button type="button" aria-pressed={filter === "all"} onClick={() => setFilter("all")}>All</button>
-          <button type="button" aria-pressed={filter === "live"} onClick={() => setFilter("live")}>Live{liveCount ? <> <span className="count">{liveCount}</span></> : null}</button>
-          <button type="button" aria-pressed={filter === "attention"} onClick={() => setFilter("attention")}>Needs you{attentionCount ? <> <span className="count">{attentionCount}</span></> : null}</button>
-        </div>
+        {/* Approvals and questions in any workspace, as one row while they last.
+            Each click opens the next waiting thread, as the shortcut does. */}
+        <Collapse open={attentionCount > 0}>{() => (
+          <button
+            type="button"
+            className="nav-row attention-row"
+            data-tooltip={`Open the next one  ${shortcutText("attention")}`}
+            onClick={() => { onOpenThreads?.(); void s.selectNextAttentionThread(); }}
+          >
+            <i className="thread-status attention" aria-hidden="true" />
+            <span>{attentionShown.current === 1 ? "1 thread needs you" : `${attentionShown.current} threads need you`}</span>
+            <ChevronRight size={14} aria-hidden="true" />
+          </button>
+        )}</Collapse>
       </div>
 
       {s.preview ? (
@@ -870,111 +955,100 @@ export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) 
         <span>Workspaces</span>
         <span className="section-actions">
           {archivedCount ? <button className="icon-btn small" aria-label={`Archived threads (${archivedCount})`} data-tooltip="Archived threads" onClick={() => s.setSettingsOpen(true, "Threads")}><Archive size={13} /></button> : null}
-          <button className="icon-btn small" aria-label="Open workspace" data-tooltip={`Open workspace  ${shortcutText("open-workspace")}`} onClick={() => void s.chooseProject()}><Plus size={14} /></button>
+          <button className="icon-btn small" aria-label="Open workspace" data-tooltip={`Open workspace  ${shortcutText("open-workspace")}`} data-tooltip-align="end" onClick={() => void s.chooseProject()}><Plus size={14} /></button>
         </span>
       </div>
 
-      <div className="scroll sidebar-tree">
+      {/* One group per workspace: the folder, then its threads. The folder in view
+          opens on its own and is set in stronger ink; a closed one flags work
+          waiting on you or still running. A search opens every folder with a match. */}
+      <div className="scroll thread-scroll">
         {!s.workspaces.length ? (
           <button className="tree-empty" onClick={() => void s.chooseProject()}>
             <FolderOpen size={15} />
             <span>Open a workspace</span>
           </button>
         ) : null}
-        {s.workspaces.map((item) => {
+        {groups.map(({ item, threads }) => {
           const active = item.id === s.selectedWorkspaceId;
-          const open = isOpen(item.id);
-          const matches = threadsFor(item);
           const loadingList = s.threadsLoading.includes(item.id);
-          // Folders with nothing in this search or filter drop out. The selected one stays, so its empty note has a home.
-          if (narrowing && !active && matches.length === 0 && !(Boolean(search) && loadingList)) {
+          // A search keeps the folders with a match, and the one in view so its empty note has a home.
+          if (search && !threads.length && !active && !loadingList) {
             lists.current[item.path] = [];
             return null;
           }
-          // A collapsed workspace opens for this search or filter only.
-          const searchHit = !open && narrowing && (matches.length > 0 || (Boolean(search) && loadingList));
-          const shown = (open && (!narrowing || active || matches.length > 0 || (Boolean(search) && loadingList))) || (searchHit && !hiddenInSearch.includes(item.id));
-          const threads = shown ? matches : [];
           lists.current[item.path] = threads;
-          const reorderable = !s.threadSearch && filter === "all";
+          const open = search ? !hiddenInSearch.includes(item.id) : expanded.includes(item.id);
+          const flag = flags.get(item.path);
+          const long = !search && threads.length > LIST_CAP + 2;
+          // Past the cap, the open thread and anything waiting or running stay listed, in place.
+          const visible = long && !showAll.includes(item.id)
+            ? threads.filter((row, index) => index < LIST_CAP || row.sessionId === s.selectedSessionId || row.attention || row.status === "running")
+            : threads;
+          const more = threads.length - visible.length;
+          const menuShown = wsMenuPop.mounted && wsMenuFor.current === item.id;
+          const toggle = () => (search ? toggleInSearch(item.id) : toggleOpen(item.id));
           return (
-            <div key={item.id} className={`workspace-group ${active ? "active" : ""}`}>
-              <div className={`workspace-row ${active ? "active" : ""} ${shown ? "open" : ""}`}>
-                <button
-                  className="workspace-toggle"
-                  aria-label={shown ? `Collapse ${item.name}` : `Expand ${item.name}`}
-                  aria-expanded={shown}
-                  title={shown ? "Collapse" : "Expand"}
-                  onClick={() => {
-                    if (searchHit) setHiddenInSearch((ids) => ids.includes(item.id) ? ids.filter((id) => id !== item.id) : [...ids, item.id]);
-                    else toggleOpen(item.id);
-                  }}
-                >
-                  <ChevronRight size={12} className="workspace-caret" aria-hidden="true" />
+            <div key={item.id} className={`workspace-group${active ? " active" : ""}`}>
+              <div className={`workspace-row${active ? " active" : ""}${menuShown ? " menu-open" : ""}`}>
+                {/* The folder mark turns into the caret under the pointer. */}
+                <button className="workspace-toggle" aria-label={`${open ? "Collapse" : "Expand"} ${item.name}`} aria-expanded={open} onClick={toggle}>
+                  {open ? <FolderOpen size={15} className="ws-folder" aria-hidden="true" /> : <Folder size={15} className="ws-folder" aria-hidden="true" />}
+                  <ChevronRight size={14} className="ws-caret" aria-hidden="true" />
                 </button>
                 <button
                   className="workspace"
                   title={item.path}
                   onClick={() => {
-                    if (!active) {
-                      setExpanded((ids) => ids.includes(item.id) ? ids : [...ids, item.id]);
-                      void s.selectWorkspace(item.id);
-                      return;
-                    }
-                    toggleOpen(item.id);
+                    if (active) { toggle(); return; }
+                    setRevealed(item.id);
+                    void s.selectWorkspace(item.id);
                   }}
                 >
-                  {shown ? <FolderOpen size={15} aria-hidden="true" /> : <Folder size={15} aria-hidden="true" />}
                   <span className="workspace-name">{item.name}</span>
-                  {!shown && attentionPaths.has(item.path) ? <span className="thread-status attention" role="img" aria-label="A thread needs your attention" title="A thread needs your attention" /> : null}
+                  {open ? null
+                    : flag?.attention ? <span className="thread-status attention" role="img" aria-label="A thread needs your attention" title="A thread needs your attention" />
+                    : flag?.running ? <span className="thread-status running" role="img" aria-label="A thread is running" title="A thread is running" />
+                    : null}
                 </button>
-                {!item.grantId ? (
-                  <button className="regrant-btn" title="This folder lost its access grant. Pick it again to restore access." onClick={() => void s.chooseProject()}>Re-open</button>
-                ) : null}
                 <div className="row-actions">
-                  <button className="icon-btn small" aria-label={`New thread in ${item.name}`} data-tooltip={active ? `New thread  ${shortcutText("new-thread")}` : "New thread"} disabled={s.starting} onClick={() => {
-                    // Selecting a workspace opens its draft, so a new thread elsewhere is one click too.
-                    if (!active) { setExpanded((ids) => ids.includes(item.id) ? ids : [...ids, item.id]); void s.selectWorkspace(item.id); }
-                    newThread();
-                  }}><SquarePen size={13} /></button>
-                  {!item.trusted && item.grantId ? <button className="icon-btn small" aria-label={`Trust ${item.name}`} data-tooltip="Trust workspace…" onClick={() => void s.openTrustDialog(item.id)}><ShieldCheck size={13} /></button> : null}
+                  <button className="icon-btn small" aria-label={`New thread in ${item.name}`} data-tooltip={active ? `New thread  ${shortcutText("new-thread")}` : "New thread"} disabled={s.starting || !item.grantId} onClick={() => newThreadIn(item)}><SquarePen size={13} /></button>
                   <button
+                    id={`workspace-more-${item.id}`}
                     className="icon-btn small"
-                    aria-label={`Remove ${item.name}`}
-                    title="Remove from sidebar"
-                    onClick={() => {
-                      void s.confirm({ title: `Remove ${item.name} from the sidebar?`, body: `Running turns in this workspace will be stopped.${useAppStore.getState().threads.some((thread) => thread.worktree && thread.workspacePath === item.path) ? " Its worktrees are removed too, except any with uncommitted changes, which stay on disk." : ""}`, confirmLabel: "Remove", danger: true }).then((ok) => { if (ok) s.removeWorkspace(item.id); });
+                    aria-label={`Actions for ${item.name}`}
+                    aria-haspopup="menu"
+                    aria-expanded={wsMenu === item.id}
+                    onClick={(event) => { event.stopPropagation(); setMenu(null); setWsMenu((current) => current === item.id ? null : item.id); }}
+                    onKeyDown={(event) => {
+                      if (event.key === "ArrowDown" && wsMenu !== item.id) { event.preventDefault(); setMenu(null); setWsMenu(item.id); }
+                      if (event.key === "Escape" && wsMenu === item.id) { event.preventDefault(); setWsMenu(null); }
                     }}
-                  >
-                    <X size={13} />
-                  </button>
+                  ><MoreHorizontal size={14} /></button>
                 </div>
+                {menuShown ? <WorkspaceMenu workspace={item} editor={s.editor ?? "default"} closing={wsMenuPop.closing} onClose={() => closeWorkspaceMenu(item.id)} onPick={(action) => workspaceAction(item, action)} /> : null}
               </div>
 
-              <Collapse open={shown} animate={revealed === item.id}>{() => (
-                <div className="thread-list" role="list">
-                  {threads.map((row) => (
-                    <ThreadItem
-                      key={row.sessionId}
-                      row={row}
-                      active={row.sessionId === s.selectedSessionId}
-                      menuOpen={menu === row.sessionId}
-                      renaming={renaming === row.sessionId}
-                      dragging={dragging === row.sessionId}
-                      dropTarget={dropTarget === row.sessionId}
-                      reorderable={reorderable}
-                      preview={s.preview}
-                      agentName={row.agentId ? s.agents.find((agent) => agent.id === row.agentId)?.name : undefined}
-                      actions={actions}
-                    />
-                  ))}
+              <Collapse open={open} animate={revealed === item.id}>{() => (
+                <div className="workspace-threads">
+                  {!item.grantId ? (
+                    <button type="button" className="workspace-regrant" onClick={() => void s.chooseProject()}>Glitter lost access to this folder. Choose it again…</button>
+                  ) : null}
+                  {visible.length ? (
+                    <div className="thread-list" role="list" aria-label={`Threads in ${item.name}`}>
+                      {visible.map((row) => rowNode(row, !search))}
+                    </div>
+                  ) : null}
+                  {more ? (
+                    <button type="button" className="list-more" onClick={() => setShowAll((ids) => [...ids, item.id])}>Show {more} more</button>
+                  ) : long ? (
+                    <button type="button" className="list-more" onClick={() => setShowAll((ids) => ids.filter((id) => id !== item.id))}>Show less</button>
+                  ) : null}
                   {!threads.length ? (
                     <div className="tree-note">
-                      {loadingList || (checking && !narrowing)
+                      {loadingList || (active && checking && !search)
                         ? <span className="tree-loading"><LoaderCircle size={12} className="spin" aria-hidden="true" />Loading threads…</span>
-                        : s.threadSearch ? "No matching threads"
-                        : filter === "live" ? "No running threads"
-                        : filter === "attention" ? "Nothing needs you"
+                        : search ? "No matching threads"
                         : "No threads yet"}
                     </div>
                   ) : null}
@@ -983,9 +1057,10 @@ export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) 
             </div>
           );
         })}
+        {search && s.workspaces.length && !anyMatch && !workspace ? <div className="tree-note">No matching threads</div> : null}
       </div>
 
-      {/* The foot: an update or a blocked agent while they last, then Settings and Usage as icons. */}
+      {/* The foot: an update or a blocked agent while they last, then Settings and today's usage. */}
       <div className="sidebar-bottom">
         {updateAvailable && s.cliUpdate ? <div className="update-wrap" onKeyDown={(event) => { if (event.key === "Escape") setUpdateOpen(false); }}>
           <button
@@ -1027,8 +1102,12 @@ export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) 
             )
           ) : null}
           <div className="sidebar-utilities">
-            <button type="button" className="icon-btn" aria-label="Settings" data-tooltip={`Settings  ${shortcutText("settings")}`} data-tooltip-side="top" data-tooltip-align="start" onClick={() => openSettings()}><Settings size={16} /></button>
-            <SidebarUsage />
+            <button type="button" className="nav-row settings-row" aria-label="Settings" onClick={() => openSettings()}>
+              <Settings size={15} />
+              <span aria-hidden="true">Settings</span>
+              <kbd aria-hidden="true">{shortcutText("settings")}</kbd>
+            </button>
+            <SidebarUsage showToday />
           </div>
         </div>
       </div>

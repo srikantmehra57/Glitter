@@ -1,3 +1,4 @@
+import { isCustomProviderId } from "./providers";
 import type { AgentId } from "./types";
 
 /**
@@ -103,7 +104,7 @@ export function leadingBrandSlug(agentId?: AgentId, providerId?: string): string
   return providerSlug(providerId) ?? (agentId ? AGENT_SLUG[agentId] : undefined);
 }
 
-export function providerBrand(id: string): BrandMark {
+export function providerBrand(id: string, name?: string): BrandMark {
   const known = PROVIDER_GLYPH[id];
   const tone = known?.tone ?? "custom";
   const slug = PROVIDER_SLUG[id];
@@ -111,6 +112,9 @@ export function providerBrand(id: string): BrandMark {
   // A lab an agent's catalog names (`upstage/…`, `meta/…`) wears its family logo when there is one.
   const family = known ? undefined : MODEL_SLUGS.find(([pattern]) => pattern.test(`${id.toLowerCase()}/`))?.[1];
   if (family) return { slug: family, tone: family };
+  // A custom endpoint wears its own name's initials, so two of them never look
+  // alike. `custom` is the create sentinel, live while the name is being typed.
+  if (name && (isCustomProviderId(id) || id === "custom")) return { glyph: orgGlyph(name), tone: "custom" };
   return { glyph: known?.glyph ?? id.slice(0, 1).toUpperCase(), tone };
 }
 

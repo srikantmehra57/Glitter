@@ -450,8 +450,38 @@ describe("cost estimate", () => {
     const user = userEvent.setup();
     render(<Composer />);
     await user.click(screen.getByRole("button", { name: /Context window/ }));
+    expect(screen.getByText("100K/200K (50%)")).toBeInTheDocument();
     expect(screen.getByText("Cached").parentElement).toHaveTextContent("100K");
     expect(screen.getByText("Cache write").parentElement).toHaveTextContent("500");
+    expect(screen.getByText("Average cache hit rate").parentElement).toHaveTextContent("99.9%");
+  });
+
+  it("splits the window when cache reads and writes add up to the used count", async () => {
+    seedWorkspace({ context: { usedTokens: 10_000, windowTokens: 20_000, cacheReadTokens: 2_500, cacheWriteTokens: 500 } });
+    const user = userEvent.setup();
+    render(<Composer />);
+    await user.click(screen.getByRole("button", { name: /Context window/ }));
+    expect(screen.getByText("10K/20K (50%)")).toBeInTheDocument();
+    expect(screen.getByText("Prompt").parentElement).toHaveTextContent("70%");
+    expect(screen.getByText("Cached").parentElement).toHaveTextContent("25%");
+    expect(screen.getByText("Cache write").parentElement).toHaveTextContent("5%");
+    expect(screen.getByText("Average cache hit rate").parentElement).toHaveTextContent("26.3%");
+  });
+
+  it("lists the models used today under the context window", async () => {
+    seedWorkspace({ context: { usedTokens: 1_000, windowTokens: 4_000 } });
+    seedStore({ usageLedger: { version: 1, days: [], turns: [
+      { key: "a", at: Date.now() - 1_000, agentId: "harness", providerId: "anthropic", modelId: "anthropic/claude-sonnet-5", inputTokens: 3_000, cachedTokens: 0, outputTokens: 1_000, estimated: false, durationMs: 1_000, threadId: "s1", workspace: "/repo", tools: {} },
+      { key: "b", at: Date.now() - 1_000, agentId: "harness", providerId: "openai", modelId: "openai/gpt-5.5", inputTokens: 1_000, cachedTokens: 0, outputTokens: 0, estimated: false, durationMs: 1_000, threadId: "s1", workspace: "/repo", tools: {} },
+    ] } });
+    const user = userEvent.setup();
+    render(<Composer />);
+    await user.click(screen.getByRole("button", { name: /Context window/ }));
+    const today = screen.getByText("Today").closest(".context-group") as HTMLElement;
+    expect(within(today).getByText("claude-sonnet-5")).toBeInTheDocument();
+    expect(within(today).getByText("4K · 80%")).toBeInTheDocument();
+    expect(within(today).getByText("gpt-5.5")).toBeInTheDocument();
+    expect(within(today).getByText("1K · 20%")).toBeInTheDocument();
   });
 
   it("omits the row when the model has no price", () => {

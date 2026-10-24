@@ -116,7 +116,10 @@ export function FindBar({ thread, scroller, closing = false }: { thread: Thread;
     const reveal = () => {
       const message = byData(root, "item", current.itemId);
       if (!message) {
-        (byData(root, "virtualRun", current.runId) ?? byData(root, "run", current.runId))?.scrollIntoView({ block: "center" });
+        // A note inside a settled turn's folded work: open the fold, then look again.
+        const fold = root.querySelector<HTMLButtonElement>(`[data-holds~="${CSS.escape(current.itemId)}"][aria-expanded="false"]`);
+        if (fold) fold.click();
+        else (byData(root, "virtualRun", current.runId) ?? byData(root, "run", current.runId))?.scrollIntoView({ block: "center" });
         if (tries++ < 30) frame = requestAnimationFrame(reveal);
         return;
       }

@@ -1,11 +1,11 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { describeError } from "../lib/errors";
 import {
-  BellRing, Bot, Brain, Check, CircleDot, ChevronRight, CircleAlert, CircleSlash, Clock3, Copy, Eye, FilePen, FileText, GitFork, Globe, Info, Layers, ListChecks,
+  BellRing, Bot, Brain, Check, CircleDot, ChevronRight, CircleAlert, CircleSlash, Copy, Eye, FilePen, FileText, GitFork, Globe, Info, Layers, ListChecks,
   LoaderCircle, Maximize2, MessageCircle, Pencil, Pin, PinOff, Play, RotateCcw, Search, Send, SkipForward, SquareTerminal, Target, Undo2, Workflow, Wrench, X,
 } from "lucide-react";
 import { Orb } from "./Orb";
-import { ACTIVITY_KINDS, agentCounts, backgroundAgents, computeVirtualWindow, estimateRunHeight, groupAgentRuns, messageRewindBoundary, parseWorkflowMessage, type AgentState, relativeToWorkspace, runSummary, showTerminalReceipt, stabilizeRuns, type AgentRun, type AgentStep, type AgentStepKind } from "../lib/agent";
+import { ACTIVITY_KINDS, activitySummary, agentCounts, backgroundAgents, computeVirtualWindow, estimateRunHeight, groupAgentRuns, messageRewindBoundary, parseWorkflowMessage, relativeToWorkspace, runSummary, showTerminalReceipt, stabilizeRuns, type ActivityBucket, type AgentState, type AgentRun, type AgentStep, type AgentStepKind } from "../lib/agent";
 import { copyText, formatArgs, formatBytes, formatDuration, formatTokens, humanizeModelLabel, humanizeProvider, humanizeToolName, shortcutLabel, summarizeArgs } from "../lib/format";
 import { estimateCost, formatCost } from "../lib/cost";
 import { modelFor } from "../lib/effort";
@@ -241,33 +241,47 @@ function StepRowView({ step }: { step: AgentStep }) {
 
 const StepRow = memo(StepRowView);
 
+/** The composition bar draws these buckets in this order; colours come from the chart series tokens. */
+const BAR_BUCKETS: ActivityBucket[] = ["thinking", "files", "commands", "other"];
+
 function ActivityGroupView({ steps, live }: { steps: AgentStep[]; live: boolean }) {
-  const total = steps.reduce((sum, step) => sum + (step.durationMs ?? 0), 0);
   const failed = steps.some((step) => step.status === "failed");
   const [open, setOpen] = useState(live || failed);
   // Only a group the user opens animates; one restored by the virtual list must not shift the scroll.
   const [toggled, setToggled] = useState(false);
   useEffect(() => { if (live || failed) setOpen(true); }, [live, failed]);
-  const counts = useMemo(() => {
-    const plural = (count: number, one: string) => (count ? `${count} ${one}${count === 1 ? "" : "s"}` : "");
-    const files = new Set(steps.filter((step) => step.kind === "read" || step.kind === "edit").map((step) => step.path).filter(Boolean)).size;
-    return [
-      plural(steps.filter((step) => step.kind === "reasoning").length, "thought"),
-      plural(steps.filter((step) => step.kind === "edit").length, "edit"),
-      plural(files, "file"),
-      plural(steps.filter((step) => step.kind === "command").length, "command"),
-    ].filter(Boolean).join(" · ");
-  }, [steps]);
+  const summary = useMemo(() => activitySummary(steps), [steps]);
+  const plural = (count: number, one: string) => `${count} ${one}${count === 1 ? "" : "s"}`;
+  const chips = [
+    summary.thoughts ? { icon: Brain, label: plural(summary.thoughts, "thought") } : null,
+    summary.edits ? { icon: FilePen, label: plural(summary.edits, "edit") } : null,
+    summary.files ? { icon: FileText, label: plural(summary.files, "file") } : null,
+    summary.commands ? { icon: SquareTerminal, label: plural(summary.commands, "command") } : null,
+  ].filter((chip): chip is { icon: typeof Brain; label: string } => chip != null);
   if (steps.length < 2) {
     return <ol className="steps">{steps.map((step) => <StepRow key={step.id} step={step} />)}</ol>;
   }
+  // The same breakdown in words, for the tooltip and anyone hover-reading the row.
+  const breakdown = [
+    plural(steps.length, "step"),
+    ...chips.map((chip) => chip.label),
+    failed ? plural(summary.failures || 1, "failure") : "",
+    !live && summary.durationMs ? seconds(summary.durationMs) : "",
+  ].filter(Boolean).join(" · ");
   return (
-    <div className={`activity-group ${open ? "open" : ""}`}>
-      <button type="button" className={`group-head${live ? " live" : ""}${failed ? " failed" : ""}`} aria-expanded={open} onClick={() => { setToggled(true); setOpen(!open); }}>
-        <ChevronRight size={12} className={`caret ${open ? "open" : ""}`} aria-hidden="true" />
-        <span className="group-title">{steps.length} steps</span>
-        {counts ? <span className="group-meta">{counts}</span> : null}
-        {total && !live ? <span className="group-meta">{seconds(total)}</span> : null}
+    <div className={`activity-group ${open ? "open" : ""}${live ? " live" : ""}`}>
+      <button type="button" className={`group-head${live ? " live" : ""}${failed ? " failed" : ""}`} aria-expanded={open} title={breakdown} onClick={() => { setToggled(true); setOpen(!open); }}>
+        <span className="trace-node" aria-hidden="true"><ChevronRight size={12} className={`caret ${open ? "open" : ""}`} /></span>
+        {live ? <span className="group-live-dot" aria-hidden="true" /> : null}
+        <span className="group-title">{plural(steps.length, "step")}</span>
+        <span className="group-bar" aria-hidden="true">
+          {BAR_BUCKETS.map((bucket) => summary.shares[bucket] ? <i key={bucket} className={bucket} style={{ flexGrow: summary.shares[bucket] }} /> : null)}
+        </span>
+        <span className="group-chips">
+          {failed ? <span className="group-chip fail"><CircleAlert size={11} aria-hidden="true" />{plural(summary.failures || 1, "failure")}</span> : null}
+          {chips.map(({ icon: Icon, label }) => <span key={label} className="group-chip"><Icon size={11} aria-hidden="true" />{label}</span>)}
+        </span>
+        {!live && summary.durationMs ? <span className="group-meta">{seconds(summary.durationMs)}</span> : null}
       </button>
       <Collapse open={open} animate={toggled}>{() => <ol className="steps">{steps.map((step) => <StepRow key={step.id} step={step} />)}</ol>}</Collapse>
     </div>
@@ -436,16 +450,22 @@ function UserMessageView({ step }: { step: AgentStep }) {
 
 const UserMessage = memo(UserMessageView);
 
-/** `final` marks the run's settled answer. The notes an agent writes between its steps carry no actions, so they reserve no row for them either. */
+/** The agent's name, once at the top of its side of a turn, on the same column as the work rail below it. */
+function AgentHeadView() {
+  const agentId: AgentId = useAppStore((state) => currentThread(state)?.agentId ?? "muse");
+  const agentName = useAppStore((state) => state.agents.find((agent) => agent.id === agentId)?.name ?? AGENT_LABELS[agentId]);
+  return <div className="agent-message-head"><ProductAgentMark id={agentId} size={22} /><span>{agentName}</span></div>;
+}
+
+const AgentHead = memo(AgentHeadView);
+
+/** The answer a turn settles on. `final` adds its actions once the turn has ended. */
 function AgentMessageView({ step, final, canRetry }: { step: AgentStep; final: boolean; canRetry: boolean }) {
   const retryLast = useAppStore((state) => state.retryLast);
   const busy = useAppStore((state) => currentThread(state)?.status === "running" || state.submitting);
   const text = step.detail ?? "";
-  const agentId: AgentId = useAppStore((state) => currentThread(state)?.agentId ?? "muse");
-  const agentName = useAppStore((state) => state.agents.find((agent) => agent.id === agentId)?.name ?? AGENT_LABELS[agentId]);
   return (
     <article className="msg agent" data-item={step.id}>
-      <div className="agent-message-head"><ProductAgentMark id={agentId} size={18} /><span>{agentName}</span></div>
       <div className="agent-message-body"><Markdown>{text}</Markdown></div>
       {final ? <MessageActions text={text} busy={busy} onRetry={canRetry ? () => void retryLast() : undefined} retryLabel="Retry last turn" /> : null}
     </article>
@@ -453,6 +473,71 @@ function AgentMessageView({ step, final, canRetry }: { step: AgentStep; final: b
 }
 
 const AgentMessage = memo(AgentMessageView);
+
+/** A note the agent wrote between steps: narration of the work, so it sits on the rail in the quieter voice. */
+function AgentNoteView({ step }: { step: AgentStep }) {
+  return (
+    <div className="trace-note" data-item={step.id}>
+      <span className="trace-node" aria-hidden="true"><i /></span>
+      <div className="trace-note-body"><Markdown>{step.detail ?? ""}</Markdown></div>
+    </div>
+  );
+}
+
+const AgentNote = memo(AgentNoteView);
+
+type TraceEntry = { node: ReactNode; loose?: boolean };
+
+/**
+ * A turn's work — its notes and steps — on one rail under the agent's name.
+ * While the turn runs it stays open; once the turn settles on an answer it
+ * folds to one line above it, so the answer reads on its own. Cards, errors
+ * and the plan are `loose`: they never hide inside the fold.
+ */
+function Trace({ entries, steps, holds, foldable, run, isLast }: { entries: TraceEntry[]; steps: AgentStep[]; holds: string[]; foldable: boolean; run: AgentRun; isLast: boolean }) {
+  const [open, setOpen] = useState(!foldable);
+  const [toggled, setToggled] = useState(false);
+  const wasFoldable = useRef(foldable);
+  useEffect(() => {
+    // A turn settling in view folds its work away; one restored by the virtual list mounts folded and still.
+    if (foldable && !wasFoldable.current) { setToggled(true); setOpen(false); }
+    wasFoldable.current = foldable;
+  }, [foldable]);
+  const turnMs = useAppStore((state) => completedTurnStats(currentThread(state), run, isLast)?.durationMs);
+  const summary = useMemo(() => activitySummary(steps), [steps]);
+  const inside = foldable ? entries.filter((entry) => !entry.loose) : entries;
+  if (!entries.length) return null;
+  const plural = (count: number, one: string) => `${count} ${one}${count === 1 ? "" : "s"}`;
+  const duration = turnMs ? formatDuration(turnMs) : summary.durationMs ? `~${formatDuration(summary.durationMs)}` : "";
+  const chips = [
+    duration && summary.steps ? plural(summary.steps, "step") : "",
+    summary.edits ? plural(summary.edits, "edit") : "",
+    summary.files ? plural(summary.files, "file") : "",
+    summary.commands ? plural(summary.commands, "command") : "",
+  ].filter(Boolean);
+  return <>
+    {foldable ? (
+      <button type="button" className={`trace-head${summary.failures ? " failed" : ""}`} aria-expanded={open} data-holds={holds.join(" ")} onClick={() => { setToggled(true); setOpen(!open); }}>
+        <span className="trace-node" aria-hidden="true"><ChevronRight size={12} className={`caret ${open ? "open" : ""}`} /></span>
+        <span className="trace-title">{duration ? `Worked for ${duration}` : plural(summary.steps, "step")}</span>
+        {summary.failures ? <span className="group-chip fail"><CircleAlert size={11} aria-hidden="true" />{plural(summary.failures, "failure")}</span> : null}
+        {chips.length ? <span className="trace-facts">{chips.join(" · ")}</span> : null}
+      </button>
+    ) : null}
+    <Collapse open={!foldable || open} animate={toggled}>{() => <div className="trace">{inside.map((entry) => entry.node)}</div>}</Collapse>
+    {foldable ? entries.filter((entry) => entry.loose).map((entry) => entry.node) : null}
+  </>;
+}
+
+/** The message a run settles on: its last, with no work after it. While a run is live, a message the agent then works past becomes a note. */
+function settledAnswerId(steps: AgentStep[]) {
+  for (let index = steps.length - 1; index >= 0; index -= 1) {
+    const step = steps[index];
+    if (step.kind === "error" || hiddenStep(step)) continue;
+    return step.kind === "message" && step.detail ? step.id : undefined;
+  }
+  return undefined;
+}
 
 function completedTurnStats(thread: Thread | undefined, run: AgentRun, isLast: boolean) {
   const stats = thread?.turnStats;
@@ -469,7 +554,7 @@ function Completion({ run, isLast }: { run: AgentRun; isLast: boolean }) {
     const thread = currentThread(state);
     const snapshot = run.turnId ? thread?.snapshots?.[run.turnId] : undefined;
     const stats = completedTurnStats(thread, run, isLast);
-    return Boolean(snapshot?.files.length || snapshot?.state === "unavailable" || stats);
+    return Boolean(snapshot?.files.length || stats);
   });
   if (run.status === "running" || run.status === "waiting") return null;
   if (run.status === "completed" ? !hasDetails && !runSummary(run).changed.length : !isLast) return null;
@@ -499,31 +584,39 @@ function ReceiptView({ run, isLast }: { run: AgentRun; isLast: boolean }) {
     return state.modelsAgentId === (thread?.agentId ?? "muse") ? modelFor(state.models, thread?.config ?? {}) : undefined;
   });
   const turnCost = stats && costModel ? estimateCost({ promptTokens: stats.inputTokens, outputTokens: stats.outputTokens }, costModel.cost) : undefined;
+  // Hosts that report no per-turn usage still reported each step's time; their
+  // sum, marked ~, fills the receipt's otherwise-empty metrics row.
+  const derivedMs = run.steps.reduce((sum, step) => sum + (step.durationMs ?? 0), 0);
+  // One quiet line of facts, most useful first: time, tokens, cost, then the model that did the work.
   const metrics = stats ? <span className="turn-stats" aria-label="Turn usage">
-    {costModel ? <span className="turn-model" title={costModel.providerId ? `${humanizeModelLabel(costModel.modelId, costModel.displayLabel)} via ${humanizeProvider(costModel.providerId)}` : undefined}><ModelIcon modelId={costModel.modelId} providerId={costModel.providerId} size={14} badge fallback={<ProductAgentMark id={agentId} size={14} />} />{humanizeModelLabel(costModel.modelId, costModel.displayLabel)}</span> : null}
-    <span className="turn-duration" title="Time spent on this turn"><Clock3 size={12} aria-hidden="true" />{formatDuration(stats.durationMs)}</span>
+    <span className="turn-duration" title="Time spent on this turn">{formatDuration(stats.durationMs)}</span>
     {stats.outputTokens ? <span title="Output tokens for this turn">{stats.estimated ? "~" : ""}{formatTokens(stats.outputTokens)} tokens</span> : null}
     {turnCost != null && costModel ? <span title="Estimated cost for this turn">≈{formatCost(turnCost, costModel.cost?.currency)}</span> : null}
+    {costModel ? <span className="turn-model" title={costModel.providerId ? `${humanizeModelLabel(costModel.modelId, costModel.displayLabel)} via ${humanizeProvider(costModel.providerId)}` : undefined}><ModelIcon modelId={costModel.modelId} providerId={costModel.providerId} size={12} fallback={<ProductAgentMark id={agentId} size={12} />} />{humanizeModelLabel(costModel.modelId, costModel.displayLabel)}</span> : null}
+  </span> : derivedMs > 0 ? <span className="turn-stats" aria-label="Turn duration">
+    <span className="turn-duration" title="Sum of the step times the agent reported">~{formatDuration(derivedMs)}</span>
   </span> : null;
   const openDiff = (raw: string) => openFileDiff(relativeToWorkspace(raw, workspacePath) ?? raw);
   if (run.status !== "completed" && !showTerminalReceipt(run.status, isLast, busy)) return null;
   const summary = runSummary(run);
   const changed = snapshot?.state === "ready" || snapshot?.state === "undone" ? snapshot.files : summary.changed;
   const fileCount = changed.length;
+  const undone = snapshot?.state === "undone";
   const snapshotActions = <>
-    {snapshot && fileCount > 0 && ["ready", "undone"].includes(snapshot.state) && sessionId && run.turnId ? <button type="button" className="ghost-btn small" disabled={busy || !!snapshotPending} title={snapshot.state === "undone" ? "Restore this turn’s saved changes" : "Restore the file state from before this turn"} onClick={() => void restoreSnapshot(sessionId, run.turnId!)}><Undo2 size={11} aria-hidden="true" />{snapshotPending === run.turnId ? "Restoring…" : snapshot.state === "undone" ? "Reapply" : "Undo"}</button> : null}
+    {snapshot && fileCount > 0 && ["ready", "undone"].includes(snapshot.state) && sessionId && run.turnId ? <button type="button" className="ghost-btn small" disabled={busy || !!snapshotPending} title={undone ? "Restore this turn’s saved changes" : "Restore the file state from before this turn"} onClick={() => void restoreSnapshot(sessionId, run.turnId!)}><Undo2 size={12} aria-hidden="true" />{snapshotPending === run.turnId ? "Restoring…" : undone ? "Reapply" : "Undo"}</button> : null}
   </>;
-  const snapshotMessage = snapshotError ?? (snapshot?.state === "unavailable" ? snapshot.reason ?? "No saved file state is available for this turn."
-    : snapshot?.state === "undone" ? "Files restored to their state before this turn. Thread history is kept."
-    : !snapshot && fileCount ? "Undo is unavailable for turns without a saved file state." : null);
-  const snapshotNote = snapshotMessage ? <span className={`receipt-note${snapshotError ? " danger" : ""}`} role={snapshotError ? "alert" : undefined}><Info size={12} aria-hidden="true" /><span>{snapshotMessage}</span></span> : null;
+  // Undo appears only when it can run. Why it cannot (no saved state, a large
+  // file, a busy shell) is not something to act on, so the strip says nothing;
+  // only an Undo or Reapply the user started and that failed gets a line.
+  const snapshotNote = snapshotError ? <span className="receipt-note danger" role="alert"><Info size={12} aria-hidden="true" /><span>{snapshotError}</span></span> : null;
   if (run.status === "completed") {
-    if (!fileCount && snapshot?.state !== "unavailable" && !stats) return null;
+    if (!fileCount && !stats) return null;
     const cuttable = agentId === "muse" && run.turnId != null && !run.turnId.startsWith("local:") && run.turnId !== "history";
     return (
       <section className="receipt completed" aria-label="Done">
         <div className="receipt-head">
-          <span className="receipt-status"><span className="receipt-icon"><Check size={14} strokeWidth={2.2} aria-hidden="true" /></span><strong>Done</strong></span>
+          {/* An undone turn says so in place of Done; its files are back to their state before it. */}
+          <span className={`receipt-status${undone ? " undone" : ""}`} title={undone ? "Files restored to their state before this turn. Thread history is kept." : undefined}><span className="receipt-icon">{undone ? <Undo2 size={13} aria-hidden="true" /> : <Check size={14} strokeWidth={2.2} aria-hidden="true" />}</span><strong>{undone ? "Undone" : "Done"}</strong></span>
           {metrics}
           <span className="receipt-actions">
             {snapshotActions}
@@ -756,20 +849,30 @@ function RunViewView({ run, header, inline, isLast, onHeightChange }: { run: Age
   }, [run.id, onHeightChange]);
 
   const live = run.status === "running" || run.status === "waiting";
+  // The user's message (and the goal or plan under it), then the agent's side:
+  // its work on the rail, the answer, and anything that came after the answer.
   const blocks: ReactNode[] = [];
+  const entries: TraceEntry[] = [];
+  const after: ReactNode[] = [];
+  const traceSteps: AgentStep[] = [];
+  const holds: string[] = [];
+  let answer: ReactNode = null;
   let buffer: AgentStep[] = [];
   let placed = false;
-  const lastMessageId = [...run.steps].reverse().find((step) => step.kind === "message")?.id;
+  const answerId = settledAnswerId(run.steps);
+  const push = (node: ReactNode, loose = false) => { if (answer) after.push(node); else entries.push({ node, loose }); };
   const flush = () => {
     if (!buffer.length) return;
-    blocks.push(<ActivityGroup key={`g-${buffer[0].id}`} steps={buffer} live={live && buffer.some((step) => step.status === "running")} />);
+    push(<ActivityGroup key={`g-${buffer[0].id}`} steps={buffer} live={live && buffer.some((step) => step.status === "running")} />);
+    traceSteps.push(...buffer);
     buffer = [];
   };
   // A plan is shown where the agent made it, splitting the activity around it.
   const place = (step: AgentStep) => {
     if (!inline || step.id !== inline.after) return;
     flush();
-    blocks.push(<div key="run-inline" className="run-inline">{inline.node}</div>);
+    const node = <div key="run-inline" className="run-inline">{inline.node}</div>;
+    if (step.kind === "user") blocks.push(node); else push(node, true);
   };
   for (const step of run.steps) {
     if (hiddenStep(step)) { place(step); continue; }
@@ -779,9 +882,10 @@ function RunViewView({ run, header, inline, isLast, onHeightChange }: { run: Age
       blocks.push(<UserMessage key={step.id} step={step} />);
       if (header && !placed) { blocks.push(<div key="run-header" className="run-header">{header}</div>); placed = true; }
     }
-    else if (step.kind === "workflow" || step.kind === "subagent") blocks.push(<AgentsCard key={step.id} step={step} />);
-    else if (step.kind === "error") blocks.push(<div key={step.id} className="system-note" role="alert"><CircleAlert size={13} aria-hidden="true" /><span>{step.detail || "Something went wrong."}</span></div>);
-    else if (step.detail) blocks.push(<AgentMessage key={step.id} step={step} final={!live && step.id === lastMessageId} canRetry={isLast && step.id === lastMessageId} />);
+    else if (step.kind === "workflow" || step.kind === "subagent") push(<AgentsCard key={step.id} step={step} />, true);
+    else if (step.kind === "error") push(<div key={step.id} className="system-note" role="alert"><CircleAlert size={13} aria-hidden="true" /><span>{step.detail || "Something went wrong."}</span></div>, true);
+    else if (step.detail && step.id === answerId) answer = <AgentMessage key={step.id} step={step} final={!live} canRetry={isLast} />;
+    else if (step.detail) { push(<AgentNote key={step.id} step={step} />); holds.push(step.id); }
     place(step);
   }
   // While the run is live, the work since the last message belongs to the live status line
@@ -789,9 +893,19 @@ function RunViewView({ run, header, inline, isLast, onHeightChange }: { run: Age
   if (live && isLast) buffer = [];
   flush();
   if (header && !placed) blocks.unshift(<div key="run-header" className="run-header">{header}</div>);
+  // One line is already its own summary; a fold over it would only add a click.
+  const foldable = !live && answer != null && entries.filter((entry) => !entry.loose).length > 1;
   return (
     <section ref={rootRef} className={`run ${run.status}`} data-run={run.id}>
       {blocks}
+      {entries.length || answer || after.length ? (
+        <div className="agent-turn">
+          <AgentHead />
+          <Trace entries={entries} steps={traceSteps} holds={holds} foldable={foldable} run={run} isLast={isLast} />
+          {answer}
+          {after}
+        </div>
+      ) : null}
       <Completion run={run} isLast={isLast} />
     </section>
   );
@@ -805,10 +919,14 @@ export function WorkingIndicator({ label, paused, peak, meta, live, agentId = "m
   const [open, setOpen] = useState(false);
   const thought = live?.find((step) => step.kind === "reasoning" && step.status === "running");
   const actions = live?.filter((step) => step !== thought) ?? [];
+  // The newest running step names the current action; its icon keeps the status
+  // line in the same visual language as the step rows it opens onto.
+  const current = live ? [...live].reverse().find((step) => step.status === "running" && step.kind !== "reminder") : undefined;
   return (
     <div className={`working-wrap${closing ? " closing" : ""}`} aria-live="polite">
       <button type="button" className={`working ${peak ? "peak" : ""}`} aria-expanded={live ? open : undefined} disabled={!live} onClick={() => setOpen(!open)}>
         {agentId === "muse" ? <Orb state={paused ? "breathing" : thinkingOrb !== "auto" ? thinkingOrb : peak ? "solving" : "working"} size={20} speed={peak && !paused ? 1.9 : 1} paused={paused} aria-label={agentName} /> : <span className={`working-agent ${paused ? "paused" : ""}`} aria-label={agentName}><ProductAgentMark id={agentId} size={20} /><i aria-hidden="true" /></span>}
+        {live ? <span className={`working-node${paused ? " paused" : ""}`} aria-hidden="true"><StepIcon kind={current?.kind ?? "reasoning"} /></span> : null}
         <span className={`working-label ${paused ? "" : "shimmer"}`} title={label}>{label}</span>
         {meta ? <span className="working-meta">{meta}</span> : null}
         {live ? <ChevronRight size={12} className={`caret ${open ? "open" : ""}`} aria-hidden="true" /> : null}
@@ -816,7 +934,12 @@ export function WorkingIndicator({ label, paused, peak, meta, live, agentId = "m
       <Collapse open={open && Boolean(live)}>{() => (
         <div className="working-detail">
           {actions.length ? <ol className="steps">{actions.map((step) => <StepRow key={step.id} step={step} />)}</ol> : null}
-          {thought?.detail ? <div className="thought live"><Markdown>{thought.detail}</Markdown></div> : null}
+          {thought?.detail ? (
+            <div className="thought live">
+              <p className="thought-head"><Brain size={12} aria-hidden="true" />Thinking</p>
+              <Markdown>{thought.detail}</Markdown>
+            </div>
+          ) : null}
           {!thought?.detail && !actions.length ? <p className="working-empty">{thought ? "Reasoning privately. The model hasn't shared its thoughts yet." : "Waiting on the model."}</p> : null}
         </div>
       )}</Collapse>

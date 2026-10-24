@@ -366,6 +366,12 @@ button.setting-row.sidebar-accent-option:focus-visible { outline-offset: -2px; }
 .provider-form .field > span { color: var(--secondary); font-size: var(--text-sm); font-weight: 500; }
 .provider-form input { width: 100%; height: 32px; padding: 0 12px; border: 1px solid var(--border); border-radius: var(--r-pill); background: var(--well); color: var(--ink); font-size: var(--text-md); outline: none; transition: border-color var(--dur-1) var(--ease), box-shadow var(--dur-1) var(--ease); }
 .provider-form input:focus { border-color: color-mix(in oklab, var(--accent) 70%, transparent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.provider-form select { width: 100%; height: 32px; padding: 0 12px; border: 1px solid var(--border); border-radius: var(--r-pill); background: var(--well); color: var(--ink); font-size: var(--text-md); outline: none; transition: border-color var(--dur-1) var(--ease), box-shadow var(--dur-1) var(--ease); }
+.provider-form select:focus { border-color: color-mix(in oklab, var(--accent) 70%, transparent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.provider-add { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 48px; padding: 10px 16px; border: 0; background: none; color: var(--secondary); font-size: var(--text-md); cursor: pointer; transition: background var(--dur-1) var(--ease), color var(--dur-1) var(--ease); }
+.provider-add svg { color: var(--tertiary); }
+.provider-add:hover { background: var(--hover); color: var(--ink); }
+.provider-add:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
 .provider-form .settings-note { margin: 0; }
 .provider-form-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
 .provider-key-link { min-width: 0; margin: 0 auto 0 -6px; font-size: var(--text-xs); }
@@ -390,15 +396,10 @@ button.setting-row.sidebar-accent-option:focus-visible { outline-offset: -2px; }
 .settings-dialog .extension-detail .permission-note { margin: 0 0 4px; }
 .settings-dialog .import-row { margin: 0 0 10px; }
 
-.settings-dialog .usage-embed-head { margin: 0 0 16px; padding: 0; }
-.settings-dialog .usage-scroll { display: flex; flex-direction: column; gap: 16px; }
-.settings-dialog .usage-plan, .settings-dialog .usage-summary, .settings-dialog .usage-providers, .settings-dialog .usage-activity, .settings-dialog .usage-details > section { padding: 16px; border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--surface-2); }
-.settings-dialog .usage-summary { padding: 6px 16px; }
-.settings-dialog .usage-summary > div { padding: 14px 12px; }
-.settings-dialog .usage-summary > div + div::before { top: 14px; bottom: 14px; }
-.settings-dialog .usage-summary strong { font-size: var(--text-xl); }
-.settings-dialog .usage-section-head { margin-bottom: 14px; }
-.settings-dialog .usage-details { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; padding: 0; }
+.settings-page-usage .settings-column { max-width: 960px; }
+.settings-section-head.is-usage { display: block; margin-bottom: 16px; padding-bottom: 0; border-bottom: 0; }
+.settings-section-head.is-usage .usage-page-title h3 { margin: 0; }
+.settings-dialog .usage-scroll { gap: 16px; }
 .settings-dialog .usage-details h2 { margin-bottom: 12px; }
 
 

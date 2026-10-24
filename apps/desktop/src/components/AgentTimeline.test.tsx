@@ -1,16 +1,20 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AgentTimeline, WorkingIndicator } from "./AgentTimeline";
 import { useAppStore } from "../lib/store";
 import { resetStore, seedStore } from "../test/store";
 import type { Thread, TranscriptItem } from "../lib/types";
 
-// Every agent message renders one mark, so counting marks counts message renders.
-const marks = vi.hoisted(() => ({ count: 0 }));
 vi.mock("./AgentPicker", () => ({
-  AgentMark: () => { marks.count += 1; return <span data-testid="agent-mark" />; },
+  AgentMark: () => <span data-testid="agent-mark" />,
 }));
+// Every message renders its text through Markdown once, so counting those renders counts message renders.
+const marks = vi.hoisted(() => ({ count: 0 }));
+vi.mock("./Markdown", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./Markdown")>();
+  return { Markdown: (props: Parameters<typeof actual.Markdown>[0]) => { marks.count += 1; return <actual.Markdown {...props} />; } };
+});
 vi.mock("./Orb", () => ({ Orb: ({ state, paused }: { state: string; paused?: boolean }) => <span data-testid="thinking-orb" data-state={state} data-paused={paused} /> }));
 
 describe("thinking orb preference", () => {
@@ -214,21 +218,59 @@ describe("AgentTimeline", () => {
     mount(thread({ items: [item({ tool: "edit_file", turnId: "t1", args: '{"path":"src/a.ts"}' })] }));
     expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
     expect(screen.queryByRole("button", { name: /Revert files/ })).toBeNull();
-    expect(screen.getByText(/without a saved file state/)).toBeInTheDocument();
+    // Undo is simply absent; the strip does not explain why.
+    expect(screen.queryByText(/Undo is unavailable|saved file state/)).toBeNull();
   });
 
   it("shows native snapshot files and Reapply even when a shell made the changes", () => {
     mount(thread({ snapshots: { t1: { snapshotId: "snap-1", sessionId: "s1", turnId: "t1", state: "undone", files: ["shell-created.txt"], reason: null, createdAt: 1 } }, items: [item({ tool: "bash", turnId: "t1", commandText: "create a file" })] }));
     expect(screen.getByText("Changed 1 file")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Reapply" })).toBeInTheDocument();
-    expect(screen.getByText(/Thread history is kept/)).toBeInTheDocument();
+    // The strip itself says the turn is undone, in place of Done.
+    expect(within(screen.getByRole("region", { name: "Done" })).getByText("Undone")).toBeInTheDocument();
   });
 
-  it("explains an unavailable snapshot even without file-edit tool records", () => {
+  it("fills a host that reports no turn usage with the derived step time", () => {
+    mount(thread({
+      agentId: "grok",
+      lastTurnId: "t1",
+      lastOutcome: "completed",
+      items: [
+        item({ itemId: "u1", kind: "userMessage", turnId: "t1", text: "go" }),
+        item({ itemId: "c1", tool: "bash", turnId: "t1", commandText: "npm test", durationMs: 9000 }),
+        item({ itemId: "e1", tool: "edit_file", turnId: "t1", args: JSON.stringify({ path: "src/a.ts" }), durationMs: 1000 }),
+      ],
+    }));
+    expect(screen.getByTitle("Sum of the step times the agent reported")).toHaveTextContent("~10s");
+  });
+
+  it("adds no receipt just to say a snapshot is unavailable", () => {
     mount(thread({ snapshots: { t1: { snapshotId: "snap-1", sessionId: "s1", turnId: "t1", state: "unavailable", files: [], reason: "Overlapping runs shared this workspace. Their changes cannot be separated.", createdAt: 1 } }, items: [item({ tool: "bash", turnId: "t1", commandText: "create a file" })] }));
-    expect(screen.getByText(/Overlapping runs shared/)).toBeInTheDocument();
+    expect(screen.queryByText(/Overlapping runs shared/)).toBeNull();
+    expect(screen.queryByRole("region", { name: "Done" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
     expect(screen.queryByText(/Changed 0 files/)).toBeNull();
+  });
+
+  it("keeps a live turn's work open, then folds it above the answer once the turn settles", () => {
+    const items = [
+      item({ itemId: "u1", kind: "userMessage", turnId: "t1", text: "Fix the flaky login test" }),
+      item({ itemId: "m1", kind: "agentMessage", turnId: "t1", text: "Reading the guide first" }),
+      item({ itemId: "c1", tool: "read_file", turnId: "t1", args: JSON.stringify({ path: "src/a.ts" }), durationMs: 2000 }),
+      item({ itemId: "m2", kind: "agentMessage", turnId: "t1", text: "Found the race" }),
+    ];
+    const view = mount(thread({ status: "running", activeTurnId: "t1", items }));
+    expect(screen.getByText("Reading the guide first").closest(".trace-note")).not.toBeNull();
+    expect(document.querySelector(".trace-head")).toBeNull();
+    expect(screen.getAllByTestId("agent-mark")).toHaveLength(1);
+    view.unmount();
+    mount(thread({ lastTurnId: "t1", lastOutcome: "completed", items }));
+    expect(screen.queryByText("Reading the guide first")).toBeNull();
+    expect(screen.getByText("Found the race").closest(".msg.agent")).not.toBeNull();
+    const fold = screen.getByRole("button", { name: /Worked for/ });
+    expect(fold).toHaveAttribute("data-holds", "m1");
+    fireEvent.click(fold);
+    expect(screen.getByText("Reading the guide first")).toBeInTheDocument();
   });
 
   it("labels an in-progress tool call as Running", () => {
@@ -264,7 +306,8 @@ describe("AgentTimeline", () => {
     seedStore({ threads: [first], selectedSessionId: first.sessionId });
     marks.count = 0;
     const { rerender } = render(<AgentTimeline thread={first} />);
-    expect(marks.count).toBe(turns + 1);
+    // Each settled turn's question and answer, then the live question and the message being written.
+    expect(marks.count).toBe(turns * 2 + 2);
 
     marks.count = 0;
     const next = make("Working on it, and more");

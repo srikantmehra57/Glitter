@@ -9,8 +9,9 @@ import { buildSuggestionPrompt, cheapestModel, parseSuggestions, suggestionSigna
 import { stepZoom } from "./zoom";
 import { asLedger, compact, EMPTY_LEDGER, recordTurn, turnEntry, type UsageLedger } from "./usageLedger";
 import { persistableDrafts, rememberPrompt, NewerSessionMemoryError, SessionMemoryPersistence, SESSION_MEMORY_VERSION, type Draft, type SessionMemory, type ThreadMeta } from "./sessionMemory";
-import { acpConsentGet, acpConsentSet, agentIdentities, bridge, catalogInstall, catalogList, catalogRemove, cliLogout, confirmAgentBin, credentialGet, credentialSet, enterpriseStatus, gitCommit, gitDiscardAll, gitDiscardFiles, gitDiscardHunk, gitInit, gitReview, gitBranches, gitPull, gitPullRequest, gitPush, gitSnapshot, gitStage, gitSwitch, gitWorktreeCreate, gitWorktreeHandoff, gitWorktreeRemove, turnSnapshots, restoreTurnSnapshot, forgetTurnSnapshots, listWorkspaceFiles, MOCK_FILES, mockThreads, mockWorkspaceFile, mockWorktree, readWorkspaceFile, onBridgeEvent, onWindowCloseRequested, persistStoreDocument, pickFolder, pickPluginBundle, pickSkillSource, pluginInstall, pluginList, projectInit, readDroppedPaths, removeGrant, repairStoreDocument, setInterfaceZoom, setWindowAppearance, setMenuShortcuts, skillImport, skillInstall, skillList, skillUninstall, trustPreview, verifyGrants, type BridgeEventPayloads } from "./bridge";
+import { acpConsentGet, acpConsentSet, agentIdentities, bridge, catalogInstall, catalogList, catalogRemove, cliLogout, confirmAgentBin, credentialGet, credentialSet, enterpriseStatus, gitCommit, gitDiscardAll, gitDiscardFiles, gitDiscardHunk, gitInit, gitReview, gitBranches, gitPull, gitPullRequest, gitPush, gitSnapshot, gitStage, gitSwitch, gitWorktreeCreate, gitWorktreeHandoff, gitWorktreeRemove, turnSnapshots, restoreTurnSnapshot, forgetTurnSnapshots, listWorkspaceFiles, MOCK_FILES, mockThreads, mockWorkspaceFile, mockWorktree, providerKeysGet, readWorkspaceFile, onBridgeEvent, onWindowCloseRequested, persistStoreDocument, pickFolder, pickPluginBundle, pickSkillSource, pluginInstall, pluginList, projectInit, readDroppedPaths, removeGrant, repairStoreDocument, setInterfaceZoom, setWindowAppearance, setMenuShortcuts, skillImport, skillInstall, skillList, skillUninstall, trustPreview, verifyGrants, type BridgeEventPayloads } from "./bridge";
 import { MOCK_AGENT_MODELS, MOCK_AGENTS, MOCK_GIT, MOCK_MODELS, mockGitReview } from "./mock";
+import { PROVIDER_IDS, type ProviderStatus } from "./providers";
 import { clampTier, modelFor, tiersFor } from "./effort";
 import { dropHunk, parseUnifiedDiff, reviewTarget } from "./diff";
 import { MAX_DROP_FILES, MAX_IMAGE_BYTES, refPathForDrop } from "./drop";
@@ -302,6 +303,12 @@ type AppStore = Settings & {
   detectionChecked: boolean;
   preview: boolean;
   detection: Detection | null;
+  /** Provider keychain status: connected built-ins, and the custom endpoints with their names. */
+  providerStatus: ProviderStatus[] | null;
+  /** The Providers page's read error; other surfaces fall back to ids alone. */
+  providerStatusError: string | null;
+  /** Re-read the provider keychain status (connection, key hint, custom names and wires). */
+  refreshProviders: () => Promise<void>;
   /** Last CLI release-channel check; null until the first check settles. */
   cliUpdate: CliUpdateStatus | null;
   cliUpdateLoading: boolean;
@@ -789,7 +796,7 @@ function recordUsage(get: () => AppStore, set: (patch: Partial<AppStore>) => voi
   const entry = turnEntry(thread);
   if (!entry) return;
   const existing = state.usageLedger.turns.find((turn) => turn.key === entry.key);
-  if (existing && existing.inputTokens === entry.inputTokens && existing.cachedTokens === entry.cachedTokens && existing.outputTokens === entry.outputTokens && existing.estimated === entry.estimated) return;
+  // Late reports can add duration, cache or trajectory detail even when the totals match.
   set({ usageLedger: recordTurn(state.usageLedger, existing ? { ...entry, at: existing.at } : entry) });
   scheduleLedger(get);
 }
@@ -954,12 +961,14 @@ function withLateUsage(thread: Thread): Thread {
   if (thread.status === "running" || !thread.turnStats || thread.turnStartOutput == null) return thread;
   const outputTokens = turnTokens(thread);
   const inputTokens = thread.turnStartPrompt == null ? undefined : turnPromptTokens(thread);
-  const cachedTokens = thread.turnStartCache == null ? 0 : turnCacheTokens(thread);
+  const cachedTokens = turnCacheTokens(thread);
+  // The ledger's input total includes the separately-reported cache, just as finishTurn's does.
+  const combinedInput = inputTokens == null ? undefined : inputTokens + cachedTokens;
   const outputChanged = !!outputTokens && outputTokens !== thread.turnStats.outputTokens;
-  const inputChanged = inputTokens != null && inputTokens !== thread.turnStats.inputTokens;
+  const inputChanged = combinedInput != null && combinedInput !== thread.turnStats.inputTokens;
   const cacheChanged = cachedTokens !== (thread.turnStats.cachedTokens ?? 0);
   if (!outputChanged && !inputChanged && !cacheChanged) return thread;
-  return { ...thread, turnStats: { ...thread.turnStats, ...(outputChanged && outputTokens ? { outputTokens, estimated: false } : {}), ...(inputChanged && inputTokens != null ? { inputTokens } : {}), ...(cacheChanged ? { cachedTokens: cachedTokens || undefined } : {}) } };
+  return { ...thread, turnStats: { ...thread.turnStats, ...(outputChanged && outputTokens ? { outputTokens, estimated: false } : {}), ...(inputChanged ? { inputTokens: combinedInput } : {}), cachedTokens: cachedTokens || undefined } };
 }
 
 /** Error text the renderer keys on to offer a one-click folder re-open. */
@@ -1242,6 +1251,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
   detectionChecked: false,
   preview: false,
   detection: null,
+  providerStatus: null,
+  providerStatusError: null,
   cliUpdate: null,
   cliUpdateLoading: false,
   cliUpdateError: null,
@@ -1431,9 +1442,11 @@ export const useAppStore = create<AppStore>((set, get) => ({
         // remains — agent detection (which spawns CLIs), starting the host,
         // listing threads, reopening the last one — takes as long as it takes,
         // and used to hold the whole window on a boot screen until it finished.
-        // Detection starts first so listing and sending can wait on it.
+        // Detection starts first so listing and sending can wait on it. Provider
+        // status (custom endpoint names included) is a cheap local read.
         const detecting = get().refreshDetection();
         detecting.catch(() => {});
+        void get().refreshProviders();
         // Selection, draft and the changes dock need nothing from the host.
         const restoreId = memory.selectedWorkspaceId && get().workspaces.some((workspace) => workspace.id === memory.selectedWorkspaceId)
           ? memory.selectedWorkspaceId
@@ -1511,6 +1524,15 @@ export const useAppStore = create<AppStore>((set, get) => ({
     const project = get().drafts[projectKey];
     if (project?.config?.agentId && !agentEnabled(get(), project.config.agentId)) {
       set({ drafts: { ...get().drafts, [projectKey]: { ...project, config: { ...project.config, agentId: undefined } } } });
+    }
+  },
+
+  refreshProviders: async () => {
+    try {
+      set({ providerStatus: await providerKeysGet(PROVIDER_IDS), providerStatusError: null });
+    } catch (error) {
+      // Pickers fall back to ids alone; the Providers page shows the error.
+      set({ providerStatusError: describeError("Could not read saved providers", error) });
     }
   },
 
@@ -4337,7 +4359,7 @@ export function bindBridgeEvents() {
       const shifted = (data.config.modelId !== undefined && data.config.modelId !== prior?.modelId) || (data.config.mode !== undefined && data.config.mode !== prior?.mode);
       if (store.selectedSessionId === data.sessionId && shifted) void useAppStore.getState().refreshModels();
     }
-    if (event === "sessionFacts") {
+    if (event === "sessionFacts" || event === "usage") {
       const data = payload as BridgeEventPayloads["sessionFacts"];
       update(data.sessionId, (thread) => withLateUsage({ ...thread, plan: data.plan ?? thread.plan, planAnchor: data.plan ? planAnchorFor(thread, data.plan) : thread.planAnchor, goal: data.goal ?? thread.goal, context: data.context ?? thread.context, usage: data.usage ?? thread.usage, hostBranch: data.branch ?? thread.hostBranch }));
       // Usage reported after the turn ended replaces that turn's estimate in the ledger.

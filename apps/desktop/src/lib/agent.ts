@@ -400,6 +400,51 @@ function clip(text: string, max: number) {
   return flat.length > max ? `${flat.slice(0, max - 1).trimEnd()}…` : flat;
 }
 
+/** The buckets the activity summary bar draws, in draw order. */
+export type ActivityBucket = "thinking" | "files" | "commands" | "other";
+
+export type ActivitySummary = {
+  steps: number;
+  thoughts: number;
+  edits: number;
+  /** Distinct paths touched by reads and edits. */
+  files: number;
+  commands: number;
+  failures: number;
+  durationMs: number;
+  /** Step counts per bucket, unnormalized; the bar draws them as flex shares. */
+  shares: Record<ActivityBucket, number>;
+};
+
+/** What a run's collapsed activity row says: counts of what happened, from the steps the host reported. */
+export function activitySummary(steps: AgentStep[]): ActivitySummary {
+  const files = new Set<string>();
+  const shares: Record<ActivityBucket, number> = { thinking: 0, files: 0, commands: 0, other: 0 };
+  let thoughts = 0;
+  let edits = 0;
+  let commands = 0;
+  let failures = 0;
+  let durationMs = 0;
+  for (const step of steps) {
+    if (step.kind === "reasoning") {
+      thoughts += 1;
+      shares.thinking += 1;
+    } else if (step.kind === "read" || step.kind === "edit") {
+      if (step.kind === "edit") edits += 1;
+      if (step.path) files.add(step.path);
+      shares.files += 1;
+    } else if (step.kind === "command") {
+      commands += 1;
+      shares.commands += 1;
+    } else {
+      shares.other += 1;
+    }
+    if (step.status === "failed") failures += 1;
+    durationMs += step.durationMs ?? 0;
+  }
+  return { steps: steps.length, thoughts, edits, files: files.size, commands, failures, durationMs, shares };
+}
+
 /**
  * What the agent is doing right now, in words, for the live status line (like Claude desktop):
  * the newest running step of the current turn — "Reading store.ts", "Running npm test", or

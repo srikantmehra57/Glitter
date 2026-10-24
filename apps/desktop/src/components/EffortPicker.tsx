@@ -40,8 +40,8 @@ export function EffortGauge({ tier, size = 16 }: { tier: ReasoningEffort; size?:
 
 /**
  * Reasoning effort, apart from the model. The chip names the level beside its
- * dial; a click opens a menu of the model's levels, each with its dial and
- * what it trades, and the model's own default tagged. The left and right arrows on the closed chip
+ * dial; a click opens a menu of the model's levels, each with its dial, and
+ * the model's own default tagged. The left and right arrows on the closed chip
  * step the level without opening anything.
  */
 export function EffortPicker({ value, tiers, fallback, disabled, applying, onChange }: Props) {
@@ -87,7 +87,6 @@ export function EffortPicker({ value, tiers, fallback, disabled, applying, onCha
         options={tiers.map((tier) => ({
           value: tier,
           label: TIER_COPY[tier].label,
-          description: TIER_COPY[tier].blurb,
           icon: <EffortGauge tier={tier} size={20} />,
           tag: tier === fallback ? "Default" : undefined,
         }))}

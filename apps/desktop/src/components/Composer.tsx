@@ -4,12 +4,14 @@ import { useShallow } from "zustand/react/shallow";
 import { ArrowUp, AtSign, FileText, FileUp, GitBranch, Hammer, Lock, Paperclip, Play, RotateCcw, ShieldAlert, ShieldCheck, Square, Terminal, TriangleAlert, X } from "lucide-react";
 import { ACP_APPROVAL_DESCRIPTIONS, ACP_APPROVAL_ORDER, AGENT_LABELS, APPROVAL_DESCRIPTIONS, APPROVAL_LABELS, APPROVAL_ORDER, HARNESS_APPROVAL_ORDER, agentEnabled, approvalModeForAgent, type ApprovalMode, type ContextRef, type Thread, type TranscriptItem } from "../lib/types";
 import { defaultTier, isPeak, modelFor, tiersFor, withUnlistedModels } from "../lib/effort";
-import { formatTokens, humanizeModelLabel, isTauri, uid } from "../lib/format";
+import { contextComposition, formatShare, formatTokens, humanizeModelLabel, isTauri, uid } from "../lib/format";
 import { fuzzyScore } from "../lib/fuzzy";
 import { listen } from "@tauri-apps/api/event";
 import { acceptsBusySend, activeAgentId, activeConfig, currentThread, currentWorkspace, useAppStore } from "../lib/store";
 import { runBuiltinCommand } from "../lib/commands";
 import { estimateCost, formatCost } from "../lib/cost";
+import { groupUsage, ledgerSlices } from "../lib/usageLedger";
+import { customProviders, providerName } from "../lib/providers";
 import { ModelPicker, modelKey } from "./ModelPicker";
 import { EffortPicker } from "./EffortPicker";
 import { SelectMenu } from "./SelectMenu";
@@ -107,6 +109,7 @@ function ComposerView({ above }: { above?: ReactNode }) {
     contextRefs: state.contextRefs,
     git: state.git,
     fileIndex: state.fileIndex,
+    providerStatus: state.providerStatus,
     setComposer: state.setComposer,
     handoffWorktree: state.handoffWorktree,
     customCommands: state.customCommands,
@@ -128,6 +131,7 @@ function ComposerView({ above }: { above?: ReactNode }) {
     refreshModels: state.refreshModels,
     setSessionConfig: state.setSessionConfig,
     compactThread: state.compactThread,
+    usageLedger: state.usageLedger,
     continueThread: state.continueThread,
     retryLast: state.retryLast,
     startHost: state.startHost,
@@ -170,8 +174,15 @@ function ComposerView({ above }: { above?: ReactNode }) {
     [agentId, catalog, config.modelId, config.providerId, s.defaultModel, s.defaultProviderId],
   );
   const model = modelFor(models, config);
-  // The built-in agent is addressed by its model, the way the picker shows it; a CLI agent by its own name.
-  const speaker = agentId === "harness" && model ? humanizeModelLabel(model.modelId, model.displayLabel) : agentName;
+  const customProviderList = useMemo(() => customProviders(s.providerStatus ?? []), [s.providerStatus]);
+  // The built-in agent is addressed by its model, the way the picker shows it.
+  // Before any model resolves, the connected provider names it; with none
+  // connected it is "the built-in agent" — never the code name.
+  const connectedProvider = s.providerStatus?.find((row) => row.configured);
+  const fallbackSpeaker = agentId === "harness"
+    ? connectedProvider ? providerName(connectedProvider.id, customProviderList) : "the built-in agent"
+    : agentName;
+  const speaker = agentId === "harness" && model ? humanizeModelLabel(model.modelId, model.displayLabel) : fallbackSpeaker;
   const tiers = tiersFor(model, agentId);
   const fallbackTier = defaultTier(model, tiers);
   const peak = isPeak(config.effort ?? fallbackTier, tiers);
@@ -222,8 +233,20 @@ function ComposerView({ above }: { above?: ReactNode }) {
   const slashListId = useId();
   const context = thread?.context;
   const contextPercent = context?.windowTokens && context.usedTokens != null ? Math.min(100, Math.round((context.usedTokens / context.windowTokens) * 100)) : null;
-  const remainingTokens = context?.windowTokens != null && context.usedTokens != null ? Math.max(0, context.windowTokens - context.usedTokens) : null;
+  const composition = context ? contextComposition(context) : null;
   const threadCost = thread?.usage && model ? estimateCost(thread.usage, model.cost) : undefined;
+  const todayModels = useMemo(() => {
+    const now = Date.now();
+    const start = new Date(now);
+    start.setHours(0, 0, 0, 0);
+    const groups = groupUsage(ledgerSlices(s.usageLedger).filter((slice) => slice.at >= start.getTime() && slice.at <= now), (slice) => slice.modelId);
+    const total = groups.reduce((sum, group) => sum + group.inputTokens + group.outputTokens, 0);
+    return groups.filter((group) => group.inputTokens + group.outputTokens > 0).slice(0, 4).map((group, index) => {
+      const tokens = group.inputTokens + group.outputTokens;
+      const name = group.id.includes("/") ? group.id.slice(group.id.lastIndexOf("/") + 1) : group.id;
+      return { id: group.id, label: name, tokens, share: total ? tokens / total : 0, slot: index < 5 ? index + 1 : 0, approx: group.estimatedTurns ? "≈" : "" };
+    });
+  }, [s.usageLedger]);
   // The host's pressure flag can lag behind (or disagree with) the real numbers, so the
   // warning follows what the user can see: only "blocked" is taken from the host as-is.
   const contextLevel = contextPercent == null ? "" : context?.pressure === "blocked" || contextPercent >= 95 ? "blocked" : contextPercent >= 80 ? "warning" : "";
@@ -758,6 +781,7 @@ function ComposerView({ above }: { above?: ReactNode }) {
               models={models}
               agentId={agentId}
               agents={pickerAgents}
+              customProviders={customProviderList}
               agentDisabled={Boolean(busy || running || !workspace)}
               value={modelValue}
               loading={s.modelsLoading || s.modelsAgentId !== agentId || s.booting}
@@ -803,7 +827,7 @@ function ComposerView({ above }: { above?: ReactNode }) {
                     value: mode,
                     label: APPROVAL_LABELS[mode],
                     description: (cliAgent ? ACP_APPROVAL_DESCRIPTIONS[mode] : undefined) ?? APPROVAL_DESCRIPTIONS[mode],
-                    icon: mode === "allowAll" ? <TriangleAlert size={14} aria-hidden="true" /> : mode === "denyUnmatched" ? <Lock size={14} aria-hidden="true" /> : mode === "guarded" ? <ShieldAlert size={14} aria-hidden="true" /> : <ShieldCheck size={14} aria-hidden="true" />,
+                    icon: mode === "allowAll" ? <TriangleAlert size={15} aria-hidden="true" /> : mode === "denyUnmatched" ? <Lock size={15} aria-hidden="true" /> : mode === "guarded" ? <ShieldAlert size={15} aria-hidden="true" /> : <ShieldCheck size={15} aria-hidden="true" />,
                     ...(mode === "allowAll" ? { tone: "danger" as const } : {}),
                   }))}
                   disabled={locked}
@@ -862,17 +886,30 @@ function ComposerView({ above }: { above?: ReactNode }) {
                   <span>{contextPercent}%</span>
                 </button>
                 <div id="context-details" className={`context-popover ${contextLevel}`} role="tooltip">
-                  <div className="context-pop-head"><span>Context window</span><strong>{contextPercent}<small>%</small></strong></div>
-                  <div className="context-bar" aria-hidden="true"><span style={{ width: `${contextPercent}%` }} /></div>
-                  <dl className="context-stats">
-                    <div><dt>Used</dt><dd title={context.usedTokens?.toLocaleString("en-US")}>{formatTokens(context.usedTokens ?? 0)}</dd></div>
-                    <div><dt>Remaining</dt><dd title={remainingTokens?.toLocaleString("en-US")}>{formatTokens(remainingTokens ?? 0)}</dd></div>
-                    {context.cacheReadTokens ? <div><dt>Cached</dt><dd title={context.cacheReadTokens.toLocaleString("en-US")}>{formatTokens(context.cacheReadTokens)}</dd></div> : null}
-                    {context.cacheWriteTokens ? <div><dt>Cache write</dt><dd title={context.cacheWriteTokens.toLocaleString("en-US")}>{formatTokens(context.cacheWriteTokens)}</dd></div> : null}
-                    {threadCost != null && model ? <div><dt>Est. cost</dt><dd title={`Estimated from reported usage at ${humanizeModelLabel(model.modelId, model.displayLabel)} rates`}>{formatCost(threadCost, model.cost?.currency)}</dd></div> : null}
-                  </dl>
-                  {contextLevel ? <span className={`context-pressure ${contextLevel}`}><TriangleAlert size={12} aria-hidden="true" />{contextLevel === "blocked" ? "Context limit reached. Compact or start a new thread to continue." : "Context is getting full. Older turns may be compacted."}</span>
-                    : <span className="context-foot">{formatTokens(context.windowTokens ?? 0)} token window</span>}
+                  <div className="context-pop-head"><span>Context window</span><strong>{formatTokens(context.usedTokens ?? 0)}/{formatTokens(context.windowTokens ?? 0)} ({formatShare(context.usedTokens ?? 0, context.windowTokens ?? 0)})</strong></div>
+                  <div className="context-bar" aria-hidden="true">
+                    {composition?.partitioned ? composition.parts.map((part) => <span key={part.id} data-part={part.id} style={{ width: `${((part.tokens / (context.windowTokens ?? 1)) * 100)}%` }} />) : <span data-part="used" style={{ width: `${contextPercent}%` }} />}
+                  </div>
+                  {composition?.parts.length ? <ul className="context-parts">
+                    {composition.parts.map((part) => <li key={part.id}><i className="context-dot" data-part={part.id} aria-hidden="true" /><span>{part.label}</span><span title={part.tokens.toLocaleString("en-US")}>{composition.partitioned ? formatShare(part.tokens, context.usedTokens ?? 0) : formatTokens(part.tokens)}</span></li>)}
+                  </ul> : null}
+                  {composition?.hitRate != null || (threadCost != null && model) ? <div className="context-group">
+                    {composition?.hitRate != null ? <div className="context-rate"><span>Average cache hit rate</span><strong>{formatShare(composition.hitRate, 1)}</strong></div> : null}
+                    {threadCost != null && model ? <div className="context-rate"><span>Est. cost</span><strong title={`Estimated from reported usage at ${humanizeModelLabel(model.modelId, model.displayLabel)} rates`}>{formatCost(threadCost, model.cost?.currency)}</strong></div> : null}
+                  </div> : null}
+                  {todayModels.length ? <div className="context-group">
+                    <div className="context-pop-head"><span>Today</span></div>
+                    <div className="context-today">
+                      {todayModels.map((item) => (
+                        <div key={item.id} className="context-today-model">
+                          <span className="context-today-name">{item.label}</span>
+                          <span className="context-today-meta">{item.approx}{formatTokens(item.tokens)} · {formatShare(item.share, 1)}</span>
+                          <span className="context-today-bar" data-slot={item.slot} aria-hidden="true"><span style={{ width: `${Math.min(100, item.share * 100)}%` }} /></span>
+                        </div>
+                      ))}
+                    </div>
+                  </div> : null}
+                  {contextLevel ? <span className={`context-pressure ${contextLevel}`}><TriangleAlert size={12} aria-hidden="true" />{contextLevel === "blocked" ? "Context limit reached. Compact or start a new thread to continue." : "Context is getting full. Older turns may be compacted."}</span> : null}
                   {thread && !thread.agentId && !s.preview ? <button type="button" className="ghost-btn small context-compact" disabled={thread.status === "running"} title={thread.status === "running" ? "Compact when the turn finishes" : "Compact this thread's context now"} onClick={() => { setContextOpen(false); void s.compactThread(); }}>Compact now</button> : null}
                 </div>
               </div>

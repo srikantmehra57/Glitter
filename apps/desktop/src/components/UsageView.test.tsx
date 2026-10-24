@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { act, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { UsageView } from "./UsageView";
 import { useAppStore } from "../lib/store";
@@ -34,7 +34,7 @@ function seed(extra: Record<string, unknown> = {}) {
 }
 
 describe("UsageView", () => {
-  beforeEach(() => { resetStore(); refresh.mockClear(); });
+  beforeEach(() => { resetStore(); refresh.mockReset(); refresh.mockResolvedValue(undefined); });
 
   it("breaks the period down by provider, from the recorded ledger", () => {
     seed();
@@ -47,8 +47,38 @@ describe("UsageView", () => {
     expect(rows[0]).toHaveTextContent("75%");
     expect(rows[2]).toHaveTextContent("≈0 out");
     expect(screen.getByRole("img", { name: "Anthropic 75%, OpenAI 25%" })).toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "Usage summary" })).toHaveTextContent("Tokens≈10K");
+    const summary = screen.getByRole("region", { name: "Usage summary" });
+    expect(summary).toHaveTextContent("Total tokens");
+    expect(summary).toHaveTextContent("≈10K");
+    expect(within(summary).getByText("10K")).toBeInTheDocument();
+    expect(within(summary).getByLabelText("10s")).toHaveTextContent("0 m");
+    expect(within(summary).getAllByLabelText("1 day")).toHaveLength(2);
     expect(screen.getByText(/≈ marks 1 turn whose agent reported no counts/)).toBeInTheDocument();
+  });
+
+  it("switches the activity grain and the trend range, and shares models on the donut", () => {
+    seed();
+    render(<UsageView embedded />);
+    expect(screen.getByRole("tab", { name: "Daily" })).toHaveAttribute("aria-selected", "true");
+    const grid = screen.getByRole("grid", { name: "Daily token activity" });
+    const cells = within(grid).getAllByRole("gridcell");
+    expect(cells).toHaveLength(53 * 7);
+    expect(cells.filter((cell) => cell.getAttribute("data-level") === "4")).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("tab", { name: "Weekly" }));
+    expect(screen.getByRole("grid", { name: "Weekly token activity" })).toBeInTheDocument();
+
+    expect(screen.getByRole("img", { name: /Daily token trend, last 7 days/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "Last 30 days" }));
+    expect(screen.getByRole("img", { name: /Daily token trend, last 30 days/ })).toBeInTheDocument();
+
+    const models = screen.getByRole("region", { name: "Model usage" });
+    expect(models).toHaveTextContent("claude-sonnet-5");
+    expect(models).toHaveTextContent("75%");
+    expect(models).toHaveTextContent("gpt-5.5");
+    expect(models).toHaveTextContent("25%");
+    expect(models).toHaveTextContent("≈0 tokens");
+    expect(within(models).getByRole("img", { name: "claude-sonnet-5 75%, gpt-5.5 25%" })).toBeInTheDocument();
   });
 
   it("lists every model call behind a recent Harness turn", () => {
@@ -80,8 +110,78 @@ describe("UsageView", () => {
   it("shows nothing when nothing is recorded, rather than stale estimates", () => {
     seed({ usageLedger: { version: 1, turns: [], days: [] } });
     render(<UsageView embedded />);
+    const summary = screen.getByRole("region", { name: "Usage summary" });
+    expect(within(summary).getAllByText("0")).toHaveLength(2);
+    expect(within(summary).getByLabelText("0 minutes")).toHaveTextContent("0 m");
+    expect(within(summary).getAllByLabelText("0 days")).toHaveLength(2);
+    const chart = screen.getByRole("img", { name: "Daily token trend, last 7 days. No tokens in this range" });
+    expect(chart.querySelector("path")).toBeNull();
     expect(screen.getByText("Each provider's share appears here after your first turn.")).toBeInTheDocument();
+    expect(screen.getByText("Models appear after your first turn.")).toBeInTheDocument();
+    expect(screen.getByText("Trends appear after your first turn.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Clear history" })).toBeDisabled();
+  });
+
+  it("adds rolled-up ledger days to the totals, and only to a range that contains them", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 9, 23, 15, 0, 0));
+    try {
+      const dayLabel = (date: Date) => date.toLocaleDateString([], { month: "short", day: "numeric" });
+      seed({ usageLedger: { version: 1, turns: [
+        turn({ at: Date.now() - 3_600_000, inputTokens: 1_000, outputTokens: 200, durationMs: 12 * 60_000, threadId: "today", key: "today" }),
+      ], days: [{
+        day: "2026-10-01",
+        agentId: "harness",
+        providerId: "anthropic",
+        modelId: "anthropic/claude-sonnet-5",
+        turns: 2,
+        estimatedTurns: 0,
+        inputTokens: 200_000,
+        cachedTokens: 0,
+        outputTokens: 22_200,
+        durationMs: 0,
+        tools: { bash: 4 },
+      }] } });
+      render(<UsageView embedded />);
+      const summary = screen.getByRole("region", { name: "Usage summary" });
+      expect(within(summary).getByText("223.4K")).toBeInTheDocument();
+      expect(within(summary).getByText("222.2K")).toBeInTheDocument();
+      expect(within(summary).getByLabelText("12m 0s")).toHaveTextContent("12 m");
+      expect(screen.getByText("4 runs")).toBeInTheDocument();
+
+      const week = screen.getByRole("img", { name: /Daily token trend, last 7 days/ });
+      expect(week).toHaveAttribute("aria-label", expect.stringContaining("claude-sonnet-5 1.2K"));
+      expect(week.getAttribute("aria-label")).not.toContain("223.4K");
+      expect(week.querySelector("path")?.getAttribute("d")).toMatch(/^M /);
+      expect([...document.querySelectorAll(".usage-chart-labels span")].map((node) => node.textContent)).toEqual(
+        Array.from({ length: 7 }, (_, index) => dayLabel(new Date(2026, 9, 17 + index))),
+      );
+
+      fireEvent.click(screen.getByRole("tab", { name: "Last 30 days" }));
+      const month = screen.getByRole("img", { name: "Daily token trend, last 30 days. claude-sonnet-5 223.4K" });
+      expect(month.querySelector("path")).toBeTruthy();
+      const labels = [...document.querySelectorAll(".usage-chart-labels span")].map((node) => node.textContent);
+      expect(labels[0]).toBe(dayLabel(new Date(2026, 8, 24)));
+      expect(labels[labels.length - 1]).toBe(dayLabel(new Date(2026, 9, 23)));
+
+      const active = within(screen.getByRole("grid", { name: "Daily token activity" })).getAllByRole("gridcell").filter((cell) => cell.getAttribute("data-level") !== "0");
+      expect(active).toHaveLength(2);
+      expect(active.filter((cell) => cell.getAttribute("data-level") === "4")).toHaveLength(1);
+      expect(active.some((cell) => cell.getAttribute("aria-label")?.includes("222.2K"))).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("refreshes the visible page and forces a fresh subscription reading", async () => {
+    seed({
+      agents: [{ id: "muse", name: "Muse", protocol: "msp", found: true, path: "/bin/muse", version: "1.3.0", verified: true, signIn: "", authenticated: true }],
+    });
+    render(<UsageView embedded />);
+    expect(refresh).toHaveBeenCalled();
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Refresh" })); });
+    expect(refresh).toHaveBeenCalledWith(true);
+    expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled();
   });
 
   it("clears the history after confirming", async () => {

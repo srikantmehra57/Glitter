@@ -102,14 +102,15 @@ export function SelectMenu({
         Math.max(220, popover.offsetWidth));
       const width = style.getPropertyValue("--select-match-width").trim() === "true"
         ? anchor.right - anchor.left : Math.max(anchor.right - anchor.left, naturalWidth);
-      // A short list of described rows (effort levels) may opt out of the usual cap rather than scroll.
+      // A short list may opt out of the usual cap rather than scroll.
       const maxHeight = Number.parseFloat(style.getPropertyValue("--select-max-height")) || 340;
       // Measure the height at the width the menu will have: descriptions wrap
       // more once it narrows, and a height taken at its natural width cuts off
-      // the last rows.
+      // the last rows. scrollHeight omits the border, and the popover is
+      // border-box, so sizing to scrollHeight alone clips the last row's padding.
       const before = popover.style.width;
       popover.style.width = `${width}px`;
-      const contentHeight = popover.scrollHeight;
+      const contentHeight = Math.ceil(popover.scrollHeight + popover.offsetHeight - popover.clientHeight);
       popover.style.width = before;
       setPosition({ ...menuPosition(anchor, { width, height: Math.min(maxHeight, contentHeight) }, bounds,
         style.getPropertyValue("--select-side").trim() === "bottom", style.getPropertyValue("--select-align").trim() === "right"), position: modal ? "absolute" : "fixed" });

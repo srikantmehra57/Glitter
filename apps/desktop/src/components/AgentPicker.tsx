@@ -34,9 +34,9 @@ function Mark({ brand, size }: { brand: BrandMark; size: number }) {
   return <span className={`agent-mark ${brand.tone}`} style={{ width: size, height: size, fontSize: size * (brand.glyph.length > 1 ? 0.42 : 0.62) }} aria-hidden="true">{brand.glyph}</span>;
 }
 
-/** A harness provider, as its own logo. These are not the Harness agent. */
-export function ProviderMark({ id, size = 16 }: { id: string; size?: number }) {
-  return <Mark brand={providerBrand(id)} size={size} />;
+/** A harness provider, as its own logo. These are not the Harness agent. A custom endpoint takes its name, so its mark is its initials. */
+export function ProviderMark({ id, size = 16, name }: { id: string; size?: number; name?: string }) {
+  return <Mark brand={providerBrand(id, name)} size={size} />;
 }
 
 /** The model family's logo, or a short letter when the lab has no mark on file. */
@@ -50,18 +50,19 @@ export function ModelMark({ modelId, providerId, size = 16 }: { modelId: string;
  * A model row's icon: the model family's logo, else its provider's, else
  * `fallback` (the agent's own mark, for an agent that serves only its own). With
  * `badge`, the provider rides in the corner, for lists that mix providers.
+ * `hostName` names a custom endpoint, so its mark is not a bare letter.
  */
-export function ModelIcon({ modelId, providerId, size = 16, badge = false, fallback = null }: { modelId: string; providerId?: string; size?: number; badge?: boolean; fallback?: ReactNode }) {
+export function ModelIcon({ modelId, providerId, size = 16, badge = false, fallback = null, hostName }: { modelId: string; providerId?: string; size?: number; badge?: boolean; fallback?: ReactNode; hostName?: string }) {
   const family = modelBrand(modelId, providerId);
-  const icon = family ? <Mark brand={family} size={size} /> : providerId ? <ProviderMark id={providerId} size={size} /> : fallback;
+  const icon = family ? <Mark brand={family} size={size} /> : providerId ? <ProviderMark id={providerId} size={size} name={hostName} /> : fallback;
   // The badge says something only when the provider is not the family itself (Claude via Anthropic).
-  const host = providerId ? providerBrand(providerId) : null;
+  const host = providerId ? providerBrand(providerId, hostName) : null;
   const same = Boolean(family && host && "slug" in host && "slug" in family && host.slug === family.slug);
   if (!badge || !family || !providerId || same) return icon;
   return (
     <span className="model-icon-stack" style={{ width: size, height: size }} aria-hidden="true">
       {icon}
-      <span className="model-icon-badge"><ProviderMark id={providerId} size={Math.round(size * 0.5)} /></span>
+      <span className="model-icon-badge"><ProviderMark id={providerId} size={Math.round(size * 0.5)} name={hostName} /></span>
     </span>
   );
 }

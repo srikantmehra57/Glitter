@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { asLedger, compact, dayKey, EMPTY_LEDGER, groupUsage, ledgerSlices, MAX_CALL_TURNS, MAX_TURN_CALLS, providerOf, recordTurn, RECENT_DAYS, totalsSince, turnEntry, type UsageTurn } from "./usageLedger";
+import { asLedger, compact, dayKey, dayStart, EMPTY_LEDGER, groupUsage, ledgerSlices, MAX_CALL_TURNS, MAX_TURN_CALLS, providerOf, recordTurn, RECENT_DAYS, totalsSince, turnEntry, type UsageTurn } from "./usageLedger";
 import type { ModelCall, Thread } from "./types";
 
 const DAY = 86_400_000;
@@ -83,6 +83,13 @@ describe("ledger", () => {
   it("drops days past keeping", () => {
     const ledger = compact({ version: 1, turns: [turn({ at: NOW - 500 * DAY })], days: [] }, NOW);
     expect(ledger).toEqual(EMPTY_LEDGER);
+  });
+
+  it("gives a rolled-up day a timestamp inside its local calendar day", () => {
+    const entries = ledgerSlices({ version: 1, turns: [], days: [{ day: "2026-10-01", agentId: "harness", providerId: "openai", modelId: "openai/gpt-5.5", turns: 1, estimatedTurns: 0, inputTokens: 100, cachedTokens: 0, outputTokens: 50, durationMs: 1, tools: {} }] });
+    expect(entries[0].at).toBe(dayStart("2026-10-01"));
+    expect(new Date(entries[0].at).getDate()).toBe(1);
+    expect(entries[0].wholeDay).toBe(true);
   });
 
   it("keeps per-call detail only for the newest turns", () => {

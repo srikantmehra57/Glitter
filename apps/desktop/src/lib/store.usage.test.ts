@@ -86,6 +86,16 @@ describe("usage ledger", () => {
     expect(useAppStore.getState().usageLedger.turns.map((entry) => [entry.key, entry.calls?.length])).toEqual([["h-session-1:t2", 1]]);
   });
 
+  it("updates cached input when it arrives after the turn, and keeps its trajectory", () => {
+    emit("sessionFacts", { sessionId: "h-session-1", usage: { promptTokens: 5_000, outputTokens: 700, cacheReadTokens: 100 } });
+    emit("modelCall", { sessionId: "h-session-1", turnId: "t1", call: call() });
+    emit("turnCompleted", completed);
+    const durationMs = useAppStore.getState().usageLedger.turns[0].durationMs;
+    emit("usage", { sessionId: "h-session-1", usage: { promptTokens: 5_000, outputTokens: 700, cacheReadTokens: 900 } });
+    expect(useAppStore.getState().usageLedger.turns[0]).toMatchObject({ inputTokens: 1_800, cachedTokens: 800, outputTokens: 100, durationMs });
+    expect(useAppStore.getState().usageLedger.turns[0].calls).toHaveLength(1);
+  });
+
   it("updates the same entry when usage lands after the turn ended", () => {
     emit("turnCompleted", completed);
     // Counted at once (it ran a tool), with no tokens yet.

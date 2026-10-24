@@ -3,7 +3,7 @@ import { Activity, Check, ChevronDown, KeyRound, LoaderCircle, Search, TriangleA
 import { describeError } from "../lib/errors";
 import { humanizeModelLabel } from "../lib/format";
 import { modelVisibilityKey, withModelsHidden } from "../lib/modelVisibility";
-import { providerIds, providerName } from "../lib/providers";
+import { providerIds, providerName, type ProviderEntry } from "../lib/providers";
 import { AGENT_IDS, type AgentId, type AgentInfo, type Model, type ModelTestResult } from "../lib/types";
 import { AgentMark, ModelIcon, ProviderMark } from "./AgentPicker";
 import { Collapse } from "./Presence";
@@ -35,8 +35,10 @@ function contextLabel(limit?: number | null) {
  * it in or out of the composer's picker, and — for the built-in agent, which
  * calls providers itself — a Test that sends one word and times the reply.
  */
-export function ModelLibrary({ agents, hidden, onHiddenChange, hiddenProviders, onHiddenProvidersChange, loadCatalog, testModel, onManageProviders }: {
+export function ModelLibrary({ agents, customProviders: customs = [], hidden, onHiddenChange, hiddenProviders, onHiddenProvidersChange, loadCatalog, testModel, onManageProviders }: {
   agents: AgentInfo[];
+  /** The custom endpoints the keychain holds, so their cards carry the user's own names. */
+  customProviders?: ProviderEntry[];
   hidden: readonly string[];
   onHiddenChange: (next: string[]) => void;
   /** Providers switched off as a whole, by `providerKey`. */
@@ -72,7 +74,8 @@ export function ModelLibrary({ agents, hidden, onHiddenChange, hiddenProviders, 
     const info = agents.find((agent) => agent.id === id);
     if (id === "harness") {
       for (const providerId of providerIds(catalog.models)) {
-        groups.push({ id: `harness:${providerId}`, agentId: id, name: providerName(providerId), mark: <ProviderMark id={providerId} size={22} />, models: catalog.models.filter((model) => model.providerId === providerId), catalog, testable: true });
+        const providerLabel = providerName(providerId, customs);
+        groups.push({ id: `harness:${providerId}`, agentId: id, name: providerLabel, mark: <ProviderMark id={providerId} size={22} name={providerLabel} />, models: catalog.models.filter((model) => model.providerId === providerId), catalog, testable: true });
       }
       continue;
     }
@@ -170,7 +173,7 @@ export function ModelLibrary({ agents, hidden, onHiddenChange, hiddenProviders, 
                     const meta = [contextLabel(model.contextLimit), model.cost && (Number(model.cost.input) || Number(model.cost.output)) ? `$${model.cost.input} / $${model.cost.output} per 1M` : null].filter(Boolean).join(" · ");
                     return (
                       <li key={key} className={off ? "off" : ""}>
-                        <ModelIcon modelId={model.modelId} providerId={model.providerId} size={20} fallback={<AgentMark id={group.agentId} size={20} />} />
+                        <ModelIcon modelId={model.modelId} providerId={model.providerId} size={20} hostName={providerName(model.providerId, customs)} fallback={<AgentMark id={group.agentId} size={20} />} />
                         <span className="library-copy">
                           <span className="library-name"><span title={model.modelId}>{name}</span>{model.isDefault ? <span className="picker-tag">Default</span> : null}{model.free ? <span className="picker-tag free">Free</span> : null}</span>
                           {test?.state === "failed" ? <span className="library-meta danger" role="alert">{test.error}</span> : meta ? <span className="library-meta">{meta}</span> : null}

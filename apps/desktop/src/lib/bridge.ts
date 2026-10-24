@@ -4,6 +4,8 @@ import { listen } from "@tauri-apps/api/event";
 import { isTauri } from "./format";
 import { log } from "./logger";
 import { MOCK_FILES, MOCK_GIT, MOCK_MODELS, MOCK_THREADS, mockGitReview, mockThreads, mockWorkspaceFile, mockWorktree } from "./mock";
+import type { ProviderStatus } from "./providers";
+export type { ProviderStatus } from "./providers";
 import type { DiagnosticsSnapshot, EditorChoice, ThemeMode } from "./types";
 import type { AgentId, AgentIdentity, AgentSessionConfig, ApprovalRequest, CatalogEntry, CatalogInstallResult, CatalogList, CatalogRemoveResult, CliUpdateOutcome, CliUpdateStatus, ContextUsage, Detection, DroppedFile, EnterpriseStatus, GitBranch, GoalState, HarnessMcpConfig, HarnessMcpConfigServer, HarnessMcpScope, HarnessMcpServerInput, ModelCall, PlanItem, PullRequest, GitReview, GitReviewRequest, GitSnapshot, SessionConfig, SessionMetadata, SnapshotRestore, ThreadWorktree, TokenUsage, TranscriptItem, TurnSnapshot, UserInputRequest, WorkspaceFile, WorktreeRemoval, PluginDetail, PluginEntry, SkillDetail, SkillEntry } from "./types";
 
@@ -648,28 +650,50 @@ export async function credentialSet(value: string): Promise<void> {
 }
 
 /** What the renderer may know about a model provider's saved credential: never the key itself. */
-export type ProviderStatus = { id: string; configured: boolean; keyHint: string | null; baseUrl: string | null };
+
+/** One custom or saved provider credential as the preview holds it in memory. */
+type PreviewCredential = { key?: string; baseUrl?: string; name?: string; wire?: string };
 
 /** The browser preview keeps provider setup in memory, so the Providers page can be exercised without a keychain. */
-const previewProviders = new Map<string, { key?: string; baseUrl?: string }>();
-const previewStatus = (ids: readonly string[]): ProviderStatus[] => ids.map((id) => {
-  const saved = previewProviders.get(id);
-  return { id, configured: Boolean(saved), keyHint: saved?.key ? `••••${saved.key.slice(-4)}` : null, baseUrl: saved?.baseUrl ?? null };
-});
+const previewProviders = new Map<string, PreviewCredential>();
+const previewStatusRow = (id: string, saved: PreviewCredential | undefined): ProviderStatus => {
+  const wire = saved?.wire === "anthropic" || saved?.wire === "openai" ? saved.wire : null;
+  return { id, configured: Boolean(saved), keyHint: saved?.key ? `••••${saved.key.slice(-4)}` : null, baseUrl: saved?.baseUrl ?? null, name: saved?.name ?? null, wire };
+};
+const previewStatus = (ids: readonly string[]): ProviderStatus[] => {
+  const rows = ids.map((id) => previewStatusRow(id, previewProviders.get(id)));
+  for (const id of [...previewProviders.keys()].filter((id) => /^custom-\d{1,4}$/.test(id)).sort((a, b) => Number(a.slice(7)) - Number(b.slice(7)))) {
+    rows.push(previewStatusRow(id, previewProviders.get(id)));
+  }
+  return rows;
+};
+/** The preview mints custom ids the way the keychain does, so the page behaves the same without one. */
+function previewMintCustom(): string {
+  let n = 1;
+  while (previewProviders.has(`custom-${n}`)) n += 1;
+  return `custom-${n}`;
+}
 
 export async function providerKeysGet(ids: readonly string[]): Promise<ProviderStatus[]> {
   if (!isTauri()) return previewStatus(ids);
   return invoke<ProviderStatus[]>("provider_keys_get");
 }
 
-/** Save, replace or remove one provider's key (and, for local or custom endpoints, its address). Answers the masked list. */
-export async function providerKeySet(ids: readonly string[], provider: string, change: { key?: string; baseUrl?: string; clear?: boolean }): Promise<ProviderStatus[]> {
+/** Save, replace or remove one provider's key. `custom` creates a new custom endpoint (name, wire, address, optional key); a `custom-N` id edits it. Answers the masked list. */
+export async function providerKeySet(ids: readonly string[], provider: string, change: { key?: string; baseUrl?: string; name?: string; wire?: string; clear?: boolean }): Promise<ProviderStatus[]> {
   if (!isTauri()) {
     if (change.clear) previewProviders.delete(provider);
-    else previewProviders.set(provider, { ...previewProviders.get(provider), ...(change.key ? { key: change.key } : {}), ...(change.baseUrl ? { baseUrl: change.baseUrl } : {}) });
+    else if (provider === "custom") {
+      const id = previewMintCustom();
+      previewProviders.set(id, { key: change.key, baseUrl: change.baseUrl, name: change.name, wire: change.wire });
+    } else {
+      const previous = previewProviders.get(provider) ?? {};
+      const urlChanged = change.baseUrl != null && change.baseUrl !== previous.baseUrl;
+      previewProviders.set(provider, { ...previous, ...(change.key ? { key: change.key } : urlChanged ? { key: undefined } : {}), ...(change.baseUrl ? { baseUrl: change.baseUrl } : {}), ...(change.name ? { name: change.name } : {}), ...(change.wire ? { wire: change.wire } : {}) });
+    }
     return previewStatus(ids);
   }
-  return invoke<ProviderStatus[]>("provider_key_set", { provider, key: change.key ?? null, baseUrl: change.baseUrl ?? null, clear: change.clear ?? null });
+  return invoke<ProviderStatus[]>("provider_key_set", { provider, key: change.key ?? null, baseUrl: change.baseUrl ?? null, name: change.name ?? null, wire: change.wire ?? null, clear: change.clear ?? null });
 }
 
 /** The native ACP-isolation consent flag lives beside the keychain, not in the settings document. */

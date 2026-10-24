@@ -5,8 +5,8 @@ import type { AgentId, ModelCall, Thread } from "./types";
  * turn, with its agent, provider, model, tokens, duration and tools. Before it,
  * the Usage view re-estimated everything from whichever transcripts happened to
  * be loaded, so its numbers moved with what was open and a restart showed a
- * stale picture. Recent turns stay individual (the Today and week maps need
- * their times); older ones roll up into daily totals so the record stays small.
+ * stale picture. Recent turns stay individual (the year map needs their
+ * times); older ones roll up into daily totals so the record stays small.
  */
 
 export type UsageTurn = {
@@ -66,10 +66,10 @@ export function dayKey(at: number): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
-/** Local midday of a `YYYY-MM-DD` key: inside that day in every time zone offset. */
+/** Local midnight puts a whole-day total inside the same day as its calendar key. */
 export function dayStart(day: string): number {
   const [year, month, date] = day.split("-").map(Number);
-  return new Date(year, (month || 1) - 1, date || 1, 12).getTime();
+  return new Date(year, (month || 1) - 1, date || 1).getTime();
 }
 
 /** Agents and catalogs that name a provider by product: the company behind it. */

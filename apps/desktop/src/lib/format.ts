@@ -127,7 +127,10 @@ export function formatResetIn(resetsAtMs: number, nowMs: number): string {
 }
 
 export function titleFromText(text: string): string {
-  const clean = text.replace(/\s+/g, " ").trim();
+  // Attachment markers a prompt can carry ("[Image #1]", "[Screenshot]") are not
+  // words a title should lead with; drop them so the title starts at real text.
+  const stripped = text.replace(/\[(?:image|screenshot|attachment|file)\s*(?:#?\d+)?\]/gi, " ");
+  const clean = stripped.replace(/\s+/g, " ").trim();
   if (!clean) return "Untitled thread";
   return clean.length > 48 ? `${clean.slice(0, 48)}…` : clean;
 }
@@ -331,6 +334,48 @@ export function formatTokens(count: number): string {
   if (count < 1000) return String(count);
   const [value, unit] = count < 1_000_000 ? [count / 1000, "K"] : [count / 1_000_000, "M"];
   return `${value >= 100 ? Math.round(value) : Math.round(value * 10) / 10}${unit}`;
+}
+
+/** A share as a percent: 0.625 of the whole reads "62.5%", and a whole number drops the decimal. */
+export function formatShare(part: number, total: number): string {
+  if (!(total > 0) || !(part > 0)) return "0%";
+  const pct = (part / total) * 100;
+  if (pct < 0.1) return "<0.1%";
+  let rounded = Math.round(pct * 10) / 10;
+  if (rounded >= 100 && pct < 100) rounded = 99.9;
+  const text = rounded.toFixed(1);
+  return `${text.endsWith(".0") ? text.slice(0, -2) : text}%`;
+}
+
+export type ContextPart = { id: "prompt" | "cached" | "write"; label: string; tokens: number };
+
+/**
+ * How the used window splits, when the agent reported it.
+ * Cache reads and writes count as parts only when they add up to the used
+ * total. Otherwise they stay absolute counts, so a mismatched report is not
+ * drawn as a share of the window. The hit rate is null until a cache read is reported.
+ */
+export function contextComposition(context: { usedTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number }): { parts: ContextPart[]; partitioned: boolean; hitRate: number | null } {
+  const used = Math.max(0, context.usedTokens ?? 0);
+  const read = Math.max(0, context.cacheReadTokens ?? 0);
+  const write = Math.max(0, context.cacheWriteTokens ?? 0);
+  const partitioned = (read > 0 || write > 0) && read + write <= used;
+  const parts: ContextPart[] = [];
+  if (partitioned) {
+    if (used - read - write > 0) parts.push({ id: "prompt", label: "Prompt", tokens: used - read - write });
+    if (read > 0) parts.push({ id: "cached", label: "Cached", tokens: read });
+    if (write > 0) parts.push({ id: "write", label: "Cache write", tokens: write });
+  } else {
+    if (read > 0) parts.push({ id: "cached", label: "Cached", tokens: read });
+    if (write > 0) parts.push({ id: "write", label: "Cache write", tokens: write });
+  }
+  let hitRate: number | null = null;
+  if (context.cacheReadTokens != null) {
+    const fresh = partitioned ? used - read - write : Math.max(0, used - Math.min(read, used));
+    const base = fresh + read;
+    hitRate = base > 0 ? read / base : 0;
+  }
+  return { parts, partitioned, hitRate };
 }
 
 /** What `/status` shows: one fact per line, only the ones the agent reported. */

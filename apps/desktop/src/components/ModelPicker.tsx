@@ -7,7 +7,7 @@ import { humanizeModelLabel } from "../lib/format";
 import { menuPosition } from "../lib/menuPosition";
 import { leadingBrandSlug, modelBrand } from "../lib/brands";
 import { pickerModels } from "../lib/modelVisibility";
-import { providerIds, providerName } from "../lib/providers";
+import { providerIds, providerName, type ProviderEntry } from "../lib/providers";
 import { AGENT_IDS, AGENT_LABELS, type AgentId, type AgentInfo, type Model } from "../lib/types";
 import { AgentMark, ModelIcon, ModelMark, ProviderMark, SourceRail, type RailSource } from "./AgentPicker";
 
@@ -42,14 +42,14 @@ function isFree(model: Model, agentId: AgentId) {
 }
 
 /** Drop a retired "(free)" from what a search can match. The live free rows keep it. */
-function searchText(model: Model, agentId: AgentId, source: string) {
+function searchText(model: Model, agentId: AgentId, source: string, customs: ProviderEntry[]) {
   const name = modelName(model);
-  const provider = providerName(model.providerId);
+  const provider = providerName(model.providerId, customs);
   // Only a model Cline has positively retired loses the word. An unknown mark
   // still matches, so a failed promotion lookup cannot hide every free row.
   if (agentId !== "cline" || model.free !== false) return `${model.modelId} ${name} ${provider} ${source}${model.free ? " free" : ""}`;
   const strip = (value: string) => value.replace(/\s*\(free\)/gi, " ").replace(/\bfree\b/gi, "");
-  return `${strip(model.modelId)} ${strip(name)} ${strip(provider)} ${source}`;
+  return `${strip(model.modelId)} ${strip(name)} ${strip(provider)} ${strip(source)}`;
 }
 
 function shownName(model: Model, agentId: AgentId) {
@@ -91,6 +91,8 @@ type Props = {
   agents?: AgentInfo[];
   /** Other agents' providers cannot be picked (a turn is running, no workspace). */
   agentDisabled?: boolean;
+  /** The custom endpoints the keychain holds, so their names and marks are the user's own. */
+  customProviders?: ProviderEntry[];
   value?: string;
   loading: boolean;
   disabled: boolean;
@@ -120,7 +122,7 @@ const PLAIN_SIZE = { width: 420, height: 460 };
  * it and closes. The rail lists providers and the list shows that provider's
  * models — two levels, nothing nested. Effort is its own control (EffortPicker).
  */
-export function ModelPicker({ models, agentId, agents = [], agentDisabled, value, loading, disabled, applying, title, hidden, hiddenProviders, onChange, onChooseOther, loadCatalog, onRescan, onShowCapabilities, onManageModels, onManageProviders }: Props) {
+export function ModelPicker({ models, agentId, agents = [], agentDisabled, customProviders: customs = [], value, loading, disabled, applying, title, hidden, hiddenProviders, onChange, onChooseOther, loadCatalog, onRescan, onShowCapabilities, onManageModels, onManageProviders }: Props) {
   const root = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
@@ -179,7 +181,8 @@ export function ModelPicker({ models, agentId, agents = [], agentDisabled, value
         }
         for (const providerId of providers) {
           const own = visibleModels.filter((model) => model.providerId === providerId);
-          list.push({ id: `harness:${providerId}`, agentId: id, providerId, name: providerName(providerId), mark: <ProviderMark id={providerId} size={18} />, count: own.length, catalog, models: own, hidden: catalog.models.filter((model) => model.providerId === providerId).length - own.length, disabled: !current && (Boolean(agentDisabled) || signIn), live: current && selected?.providerId === providerId });
+          const providerLabel = providerName(providerId, customs);
+          list.push({ id: `harness:${providerId}`, agentId: id, providerId, name: providerLabel, mark: <ProviderMark id={providerId} size={18} name={providerLabel} />, count: own.length, catalog, models: own, hidden: catalog.models.filter((model) => model.providerId === providerId).length - own.length, disabled: !current && (Boolean(agentDisabled) || signIn), live: current && selected?.providerId === providerId });
         }
         continue;
       }
@@ -188,7 +191,7 @@ export function ModelPicker({ models, agentId, agents = [], agentDisabled, value
     // A provider switched off in Settings → Models, or one with every model off, leaves the
     // rail — except the one the thread's model comes from, which stays reachable.
     return list.filter((item) => item.live || (!hiddenProviders?.includes(item.id) && !(item.hidden > 0 && !item.models.length)));
-  }, [shownAgents, others.join(","), agentId, models, loading, catalogs, agents, hidden, hiddenProviders, selected, agentDisabled]);
+  }, [shownAgents, others.join(","), agentId, models, loading, catalogs, agents, hidden, hiddenProviders, selected, agentDisabled, customs]);
 
   const homeId = agentId === "harness" ? `harness:${selected?.providerId ?? ""}` : `${agentId}:`;
   const sourceId = pinned && sources.some((source) => source.id === pinned) ? pinned : sources.some((source) => source.id === homeId) ? homeId : sources.find((source) => source.agentId === agentId)?.id ?? sources[0]?.id;
@@ -204,7 +207,7 @@ export function ModelPicker({ models, agentId, agents = [], agentDisabled, value
     const pool = needle ? sources : source ? [source] : [];
     const out: Array<{ model: Model; source: Source }> = [];
     for (const item of pool) {
-      const matches = item.models.filter((model) => !needle || searchText(model, item.agentId, item.name).toLowerCase().includes(needle));
+      const matches = item.models.filter((model) => !needle || searchText(model, item.agentId, item.name, customs).toLowerCase().includes(needle));
       const order = [...new Set([selected?.providerId, ...matches.map((model) => model.providerId)])];
       const sorted = matches.slice().sort((a, b) => {
         const unavailable = Number(Boolean(a.unavailable)) - Number(Boolean(b.unavailable));
@@ -301,7 +304,7 @@ export function ModelPicker({ models, agentId, agents = [], agentDisabled, value
   const label = selected ? shownName(selected, agentId) : loading ? "Loading…" : !models.length ? "No models" : "Choose model";
   const selectedBrand = selected ? modelBrand(selected.modelId, selected.providerId) : null;
   const showModelIcon = Boolean(selected && selectedBrand && "slug" in selectedBrand && selectedBrand.slug !== leadingBrandSlug(agentId, chipProvider));
-  const chipSource = chipProvider ? providerName(chipProvider) : agents.find((agent) => agent.id === agentId)?.name ?? AGENT_LABELS[agentId];
+  const chipSource = chipProvider ? providerName(chipProvider, customs) : agents.find((agent) => agent.id === agentId)?.name ?? AGENT_LABELS[agentId];
   const headTitle = needle ? "All providers" : source?.name ?? chipSource;
   const headMark: ReactNode = needle ? <span className="rail-key"><Search size={13} aria-hidden="true" /></span> : source?.mark ?? <AgentMark id={agentId} size={28} />;
   const summary = sourceLoading ? "Loading…" : needle ? `${rows.length} ${rows.length === 1 ? "match" : "matches"}` : `${rows.length} ${rows.length === 1 ? "model" : "models"}${freeCount ? ` · ${freeCount} free` : ""}`;
@@ -329,7 +332,7 @@ export function ModelPicker({ models, agentId, agents = [], agentDisabled, value
           if (event.key === "ArrowUp" || event.key === "ArrowDown") { event.preventDefault(); openPanel(); }
         }}
       >
-        {chipProvider ? <ProviderMark id={chipProvider} size={16} /> : <AgentMark id={agentId} size={16} />}
+        {chipProvider ? <ProviderMark id={chipProvider} size={16} name={providerName(chipProvider, customs)} /> : <AgentMark id={agentId} size={16} />}
         {showModelIcon && selected ? <ModelMark modelId={selected.modelId} providerId={selected.providerId} size={16} /> : null}
         <span className="picker-value">{label}</span>
         {selected && isFastModel(selected) ? <Zap size={12} className="model-fast" aria-label="Fast" /> : null}
@@ -403,7 +406,7 @@ export function ModelPicker({ models, agentId, agents = [], agentDisabled, value
                   const owner = row.source.agentId;
                   const price = costParts(model.cost);
                   const contributor = CONTRIBUTOR.test(model.modelId);
-                  const specs = [contextLabel(model.contextLimit), !contributor && model.description !== "Free" && model.description !== providerName(model.providerId) ? model.description : null].filter(Boolean).join(" · ");
+                  const specs = [contextLabel(model.contextLimit), !contributor && model.description !== "Free" && model.description !== providerName(model.providerId, customs) ? model.description : null].filter(Boolean).join(" · ");
                   const free = isFree(model, owner);
                   const name = shownName(model, owner);
                   const group = groupOf(row);
@@ -413,7 +416,7 @@ export function ModelPicker({ models, agentId, agents = [], agentDisabled, value
                     <div key={`${row.source.id}\u0000${modelKey(model)}`} role="presentation" className="model-row" style={{ "--i": Math.min(index, 12) } as React.CSSProperties}>
                       {heading ? (
                         <div className={`menu-heading group${group === "free" ? " free" : ""}`}>
-                          {needle ? <>{row.source.mark}{row.source.name}</> : group === "free" ? <><Sparkles size={12} aria-hidden="true" />Free right now</> : <>{model.providerId ? <ProviderMark id={model.providerId} size={14} /> : null}{providerName(model.providerId)}</>}
+                          {needle ? <>{row.source.mark}{row.source.name}</> : group === "free" ? <><Sparkles size={12} aria-hidden="true" />Free right now</> : <>{model.providerId ? <ProviderMark id={model.providerId} size={14} name={providerName(model.providerId, customs)} /> : null}{providerName(model.providerId, customs)}</>}
                         </div>
                       ) : null}
                       <button
@@ -435,7 +438,7 @@ export function ModelPicker({ models, agentId, agents = [], agentDisabled, value
                           event.preventDefault(); setActive(next); items.current[next]?.focus();
                         }}
                       >
-                        <span className="model-icon"><ModelIcon modelId={model.modelId} providerId={model.providerId} size={22} badge={mixed} fallback={<AgentMark id={owner} size={22} />} /></span>
+                        <span className="model-icon"><ModelIcon modelId={model.modelId} providerId={model.providerId} size={22} badge={mixed} hostName={providerName(model.providerId, customs)} fallback={<AgentMark id={owner} size={22} />} /></span>
                         <span className="model-copy">
                           <span className="model-name">
                             <span className="model-label" title={name}>{name}</span>

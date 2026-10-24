@@ -31,3 +31,11 @@ it("gives a lab an agent's catalog names its family logo when there is one", () 
   expect(providerBrand("meta")).toEqual({ slug: "meta", tone: "meta" });
   expect(providerBrand("poolside")).toEqual({ glyph: "P", tone: "custom" });
 });
+
+it("letters a custom endpoint from its own name, so two never look alike", () => {
+  expect(providerBrand("custom-1", "Work gateway")).toEqual({ glyph: "Wo", tone: "custom" });
+  expect(providerBrand("custom-2", "vLLM")).toEqual({ glyph: "Vl", tone: "custom" });
+  // Without a name it falls back to a letter; a fixed provider ignores the name.
+  expect(providerBrand("custom-3")).toEqual({ glyph: "C", tone: "custom" });
+  expect(providerBrand("anthropic", "Work gateway")).toEqual({ slug: "claude", tone: "anthropic" });
+});
