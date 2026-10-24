@@ -106,35 +106,31 @@ describe("Composer", () => {
     expect(screen.getByPlaceholderText(/Queue a follow-up/)).toBeInTheDocument();
   });
 
-  it("offers Autonomous to the harness and not to Muse", () => {
-    seedWorkspace({ agentId: "harness" });
-    const view = render(<Composer />);
-    fireEvent.click(screen.getByRole("button", { name: "Permissions" }));
-    const harnessMenu = screen.getByRole("listbox", { name: "Permissions" });
-    expect(within(harnessMenu).getByRole("option", { name: /Autonomous/ })).toBeInTheDocument();
-    expect(within(harnessMenu).getAllByRole("option")).toHaveLength(5);
-    view.unmount();
-    seedWorkspace();
-    render(<Composer />);
-    fireEvent.click(screen.getByRole("button", { name: "Permissions" }));
-    const museMenu = screen.getByRole("listbox", { name: "Permissions" });
-    expect(within(museMenu).queryByRole("option", { name: /Autonomous/ })).toBeNull();
-    expect(within(museMenu).getAllByRole("option")).toHaveLength(4);
+  it("offers the same three permission modes for every agent", () => {
+    for (const agentId of ["harness", undefined, "grok"] as const) {
+      seedWorkspace(agentId ? { agentId, config: { agentId, approvalMode: "onRequest" } } : { config: { approvalMode: "onRequest" } });
+      const view = render(<Composer />);
+      fireEvent.click(screen.getByRole("button", { name: "Permissions" }));
+      const menu = screen.getByRole("listbox", { name: "Permissions" });
+      expect(within(menu).getAllByRole("option")).toHaveLength(3);
+      expect(within(menu).getByRole("option", { name: /^Ask/ })).toBeInTheDocument();
+      expect(within(menu).getByRole("option", { name: /^Auto/ })).toBeInTheDocument();
+      expect(within(menu).getByRole("option", { name: /^Full access/ })).toBeInTheDocument();
+      view.unmount();
+    }
   });
 
-  it("gives an agent CLI a permissions menu of the three answers Glitter can give its requests", () => {
+  it("keeps a read-only thread on Read only until another mode is chosen", () => {
     const setSessionConfig = vi.fn(async () => {});
-    seedWorkspace({ agentId: "grok", config: { agentId: "grok", approvalMode: "onRequest" } });
+    seedWorkspace({ agentId: "grok", config: { agentId: "grok", approvalMode: "denyUnmatched" } });
     useAppStore.setState({ setSessionConfig });
     render(<Composer />);
-    // Auto-review has no meaning for an agent CLI, so the thread shows Ask me.
     const trigger = screen.getByRole("button", { name: "Permissions" });
-    expect(trigger).toHaveTextContent("Ask me");
+    expect(trigger).toHaveTextContent("Read only");
     fireEvent.click(trigger);
     const menu = screen.getByRole("listbox", { name: "Permissions" });
-    expect(within(menu).getAllByRole("option")).toHaveLength(3);
-    expect(within(menu).queryByRole("option", { name: /Auto-review/ })).toBeNull();
-    fireEvent.click(within(menu).getByRole("option", { name: /Unrestricted/ }));
+    expect(within(menu).getAllByRole("option")).toHaveLength(4);
+    fireEvent.click(within(menu).getByRole("option", { name: /^Full access/ }));
     expect(setSessionConfig).toHaveBeenCalledWith({ approvalMode: "allowAll" });
   });
 

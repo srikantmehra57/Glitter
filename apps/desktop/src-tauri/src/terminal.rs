@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
@@ -41,7 +42,7 @@ enum ReadEvent {
 struct Session {
     grant: String,
     master: Box<dyn MasterPty + Send>,
-    writer: Box<dyn Write + Send>,
+    writer: Arc<Mutex<Box<dyn Write + Send>>>,
     killer: Box<dyn ChildKiller + Send + Sync>,
     pid: Option<u32>,
 }
@@ -95,7 +96,7 @@ impl Terminals {
             Session {
                 grant: grant.to_string(),
                 master: pair.master,
-                writer,
+                writer: Arc::new(Mutex::new(writer)),
                 killer: child.clone_killer(),
                 pid: child.process_id(),
             },
@@ -125,12 +126,19 @@ impl Terminals {
         Ok(id)
     }
 
+    #[cfg(test)]
     pub fn write(&mut self, id: &str, data: &[u8]) -> Result<(), String> {
         if data.len() > WRITE_LIMIT {
             return Err("That is too much to send to the terminal at once.".into());
         }
-        let session = self.sessions.get_mut(id).ok_or("That terminal has closed.")?;
-        session.writer.write_all(data).and_then(|_| session.writer.flush()).map_err(|err| format!("Could not write to the terminal: {err}"))
+        let writer = self.writer(id)?;
+        let mut writer = writer.lock().map_err(|_| "Terminal writer lock failed")?;
+        writer.write_all(data).and_then(|_| writer.flush()).map_err(|err| format!("Could not write to the terminal: {err}"))
+    }
+
+    /// Clone the writer so input can block without holding the manager's lock.
+    pub fn writer(&self, id: &str) -> Result<Arc<Mutex<Box<dyn Write + Send>>>, String> {
+        self.sessions.get(id).map(|session| Arc::clone(&session.writer)).ok_or_else(|| "That terminal has closed.".into())
     }
 
     pub fn resize(&mut self, id: &str, cols: u16, rows: u16) -> Result<(), String> {
@@ -231,7 +239,9 @@ fn coalesce_output(id: &str, rx: Receiver<ReadEvent>, on_event: impl Fn(&str, Ev
 
 #[cfg(test)]
 mod tests {
-    use super::{coalesce_output, Event, ReadEvent, OUTPUT_FLUSH_BYTES};
+    use super::{coalesce_output, size, Event, ReadEvent, Terminals, OUTPUT_FLUSH_BYTES};
+    use portable_pty::{native_pty_system, CommandBuilder};
+    use std::io::Write;
     use std::sync::mpsc::{channel, Receiver};
     use std::sync::{Arc, Mutex};
     use std::thread;
@@ -319,6 +329,56 @@ mod tests {
         assert_eq!(seen.len(), 2, "the deadline emit and the exit are separate");
         assert!(matches!(&seen[0], Seen::Output(bytes) if bytes == b"abc"));
         assert!(matches!(seen[1], Seen::Exit(Some(0))));
+    }
+
+    struct BlockWriter {
+        started: std::sync::mpsc::Sender<()>,
+        release: std::sync::mpsc::Receiver<()>,
+    }
+
+    impl Write for BlockWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.started.send(()).map_err(std::io::Error::other)?;
+            self.release.recv().map_err(std::io::Error::other)?;
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+    }
+
+    #[test]
+    fn close_does_not_wait_for_a_blocked_terminal_writer() {
+        let pair = native_pty_system().openpty(size(80, 24)).expect("pty");
+        let mut command = CommandBuilder::new("/bin/sleep");
+        command.arg("10");
+        let child = pair.slave.spawn_command(command).expect("sleep");
+        drop(pair.slave);
+        let (started_tx, started_rx) = channel();
+        let (release_tx, release_rx) = channel();
+        let writer = Arc::new(Mutex::new(Box::new(BlockWriter { started: started_tx, release: release_rx }) as Box<dyn Write + Send>));
+        let mut terminals = Terminals::default();
+        terminals.sessions.insert("blocked".into(), super::Session {
+            grant: "grant".into(),
+            master: pair.master,
+            writer: Arc::clone(&writer),
+            killer: child.clone_killer(),
+            pid: child.process_id(),
+        });
+        let writer = terminals.writer("blocked").expect("writer");
+        let writer_thread = thread::spawn(move || {
+            let mut writer = writer.lock().unwrap();
+            writer.write_all(b"input").unwrap();
+        });
+        started_rx.recv_timeout(Duration::from_secs(2)).expect("writer blocked");
+        let (closed_tx, closed_rx) = channel();
+        let closer = thread::spawn(move || {
+            terminals.close("blocked");
+            closed_tx.send(()).unwrap();
+        });
+        let closed = closed_rx.recv_timeout(Duration::from_secs(2));
+        release_tx.send(()).unwrap();
+        closer.join().unwrap();
+        writer_thread.join().unwrap();
+        assert!(closed.is_ok(), "close waited for the blocked writer");
     }
 
     #[test]

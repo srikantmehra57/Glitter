@@ -12,10 +12,10 @@ describe("TerminalPane", () => {
 
   it("renders nothing until it is opened, and closes from its header", () => {
     const view = render(<TerminalPane />);
-    expect(screen.queryByRole("region", { name: "Terminal" })).toBeNull();
+    expect(screen.queryByRole("complementary", { name: "Terminal" })).toBeNull();
     seedStore({ terminalOpen: true });
     view.rerender(<TerminalPane />);
-    expect(screen.getByRole("region", { name: "Terminal" })).toHaveTextContent("/repo");
+    expect(screen.getByRole("complementary", { name: "Terminal" })).toHaveTextContent("/repo");
     fireEvent.click(screen.getByRole("button", { name: "Close terminal" }));
     expect(useAppStore.getState().terminalOpen).toBe(false);
   });

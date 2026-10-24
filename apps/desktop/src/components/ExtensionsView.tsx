@@ -398,7 +398,7 @@ export function ExtensionsView({ onOpenThreads, embedded = false }: { onOpenThre
               <button
                 type="button"
                 className="ghost-btn small"
-                disabled={harnessThread ? (s.harnessMcpLoading || s.harnessMcpConfigLoading) : s.mcpLoading}
+                disabled={harnessThread ? Boolean(s.harnessMcpLoading || s.harnessMcpConfigLoading) : s.mcpLoading}
                 onClick={() => { if (harnessThread) refreshHarnessMcp(true); else void s.refreshMcpServers(); }}
               >
                 <RefreshCw size={11} className={(harnessThread ? (s.harnessMcpLoading || s.harnessMcpConfigLoading) : s.mcpLoading) ? "spin" : ""} />{(harnessThread ? (s.harnessMcpLoading || s.harnessMcpConfigLoading) : s.mcpLoading) ? "Refreshing…" : "Refresh"}

@@ -1,7 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { mcpConfigFingerprints, readMcpConfigBytes } from "./mcp-config.js";
 import { spawnIsolated, terminateTree } from "../isolation.js";
+import { diagnostics } from "../redaction.js";
 import type { Extension, TurnContext } from "./registry.js";
 import type { Subject } from "./permission/grants.js";
 import type { ToolDefinition, ToolProduced } from "./tools.js";
@@ -14,8 +16,8 @@ import type { ToolDefinition, ToolProduced } from "./tools.js";
  * reached with the headers the user configured.
  *
  * Sync is two-phase. The whole next generation is connected and listed first;
- * any failure closes the partial generation and leaves the previous one in
- * use. The registry therefore sees either a complete set of tools or none.
+ * any failure closes the partial generation and retires the previous one for
+ * future turns. The registry therefore sees either a complete set of tools or none.
  */
 
 const CONFIG_PATH = [".glitter", "mcp.json"];
@@ -52,7 +54,7 @@ export type McpServerConfig = Readonly<{
 
 export type McpTool = Readonly<{ name: string; description: string; inputSchema: Record<string, unknown> }>;
 
-export type McpServerInfo = Readonly<{ name: string; transport: McpTransport; tools: number }>;
+export type McpServerInfo = Readonly<{ name: string; transport: McpTransport; tools: number; skipped?: boolean; reason?: string }>;
 export type McpStatus = Readonly<{ servers: McpServerInfo[]; error: string | null }>;
 
 /** Which `.glitter/mcp.json` a server is written to. The workspace file wins a duplicate name. */
@@ -148,12 +150,16 @@ function parseServer(file: string, name: string, raw: unknown): McpServerConfig 
  * Every configured server, workspace file first. A missing file is normal; a
  * malformed one is an error the sync reports instead of guessing.
  */
-export async function readMcpServers(workspaceRoot: string, homeDir: string): Promise<McpServerConfig[]> {
+export async function readMcpServers(workspaceRoot: string, homeDir: string, includeWorkspace = true): Promise<{ servers: McpServerConfig[]; sources: Record<string, McpScope> }> {
   const found = new Map<string, McpServerConfig>();
-  for (const root of [workspaceRoot, homeDir]) {
+  const sources: Record<string, McpScope> = {};
+  for (const root of includeWorkspace ? [workspaceRoot, homeDir] : [homeDir]) {
     const file = join(root, ...CONFIG_PATH);
     let text: string;
-    try { text = await readFile(file, "utf8"); } catch { continue; }
+    try { text = (await readMcpConfigBytes(root)).toString("utf8"); } catch (error) {
+      throw new Error(error instanceof Error ? error.message : String(error));
+    }
+    if (!text) continue;
     let parsed: unknown;
     try { parsed = JSON.parse(text); } catch { throw new Error(`${file} is not valid JSON.`); }
     if (!isRecord(parsed)) throw new Error(`${file} must contain an object.`);
@@ -163,9 +169,10 @@ export async function readMcpServers(workspaceRoot: string, homeDir: string): Pr
       // The workspace file was read first, so its server wins a duplicate name.
       if (found.has(name)) continue;
       found.set(name, parseServer(file, name, raw));
+      sources[name] = root === workspaceRoot && includeWorkspace ? "workspace" : "home";
     }
   }
-  return [...found.values()].sort((a, b) => a.name.localeCompare(b.name));
+  return { servers: [...found.values()].sort((a, b) => a.name.localeCompare(b.name)), sources };
 }
 
 function configFile(root: string): string {
@@ -223,9 +230,9 @@ const sortRows = (rows: Iterable<McpConfigRow>) => [...rows].sort((a, b) => a.na
  * one failure for the whole file. Values are never included, only key names.
  * A malformed workspace file stops the walk, as it does for a sync.
  */
-export async function readMcpConfig(workspaceRoot: string, homeDir: string): Promise<McpConfig> {
+export async function readMcpConfig(workspaceRoot: string, homeDir: string, includeWorkspace = true): Promise<McpConfig> {
   const rows = new Map<string, McpConfigRow>();
-  for (const [source, root] of [["workspace", workspaceRoot], ["home", homeDir]] as const) {
+  for (const [source, root] of includeWorkspace ? [["workspace", workspaceRoot], ["home", homeDir]] as const : [["home", homeDir]] as const) {
     const file = configFile(root);
     let document: Json | null;
     try {
@@ -661,6 +668,7 @@ type McpConnection = Readonly<{ config: McpServerConfig; exchange: Exchange; too
 type Generation = {
   fingerprint: string;
   servers: McpConnection[];
+  skipped: Array<{ name: string; transport: McpTransport; tools: 0; skipped: true; reason: string }>;
   /** Model-facing name to the server's own tool. */
   byName: Map<string, { server: string; tool: McpTool; definition: ToolDefinition }>;
   definitions: ToolDefinition[];
@@ -775,6 +783,12 @@ export function mcpExtension(manager: McpManager): Extension {
 type SyncNotice = { sessionId?: string; level: "warning" | "info"; message: string };
 type Emit = (event: string, payload: unknown) => void;
 
+export type McpAuthorization = {
+  workspaceTrusted: boolean;
+  configurationDigest?: string;
+  homeConfigurationDigest?: string;
+};
+
 export class McpManager {
   private readonly generations = new Map<string, Generation>();
   private readonly syncing = new Map<string, Promise<void>>();
@@ -788,7 +802,7 @@ export class McpManager {
   /** The generation a turn is using, acquired once per turn context. */
   acquire(context: TurnContext): Generation | null {
     if (this.acquired.has(context)) return this.acquired.get(context) ?? null;
-    const generation = this.generations.get(context.workspaceRoot) ?? null;
+    const generation = this.generations.get(context.sessionId) ?? null;
     if (generation) generation.refs += 1;
     this.acquired.set(context, generation);
     return generation;
@@ -803,44 +817,67 @@ export class McpManager {
     if (generation.retired && generation.refs === 0) void this.closeGeneration(generation);
   }
 
-  status(workspaceRoot: string): McpStatus {
-    const generation = this.generations.get(workspaceRoot);
+  status(sessionId: string): McpStatus {
+    const generation = this.generations.get(sessionId);
     return {
-      servers: generation ? generation.servers.map(({ config, tools }) => ({ name: config.name, transport: config.transport, tools: tools.length })) : [],
-      error: this.errors.get(workspaceRoot) ?? null,
+      servers: generation ? [...generation.servers.map(({ config, tools }) => ({ name: config.name, transport: config.transport, tools: tools.length })), ...generation.skipped] : [],
+      error: this.errors.get(sessionId) ?? null,
     };
   }
 
-  /**
-   * Bring the workspace's generation up to date with its config files. A
-   * failure reports and keeps the previous generation; it never throws, so a
-   * broken MCP config cannot fail a turn.
-   */
-  async ensure(workspaceRoot: string, sessionId?: string, force = false): Promise<void> {
-    const running = this.syncing.get(workspaceRoot);
-    if (running) { await running; return; }
-    const run = this.reconcile(workspaceRoot, sessionId, force).finally(() => {
-      if (this.syncing.get(workspaceRoot) === run) this.syncing.delete(workspaceRoot);
+  /** Sync this session. Config or consent failure disables future-turn MCP rather than retaining an old grant. */
+  async ensure(workspaceRoot: string, authorization: McpAuthorization, sessionId: string, force = false): Promise<void> {
+    const running = this.syncing.get(sessionId);
+    if (running) await running;
+    const run = this.reconcile(workspaceRoot, authorization, sessionId, force).finally(() => {
+      if (this.syncing.get(sessionId) === run) this.syncing.delete(sessionId);
     });
-    this.syncing.set(workspaceRoot, run);
+    this.syncing.set(sessionId, run);
     await run;
   }
 
-  private async reconcile(workspaceRoot: string, sessionId?: string, force = false) {
+  private retire(sessionId: string) {
+    const previous = this.generations.get(sessionId);
+    if (!previous) return;
+    this.generations.delete(sessionId);
+    previous.retired = true;
+    this.retired.add(previous);
+    if (previous.refs === 0) void this.closeGeneration(previous);
+  }
+
+  private async reconcile(workspaceRoot: string, authorization: McpAuthorization, sessionId: string, force = false) {
     let servers: McpServerConfig[];
+    let skipped: Generation["skipped"] = [];
+    let configFingerprint: string;
     try {
-      servers = await readMcpServers(workspaceRoot, this.homeDir);
+      const fingerprints = await mcpConfigFingerprints(workspaceRoot, this.homeDir);
+      configFingerprint = fingerprints.configurationDigest;
+      const read = await readMcpServers(workspaceRoot, this.homeDir, authorization.workspaceTrusted);
+      const homeApproved = fingerprints.homeConfigurationDigest !== undefined && fingerprints.homeConfigurationDigest === authorization.homeConfigurationDigest;
+      const workspaceApproved = authorization.workspaceTrusted && fingerprints.configurationDigest === authorization.configurationDigest;
+      skipped = read.servers.filter((config) => read.sources[config.name] === "workspace" ? !workspaceApproved : !homeApproved).map((config) => ({ name: config.name, transport: config.transport, tools: 0 as const, skipped: true as const, reason: "Startup configuration has not been trusted and approved." }));
+      const denied = new Set(skipped.map((config) => config.name));
+      servers = read.servers.filter((config) => !denied.has(config.name));
+      if (skipped.length) {
+        this.notice({ sessionId, level: "info", message: `${skipped.map((config) => config.name).join(", ")}: MCP startup was skipped because its configuration has not been trusted and approved. Review it in Settings → Extensions.` }, true);
+      }
     } catch (error) {
-      this.report(workspaceRoot, sessionId, messageOf(error));
+      this.retire(sessionId);
+      this.report(sessionId, messageOf(error));
       return;
     }
-    const fingerprint = createHash("sha256").update(JSON.stringify(servers)).digest("hex");
-    const current = this.generations.get(workspaceRoot);
+    const fingerprint = createHash("sha256").update(JSON.stringify({ configFingerprint, workspaceTrusted: authorization.workspaceTrusted, configurationDigest: authorization.configurationDigest, homeConfigurationDigest: authorization.homeConfigurationDigest, servers, skipped })).digest("hex");
+    const current = this.generations.get(sessionId);
     if (!force && current?.fingerprint === fingerprint) {
-      if (this.errors.delete(workspaceRoot)) return;
+      this.errors.delete(sessionId);
       return;
     }
+    // A changed config or authorization invalidates the old tools immediately.
+    // A running turn can finish its snapshot, but a failed refresh cannot leave
+    // that generation available to the next turn.
+    this.retire(sessionId);
     const built: Exchange[] = [];
+    for (const config of servers) diagnostics.rememberValues([...Object.values(config.env), ...Object.values(config.headers)]);
     const starts = servers.map(async (config): Promise<McpConnection> => {
       const exchange = config.transport === "stdio"
         ? await StdioExchange.start(config, workspaceRoot)
@@ -854,35 +891,29 @@ export class McpManager {
       const generation: Generation = {
         fingerprint,
         servers: connections,
+        skipped,
         byName,
         definitions: [...byName.values()].map((row) => row.definition),
         refs: 0,
         retired: false,
       };
-      const previous = this.generations.get(workspaceRoot);
-      this.generations.set(workspaceRoot, generation);
-      this.errors.delete(workspaceRoot);
-      this.notice({ sessionId, level: "info", message: `MCP is ready: ${generation.servers.length} server${generation.servers.length === 1 ? "" : "s"}, ${generation.definitions.length} tool${generation.definitions.length === 1 ? "" : "s"}.` }, false);
-      if (previous) {
-        previous.retired = true;
-        this.retired.add(previous);
-        if (previous.refs === 0) void this.closeGeneration(previous);
-      }
+      this.generations.set(sessionId, generation);
+      this.errors.delete(sessionId);
+      if (connections.length) this.notice({ sessionId, level: "info", message: `MCP is ready: ${generation.servers.length} server${generation.servers.length === 1 ? "" : "s"}, ${generation.definitions.length} tool${generation.definitions.length === 1 ? "" : "s"}.` }, false);
     } catch (error) {
       // A start that was still in flight when another failed has no generation
       // to belong to. Let every start settle, then close all that connected.
       await Promise.allSettled(starts);
       await Promise.allSettled(built.map((exchange) => exchange.close()));
-      this.report(workspaceRoot, sessionId, messageOf(error));
+      this.report(sessionId, messageOf(error));
     }
   }
 
-  private report(workspaceRoot: string, sessionId: string | undefined, message: string) {
-    const had = this.generations.get(workspaceRoot)?.servers.length ?? 0;
-    const text = `${message} ${had ? `The previous ${had} MCP server${had === 1 ? " is" : "s are"} still in use.` : "No MCP tools are available."}`;
+  private report(sessionId: string, message: string) {
+    const text = `${diagnostics.text(message)} No MCP tools are available.`;
     // Report a change, not the same failure once per turn.
-    if (this.errors.get(workspaceRoot) === text) return;
-    this.errors.set(workspaceRoot, text);
+    if (this.errors.get(sessionId) === text) return;
+    this.errors.set(sessionId, text);
     this.notice({ sessionId, level: "warning", message: `MCP sync failed: ${text}` }, Boolean(sessionId));
   }
 
@@ -894,6 +925,12 @@ export class McpManager {
   private async closeGeneration(generation: Generation) {
     await Promise.allSettled(generation.servers.map(({ exchange }) => exchange.close()));
     this.retired.delete(generation);
+  }
+
+  async closeSession(sessionId: string) {
+    await this.syncing.get(sessionId);
+    this.retire(sessionId);
+    this.errors.delete(sessionId);
   }
 
   async close() {

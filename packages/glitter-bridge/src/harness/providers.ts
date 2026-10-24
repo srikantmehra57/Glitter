@@ -14,6 +14,8 @@
  * the credential, so any number of them can coexist.
  */
 
+import { diagnostics } from "../redaction.js";
+
 export type Wire = "anthropic" | "openai";
 
 export type ProviderSpec = {
@@ -50,6 +52,25 @@ export function isCustomProvider(id: string): boolean {
 /** What the native shell injects per configured provider. */
 export type ProviderCredential = { key?: string; baseUrl?: string; name?: string; wire?: Wire };
 export type ProviderCredentials = Record<string, ProviderCredential>;
+
+/** Credentials injected by the native keychain, including custom endpoint identity and wire. */
+export function nativeProviderCredentials(raw: unknown): ProviderCredentials | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const credentials: ProviderCredentials = {};
+  for (const [id, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+    const entry = value as { key?: unknown; baseUrl?: unknown; name?: unknown; wire?: unknown };
+    const key = typeof entry.key === "string" ? entry.key : undefined;
+    if (key) diagnostics.remember({ [`${id}ApiKey`]: key });
+    credentials[id] = {
+      ...(key ? { key } : {}),
+      ...(typeof entry.baseUrl === "string" && entry.baseUrl ? { baseUrl: entry.baseUrl } : {}),
+      ...(typeof entry.name === "string" && entry.name ? { name: entry.name } : {}),
+      ...(entry.wire === "anthropic" || entry.wire === "openai" ? { wire: entry.wire } : {}),
+    };
+  }
+  return credentials;
+}
 
 export function providerSpec(id: string): ProviderSpec | undefined {
   return PROVIDERS.find((provider) => provider.id === id);
@@ -95,7 +116,16 @@ export const TIERS = ["none", "minimal", "low", "medium", "high", "xhigh", "max"
 export type Tier = (typeof TIERS)[number];
 
 /** Reasoning families a gateway (OpenRouter, the Cline API, the Kilo API) routes to, by the vendor's own model names. */
-const GATEWAY_REASONING = /(^|\/)(o\d|gpt-([5-9]|\d\d)|gpt-oss)|codex|claude-(3-7|sonnet-4|opus-4|[a-z]+-[4-9])|gemini-(2\.5|[3-9])|deepseek-(r1|v3\.[1-9]|v[4-9])|grok-([3-9]|code)|qwen3|qwq|glm-(4\.[5-9]|[5-9])|kimi-k2|minimax-m|nemotron|magistral|reasoning|thinking/;
+const GATEWAY_REASONING = /(^|\/)(o\d|gpt-([5-9]|\d\d)|gpt-oss)|codex|claude-(3-7|sonnet-4|opus-4|[a-z]+-[4-9])|gemini-(2\.5|[3-9])|deepseek-(r1|v3\.[1-9]|v[4-9])|grok-([3-9]|code)|qwen3|qwq|glm-(4\.[5-9]|[5-9])|kimi-k[2-9]|minimax-m|nemotron|magistral|reasoning|thinking/;
+
+/** OpenAI-compatible gateways accept these levels even though their model lists do not report them. */
+const CUSTOM_REASONING: Tier[] = ["minimal", "low", "medium", "high"];
+
+/**
+ * Kimi K3 (including K3.1 Pro and Highspeed) and K2.8. Moonshot accepts
+ * exactly low, high, and max; the model always reasons, so None is not a level.
+ */
+const KIMI_THREE_EFFORT = /(?:^|\/)kimi-k(?:3(?:[.-]|$)|2\.8(?:[.-]|$))/;
 
 /**
  * NIM models whose chat template takes a thinking switch. They have no
@@ -111,9 +141,9 @@ export const SENDS_NONE = new Set(["nvidia", "cline", "openrouter", "kilo"]);
  * Providers do not report this, so it follows their published model families;
  * an unknown model simply shows no effort picker.
  */
-export function effortTiers(providerId: string, model: string): Tier[] {
+export function effortTiers(providerId: string, model: string, wire: "anthropic" | "openai" = providerId === "anthropic" ? "anthropic" : "openai", listedReasoning?: boolean): Tier[] {
   const id = model.toLowerCase();
-  if (providerId === "anthropic") {
+  if (wire === "anthropic") {
     // Extended thinking: Claude 3.7 and every later family. 3.0 and 3.5 lack it.
     return /claude-3-(?!7)|claude-instant|claude-2/.test(id) ? [] : ["none", "low", "medium", "high", "xhigh", "max"];
   }
@@ -123,11 +153,26 @@ export function effortTiers(providerId: string, model: string): Tier[] {
   // NIM documents `reasoning_effort` for gpt-oss, and a template switch for its hybrid thinkers.
   if (providerId === "nvidia") return /(^|\/)gpt-oss/.test(id) ? ["low", "medium", "high"] : NIM_THINKING_SWITCH.test(id) ? ["none", "high"] : [];
   if (providerId === "groq") return /(^|\/)gpt-oss/.test(id) ? ["low", "medium", "high"] : [];
+  // Custom OpenAI-compatible gateways such as ZenMux use the common reasoning vocabulary.
+  // A catalog capability is authoritative; older gateways only need the family fallback.
+  // Kimi K3's published levels replace that list, with or without the capability flag.
+  if (isCustomProvider(providerId)) {
+    if (KIMI_THREE_EFFORT.test(id)) return ["low", "high", "max"];
+    return (listedReasoning ?? GATEWAY_REASONING.test(id)) ? CUSTOM_REASONING : [];
+  }
   // Gateways take OpenRouter's effort vocabulary and drop what a model cannot use.
   // Kilo's auto routers are virtual ids, so the family pattern never sees the model they resolve to.
   if (providerId === "kilo" && /(^|\/)kilo-auto\//.test(id)) return ["none", "low", "medium", "high", "xhigh"];
   if (providerId === "openrouter" || providerId === "cline" || providerId === "kilo") return GATEWAY_REASONING.test(id) ? ["none", "low", "medium", "high", "xhigh"] : [];
   return [];
+}
+
+/** The level a catalog marks when the model does not name one. Moonshot's default for Kimi K3 is max. */
+export function defaultEffortTier(model: string, tiers: readonly Tier[]): Tier | undefined {
+  if (!tiers.length) return undefined;
+  if (KIMI_THREE_EFFORT.test(model.toLowerCase()) && tiers.includes("max")) return "max";
+  if (tiers.includes("medium")) return "medium";
+  return tiers[Math.floor(tiers.length / 2)];
 }
 
 /** Anthropic thinking budgets per tier (tokens). */

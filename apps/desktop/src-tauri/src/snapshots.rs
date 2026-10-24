@@ -118,7 +118,7 @@ fn run(mut cmd: Command, args: &[&str], input: &[u8], cap: u64) -> Result<Vec<u8
             let mut output = Vec::new();
             let read = stdout.take(cap + 1).read_to_end(&mut output);
             if read.is_err() || output.len() as u64 > cap {
-                super::process::kill_tree(pid);
+                super::process::kill_tree_now(pid);
             }
             let status = child.wait().map_err(|_| "Snapshot command did not finish.".to_string())?;
             let written = writer.join().map_err(|_| "Snapshot input failed.".to_string())?;
@@ -135,7 +135,8 @@ fn run(mut cmd: Command, args: &[&str], input: &[u8], cap: u64) -> Result<Vec<u8
     match rx.recv_timeout(Duration::from_secs(10)) {
         Ok(result) => result,
         Err(_) => {
-            super::process::kill_tree(pid);
+            super::process::kill_tree_with_grace(pid, Duration::from_millis(800));
+            let _ = rx.recv_timeout(Duration::from_secs(2));
             Err("Undo is unavailable: a snapshot command took too long.".into())
         }
     }

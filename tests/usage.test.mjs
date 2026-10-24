@@ -134,13 +134,14 @@ async function usageCard(overrides = {}) {
     '../lib/store': 'export const useAppStore=(selector)=>selector?selector(globalThis.componentState):globalThis.componentState; export const currentWorkspace=()=>null; export const activeWorkspace=()=>null; export const readyAgents=()=>[];',
     './AgentPicker': 'export const AgentMark=()=>null;',
     '../lib/commands': 'export const exportThread=async()=>{};export const shortcutText=(id)=>id;',
-    'lucide-react': `const mk=(n)=>{const f=()=>null;f.displayName=n;return f;};export const Archive=mk('Archive'),Blocks=mk('Blocks'),ArrowDown=mk('ArrowDown'),ArrowUp=mk('ArrowUp'),ChevronRight=mk('ChevronRight'),ChevronsUpDown=mk('ChevronsUpDown'),CircleUser=mk('CircleUser'),Copy=mk('Copy'),Download=mk('Download'),ExternalLink=mk('ExternalLink'),Folder=mk('Folder'),FolderOpen=mk('FolderOpen'),ChartColumn=mk('ChartColumn'),ChevronDown=mk('ChevronDown'),FilePlus=mk('FilePlus'),FileText=mk('FileText'),Gauge=mk('Gauge'),GitBranch=mk('GitBranch'),GitFork=mk('GitFork'),History=mk('History'),Keyboard=mk('Keyboard'),LoaderCircle=mk('LoaderCircle'),LogOut=mk('LogOut'),MoreHorizontal=mk('MoreHorizontal'),Palette=mk('Palette'),PanelLeft=mk('PanelLeft'),Pencil=mk('Pencil'),Pin=mk('Pin'),PinOff=mk('PinOff'),Plus=mk('Plus'),Puzzle=mk('Puzzle'),RotateCcw=mk('RotateCcw'),ScanSearch=mk('ScanSearch'),Search=mk('Search'),Settings=mk('Settings'),ShieldAlert=mk('ShieldAlert'),ShieldCheck=mk('ShieldCheck'),SquarePen=mk('SquarePen'),Trash2=mk('Trash2'),X=mk('X');`,
+    '../lib/threadActions': 'export const openThreadFolder=async()=>{};export const copyThreadPath=async()=>{};export const copyThreadLogPath=async()=>{};export const copyAppLogPath=async()=>{};export const copySessionId=async()=>{};export const openAppConfig=async()=>{};export const reportThreadIssue=async()=>{};',
+    'lucide-react': `const mk=(n)=>{const f=()=>null;f.displayName=n;return f;};export const Archive=mk('Archive'),Bug=mk('Bug'),Blocks=mk('Blocks'),ArrowDown=mk('ArrowDown'),ArrowUp=mk('ArrowUp'),ChevronRight=mk('ChevronRight'),ChevronsUpDown=mk('ChevronsUpDown'),CircleUser=mk('CircleUser'),Copy=mk('Copy'),Download=mk('Download'),ExternalLink=mk('ExternalLink'),Folder=mk('Folder'),FolderOpen=mk('FolderOpen'),ChartColumn=mk('ChartColumn'),ChevronDown=mk('ChevronDown'),FilePlus=mk('FilePlus'),FileText=mk('FileText'),Gauge=mk('Gauge'),GitBranch=mk('GitBranch'),GitFork=mk('GitFork'),History=mk('History'),Keyboard=mk('Keyboard'),LoaderCircle=mk('LoaderCircle'),LogOut=mk('LogOut'),Mail=mk('Mail'),MailOpen=mk('MailOpen'),MoreHorizontal=mk('MoreHorizontal'),Palette=mk('Palette'),PanelLeft=mk('PanelLeft'),Pencil=mk('Pencil'),Pin=mk('Pin'),PinOff=mk('PinOff'),Plus=mk('Plus'),Puzzle=mk('Puzzle'),RotateCcw=mk('RotateCcw'),ScanSearch=mk('ScanSearch'),Search=mk('Search'),Settings=mk('Settings'),ShieldAlert=mk('ShieldAlert'),ShieldCheck=mk('ShieldCheck'),SquarePen=mk('SquarePen'),Trash2=mk('Trash2'),X=mk('X');`,
   });
   const render = () => runtime.render(AccountUsage);
   const renderCard = () => {
     const tree = usageNodes(render());
     const card = tree.find(node => node.props?.['aria-label'] === 'Subscription usage');
-    assert.ok(card, 'the account menu usage section renders the meter');
+    assert.ok(card, 'the usage card renders the meter');
     return usageNodes(card);
   };
   return { refreshes, renderCard };

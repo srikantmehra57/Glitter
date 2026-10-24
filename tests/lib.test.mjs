@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { build } from 'esbuild';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -21,9 +22,10 @@ const { composePrompt, shortHash, threadStatusLines, worktreeRemovalNote, titleF
 const { classifyError, describeError, authRequired, isGrantError } = await bundle('apps/desktop/src/lib/errors.ts');
 const { SessionMemoryPersistence, normalizeMemory, normalizeDraft, persistableDrafts, rememberPrompt, SESSION_MEMORY_VERSION } = await bundle('apps/desktop/src/lib/sessionMemory.ts');
 const { resolveMuseBin } = await bundle('packages/glitter-bridge/src/detect.ts');
-const { agentEnabled, DEFAULT_ENABLED_AGENTS, DEFAULT_SETTINGS, skillScopeArg } = await bundle('apps/desktop/src/lib/types.ts');
+const { agentEnabled, DEFAULT_ENABLED_AGENTS, DEFAULT_SETTINGS, skillScopeArg, UI_FONTS } = await bundle('apps/desktop/src/lib/types.ts');
 const { settingsFields } = await bundle('apps/desktop/src/lib/settingsPersistence.ts');
 const { resolveTheme, shellOpacity, normalizeTranslucency } = await bundle('apps/desktop/src/lib/theme.ts');
+const { UI_FONT_STACKS, normalizeUiFont } = await bundle('apps/desktop/src/lib/fonts.ts');
 const { rekeyThreadState, projectDraftForAgent } = await bundle('apps/desktop/src/lib/agentSwitch.ts');
 const { mcpServerNameProblem, mcpServerSummary, parseMcpArguments, parseMcpKeyValues } = await bundle('apps/desktop/src/lib/mcpConfig.ts');
 const { modelVisibilityKey, normalizeHiddenModels, normalizeHiddenProviders, providerKey, isModelHidden, pickerModels, withModelsHidden } = await bundle('apps/desktop/src/lib/modelVisibility.ts');
@@ -351,7 +353,7 @@ test('the theme engine resolves appearance settings to root attributes and the s
   const base = { theme: 'system', darkIntensity: 'mid', accentColor: 'ember', accentSidebar: false, sidebarTranslucency: 50 };
   const desktop = { prefersDark: true, windowMaterial: true, reducedTransparency: false };
   const resolved = resolveTheme(base, desktop);
-  assert.deepEqual(resolved.attributes, { theme: 'dark', dark: 'mid', accent: 'ember', sidebarAccent: 'false', translucent: 'true' });
+  assert.deepEqual(resolved.attributes, { theme: 'dark', dark: 'mid', accent: 'ember', sidebarAccent: 'false', translucent: 'true', sidebarDensity: 'standard', motion: 'system' });
   assert.equal(resolved.properties['--shell-opacity'], '0.56');
   // The native window follows the setting, not the resolved scheme: `system` hands the choice back to the OS.
   assert.equal(resolved.windowAppearance, 'system');
@@ -361,6 +363,8 @@ test('the theme engine resolves appearance settings to root attributes and the s
   assert.equal(resolveTheme({ ...base, theme: 'light', darkIntensity: 'black' }, desktop).attributes.dark, 'black');
   assert.equal(resolveTheme({ ...base, darkIntensity: 'subtle' }, desktop).attributes.dark, 'subtle');
   assert.equal(resolveTheme({ ...base, accentSidebar: true, accentColor: 'teal' }, desktop).attributes.sidebarAccent, 'true');
+  assert.equal(resolveTheme({ ...base, sidebarDensity: 'compact' }, desktop).attributes.sidebarDensity, 'compact');
+  assert.equal(resolveTheme({ ...base, reduceMotion: true }, desktop).attributes.motion, 'reduce');
   // Solid by choice, with nothing behind the page, or when the OS asks for it: the shell stays opaque.
   for (const [settings, environment] of [
     [{ ...base, sidebarTranslucency: 0 }, desktop],
@@ -388,6 +392,50 @@ test('sidebar translucency is clamped, defaulted and never fades the shell out e
   const { sidebarTranslucency: _absent, ...older } = DEFAULT_SETTINGS;
   assert.equal(settingsFields(older).sidebarTranslucency, 50);
   assert.equal(settingsFields({ ...DEFAULT_SETTINGS, sidebarTranslucency: 85 }).sidebarTranslucency, 85);
+});
+
+test('sidebar density and reduced motion persist safely and can be found in Appearance', () => {
+  assert.equal(DEFAULT_SETTINGS.sidebarDensity, 'standard');
+  assert.equal(DEFAULT_SETTINGS.reduceMotion, false);
+  const { sidebarDensity: _density, reduceMotion: _motion, ...older } = DEFAULT_SETTINGS;
+  assert.equal(settingsFields(older).sidebarDensity, 'standard');
+  assert.equal(settingsFields(older).reduceMotion, false);
+  const saved = settingsFields({ ...DEFAULT_SETTINGS, sidebarDensity: 'compact', reduceMotion: true });
+  assert.equal(saved.sidebarDensity, 'compact');
+  assert.equal(saved.reduceMotion, true);
+  assert.equal(settingsFields({ ...DEFAULT_SETTINGS, sidebarDensity: 'dense' }).sidebarDensity, 'standard');
+  assert.equal(settingsFields({ ...DEFAULT_SETTINGS, reduceMotion: 'yes' }).reduceMotion, false);
+  assert.ok(settingsTabsMatching('zoom').includes('Theme'));
+  assert.deepEqual(settingsTabsMatching('reduce motion'), ['Theme']);
+  assert.deepEqual(settingsTabsMatching('compact'), ['Theme']);
+  const css = readFileSync('apps/desktop/src/styles.css', 'utf8');
+  assert.ok(css.includes('html[data-sidebar-density="comfortable"] .sidebar { --sidebar-row-height: 34px; }'));
+  assert.ok(css.includes('html[data-sidebar-density="compact"] .sidebar { --sidebar-row-height: 26px; }'));
+  assert.ok(css.includes('html[data-motion="reduce"]'));
+});
+
+test('the interface font is one of the installed faces, and an unknown choice stays on System', () => {
+  assert.equal(DEFAULT_SETTINGS.uiFont, 'system');
+  assert.equal(UI_FONTS.length, 6);
+  assert.equal(new Set(Object.values(UI_FONT_STACKS)).size, UI_FONTS.length, 'each face has its own stack');
+  const css = readFileSync('apps/desktop/src/styles.css', 'utf8');
+  assert.ok(css.includes(`--font-sans: ${UI_FONT_STACKS.system};`), 'the stylesheet default is the System stack');
+  assert.equal(normalizeUiFont('helvetica'), 'helvetica');
+  assert.equal(normalizeUiFont('newYork'), 'newYork');
+  assert.equal(normalizeUiFont('comic sans'), 'system');
+  assert.equal(normalizeUiFont(undefined), 'system');
+  assert.equal(settingsFields({ ...DEFAULT_SETTINGS, uiFont: 'avenir' }).uiFont, 'avenir');
+  assert.equal(settingsFields({ ...DEFAULT_SETTINGS, uiFont: 'nope' }).uiFont, 'system');
+  const { uiFont: _absent, ...older } = DEFAULT_SETTINGS;
+  assert.equal(settingsFields(older).uiFont, 'system');
+  const base = { theme: 'system', darkIntensity: 'mid', accentColor: 'ember', accentSidebar: false, sidebarTranslucency: 50 };
+  const desktop = { prefersDark: true, windowMaterial: true, reducedTransparency: false };
+  assert.equal(resolveTheme(base, desktop).properties['--font-sans'], UI_FONT_STACKS.system);
+  assert.equal(resolveTheme({ ...base, uiFont: 'helvetica' }, desktop).properties['--font-sans'], UI_FONT_STACKS.helvetica);
+  assert.equal(resolveTheme({ ...base, uiFont: 'newYork' }, desktop).properties['--font-sans'], UI_FONT_STACKS.newYork);
+  assert.ok(settingsTabsMatching('helvetica').includes('Theme'));
+  assert.ok(settingsTabsMatching('futura').includes('Theme'));
+  assert.deepEqual(settingsTabsMatching('new york'), ['Theme']);
 });
 
 test('shortHash truncates digests and leaves short text alone', () => {

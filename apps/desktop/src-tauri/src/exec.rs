@@ -307,13 +307,12 @@ pub fn resolve_agent_bin(spec: &AgentSpec) -> Result<PathBuf, String> {
     Err(format!("{} is not installed. Install it, then choose Rescan.", spec.name))
 }
 
-/// Run `bin --version` with a bounded wait and a minimal environment; a hung
-/// binary is killed and reports no version instead of hanging the caller. The
-/// probe runs before an agent's identity pin is confirmed, so the unverified
-/// binary must never see the ambient desktop environment (SEC-03).
+/// Run `bin --version` with a bounded wait and a credential-free environment;
+/// a hung binary is killed and reports no version instead of hanging the caller.
+/// Detection never probes: authorized native code calls this after pinning.
 pub fn probe_version(bin: &Path) -> Option<String> {
     let mut cmd = std::process::Command::new(bin);
-    crate::process::apply_minimal_env(&mut cmd);
+    crate::process::apply_probe_env(&mut cmd);
     let mut child = cmd.arg("--version").stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn().ok()?;
     let mut waited = 0;
     let output = loop {
@@ -592,6 +591,25 @@ impl AgentPins {
         Ok(())
     }
 
+    /// Refresh display metadata only when the current binary still has the
+    /// exact path and digest authorized by the existing pin.
+    pub fn refresh_version(&self, agent_id: &str, canonical: &Path, version: Option<String>) -> Result<bool, String> {
+        let digest = digest_of(canonical)?;
+        let path = canonical.to_string_lossy().into_owned();
+        let mut pins = self.inner.lock().map_err(|err| err.to_string())?;
+        let Some(pin) = pins.get_mut(agent_id) else {
+            return Err(format!("Agent identity changed: {agent_id} has no authorized binary."));
+        };
+        if pin.path != path || pin.sha256 != digest {
+            return Err(identity_changed(agent_id, &pin.path, &path));
+        }
+        if pin.version == version {
+            return Ok(false);
+        }
+        pin.version = version;
+        Ok(true)
+    }
+
     pub fn get(&self, agent_id: &str) -> Option<AgentPin> {
         self.inner.lock().ok()?.get(agent_id).cloned()
     }
@@ -864,6 +882,26 @@ mod tests {
         assert_eq!(pins.check("opencode", &canon, Some("1.0".into())), Ok(PinCheck::Recorded), "first sighting is new");
         assert_eq!(pins.check("opencode", &canon, Some("1.0".into())), Ok(PinCheck::Same), "nothing new to persist");
         assert_eq!(pins.check("opencode", &canon, Some("1.1".into())), Ok(PinCheck::Recorded), "a new display version is a change");
+        let _ = std::fs::remove_file(&bin);
+    }
+
+    #[test]
+    fn version_refresh_preserves_the_pin_and_rejects_digest_drift() {
+        let bin = fixture("agent-version-refresh");
+        write_exec(&bin, b"one");
+        let canon = bin.canonicalize().expect("canon");
+        let pins = AgentPins::new(HashMap::new());
+        pins.check("opencode", &canon, Some("1.0".into())).expect("initial pin");
+        assert_eq!(pins.refresh_version("opencode", &canon, Some("1.0".into())), Ok(false));
+        let before = pins.get("opencode").expect("pin");
+        assert_eq!(pins.refresh_version("opencode", &canon, Some("1.1".into())), Ok(true));
+        let after = pins.get("opencode").expect("pin");
+        assert_eq!(after.path, before.path);
+        assert_eq!(after.sha256, before.sha256);
+        assert_eq!(after.version.as_deref(), Some("1.1"));
+        write_exec(&bin, b"changed bytes");
+        assert!(pins.refresh_version("opencode", &canon, Some("2.0".into())).is_err());
+        assert_eq!(pins.get("opencode").and_then(|pin| pin.version).as_deref(), Some("1.1"));
         let _ = std::fs::remove_file(&bin);
     }
 

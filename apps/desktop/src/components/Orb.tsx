@@ -1,5 +1,7 @@
 import { useEffect, useRef } from "react";
 import { ThinkingOrb, type ThinkingOrbProps } from "thinking-orbs";
+import { motionReduced } from "../lib/presence";
+import { useAppStore } from "../lib/store";
 
 /** Any CSS color → [r, g, b], via a 1×1 canvas so every syntax the browser knows works. */
 function toRgb(color: string): [number, number, number] {
@@ -18,6 +20,7 @@ function toRgb(color: string): [number, number, number] {
  * repaints its dots in the accent color.
  */
 export function Orb({ className, ...props }: ThinkingOrbProps) {
+  const reduceMotion = useAppStore((state) => state.reduceMotion);
   const wrap = useRef<HTMLSpanElement>(null);
   const tint = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
@@ -34,7 +37,7 @@ export function Orb({ className, ...props }: ThinkingOrbProps) {
     let parsed = { key: "", rgb: [227, 227, 227] as [number, number, number] };
     let source: HTMLCanvasElement | null = null;
     const draw = (now: number) => {
-      if (!motion?.matches && !props.paused) frame = requestAnimationFrame(draw);
+      if (!motionReduced() && !props.paused) frame = requestAnimationFrame(draw);
       // Nothing to repaint for a hidden window, and the source canvas is looked up
       // once rather than queried from the DOM on every frame.
       if (document.hidden) return;
@@ -71,7 +74,7 @@ export function Orb({ className, ...props }: ThinkingOrbProps) {
       frame = requestAnimationFrame(draw);
     };
     const theme = new MutationObserver(refresh);
-    theme.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme", "data-accent", "class"] });
+    theme.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme", "data-accent", "data-motion", "class"] });
     motion?.addEventListener("change", refresh);
     document.addEventListener("visibilitychange", refresh);
     refresh();
@@ -84,7 +87,7 @@ export function Orb({ className, ...props }: ThinkingOrbProps) {
   }, [props.state, props.size, props.paused, props.theme, props.speed]);
   return (
     <span ref={wrap} className={`accent-orb ${className ?? ""}`}>
-      <ThinkingOrb {...props} />
+      <ThinkingOrb {...props} paused={props.paused || reduceMotion} />
       <canvas ref={tint} className="orb-tint" aria-hidden="true" />
     </span>
   );

@@ -8,6 +8,7 @@
 | Rust (stable) | 1.77.2 or newer | Native shell, `npm run dev`, `npm run build`, native tests |
 | Git | any recent | Changes dock, file index |
 | `muse` CLI | current | Live sessions only. The browser preview and every automated test run without it. |
+| Chromium | Playwright 1.64 registry revision, or a system Chrome/Chromium/Edge channel | The real Browser panel. Not needed for the default test suite; `npx playwright install chromium` installs the matching browser. |
 
 Install the Muse CLI with `curl -fsSL https://dev.meta.ai/install.sh | sh`,
 then sign in with `muse` and `/login`.
@@ -81,6 +82,7 @@ unrelated code.
 | DOM | `apps/desktop/src/components/*.test.tsx` | Vitest + jsdom. Seed state with `src/test/store.ts`. |
 | Native | `#[cfg(test)]` modules in `src-tauri/src/*.rs` | Unit tests, plus `native_shell_e2e_*` in `lib.rs`, which drive `tauri::test::mock_app` against `tests/fixtures/stub-bridge.mjs`. |
 | Live (manual) | `scripts/live-muse-smoke.mjs [--send]` | Handshake and an authenticated cancel against your installed `muse`. Never run in CI. |
+| Browser (manual) | `GLITTER_BROWSER_LIVE_TEST=1 node --test tests/browser.test.mjs` after `npm run build:bridge` | Real local-page navigation, AI refs, click/type, screenshots, console, live frames and shutdown from a copied standalone bundle. Skipped by default and never required in CI. If the development sandbox denies Chromium's own sandbox, also set `GLITTER_BROWSER_ALLOW_UNSANDBOXED=1` for that direct test process only. |
 | Package (macOS) | `scripts/verify-macos-package.mjs` | After `npm run build`: sidecar present, bridge digest baked in, ping works without ambient Node. CI runs this. |
 
 `tests/markdown-blocks.test.mjs` uses the repository's Markdown files (`README.md`,
@@ -114,6 +116,8 @@ None are required. Optional ones:
 | `GLITTER_TEST_GRANTS_ACCOUNT` | native tests | Keyring account name for test grants |
 | `GLITTER_WORK_CEILING_MS` | bridge | Test seam for the per-verb queue ceiling. May only shorten it, never lengthen it, so it cannot weaken the guard in a real session. |
 | `MUSE_BIN` | `scripts/live-muse-smoke.mjs` | Absolute path to a `muse` binary |
+| `GLITTER_BROWSER_LIVE_TEST` | `tests/browser.test.mjs` | Set to `1` to run the real Chromium test; otherwise it is skipped. |
+| `GLITTER_BROWSER_ALLOW_UNSANDBOXED` | direct browser tests only | Set to `1` only when the development sandbox blocks Chromium's own sandbox. The native app ignores this escape hatch and always requires the sandbox. |
 | `BASE`, `CHROMIUM_PATH`, `GPU_ARGS` | `apps/website/scripts/verify-site.mjs` | Target URL and browser for the site check |
 | `APPLE_*` | `tauri build` | Signing and notarization, see [RELEASING.md](RELEASING.md). CI secrets only, never committed. |
 

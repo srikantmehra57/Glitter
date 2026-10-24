@@ -6,7 +6,7 @@ export type BridgeRequest = {
   deadlineInMs?: number;
 };
 
-/** `guarded` is the harness's Autonomous mode; the renderer never sends it to another agent. */
+/** `guarded` is Auto. The app stores it for every agent; Muse's CLI is sent the mode it accepts. */
 export type ApprovalMode = "allowAll" | "promptUnmatched" | "onRequest" | "denyUnmatched" | "guarded";
 export type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 

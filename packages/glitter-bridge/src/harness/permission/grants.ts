@@ -16,6 +16,8 @@ export type Subject =
   | { kind: "path"; path: string }
   /** One tool on one external MCP server. */
   | { kind: "mcp"; server: string; tool: string }
+  /** Read-only browser work, or control on the current/target web origin. */
+  | { kind: "browser"; control: boolean; origin: string }
   | { kind: "none" };
 
 export type Grant =
@@ -24,7 +26,8 @@ export type Grant =
   /** `folder` with an empty path is the whole workspace. */
   | { kind: "path"; match: "file" | "folder"; path: string }
   | { kind: "mcp"; match: "tool"; server: string; tool: string }
-  | { kind: "mcp"; match: "server"; server: string };
+  | { kind: "mcp"; match: "server"; server: string }
+  | { kind: "browser"; origin: string };
 
 export type GrantScope = {
   choiceId: string;
@@ -66,6 +69,9 @@ export function covers(grants: readonly Grant[], subject: Subject): boolean {
   if (subject.kind === "path") {
     return grants.some((grant) => grant.kind === "path" && (grant.match === "file" ? grant.path === subject.path : grant.path === "" || subject.path.startsWith(`${grant.path}/`)));
   }
+  if (subject.kind === "browser") {
+    return Boolean(subject.origin) && grants.some((grant) => grant.kind === "browser" && grant.origin === subject.origin);
+  }
   const command = normalize(subject.command);
   if (grants.some((grant) => grant.kind === "command" && grant.match === "exact" && grant.command === command)) return true;
   const prefixes = grants.flatMap((grant) => (grant.kind === "command" && grant.match === "prefix" ? [grant.argv] : []));
@@ -89,6 +95,10 @@ export function scopesFor(subject: Subject): GrantScope[] {
       { choiceId: "allow-session", label: `Allow ${code(subject.tool)} on ${code(subject.server)} in this thread`, scopeLabel: "This tool", grant: { kind: "mcp", match: "tool", server: subject.server, tool: subject.tool } },
       { choiceId: "allow-session-server", label: `Allow every tool on ${code(subject.server)} in this thread`, scopeLabel: `Any tool on ${subject.server}`, grant: { kind: "mcp", match: "server", server: subject.server } },
     ];
+  }
+  if (subject.kind === "browser") {
+    if (!subject.origin) return [];
+    return [{ choiceId: "allow-session", label: `Allow browser control on ${code(subject.origin)} in this thread`, scopeLabel: `Browser on ${subject.origin}`, grant: { kind: "browser", origin: subject.origin } }];
   }
   if (subject.kind === "path") {
     const scopes: GrantScope[] = [{ choiceId: "allow-session", label: "Allow edits to this file in this thread", scopeLabel: "This file", grant: { kind: "path", match: "file", path: subject.path } }];

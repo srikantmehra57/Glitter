@@ -13,6 +13,8 @@ export type SelectMenuOption = {
   tone?: "danger";
   /** A short note beside the label, such as "Default". */
   tag?: string;
+  /** Draw this option in its own face, so a font menu can show the choice. */
+  fontFamily?: string;
 };
 
 type SelectMenuProps = {
@@ -212,7 +214,7 @@ export function SelectMenu({
       >
         {icon}
         {label ? <span className="selector-label">{label}</span> : null}
-        <span className={`select-value ${selected ? "" : "placeholder"}`.trim()}>
+        <span className={`select-value ${selected ? "" : "placeholder"}`.trim()} style={selected?.fontFamily ? { fontFamily: selected.fontFamily } : undefined}>
           {selected?.label ?? placeholder}
         </span>
         <ChevronDown className="select-chevron" size={12} aria-hidden="true" data-open={open || undefined} />
@@ -228,6 +230,7 @@ export function SelectMenu({
               type="button"
               role="option"
               className={`select-option${option.description ? " rich" : ""}${index === activeIndex ? " active" : ""}${option.tone ? ` ${option.tone}` : ""}`}
+              style={option.fontFamily ? { fontFamily: option.fontFamily } : undefined}
               aria-selected={index === selectedIndex}
               disabled={option.disabled}
               onMouseEnter={() => setActiveIndex(index)}

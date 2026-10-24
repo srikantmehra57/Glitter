@@ -300,40 +300,56 @@ export function spawnIsolated(
   return { child, isolation: describeIsolation(cwd, wrapped.sandboxed) };
 }
 
-async function signalGroup(pid: number, signal: NodeJS.Signals) {
+function groupExists(pid: number): boolean {
+  try {
+    process.kill(-pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function signalGroup(pid: number, signal: NodeJS.Signals): Promise<boolean> {
   try {
     process.kill(-pid, signal);
+    return true;
   } catch {
-    try { process.kill(pid, signal); } catch { /* already gone */ }
+    return false;
   }
 }
 
 /** Close stdin, SIGTERM the process group, then SIGKILL after a grace period. */
 export function terminateTree(child: ChildProcess, graceMs = TREE_GRACE_MS): Promise<{ code: number | null; signal: string | null }> {
   return new Promise((resolve) => {
-    if (child.exitCode != null || child.signalCode != null) {
-      resolve({ code: child.exitCode, signal: child.signalCode });
-      return;
-    }
     const pid = child.pid;
     let settled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const finish = (code: number | null, signal: string | null) => {
+    let result = { code: child.exitCode, signal: child.signalCode };
+    const finish = () => {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
-      resolve({ code, signal });
+      resolve(result);
     };
-    child.once("exit", (code, signal) => finish(code, signal));
-    try { child.stdin?.end(); } catch { /* closed */ }
     const arm = () => {
+      if (settled || timer) return;
       timer = setTimeout(() => {
         const escalate = pid ? signalGroup(pid, "SIGKILL") : Promise.resolve().then(() => { try { child.kill("SIGKILL"); } catch { /* gone */ } });
-        void escalate.finally(() => finish(null, "SIGKILL"));
+        void escalate.finally(finish);
       }, graceMs);
-      timer.unref?.();
     };
-    if (pid) void signalGroup(pid, "SIGTERM").finally(() => { if (!settled) arm(); });
+    child.once("exit", (code, signal) => {
+      result = { code, signal };
+      // Leader exit is not tree exit: a descendant can still hold the group.
+      if (!pid || !groupExists(pid)) finish();
+      else arm();
+    });
+    try { child.stdin?.end(); } catch { /* closed */ }
+    if (pid) void signalGroup(pid, "SIGTERM").then((signalled) => {
+      if (settled) return;
+      if (!signalled && !groupExists(pid)) finish();
+      else arm();
+    });
     else {
       try { child.kill("SIGTERM"); } catch { /* gone */ }
       arm();

@@ -1,5 +1,5 @@
 export type ApprovalMode = "allowAll" | "promptUnmatched" | "onRequest" | "denyUnmatched" | "guarded";
-/** The four modes the Muse CLI knows. `guarded` is the harness's own. */
+/** The modes the Muse CLI accepts. Auto (`guarded`) is translated before it is sent. */
 export type CliApprovalMode = Exclude<ApprovalMode, "guarded">;
 export type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 export type ThemeMode = "system" | "dark" | "light";
@@ -7,6 +7,12 @@ export type AccentColor = "ember" | "mono" | "blue" | "violet" | "pink" | "orang
 /** How deep the dark theme goes; `mid` is the default Smoke palette. */
 export const DARK_INTENSITIES = ["subtle", "mid", "black"] as const;
 export type DarkIntensity = (typeof DARK_INTENSITIES)[number];
+/** Interface typeface. `system` is the face in styles.css; the rest ship with macOS. */
+export const UI_FONTS = ["system", "helvetica", "avenir", "gill", "futura", "newYork"] as const;
+export type UiFont = (typeof UI_FONTS)[number];
+/** Vertical rhythm for workspace and thread rows; standard preserves the original 28px rows. */
+export const SIDEBAR_DENSITIES = ["standard", "comfortable", "compact"] as const;
+export type SidebarDensity = (typeof SIDEBAR_DENSITIES)[number];
 export const THINKING_ORBS = ["auto", "working", "searching", "solving", "listening", "connecting", "weaving", "composing", "breathing", "shaping"] as const;
 export type ThinkingOrbStyle = (typeof THINKING_ORBS)[number];
 /** Which credential pays for a session: the Muse Code subscription sign-in, or a metered API key. */
@@ -14,6 +20,8 @@ export type AuthSource = "subscription" | "apiKey";
 export type AuthMode = "auto" | AuthSource;
 import type { UserInputRequest, UserInputResponse, UserInputAnswer } from "../../../../packages/glitter-bridge/src/protocol";
 export type { UserInputRequest, UserInputResponse, UserInputAnswer };
+import type { BrowserControlInput, BrowserControlResult, BrowserFrame, BrowserState, BrowserStateEvent, BrowserViewport } from "../../../../packages/glitter-bridge/src/browser-types";
+export type { BrowserControlInput, BrowserControlResult, BrowserFrame, BrowserState, BrowserStateEvent, BrowserViewport };
 
 import type { ShortcutOverrides } from "./shortcuts";
 
@@ -143,6 +151,8 @@ export type Detection = {
 };
 
 export type DiagnosticsSnapshot = { os: string; arch: string; logTail: string[] };
+/** Native app-log and Harness session-log locations; no renderer-chosen paths. */
+export type SupportPaths = { appLogPath: string; sessionLogPath: string | null };
 
 /** Muse CLI release-channel urgency (`muse-launcher.sh` channel manifest). */
 export type CliUpdateUrgency = "none" | "encouraged" | "must_download";
@@ -492,6 +502,15 @@ export type DockTab = "changes" | "diff" | "files" | "activity";
 export type WorkspaceFile = { path: string; content?: string; size: number; truncated: boolean; skipped?: string };
 export type SnapshotRestore = { snapshot: TurnSnapshot; conflicts: string[] };
 
+export type TokenSpeed = {
+  /** UTF-16 length of generated text observed by this renderer, matching the existing chars/4 estimate. */
+  characters: number;
+  /** Accumulated active stream time; long gaps between generated chunks are capped. */
+  activeMs: number;
+  /** Renderer clock at the latest accepted generated-text item or delta. */
+  lastAt: number;
+};
+
 export type Thread = {
   /** Native checkpoints; content is retained only in the native snapshot store. */
   snapshots?: Record<string, TurnSnapshot>;
@@ -558,12 +577,14 @@ export type Thread = {
   planAnchor?: string;
   /** When the current turn was sent, and the host's token counts at that moment. */
   turnStartedAt?: number;
+  /** Ephemeral renderer-side stream measurement; never supplied by a provider or CLI. */
+  tokenSpeed?: TokenSpeed;
   turnStartOutput?: number;
   turnStartPrompt?: number;
   /** Cached prompt tokens (read and written) when the turn started; reported apart from the prompt by some providers. */
   turnStartCache?: number;
   /** Time and tokens the last finished turn took; input is undefined when the agent reports output only. */
-  turnStats?: { turnId?: string; durationMs: number; outputTokens?: number; inputTokens?: number; cachedTokens?: number; estimated?: boolean };
+  turnStats?: { turnId?: string; durationMs: number; outputTokens?: number; inputTokens?: number; cachedTokens?: number; estimated?: boolean; tokensPerSecond?: number };
   /** The model calls made so far in the running turn; cleared when the next one starts. */
   turnCalls?: ModelCall[];
   goal?: GoalState | null;
@@ -641,12 +662,18 @@ export type Settings = {
   /** Sandbox network mode (`serve --sandbox-network`). */
   sandboxNetwork: SandboxNetwork;
   theme: ThemeMode;
+  /** Interface typeface. Code, diffs and the terminal stay on the monospace face. */
+  uiFont: UiFont;
   /** How deep the dark theme is when the interface resolves to dark. */
   darkIntensity: DarkIntensity;
   accentColor: AccentColor;
   accentSidebar: boolean;
   /** How see-through the sidebar is, 0 (solid) to 100. Only shows where the window has a material behind it. */
   sidebarTranslucency: number;
+  /** Vertical spacing for workspace and thread rows. */
+  sidebarDensity: SidebarDensity;
+  /** Reduce interface animation in addition to the macOS accessibility preference. */
+  reduceMotion: boolean;
   /** Animation used while an agent thinks; automatic follows the run's effort. */
   thinkingOrb?: ThinkingOrbStyle;
   defaultModel: string;
@@ -694,10 +721,13 @@ export const DEFAULT_SETTINGS: Settings = {
   disableShell: false,
   sandboxNetwork: "proxy-only",
   theme: "system",
+  uiFont: "system",
   darkIntensity: "mid",
   accentColor: "ember",
   accentSidebar: false,
   sidebarTranslucency: 50,
+  sidebarDensity: "standard",
+  reduceMotion: false,
   thinkingOrb: "auto",
   defaultModel: "",
   defaultProviderId: undefined,
@@ -718,51 +748,35 @@ export const DEFAULT_SETTINGS: Settings = {
   workspaces: [],
 };
 
-/** The four CLI label values match the Muse CLI permission picker exactly; `guarded` is harness-only. */
+/**
+ * The permission menu is the app's, for every agent and model.
+ * Ask, Auto, Full access. Read only remains for a thread already using it.
+ */
 export const APPROVAL_LABELS: Record<ApprovalMode, string> = {
   denyUnmatched: "Read only",
-  promptUnmatched: "Ask me",
-  onRequest: "Auto-review",
-  guarded: "Autonomous",
-  allowAll: "Unrestricted",
+  promptUnmatched: "Ask",
+  onRequest: "Ask",
+  guarded: "Auto",
+  allowAll: "Full access",
 };
 
-/** The four CLI descriptions match the Muse CLI permission picker exactly; `guarded` is harness-only. */
 export const APPROVAL_DESCRIPTIONS: Record<ApprovalMode, string> = {
-  denyUnmatched: "Reads files only.",
-  promptUnmatched: "Edits workspace and temporary files; requires approval for protected writes, new network targets, and other restricted actions.",
-  onRequest: "Same access as Ask me; AI reviews eligible actions; trusted permission hooks may decide approval requests first.",
-  guarded: "Edits and ordinary commands run without asking. Risky or destructive commands still ask first.",
-  allowAll: "No filesystem sandbox or approval prompts; local commands have direct network access; project trust is unchanged.",
+  denyUnmatched: "Reads files. Changes nothing.",
+  promptUnmatched: "Edits run, commands ask.",
+  onRequest: "Edits run, commands ask.",
+  guarded: "Risky commands still ask.",
+  allowAll: "No approval prompts.",
 };
 
-/** The four MSP modes offered in the UI, in CLI order from most to least restrictive. */
-export const APPROVAL_ORDER: CliApprovalMode[] = ["denyUnmatched", "promptUnmatched", "onRequest", "allowAll"];
-
-/** The harness also offers Autonomous, between Auto-review and Unrestricted. */
-export const HARNESS_APPROVAL_ORDER: ApprovalMode[] = ["denyUnmatched", "promptUnmatched", "onRequest", "guarded", "allowAll"];
+/** Composer order, strict to open. Full access stays off the saved default. */
+export const APPROVAL_ORDER: ApprovalMode[] = ["onRequest", "guarded", "allowAll"];
 
 /**
- * An agent CLI (ACP) asks the app before a tool runs, and the app answers by
- * the thread's mode (`acp.ts`): decline changes, ask, or approve each request.
+ * The app owns the mode. The agent id is unused: a provider does not get its
+ * own list. A saved Ask-me (`promptUnmatched`) is Ask.
  */
-export const ACP_APPROVAL_ORDER: ApprovalMode[] = ["denyUnmatched", "promptUnmatched", "allowAll"];
-export const ACP_APPROVAL_DESCRIPTIONS: Partial<Record<ApprovalMode, string>> = {
-  denyUnmatched: "Lets reads and searches through; declines any edit or command it asks to run.",
-  promptUnmatched: "Shows every permission request, for you to allow or deny.",
-  allowAll: "Approves every permission request, once each, without asking.",
-};
-
-const isCliAgent = (agentId: AgentId | undefined) => agentId != null && agentId !== "muse" && agentId !== "harness";
-
-/**
- * `guarded` is harness-only: Muse falls back to Auto-review, the closest mode it
- * knows. An agent CLI has neither Auto-review nor Autonomous, so both become Ask me.
- */
-export const approvalModeForAgent = (agentId: AgentId | undefined, mode: ApprovalMode | undefined): ApprovalMode | undefined => {
-  if (isCliAgent(agentId)) return mode === "denyUnmatched" || mode === "allowAll" ? mode : "promptUnmatched";
-  return mode === "guarded" && agentId !== "harness" ? "onRequest" : mode;
-};
+export const approvalModeForAgent = (_agentId: AgentId | undefined, mode: ApprovalMode | undefined): ApprovalMode | undefined =>
+  mode === "promptUnmatched" ? "onRequest" : mode;
 
 export const AUTH_MODE_ORDER: AuthMode[] = ["auto", "subscription", "apiKey"];
 

@@ -6,7 +6,8 @@ import { LoginFlow } from "./login.js";
 import { AcpAgentHost } from "./acp.js";
 import { HARNESS_ID, HarnessHost } from "./harness/host.js";
 import type { McpScope, McpServerInput } from "./harness/mcp.js";
-import type { ProviderCredentials } from "./harness/providers.js";
+import { nativeProviderCredentials } from "./harness/providers.js";
+import type { BrowserControlInput, BrowserManager } from "./browser.js";
 import { agentSpec, checkAgentBin, detectAgents, resolveAgentBin } from "./agents.js";
 import { checkCliUpdate, updateCli } from "./cli-update.js";
 import type { ApprovalMode, BridgeRequest, ReasoningEffort, UserInputResponse } from "./protocol.js";
@@ -85,7 +86,20 @@ function mergeSuggestIdentity(running: SuggestIdentity | null, next: SuggestIden
 }
 const loginFlow = new LoginFlow((event, payload) => emit(event, payload));
 /** The built-in agent runs in this process; one host serves every workspace. */
-const harness = new HarnessHost((event, payload) => emit(event, payload));
+const harnessAuthorizations = new Map<string, import("./harness/mcp.js").McpAuthorization>();
+let browser: BrowserManager | undefined;
+let browserLoading: Promise<BrowserManager> | null = null;
+const harness = new HarnessHost((event, payload) => emit(event, payload), undefined, undefined, undefined, (sessionId) => harnessAuthorizations.get(sessionId));
+async function ensureBrowser(): Promise<BrowserManager> {
+  if (!browserLoading) browserLoading = (async () => {
+    const { BrowserManager, browserExtension } = await import("./browser.js");
+    const manager = new BrowserManager((event, payload) => emit(event, payload));
+    harness.registry.register(browserExtension(manager));
+    browser = manager;
+    return manager;
+  })();
+  return browserLoading;
+}
 const acpHosts = new Map<string, AcpAgentHost>();
 /** sessionId → host key, so session-scoped calls reach the host that owns them. */
 const owners = new Map<string, string>();
@@ -226,6 +240,7 @@ const queues = new Map<string, { tail: Promise<unknown>; pending: number }>();
 const createCache = new Map<string, { expires: number; result: unknown }>();
 
 function queueKey(method: string, params: Record<string, unknown>) {
+  if (["browserOpen", "browserControl", "browserClose"].includes(method)) return `browser:${String(params.workspaceRoot ?? "")}`;
   // An update downloads a release: it must not wedge lifecycle verbs behind it.
   if (method === "updateCli") return "muse:cli-update";
   // Suggestions never hold the session queue. Muse has one quiet host, so its
@@ -360,6 +375,8 @@ function agentOf(params: Record<string, unknown>) {
   return (sessionId && owners.get(sessionId)) || explicit || "muse";
 }
 
+function sessionKey(params: Record<string, unknown>) { return typeof params.sessionId === "string" ? params.sessionId : ""; }
+
 function rememberOwner(sessionId: string, agentId: string) {
   if (!sessionId) return;
   if (owners.has(sessionId)) owners.delete(sessionId);
@@ -383,25 +400,7 @@ function claim<T extends { sessionId?: string; sessions?: Array<{ sessionId: str
  * session ever listed or started, so the entry has to go with the host's state.
  */
 function release(sessionId: string) {
-  if (sessionId) owners.delete(sessionId);
-}
-
-/**
- * Provider keys the native shell injected for a harness request. Each is
- * registered with the redactor first, so no error or log line can echo one.
- */
-function providerCredentials(params: Record<string, unknown>): ProviderCredentials | undefined {
-  const raw = params.providerKeys;
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
-  const credentials: ProviderCredentials = {};
-  for (const [id, value] of Object.entries(raw as Record<string, unknown>)) {
-    if (!value || typeof value !== "object") continue;
-    const entry = value as { key?: unknown; baseUrl?: unknown };
-    const key = typeof entry.key === "string" ? entry.key : undefined;
-    if (key) diagnostics.remember({ [`${id}ApiKey`]: key });
-    credentials[id] = { ...(key ? { key } : {}), ...(typeof entry.baseUrl === "string" && entry.baseUrl ? { baseUrl: entry.baseUrl } : {}) };
-  }
-  return credentials;
+  if (sessionId) { owners.delete(sessionId); harnessAuthorizations.delete(sessionId); }
 }
 
 /** Ids of the providers with saved keys, injected natively (never the keys) for detection. */
@@ -409,11 +408,43 @@ function harnessProviders(params: Record<string, unknown>): string[] {
   return Array.isArray(params.harnessProviders) ? params.harnessProviders.filter((id): id is string => typeof id === "string") : [];
 }
 
+async function dispatchBrowser(method: string, params: Record<string, unknown>) {
+  const manager = await ensureBrowser();
+  const { parseBrowserControl } = await import("./browser.js");
+  const workspaceRoot = typeof params.workspaceRoot === "string" ? params.workspaceRoot : "";
+  if (!workspaceRoot.trim()) throw new Error("A workspace root is required for browser control.");
+  if (method === "browserClose") return manager.control(workspaceRoot, { action: "close" });
+  if (method === "browserOpen") {
+    const input: BrowserControlInput = {
+      action: "open",
+      ...(typeof params.url === "string" ? { url: params.url } : {}),
+      ...(typeof params.width === "number" ? { width: params.width } : {}),
+      ...(typeof params.height === "number" ? { height: params.height } : {}),
+    };
+    return manager.control(workspaceRoot, input);
+  }
+  const raw = { ...params };
+  delete raw.workspaceRoot;
+  const parsed = parseBrowserControl(raw);
+  if (!parsed.request) throw new Error(parsed.error ?? "Invalid browser input.");
+  return manager.control(workspaceRoot, parsed.request);
+}
+
 async function dispatch(method: string, params: Record<string, unknown>) {
+  if (["browserOpen", "browserControl", "browserClose"].includes(method)) return dispatchBrowser(method, params);
   if (typeof params.museApiKey === "string") diagnostics.remember({ museApiKey: params.museApiKey });
+  // Native validation strips decideApproval.sessionId before forwarding. Route
+  // by live approval ownership, or a Harness request falls through to Muse.
+  if (method === "decideApproval" && harness.ownsApproval(String(params.approvalId ?? ""))) return dispatchHarness(method, params);
   const agentId = agentOf(params);
   if (agentId === HARNESS_ID) {
-    harness.setCredentials(providerCredentials(params));
+    await ensureBrowser();
+    harness.setCredentials(nativeProviderCredentials(params));
+    if (params.harnessMcpTrust !== undefined && params.harnessMcpTrust !== null) {
+      const authorization = params.harnessMcpTrust as import("./harness/mcp.js").McpAuthorization;
+      const next = { workspaceTrusted: authorization.workspaceTrusted === true, ...(typeof authorization.configurationDigest === "string" ? { configurationDigest: authorization.configurationDigest } : {}), ...(typeof authorization.homeConfigurationDigest === "string" ? { homeConfigurationDigest: authorization.homeConfigurationDigest } : {}) };
+      harnessAuthorizations.set(sessionKey(params), next);
+    }
     return dispatchHarness(method, params);
   }
   if (agentId !== "muse") {
@@ -798,7 +829,9 @@ async function dispatchHarness(method: string, params: Record<string, unknown>) 
         effort: typeof params.reasoningEffort === "string" ? params.reasoningEffort : undefined,
         mode: typeof params.mode === "string" ? params.mode : undefined,
         approvalMode: typeof params.approvalMode === "string" ? params.approvalMode : undefined,
+        mcpAuthorization: harnessAuthorizations.get(""),
       }));
+      harnessAuthorizations.delete("");
       rememberCreate("startSession", HARNESS_ID, params, started);
       return started;
     }
@@ -927,7 +960,7 @@ function shutdown() {
   process.stdin.pause();
   const timer = setTimeout(() => process.exit(0), 2000);
   timer.unref();
-  void Promise.allSettled([host.stop(), suggestHost.stop(), harness.stop(), ...[...acpHosts.values()].map((agent) => agent.stop())]).finally(() => {
+  void Promise.allSettled([browser ? browser.closeAll() : Promise.resolve(), host.stop(), suggestHost.stop(), harness.stop(), ...[...acpHosts.values()].map((agent) => agent.stop())]).finally(() => {
     clearTimeout(timer);
     process.exit(0);
   });

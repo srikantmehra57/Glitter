@@ -63,11 +63,12 @@ function foldModels(groups: UsageGroup[], limit = COLOR_SLOTS): UsageGroup[] {
 
 /** A stat that counts to its value when the page opens, so the numbers arrive with the charts. */
 function Count({ value, format = formatCount }: { value: number; format?: (value: number) => string }) {
+  const reduceMotion = useAppStore((state) => state.reduceMotion);
   const [shown, setShown] = useState(() => (motionReduced() ? value : 0));
   const latest = useRef(shown);
   latest.current = shown;
   useEffect(() => {
-    if (motionReduced() || latest.current === value) { setShown(value); return; }
+    if (reduceMotion || motionReduced() || latest.current === value) { setShown(value); return; }
     const from = latest.current;
     const started = performance.now();
     let frame = 0;
@@ -78,7 +79,7 @@ function Count({ value, format = formatCount }: { value: number; format?: (value
     };
     frame = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frame);
-  }, [value]);
+  }, [value, reduceMotion]);
   return <>{format(shown)}</>;
 }
 
@@ -221,7 +222,7 @@ function ProviderBreakdown({ rows, total }: { rows: ProviderRow[]; total: number
 const callTokens = (call: ModelCall) => `${call.inputTokens.toLocaleString()} input${call.cachedTokens ? `, ${call.cachedTokens.toLocaleString()} of it cached` : ""} · ${call.outputTokens.toLocaleString()} output tokens`;
 
 /** Each model call behind the recent turns' totals: what it sent, what came back, why it stopped. */
-function Trajectory({ turns, slots }: { turns: UsageSlice[]; slots: Map<string, number> }) {
+function Trajectory({ turns, slots, emptyText = "Harness turns list every call here. Other agents report totals only." }: { turns: UsageSlice[]; slots: Map<string, number>; emptyText?: string }) {
   return (
     <section className="usage-trajectory" aria-labelledby="usage-trajectory-title">
       <div className="usage-section-head">
@@ -262,7 +263,7 @@ function Trajectory({ turns, slots }: { turns: UsageSlice[]; slots: Map<string, 
             );
           })}
         </ol>
-      ) : <p className="usage-empty">Harness turns list every call here. Other agents report totals only.</p>}
+      ) : <p className="usage-empty">{emptyText}</p>}
     </section>
   );
 }
@@ -352,6 +353,9 @@ function ModelDonut({ segments, total, approx }: { segments: Array<{ id: string;
 
 export function UsageView({ embedded = false, actionsHost }: { embedded?: boolean; actionsHost?: HTMLElement | null } = {}) {
   const stored = useAppStore((state) => state.usageLedger);
+  const trajectoryThreadId = useAppStore((state) => state.trajectoryThreadId);
+  const trajectoryThreadTitle = useAppStore((state) => state.trajectoryThreadId ? state.threads.find((thread) => thread.sessionId === state.trajectoryThreadId)?.title : undefined);
+  const clearTrajectory = useAppStore((state) => state.clearThreadTrajectory);
   const preview = useAppStore((state) => state.preview);
   // The plan meter is Meta's subscription. It stays off unless Muse itself is on,
   // so a disabled Muse CLI does not pin the page to a host that is not running.
@@ -376,6 +380,11 @@ export function UsageView({ embedded = false, actionsHost }: { embedded?: boolea
     const timer = window.setInterval(() => void refreshSubscriptionUsage(), 60_000);
     return () => window.clearInterval(timer);
   }, [museOn, refreshSubscriptionUsage]);
+  useEffect(() => {
+    if (!trajectoryThreadId) return;
+    const frame = requestAnimationFrame(() => document.getElementById("usage-trajectory-title")?.scrollIntoView({ block: "start", behavior: motionReduced() ? "auto" : "smooth" }));
+    return () => cancelAnimationFrame(frame);
+  }, [trajectoryThreadId]);
   const now = useMemo(() => new Date(nowMs), [nowMs]);
   const previewDay = preview ? startOfPreview(now) : 0;
   const ledger = useMemo(() => preview ? mockUsageLedger() : stored, [preview, previewDay, stored]);
@@ -414,7 +423,7 @@ export function UsageView({ embedded = false, actionsHost }: { embedded?: boolea
   const longest = Math.max(0, ...(individual.length ? individual : slices).map((slice) => slice.durationMs));
   const threads = new Set(individual.map((slice) => slice.threadId).filter(Boolean)).size;
   const workspaces = new Set(individual.map((slice) => slice.workspace).filter(Boolean)).size;
-  const trajectory = individual.filter((slice) => slice.calls?.length).sort((a, b) => b.at - a.at).slice(0, TRAJECTORY_TURNS);
+  const trajectory = individual.filter((slice) => slice.calls?.length && (!trajectoryThreadId || slice.threadId === trajectoryThreadId)).sort((a, b) => b.at - a.at).slice(0, TRAJECTORY_TURNS);
   const streaks = useMemo(() => streakStats(slices, now), [now, slices]);
   const peak = useMemo(() => peakTokens(slices, now), [now, slices]);
   const busiest = useMemo(() => busiestDay(slices, now), [now, slices]);
@@ -624,7 +633,8 @@ export function UsageView({ embedded = false, actionsHost }: { embedded?: boolea
             </dl>
           </section>
         </div>
-        <Trajectory turns={trajectory} slots={slots} />
+        {trajectoryThreadId ? <div className="usage-thread-filter"><span>Model calls for <strong>{trajectoryThreadTitle ?? "this thread"}</strong></span><button type="button" className="text-btn" onClick={clearTrajectory}>View all threads</button></div> : null}
+        <Trajectory turns={trajectory} slots={slots} emptyText={trajectoryThreadId ? "No recent model calls are recorded for this thread. Older turns and other agents may report totals only." : undefined} />
         {/* Muse's own plan meter, for people who also run Muse: after Glitter's counts, not ahead of them. */}
         {museOn ? <PlanUsage now={nowMs} /> : null}
         <p className="usage-note">

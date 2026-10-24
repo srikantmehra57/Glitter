@@ -536,6 +536,23 @@ test('local saves go through the native atomic writer and never the plugin write
   assert.equal(docs[0].sessionMemory.dockOpen, false, 'the payload carries the change that triggered it');
 });
 
+test('manual unread state is saved with the other thread metadata', async () => {
+  const store = await frontendStore(true);
+  workspace(store);
+  store.setState({ threads: [{ sessionId: 's1', workspacePath: '/repo', title: 'Work', status: 'idle', unread: false, opened: true, items: [] }] });
+  globalThis.persistedData = {};
+  await flushMemorySave();
+  let document = null;
+  globalThis.persistStoreDocument = async (json) => { document = JSON.parse(json); };
+  store.getState().setThreadUnread('s1', true);
+  assert.equal(store.getState().threads[0].unread, true);
+  await flushMemorySave();
+  assert.equal(document.sessionMemory.threadMeta.s1.unread, true);
+  store.getState().setThreadUnread('s1', false);
+  await flushMemorySave();
+  assert.equal(document.sessionMemory.threadMeta.s1.unread, false);
+});
+
 test('a failed local save surfaces a banner and the next success clears it', async () => {
   const store = await frontendStore(true);
   globalThis.persistedData = {};
@@ -677,6 +694,19 @@ test('a newer session document is left unchanged and the banner says so', async 
   }
 });
 
+test('an older settings save preserves fields from a newer document', async () => {
+  const { SettingsPersistence } = await bundle('apps/desktop/src/lib/settingsPersistence.ts');
+  const backing = { settings: { theme: 'light', futureSetting: { enabled: true } } };
+  const persistence = new SettingsPersistence(
+    { get: async () => backing.settings, set: async (_key, value) => { backing.settings = value; }, save: async () => {} },
+    { get: async () => null, set: async () => {} },
+  );
+  const loaded = await persistence.load();
+  await persistence.save({ ...loaded, theme: 'dark' });
+  assert.deepEqual(backing.settings.futureSetting, { enabled: true });
+  assert.equal(backing.settings.theme, 'dark');
+});
+
 test('an intact store document raises no recovery banner', async () => {
   globalThis.storeRepair = { status: 'ok' };
   globalThis.persistedData = { sessionMemory: { version: 1, drafts: { 'thread:s1': { text: 'Ordinary draft', images: [] } } } };
@@ -772,6 +802,23 @@ test('deleting a thread with a running turn stops the turn instead of orphaning 
   store.getState().deleteThread('idle');
   await sleep(20);
   assert.equal(calls.filter(([method]) => method === 'cancelTurn').length, 0, 'nothing was running, so nothing is cancelled');
+});
+
+test('deleting during the send acknowledgement cancels before closing the session', async () => {
+  const store = await frontendStore();
+  workspace(store);
+  const calls = [];
+  globalThis.storeBridge = async (method, params) => { calls.push([method, params]); return {}; };
+  store.setState({
+    threads: [{ sessionId: 'pending', agentId: 'opencode', workspacePath: '/repo', items: [], opened: true, status: 'running', activeTurnId: null, title: 'Pending' }],
+    selectedSessionId: 'pending',
+  });
+  store.getState().deleteThread('pending');
+  await sleep(20);
+  assert.deepEqual(calls.map(([method]) => method), ['cancelTurn', 'closeSession']);
+  assert.equal(calls[0][1].sessionId, 'pending');
+  assert.equal(calls[0][1].turnId, undefined, 'cancel does not need the missing acknowledgement id');
+  assert.equal(store.getState().threads.length, 0);
 });
 
 test('removing a workspace stops every running turn it owned', async () => {
@@ -1499,6 +1546,24 @@ test('drafting a commit message never replaces a composer draft and fills the bo
   assert.equal(store.getState().commitDraft.text, 'Fix flaky login test');
 });
 
+test('archiving the selected thread preserves its draft and the workspace draft', async () => {
+  const store = await frontendStore();
+  workspace(store);
+  store.setState({
+    selectedSessionId: 's1',
+    composer: 'live thread draft',
+    threads: [{ sessionId: 's1', workspacePath: '/repo', title: 'Work', status: 'idle', opened: true, items: [] }],
+    drafts: { 'thread:s1': { text: 'older thread draft' }, 'project:w': { text: 'workspace draft' } },
+  });
+  store.getState().archiveThread('s1');
+  assert.equal(store.getState().selectedSessionId, null);
+  assert.equal(store.getState().composer, 'workspace draft');
+  assert.equal(store.getState().drafts['thread:s1'].text, 'live thread draft');
+  await store.getState().selectThread('s1');
+  assert.equal(store.getState().composer, 'live thread draft');
+  assert.equal(store.getState().drafts['project:w'].text, 'workspace draft');
+});
+
 test('line comments are sent as one message without touching the composer draft, and steer a running Muse turn', async () => {
   const store = await frontendStore(); workspace(store);
   globalThis.readGit = () => git(['a.ts']);
@@ -1534,6 +1599,78 @@ test('line comments are sent as one message without touching the composer draft,
   store.getState().addLineComment(comment);
   await assert.rejects(store.getState().sendLineComments(), /Stop the running turn first/);
   assert.equal(store.getState().lineComments['thread:s1'].length, 1);
+});
+
+test('line comment delivery preserves both threads drafts after navigation', async () => {
+  const store = await frontendStore();
+  workspace(store);
+  const gate = deferred();
+  globalThis.storeBridge = async (method, params) => {
+    if (method === 'sendTurn') { await gate.promise; return { turnId: 't1' }; }
+    return {};
+  };
+  store.setState({
+    selectedSessionId: 's1', composer: 'original thread draft',
+    threads: [
+      { sessionId: 's1', workspacePath: '/repo', title: 'One', status: 'idle', opened: true, items: [] },
+      { sessionId: 's2', workspacePath: '/repo', title: 'Two', status: 'idle', opened: true, items: [] },
+    ],
+  });
+  store.getState().addLineComment({ path: 'a.ts', line: 4, removed: false, context: '@@ -1 +1 @@\n+x', text: 'Check this' });
+  const sending = store.getState().sendLineComments();
+  await sleep(0);
+  await store.getState().selectThread('s2');
+  store.setState({ composer: 'second thread draft' });
+  gate.resolve();
+  await sending;
+  assert.equal(store.getState().composer, 'second thread draft', 'the destination composer is not overwritten');
+  assert.equal(store.getState().drafts['thread:s1'].text, 'original thread draft', 'the original draft is restored in its own record');
+});
+
+test('overlapping settings changes persist the union of both patches', async () => {
+  const store = await frontendStore();
+  workspace(store);
+  globalThis.persistedData = { settings: {} };
+  const dark = store.getState().commitSettings({ theme: 'dark' });
+  const blue = store.getState().commitSettings({ accentColor: 'blue' });
+  await Promise.all([dark, blue]);
+  assert.equal(store.getState().theme, 'dark');
+  assert.equal(store.getState().accentColor, 'blue');
+  assert.equal(globalThis.persistedData.settings.theme, 'dark', 'the first patch is not lost from disk');
+  assert.equal(globalThis.persistedData.settings.accentColor, 'blue');
+});
+
+test('Harness MCP refreshes and writes stay with their owning session', async () => {
+  const store = await frontendStore();
+  workspace(store);
+  const a = deferred();
+  const b = deferred();
+  globalThis.storeBridge = async (method, params) => {
+    if (method === 'harnessMcp' || method === 'harnessMcpConfig') return params.sessionId === 'a' ? a.promise : b.promise;
+    return {};
+  };
+  store.setState({
+    selectedSessionId: 'a',
+    threads: [
+      { sessionId: 'a', agentId: 'harness', workspacePath: '/repo', title: 'A', status: 'idle', opened: true, items: [] },
+      { sessionId: 'b', agentId: 'harness', workspacePath: '/repo', title: 'B', status: 'idle', opened: true, items: [] },
+    ],
+  });
+  const first = store.getState().refreshHarnessMcp('a');
+  const firstConfig = store.getState().refreshHarnessMcpConfig('a');
+  await store.getState().selectThread('b');
+  const second = store.getState().refreshHarnessMcp('b');
+  const secondConfig = store.getState().refreshHarnessMcpConfig('b');
+  a.resolve({ servers: [{ name: 'a-server', transport: 'stdio', tools: 1 }] });
+  await Promise.all([first, firstConfig]);
+  assert.deepEqual(store.getState().harnessMcp.servers, [], 'the other session is still loading, not shown as its predecessor');
+  assert.deepEqual(store.getState().harnessMcpConfig.servers, []);
+  b.resolve({ servers: [{ name: 'b-server', transport: 'http', tools: 2 }] });
+  await Promise.all([second, secondConfig]);
+  assert.deepEqual(store.getState().harnessMcp.servers.map((server) => server.name), ['b-server']);
+  assert.deepEqual(store.getState().harnessMcpConfig.servers.map((server) => server.name), ['b-server']);
+  assert.equal(store.getState().harnessMcpLoading, null);
+  assert.equal(store.getState().harnessMcpConfigLoading, null);
 });
 
 test('zoom changes reach the window once per step and stop at the limits', async () => {

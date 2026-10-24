@@ -9,7 +9,7 @@ import { pathToFileURL } from 'node:url';
 const temporary = await mkdtemp(join(tmpdir(), 'muse-acp-'));
 const outfile = join(temporary, 'acp.mjs');
 await build({ entryPoints: [resolve('packages/glitter-bridge/src/acp.ts')], bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'silent' });
-const { AcpAgentHost, fatalProviderError, zenFreeModel, fallbackOpencodeModel, modelIdsFromError, modelOption, applyClineFree, fetchClineFreeIds, opencodeModelsFromCatalog, disabledOpencodeModelIds, mergeOpencodeModels } = await import(pathToFileURL(outfile).href);
+const { AcpAgentHost, acpPermissionDecision, fatalProviderError, zenFreeModel, fallbackOpencodeModel, modelIdsFromError, modelOption, applyClineFree, fetchClineFreeIds, opencodeModelsFromCatalog, disabledOpencodeModelIds, mergeOpencodeModels } = await import(pathToFileURL(outfile).href);
 
 test('rate limits and disabled models are fatal provider errors', () => {
   assert.equal(fatalProviderError('mimo-v2.5-free: Rate limit exceeded. Please try again later.'), true);
@@ -342,6 +342,21 @@ test('ACP initialization errors redact stderr canaries before reaching the calle
   } finally { await host.stop(); }
 });
 
+test('automatic ACP approval never falls back to an always grant', async () => {
+  const events = [];
+  const spec = { id: 'fake', name: 'Fake', protocol: 'acp', bins: [], acpArgs: [resolve('tests/fixtures/fake-acp-agent.mjs'), '--always-only'], verified: true, signIn: '' };
+  const host = new AcpAgentHost(spec, process.execPath, (event, payload) => events.push({ event, payload }));
+  try {
+    await host.startSession({ workspaceRoot: '/tmp/ws', approvalMode: 'allowAll' });
+    await host.sendTurn({ sessionId: 's1', text: 'list files' });
+    const approval = await until(events, ({ event }) => event === 'approval');
+    assert.ok(approval, 'an always-only choice is reviewed instead of silently selected');
+    assert.equal(events.some(({ event, payload }) => event === 'approvalAudit' && payload.outcome === 'auto-approved'), false);
+    host.decideApproval({ approvalId: approval.payload.approvalId, choiceId: 'yes' });
+    await until(events, ({ event }) => event === 'turnCompleted');
+  } finally { await host.stop(); }
+});
+
 test('suggest runs one muted turn: text is collected, nothing is emitted, the session is closed', async () => {
   const { host, events } = fakeAgent();
   try {
@@ -372,8 +387,18 @@ test('a model rescan returns the freshly probed catalog and keeps the session ro
   } finally { await host.stop(); }
 });
 
+test('the app answers an agent permission request with the same three modes', () => {
+  assert.equal(acpPermissionDecision('onRequest', { kind: 'edit', rawInput: { path: 'a.ts' } }), 'allow');
+  assert.equal(acpPermissionDecision('onRequest', { kind: 'execute', rawInput: { command: 'ls' } }), 'allow');
+  assert.equal(acpPermissionDecision('onRequest', { kind: 'execute', rawInput: { command: 'npm test' } }), 'ask');
+  assert.equal(acpPermissionDecision('guarded', { kind: 'execute', rawInput: { command: 'npm test' } }), 'allow');
+  assert.equal(acpPermissionDecision('guarded', { kind: 'execute', rawInput: { command: 'rm -rf src' } }), 'ask');
+  assert.equal(acpPermissionDecision('allowAll', { kind: 'execute', rawInput: { command: 'rm -rf /' } }), 'deny');
+  assert.equal(acpPermissionDecision('promptUnmatched', { kind: 'execute', rawInput: { command: 'ls' } }), 'ask');
+});
+
 test('an agent CLI thread answers permission requests by its mode, and audits each automatic answer', async () => {
-  for (const [mode, expected] of [['allowAll', { status: 'completed', choice: 'yes', outcome: 'auto-approved' }], ['denyUnmatched', { status: 'failed', choice: 'no', outcome: 'auto-denied' }]]) {
+  for (const [mode, expected] of [['allowAll', { status: 'completed', choice: 'yes', outcome: 'auto-approved' }], ['onRequest', { status: 'completed', choice: 'yes', outcome: 'auto-approved' }], ['guarded', { status: 'completed', choice: 'yes', outcome: 'auto-approved' }], ['denyUnmatched', { status: 'failed', choice: 'no', outcome: 'auto-denied' }]]) {
     const events = [];
     const spec = { id: 'fake', name: 'Fake', protocol: 'acp', bins: [], acpArgs: [resolve('tests/fixtures/fake-acp-agent.mjs')], verified: true, signIn: '' };
     const host = new AcpAgentHost(spec, process.execPath, (event, payload) => events.push({ event, payload }));
@@ -391,7 +416,8 @@ test('an agent CLI thread answers permission requests by its mode, and audits ea
   const { host } = fakeAgent();
   try {
     await host.startSession({ workspaceRoot: '/tmp/ws' });
-    assert.deepEqual(host.setApprovalMode('s1', 'onRequest').effectiveMode, { mode: 'promptUnmatched' }, 'a mode an agent CLI cannot honour falls back to Ask me');
+    assert.deepEqual(host.setApprovalMode('s1', 'onRequest').effectiveMode, { mode: 'onRequest' });
+    assert.deepEqual(host.setApprovalMode('s1', 'guarded').effectiveMode, { mode: 'guarded' });
     assert.throws(() => host.setApprovalMode('nope', 'allowAll'), /Unknown Fake session/);
   } finally { await host.stop(); }
 });

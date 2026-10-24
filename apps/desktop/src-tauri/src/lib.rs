@@ -21,6 +21,7 @@ mod exec;
 mod export_markdown;
 mod framing;
 mod legacy;
+mod mcp_consent;
 mod process;
 mod snapshots;
 mod terminal;
@@ -125,6 +126,8 @@ struct AppState {
     exec_pins: exec::ExecPins,
     /// Cross-restart ACP identity pins (path + digest per agent).
     agent_pins: exec::AgentPins,
+    /// Workspace trust and configuration-bound MCP startup permission.
+    workspace_security: mcp_consent::WorkspaceSecurity,
 }
 
 impl AppState {
@@ -143,6 +146,7 @@ impl AppState {
             picked_installs: Mutex::new(HashSet::new()),
             exec_pins: exec::ExecPins::new(),
             agent_pins: exec::AgentPins::new(HashMap::new()),
+            workspace_security: mcp_consent::WorkspaceSecurity::default(),
         }
     }
 }
@@ -179,6 +183,9 @@ const BRIDGE_METHODS: &[&str] = &[
     "mcpServers",
     "userShell",
     "readOutput",
+    "browserOpen",
+    "browserControl",
+    "browserClose",
     "setReasoningEffort",
     "subagentControl",
     "taskControl",
@@ -720,18 +727,23 @@ fn inject_agent_bin(state: &AppState, params: &mut Value) -> Result<(), String> 
     let spec = exec::agent_spec(&agent_id).ok_or_else(|| format!("Unknown agent: {agent_id}"))?;
     let canonical = exec::resolve_agent_bin(spec)?;
     state.exec_pins.check(&canonical, &format!("The {} CLI", spec.name))?;
-    // The identity check runs on every request that names an agent. Digests and
-    // the `--version` probe are remembered per binary, and the keyring is
-    // rewritten only when a pin actually changed — not on every call.
-    let version = exec::probe_version_cached(&canonical);
-    let outcome = state.agent_pins.check(&agent_id, &canonical, version)?;
+    // Authorize the identity before any execution. The stored version is only
+    // metadata, so ordinary requests never respawn an unchanged agent.
+    let previous_version = state.agent_pins.get(&agent_id).and_then(|pin| pin.version);
+    let outcome = state.agent_pins.check(&agent_id, &canonical, previous_version)?;
+    if outcome.changed() {
+        persist_agent_pins(state);
+    }
+    if outcome.changed() || state.agent_pins.get(&agent_id).and_then(|pin| pin.version).is_none() {
+        let version = exec::probe_version_cached(&canonical);
+        if state.agent_pins.refresh_version(&agent_id, &canonical, version)? {
+            persist_agent_pins(state);
+        }
+    }
     if let exec::PinCheck::VendorUpdate { from, team } = &outcome {
         // Accepted without asking, so it is recorded where trust decisions go.
         let _ = write_security_audit(&format!("agent-update\t{agent_id}\t{team}\t{from}\t{}", canonical.to_string_lossy()));
         native_log("info", "agent.vendor_update", &format!("{agent_id} updated by its signer {team}"));
-    }
-    if outcome.changed() {
-        persist_agent_pins(state);
     }
     let object = params.as_object_mut().ok_or("Bridge parameters must be an object")?;
     object.insert("agentBin".into(), Value::String(canonical.to_string_lossy().into_owned()));
@@ -917,10 +929,63 @@ fn harness_env<R: Runtime>(app: &AppHandle<R>, cmd: &mut std::process::Command) 
     }
 }
 
+/// Chromium is an app-managed executable, not a renderer-selected program.
+/// Prefer the full browser matching the pinned Playwright registry, then a
+/// system channel, then the matching headless shell. The digest is pinned for
+/// this bridge process and checked again by the bridge before a relaunch.
+fn resolve_browser_bin(state: &AppState) -> Option<PathBuf> {
+    // Playwright 1.64.1 (`node_modules/playwright-core/browsers.json`).
+    const CHROMIUM_REVISION: &str = "1248";
+    let mut candidates = Vec::new();
+    #[cfg(target_os = "macos")]
+    {
+        let full = if cfg!(target_arch = "aarch64") { "chrome-mac-arm64" } else { "chrome-mac-x64" };
+        let shell = if cfg!(target_arch = "aarch64") { "chrome-headless-shell-mac-arm64" } else { "chrome-headless-shell-mac-x64" };
+        if let Some(home) = dirs::home_dir() {
+            let cache = home.join("Library/Caches/ms-playwright");
+            candidates.push(cache.join(format!("chromium-{CHROMIUM_REVISION}")).join(full).join("Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"));
+            candidates.push(cache.join(format!("chromium_headless_shell-{CHROMIUM_REVISION}")).join(shell).join("chrome-headless-shell"));
+        }
+        candidates.extend([
+            PathBuf::from("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+            PathBuf::from("/Applications/Chromium.app/Contents/MacOS/Chromium"),
+            PathBuf::from("/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"),
+        ]);
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let full = if cfg!(target_arch = "aarch64") { "chrome-linux-arm64/chrome" } else { "chrome-linux64/chrome" };
+        let shell = if cfg!(target_arch = "aarch64") { "chrome-headless-shell-linux-arm64/chrome-headless-shell" } else { "chrome-headless-shell-linux64/chrome-headless-shell" };
+        if let Some(home) = dirs::home_dir() {
+            let cache = home.join(".cache/ms-playwright");
+            candidates.push(cache.join(format!("chromium-{CHROMIUM_REVISION}")).join(full));
+            candidates.push(cache.join(format!("chromium_headless_shell-{CHROMIUM_REVISION}")).join(shell));
+        }
+    }
+    candidates.into_iter().find_map(|path| {
+        if !path.is_file() {
+            return None;
+        }
+        let canonical = exec::validate_exec(&path.to_string_lossy(), &|name| matches!(name, "Google Chrome for Testing" | "Google Chrome" | "Chromium" | "Microsoft Edge" | "chrome" | "chrome-headless-shell"), "Chromium").ok()?;
+        state.exec_pins.check(&canonical, "Chromium").ok()?;
+        Some(canonical)
+    })
+}
+
+fn browser_env(state: &AppState, cmd: &mut std::process::Command) {
+    // With no authorized executable the bridge must not search ambient channels.
+    cmd.env("GLITTER_NATIVE_BROWSER_CHECK", "1");
+    if let Some(path) = resolve_browser_bin(state) {
+        cmd.env("GLITTER_BROWSER_BIN", &path);
+        if let Ok(digest) = exec::sha256_file(&path) {
+            cmd.env("GLITTER_BROWSER_SHA256", digest);
+        }
+    }
+}
+
 fn spawn_bridge<R: Runtime>(app: &AppHandle<R>, state: &AppState) -> Result<Bridge, String> {
     #[cfg(debug_assertions)]
     {
-        let _ = state;
         let node = node_bin()?;
         let script = bridge_script(app)?;
         let mut cmd = command(node);
@@ -928,6 +993,7 @@ fn spawn_bridge<R: Runtime>(app: &AppHandle<R>, state: &AppState) -> Result<Brid
         process::isolate_command(&mut cmd);
         cmd.env("PATH", augmented_path());
         harness_env(app, &mut cmd);
+        browser_env(state, &mut cmd);
         let child = cmd.spawn().map_err(|err| format!("Failed to start Glitter bridge: {err}"))?;
         spawn_bridge_stdio(child, app)
     }
@@ -942,6 +1008,7 @@ fn spawn_bridge<R: Runtime>(app: &AppHandle<R>, state: &AppState) -> Result<Brid
         process::isolate_command(&mut cmd);
         cmd.env("PATH", augmented_path());
         harness_env(app, &mut cmd);
+        browser_env(state, &mut cmd);
         let child = cmd.spawn().map_err(|err| format!("Failed to start Glitter bridge: {err}"))?;
         return spawn_bridge_stdio(child, app);
     }
@@ -1030,6 +1097,15 @@ fn bridge_request_impl<R: Runtime>(state: &AppState, app: &AppHandle<R>, id: Str
             call_grant = Some(grant_id);
         }
     }
+    if matches!(method.as_str(), "browserOpen" | "browserControl" | "browserClose") {
+        let grant_id = params.get("grantId").and_then(Value::as_str).unwrap_or("").to_string();
+        if grant_id.is_empty() {
+            return Err("A workspace grant is required for browser control.".into());
+        }
+        let root = grant_root(state, &grant_id)?;
+        let object = params.as_object_mut().ok_or("Bridge parameters must be an object")?;
+        object.insert("workspaceRoot".into(), Value::String(root.to_string_lossy().into_owned()));
+    }
     if method == "resumeSession" {
         let session_id = params.get("sessionId").and_then(Value::as_str).unwrap_or("");
         let grant_id = require_session(state, session_id)?;
@@ -1066,6 +1142,21 @@ fn bridge_request_impl<R: Runtime>(state: &AppState, app: &AppHandle<R>, id: Str
         let harness_session = params.get("sessionId").and_then(Value::as_str).is_some_and(|id| id.starts_with("h-"));
         if harness_session {
             inject_provider_keys(&mut params)?;
+        }
+    }
+    let native_mcp = (method == "startSession" && params.get("agentId").and_then(Value::as_str) == Some("harness"))
+        || (matches!(method.as_str(), "resumeSession" | "sendTurn" | "harnessMcp" | "harnessMcpConfig")
+            && params.get("sessionId").and_then(Value::as_str).is_some_and(|id| id.starts_with("h-")));
+    if native_mcp {
+        let grant_id = if method == "startSession" {
+            params.get("grantId").and_then(Value::as_str).unwrap_or("").to_string()
+        } else {
+            require_session(state, params.get("sessionId").and_then(Value::as_str).unwrap_or(""))?
+        };
+        if !grant_id.is_empty() {
+            // Supply absence of consent too: a changed or revoked approval must
+            // not leave the previous authorization in the bridge's session map.
+            mcp_consent::inject(state, &grant_id, &mut params)?;
         }
     }
     if method == "decideApproval" {
@@ -2998,27 +3089,26 @@ struct AgentIdentity {
 
 fn agent_identity(state: &AppState, spec: &exec::AgentSpec) -> AgentIdentity {
     let resolved = exec::resolve_agent_bin(spec).ok();
-    let version = resolved.as_deref().and_then(exec::probe_version_cached);
     let digest = resolved.as_deref().and_then(|path| exec::digest_of(path).ok());
     let pinned = state.agent_pins.get(spec.id);
-    let changed = match (&pinned, &resolved, &digest) {
-        (Some(pin), Some(path), Some(digest)) => pin.path != path.to_string_lossy() || pin.sha256 != *digest,
+    let unchanged = match (&pinned, &resolved, &digest) {
+        (Some(pin), Some(path), Some(digest)) => pin.path == path.to_string_lossy() && pin.sha256 == *digest,
         _ => false,
     };
     AgentIdentity {
         agent_id: spec.id.to_string(),
         name: spec.name.to_string(),
         path: resolved.map(|path| path.to_string_lossy().into_owned()),
-        version,
+        version: if unchanged { pinned.as_ref().and_then(|pin| pin.version.clone()) } else { None },
         pinned: pinned.is_some(),
-        changed,
+        changed: pinned.is_some() && !unchanged,
     }
 }
 
 /// Display-only agent identities for Settings: canonical path, version, and
 /// pin/drift state. Resolves without recording — first sighting pins when the
-/// agent is actually used. Hashing and version probes can take real time on a
-/// cold disk, so this runs on the blocking pool rather than the UI thread.
+/// agent is actually used. Hashing can take real time on a cold disk, so this
+/// runs on the blocking pool rather than the UI thread.
 #[tauri::command]
 async fn agent_identities(app: AppHandle) -> Result<Vec<AgentIdentity>, String> {
     blocking(move || {
@@ -3035,12 +3125,18 @@ async fn agent_identities(app: AppHandle) -> Result<Vec<AgentIdentity>, String> 
 async fn confirm_agent_bin(app: AppHandle, agent_id: String) -> Result<AgentIdentity, String> {
     blocking(move || {
         let state = app.state::<AppState>();
+        if !credentials::acp_consent_value().unwrap_or(false) {
+            return Err("Third-party agents run without an OS sandbox. Confirm that in Settings → Agents before using them.".into());
+        }
         let spec = exec::agent_spec(&agent_id).filter(|spec| spec.id != "muse").ok_or("Unknown agent.")?;
         let canonical = exec::resolve_agent_bin(spec)?;
         state.exec_pins.check(&canonical, &format!("The {} CLI", spec.name))?;
-        let version = exec::probe_version_cached(&canonical);
-        state.agent_pins.confirm(&agent_id, &canonical, version)?;
+        state.agent_pins.confirm(&agent_id, &canonical, None)?;
         persist_agent_pins(&state);
+        let version = exec::probe_version_cached(&canonical);
+        if state.agent_pins.refresh_version(&agent_id, &canonical, version)? {
+            persist_agent_pins(&state);
+        }
         Ok(agent_identity(&state, spec))
     })
     .await
@@ -3092,6 +3188,7 @@ async fn remove_grant(app: AppHandle, grant_id: String) -> Result<(), String> {
         native_log("info", "grant.revoked", &format!("workspace grant revoked: {}", grant_tag(&grant_id)));
         let legacy = legacy_worktree_store(&app);
         let stores: Vec<PathBuf> = worktree_store(&app).ok().into_iter().chain(legacy.clone()).collect();
+        let browser_roots: Vec<(String, PathBuf)> = state.grants.lock().map_err(|err| err.to_string())?.iter().map(|(id, root)| (id.clone(), root.clone())).collect();
         let revoked = revoke_grant(&state, &stores, &grant_id)?;
         if let Some(legacy) = &legacy {
             legacy::prune_worktree_store(legacy);
@@ -3102,6 +3199,14 @@ async fn remove_grant(app: AppHandle, grant_id: String) -> Result<(), String> {
         // A shell left running in a folder the app no longer has access to would outlive the grant.
         if let Ok(mut terminals) = state.terminals.lock() {
             terminals.close_grants(&revoked);
+        }
+        // Native-originated close needs no revoked grant. Do not spawn a new
+        // bridge just for cleanup, and never leave that workspace's page alive.
+        let bridge_alive = state.bridge.lock().ok().is_some_and(|bridge| bridge.is_some());
+        if bridge_alive {
+            for (_, root) in browser_roots.into_iter().filter(|(id, _)| revoked.contains(id)) {
+                let _ = send_bridge_request(&state, &app, &format!("browser-revoke-{}", uuid::Uuid::new_v4().simple()), "browserClose", json!({ "workspaceRoot": root }));
+            }
         }
         Ok(())
     })
@@ -3240,6 +3345,31 @@ fn export_to_path(state: &AppState, session_id: &str, out: &str, muse_bin: &str,
 /// `item/readOutput` pages, small enough to keep one dialog write sane.
 const OUTPUT_SAVE_LIMIT: usize = 32 * 1024 * 1024;
 
+fn read_rules_preview(root: &Path) -> Option<TrustRules> {
+    let root = root.canonicalize().ok()?;
+    let path = root.join("AGENTS.md").canonicalize().ok()?;
+    if !path.starts_with(&root) || !path.is_file() {
+        return None;
+    }
+    // Only the first 64 KiB is ever shown, so never read past it: an AGENTS.md
+    // that is simply enormous would otherwise allocate without bound.
+    let file = std::fs::File::open(path).ok()?;
+    let mut bytes = Vec::new();
+    let mut reader = std::io::Read::take(file, RULES_PREVIEW_LIMIT);
+    let read = std::io::Read::read_to_end(&mut reader, &mut bytes).ok()?;
+    if read == 0 {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&bytes);
+    let excerpt: String = text.chars().take(2000).collect();
+    let truncated = text.len() > excerpt.len() || read == RULES_PREVIEW_LIMIT as usize;
+    Some(TrustRules {
+        path: "AGENTS.md".into(),
+        excerpt,
+        truncated,
+    })
+}
+
 /// Trusted-content preview for the workspace trust decision: the workspace
 /// skills the host would load plus the workspace rules file. Grant-gated
 /// and read-only; both halves are best-effort (an unreadable side yields
@@ -3261,30 +3391,7 @@ async fn trust_preview(app: AppHandle, grant_id: String, muse_bin: String) -> Re
         }
         let stdout = String::from_utf8_lossy(&listed.stdout);
         let skills = parse_skill_list(&stdout);
-        let rules_path = root.join("AGENTS.md");
-        // Only the first 64 KiB is ever shown, so never read past it: an AGENTS.md
-        // that is a symlink to /dev/zero, or simply enormous, would otherwise
-        // allocate until the process aborts.
-        let rules = match std::fs::File::open(&rules_path) {
-            Ok(file) => {
-                let mut bytes = Vec::new();
-                let mut reader = std::io::Read::take(file, RULES_PREVIEW_LIMIT);
-                match std::io::Read::read_to_end(&mut reader, &mut bytes) {
-                    Ok(read) if read > 0 => {
-                        let text = String::from_utf8_lossy(&bytes);
-                        let excerpt: String = text.chars().take(2000).collect();
-                        let truncated = text.len() > excerpt.len() || read == RULES_PREVIEW_LIMIT as usize;
-                        Some(TrustRules {
-                            path: "AGENTS.md".into(),
-                            excerpt,
-                            truncated,
-                        })
-                    }
-                    _ => None,
-                }
-            }
-            Err(_) => None,
-        };
+        let rules = read_rules_preview(&root);
         Ok(TrustPreview {
             skills,
             rules,
@@ -3336,7 +3443,8 @@ fn run_bounded(mut cmd: Command, what: &str, timeout: std::time::Duration) -> Re
     match rx.recv_timeout(timeout) {
         Ok(output) => output.map_err(|err| format!("{what} failed: {err}")),
         Err(_) => {
-            process::kill_tree(pid);
+            process::kill_tree_with_grace(pid, Duration::from_millis(800));
+            let _ = rx.recv_timeout(Duration::from_secs(2));
             Err(format!("{what} took too long. Try again."))
         }
     }
@@ -4581,6 +4689,45 @@ fn open_log_folder(app: AppHandle) -> Result<String, String> {
     Ok(path.to_string_lossy().into_owned())
 }
 
+fn harness_session_log_file(base: &Path, session_id: &str) -> Result<PathBuf, String> {
+    if !valid_session_id(session_id) || !session_id.starts_with("h-") {
+        return Err("That Harness session identifier is not valid.".into());
+    }
+    Ok(base.join("harness").join("sessions").join(format!("{session_id}.jsonl")))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SupportPaths {
+    app_log_path: String,
+    session_log_path: Option<String>,
+}
+
+/// App-owned paths only. Other agents do not expose a canonical per-session log
+/// to Glitter, so the menu offers Copy task path for Harness sessions alone.
+#[tauri::command]
+fn support_paths(app: AppHandle, session_id: Option<String>, agent_id: Option<String>) -> Result<SupportPaths, String> {
+    let session_log_path = match (agent_id.as_deref(), session_id) {
+        (Some("harness"), Some(session_id)) => {
+            let base = app.path().app_data_dir().map_err(|err| format!("Could not resolve the session log path: {err}"))?;
+            let path = harness_session_log_file(&base, &session_id)?;
+            path.is_file().then(|| path.to_string_lossy().into_owned())
+        }
+        _ => None,
+    };
+    Ok(SupportPaths { app_log_path: app_log_path(&app)?.to_string_lossy().into_owned(), session_log_path })
+}
+
+/// The config destination is app-owned, never a renderer-supplied path or editor.
+#[tauri::command]
+fn open_config_file(app: AppHandle) -> Result<(), String> {
+    let path = store_document_path(&app)?;
+    if !path.is_file() {
+        return Err("The settings file is not available yet. Change a setting, then try again.".into());
+    }
+    app.opener().open_path(path.to_string_lossy(), None::<&str>).map_err(|err| format!("Could not open the settings file: {err}"))
+}
+
 #[tauri::command]
 async fn diagnostics_snapshot(app: AppHandle) -> Result<DiagnosticsSnapshot, String> {
     blocking(move || {
@@ -4658,7 +4805,14 @@ async fn terminal_write(app: AppHandle, id: String, data: String) -> Result<(), 
     if !terminal::valid_id(&id) {
         return Err("That terminal has closed.".into());
     }
-    blocking(move || app.state::<AppState>().terminals.lock().map_err(|err| err.to_string())?.write(&id, data.as_bytes())).await
+    if data.len() > terminal::WRITE_LIMIT {
+        return Err("That is too much to send to the terminal at once.".into());
+    }
+    let writer = app.state::<AppState>().terminals.lock().map_err(|err| err.to_string())?.writer(&id)?;
+    blocking(move || {
+        let mut writer = writer.lock().map_err(|_| "Terminal writer lock failed")?;
+        writer.write_all(data.as_bytes()).and_then(|_| writer.flush()).map_err(|err| format!("Could not write to the terminal: {err}"))
+    }).await
 }
 
 #[tauri::command]
@@ -4894,6 +5048,10 @@ pub fn run() {
                 export_session,
                 save_output_text,
                 trust_preview,
+                mcp_consent::review_mcp,
+                mcp_consent::consent_mcp,
+                mcp_consent::workspace_trust,
+                mcp_consent::workspace_trust_set,
                 mcp_login,
                 mcp_logout,
                 cli_logout,
@@ -4928,6 +5086,8 @@ pub fn run() {
                 repair_store_document,
                 append_app_log,
                 open_log_folder,
+                support_paths,
+                open_config_file,
                 diagnostics_snapshot,
                 haptic,
                 credentials::credential_get,
@@ -4963,6 +5123,9 @@ pub fn run() {
             }
             if let Ok(mut grants) = state.grants.lock() {
                 *grants = load_grants();
+            }
+            if let Ok(data) = handle.path().app_data_dir() {
+                state.workspace_security.load_from(&data.join("workspace-security.json"));
             }
             state.agent_pins.replace(load_agent_pins());
             // Warm the bridge beside the webview instead of before it. Starting it
@@ -6135,6 +6298,9 @@ mod tests {
         assert!(!valid_session_id("has space"));
         assert!(!valid_session_id(&"x".repeat(513)));
         assert!(valid_session_id("01a0bcbb-8b53-7df0-8a17-08a6702c9d68"));
+        assert!(harness_session_log_file(Path::new("/data"), "h-thread-123").unwrap().ends_with("harness/sessions/h-thread-123.jsonl"));
+        assert!(harness_session_log_file(Path::new("/data"), "../h-thread-123").is_err());
+        assert!(harness_session_log_file(Path::new("/data"), "muse-thread-123").is_err());
     }
 
     #[test]
@@ -6184,17 +6350,23 @@ mod tests {
         // A regular file far past the ceiling, written sparsely where possible.
         let body = "a".repeat((RULES_PREVIEW_LIMIT as usize) * 4);
         std::fs::write(dir.join("AGENTS.md"), &body).unwrap();
-        let read = {
-            let file = std::fs::File::open(dir.join("AGENTS.md")).unwrap();
-            let mut bytes = Vec::new();
-            let mut reader = std::io::Read::take(file, RULES_PREVIEW_LIMIT);
-            let n = std::io::Read::read_to_end(&mut reader, &mut bytes).unwrap();
-            (n, bytes)
-        };
-        assert_eq!(read.0, RULES_PREVIEW_LIMIT as usize, "the read stops at the ceiling");
-        assert!(read.1.len() < body.len());
-        let truncated = String::from_utf8_lossy(&read.1).chars().take(2000).collect::<String>().len() < read.1.len() || read.0 == RULES_PREVIEW_LIMIT as usize;
-        assert!(truncated, "the UI must be told the excerpt is partial");
+        let preview = read_rules_preview(&dir).expect("regular rules file");
+        assert_eq!(preview.excerpt.chars().count(), 2000, "the preview stops at the character ceiling");
+        assert!(preview.truncated, "the UI must be told the excerpt is partial");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn agents_md_symlink_outside_the_workspace_is_not_previewed() {
+        let dir = std::env::temp_dir().join(format!("muse-rules-link-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let root = dir.join("repo");
+        std::fs::create_dir_all(&root).unwrap();
+        let outside = dir.join("outside.txt");
+        std::fs::write(&outside, b"private rules").unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("AGENTS.md")).unwrap();
+        assert!(read_rules_preview(&root).is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -6539,6 +6711,49 @@ mod tests {
     /// (tests/fixtures/stub-bridge.mjs): the grant → session → approval →
     /// export → relaunch → crash-recovery flow the packaged app runs, minus
     /// the dialog gestures themselves. Skips when Node is absent.
+    #[cfg(unix)]
+    #[test]
+    fn bounded_timeout_kills_descendants_that_ignore_term() {
+        let dir = std::env::temp_dir().join(format!("muse-bounded-tree-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let pid_file = dir.join("pid");
+        let ready_file = dir.join("ready");
+        let script = r#"
+/bin/sh -c 'trap "" TERM; echo $$ > "$1"; while :; do sleep 1; done' sh "$1" &
+trap 'exit 0' TERM
+echo ready > "$2"
+while :; do sleep 1; done
+"#;
+        let mut cmd = std::process::Command::new("/bin/sh");
+        cmd.arg("-c").arg(script).arg("sh").arg(&pid_file).arg(&ready_file);
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(run_bounded(cmd, "fixture", Duration::from_millis(1000)));
+        });
+        for _ in 0..100 {
+            if ready_file.exists() && pid_file.exists() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let outcome = rx.recv_timeout(Duration::from_secs(8));
+        let pid = std::fs::read_to_string(&pid_file).expect("grandchild pid").trim().to_string();
+        let mut dead = false;
+        for _ in 0..60 {
+            if !std::process::Command::new("kill").args(["-0", &pid]).output().is_ok_and(|output| output.status.success()) {
+                dead = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let _ = std::process::Command::new("kill").args(["-KILL", &pid]).output();
+        let _ = std::fs::remove_dir_all(&dir);
+        let error = outcome.expect("bounded command returned").expect_err("the command times out");
+        assert!(error.contains("took too long"), "{error}");
+        assert!(dead, "the stubborn descendant survived the timeout cleanup");
+    }
+
     #[test]
     fn native_shell_e2e_grant_session_approval_export_relaunch() {
         if which::which("node").is_err() {

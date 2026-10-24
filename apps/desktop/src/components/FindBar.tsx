@@ -123,6 +123,13 @@ export function FindBar({ thread, scroller, closing = false }: { thread: Thread;
         if (tries++ < 30) frame = requestAnimationFrame(reveal);
         return;
       }
+      // A note stays one line until opened. The match may be past that line, so open it, then look again.
+      const note = message.querySelector<HTMLButtonElement>(".trace-note-head[aria-expanded='false']");
+      if (note) {
+        note.click();
+        if (tries++ < 30) frame = requestAnimationFrame(reveal);
+        return;
+      }
       message.classList.add("find-current");
       const api = highlights();
       const mine = textRanges(message, query);

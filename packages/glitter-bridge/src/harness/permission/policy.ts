@@ -9,7 +9,7 @@ import { covers, scopesFor, type Grant, type GrantScope, type Subject } from "./
  * cannot turn that denial into permission.
  */
 
-/** Permission modes the harness enforces: the app's vocabulary plus `guarded`, which the app calls Autonomous. */
+/** Permission modes the app enforces. The composer calls them Ask (`onRequest`), Auto (`guarded`) and Full access (`allowAll`). */
 export type ApprovalMode = "denyUnmatched" | "promptUnmatched" | "onRequest" | "guarded" | "allowAll";
 
 export type PolicyInput = {
@@ -31,11 +31,17 @@ export function decide(input: PolicyInput): Verdict {
   // Delegation does not act by itself: the child's own calls meet this same
   // policy, one at a time, so the task call needs no approval of its own.
   if (kind === "read" || kind === "plan" || kind === "delegate") return { kind: "allow" };
+  if (kind === "browser" && subject.kind === "browser" && !subject.control) return { kind: "allow" };
+  if (kind === "browser" && input.planMode) return { kind: "deny", reason: "Plan mode is on: the browser is read-only. Finish the plan, or ask the user to switch to Build." };
   // Known read-only commands need no approval in any mode, Plan mode and read-only threads included.
   if (kind === "shell" && subject.kind === "command" && isReadOnly(subject.command)) return { kind: "allow" };
   if (kind === "edit" && input.planMode) return { kind: "deny", reason: "Plan mode is on: files are not edited. Finish the plan, or ask the user to switch to Build." };
-  if (mode === "denyUnmatched") return { kind: "deny", reason: `The thread is read-only: ${kind === "edit" ? "file edits" : kind === "mcp" ? "MCP tool calls" : "commands"} are refused. Ask the user to change the permission mode if this is needed.` };
+  if (mode === "denyUnmatched") return { kind: "deny", reason: `The thread is read-only: ${kind === "edit" ? "file edits are" : kind === "mcp" ? "MCP tool calls are" : kind === "browser" ? "browser control is" : "commands are"} refused. Ask the user to change the permission mode if this is needed.` };
   if (mode === "allowAll") return { kind: "allow" };
+  if (kind === "browser") {
+    if (covers(input.grants, subject)) return { kind: "allow" };
+    return { kind: "ask", scopes: scopesFor(subject) };
+  }
   // An external server runs with its own authority, so a call meets the user in
   // every mode short of full access — Autonomous included — unless this thread
   // already granted that tool or server.
@@ -46,7 +52,7 @@ export function decide(input: PolicyInput): Verdict {
   if (mode === "onRequest" && kind === "edit") return { kind: "allow" };
   const risks = subject.kind === "command" ? assessCommand(subject.command).filter((risk) => risk.level === "ask") : [];
   if (risks.length) return { kind: "ask", scopes: [], risk: risks.map((risk) => risk.reason).join(" ") };
-  // Autonomous but not reckless: the ask-level risks above are the brakes, and
+  // Auto, but not reckless: the ask-level risks above are the brakes, and
   // everything else runs. A risky call is still offered no grant.
   if (mode === "guarded") return { kind: "allow" };
   if (covers(input.grants, subject)) return { kind: "allow" };

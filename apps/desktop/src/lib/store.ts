@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { estimateTurnTokens, mergeHistoryItems, messageRewindBoundary, planAnchorFor, relativeToWorkspace, stepFromItem } from "./agent";
+import { readTokenSpeed, recordTokenSpeed } from "./tokenSpeed";
 import { LazyStore } from "@tauri-apps/plugin-store";
 import { SettingsPersistence, settingsFields } from "./settingsPersistence";
 import { composeLineComments, LINE_COMMENT_LIMIT, type LineComment } from "./lineComments";
@@ -48,7 +49,7 @@ import {
   type WorkspaceFile,
   type Workspace,
   type CliUpdateOutcome, type CliUpdateStatus, type ComposerImage, type ContextRef, type HostCompat, type HostInfo, type Model, type ModelTestResult, type SessionConfig, type SessionMetadata, type SessionOpening, type SessionPreview,
-  type UserInputResponse, type GoalState, type ContextUsage, type TokenUsage, type SubscriptionUsage, type SubagentResult, type Suggestion, type TrustPreview, type SkillRow, type McpServer, type HarnessMcpStatus, type HarnessMcpConfig, type HarnessMcpScope, type HarnessMcpServerInput, type CatalogEntry, type CatalogInstallResult, type CatalogRemoveResult, type PluginEntry, type SkillEntry, type HostPosture, type EnterpriseStatus, type SettingsTab,
+  type UserInputResponse, type GoalState, type ContextUsage, type TokenUsage, type SubscriptionUsage, type SubagentResult, type Suggestion, type TrustPreview, type SkillRow, type McpServer, type HarnessMcpStatus, type HarnessMcpConfig, type HarnessMcpScope, type HarnessMcpServerInput, type CatalogEntry, type CatalogInstallResult, type CatalogRemoveResult, type PluginEntry, type SkillEntry, type HostPosture, type EnterpriseStatus, type SettingsTab, type BrowserControlInput, type BrowserControlResult, type BrowserFrame, type BrowserState, type BrowserStateEvent,
 } from "./types";
 
 const persist = isTauri() ? new LazyStore("glitter.json", { autoSave: false, defaults: {} }) : null;
@@ -367,12 +368,12 @@ type AppStore = Settings & {
   refreshMcpServers: () => Promise<void>;
   /** The Harness's own MCP generation for the thread's workspace; null until loaded. */
   harnessMcp: HarnessMcpStatus | null;
-  harnessMcpLoading: boolean;
+  harnessMcpLoading: string | null;
   harnessMcpError: string | null;
   refreshHarnessMcp: (sessionId: string, refresh?: boolean) => Promise<void>;
   /** The config rows behind `harnessMcp`, including servers the parser refused; null until loaded. */
   harnessMcpConfig: HarnessMcpConfig | null;
-  harnessMcpConfigLoading: boolean;
+  harnessMcpConfigLoading: string | null;
   harnessMcpConfigError: string | null;
   refreshHarnessMcpConfig: (sessionId: string) => Promise<void>;
   /** Write a server to the workspace or home config, then reconnect the generation. */
@@ -422,6 +423,10 @@ type AppStore = Settings & {
   settingsOpen: boolean;
   /** Last visited Settings tab, also used by explicit navigation links. */
   settingsTab: SettingsTab;
+  /** When set, Usage filters its trajectory to this thread and offers an all-threads reset. */
+  trajectoryThreadId: string | null;
+  openThreadTrajectory: (sessionId: string) => void;
+  clearThreadTrajectory: () => void;
   /** Bumped to ask the composer for focus (a new thread is a composer draft). */
   composerFocus: number;
   /** Bumped to ask the thread header to start its inline title edit. */
@@ -516,6 +521,7 @@ type AppStore = Settings & {
   removeWorkspace: (id: string) => void;
   renameThread: (sessionId: string, title: string) => void;
   pinThread: (sessionId: string) => void;
+  setThreadUnread: (sessionId: string, unread: boolean) => void;
   /** Swap sidebar positions with a neighbouring thread. */
   swapThreadOrder: (sessionId: string, otherId: string) => void;
   /** Persist a drag-reordered thread list; ids are given in the order they now appear. */
@@ -555,9 +561,19 @@ type AppStore = Settings & {
   setThreadSearchOpen: (open: boolean) => void;
   setSidebarCollapsed: (collapsed: boolean) => void;
   setPaletteOpen: (open: boolean) => void;
-  /** The terminal pane below the composer. */
+  /** The terminal side panel beside the thread; it shares the panel space with Changes. */
   terminalOpen: boolean;
   setTerminalOpen: (open: boolean) => void;
+  /** The shared Chromium side panel. Frames are transient and never persisted. */
+  browserOpen: boolean;
+  browserState: BrowserState | null;
+  browserFrame: BrowserFrame | null;
+  browserBusy: boolean;
+  browserError: string | null;
+  setBrowserOpen: (open: boolean) => void;
+  openBrowser: (url?: string, viewport?: { width: number; height: number }) => Promise<void>;
+  controlBrowser: (input: BrowserControlInput) => Promise<BrowserControlResult | null>;
+  closeBrowser: () => Promise<void>;
   /** The find bar over the open thread. `findFocus` bumps on every request so an open bar takes focus again. */
   findOpen: boolean;
   findFocus: number;
@@ -588,7 +604,7 @@ type AppStore = Settings & {
   switchThreadAgent: (agentId: AgentId) => Promise<void>;
   refreshTurnSnapshots: (sessionId: string) => Promise<void>;
   restoreSnapshot: (sessionId: string, turnId: string, options?: { confirmed?: boolean }) => Promise<boolean>;
-  sendPrompt: (options?: { resetTaskState?: boolean; disposition?: "queue" | "steer" | "replace" }) => Promise<void>;
+  sendPrompt: (options?: { resetTaskState?: boolean; disposition?: "queue" | "steer" | "replace" }) => Promise<boolean>;
   stopTurn: () => Promise<void>;
   unqueueTurn: (turnId: string) => Promise<void>;
   decide: (approvalId: string, choiceId: string, feedback?: string) => Promise<void>;
@@ -697,6 +713,10 @@ function dropApproval(thread: Thread, approvalId: string): { thread: Thread; slo
 const renameGeneration = new Map<string, number>();
 const renameInflight = new Set<string>();
 
+function countsForTokenSpeed(item: TranscriptItem): boolean {
+  return item.kind === "agentMessage" || item.kind === "reasoning";
+}
+
 function applyItem(thread: Thread, incoming: TranscriptItem): Thread {
   const buffered = pendingDeltas.get(incoming.itemId);
   if (buffered) {
@@ -712,9 +732,14 @@ function applyItem(thread: Thread, incoming: TranscriptItem): Thread {
     ? thread.items.map((item, i) => (i === index ? { ...item, ...incoming } : item))
     : [...thread.items, incoming];
   const user = items.find((item) => item.kind === "userMessage" && item.text);
+  // The first generated chunk arrives on the item itself; later chunks are deltas.
+  // Completed items are history or a closing snapshot, never new generated text.
+  const startsStream = index < 0 && thread.status === "running" && countsForTokenSpeed(incoming) && (incoming.status === "inProgress" || incoming.status === "running");
+  const tokenSpeed = startsStream ? recordTokenSpeed(thread.tokenSpeed, incoming.text ?? "", Date.now()) : thread.tokenSpeed;
   return {
     ...thread,
     items,
+    tokenSpeed,
     updatedAt: new Date().toISOString(),
     title: thread.customTitle ? thread.title : user?.text ? titleFromText(user.text) : thread.title,
   };
@@ -813,6 +838,7 @@ async function persistMemory(state: AppStore) {
       pinned: thread.pinned,
       order: thread.order,
       archived: thread.archived,
+      unread: thread.unread,
       lastStatus: thread.status,
       lastOutcome: thread.lastOutcome,
       forkedFrom: thread.forkedFrom ?? undefined,
@@ -904,6 +930,7 @@ function applyMeta(thread: Thread, meta?: ThreadMeta, sessionStatus?: string): T
     pinned: meta.pinned,
     order: meta.order ?? thread.order,
     archived: meta.archived,
+    unread: meta.unread ?? thread.unread,
     lastOutcome: interrupted ? "interrupted" : meta.lastOutcome,
     forkedFrom: meta.forkedFrom ?? thread.forkedFrom,
     worktree: meta.worktree ?? thread.worktree,
@@ -1096,7 +1123,7 @@ function beginWorkspaceSelection(
   if (!workspace) return null;
   const version = ++selectionVersion;
   ++reviewVersion;
-  set({ ...switchDraft(get(), id, null), error: null, git: null, fileView: null, branches: null, pullRequest: null, reviewBase: "", review: null, reviewError: null, reviewLoading: null, diffTabs: null, diffActive: null });
+  set({ ...switchDraft(get(), id, null), error: null, git: null, fileView: null, branches: null, pullRequest: null, reviewBase: "", review: null, reviewError: null, reviewLoading: null, diffTabs: null, diffActive: null, browserState: null, browserFrame: null, browserBusy: false, browserError: null });
   void get().refreshGit();
   void get().refreshFileIndex(id);
   return { workspace, version };
@@ -1134,13 +1161,19 @@ function settleHostRestart(get: () => AppStore, set: (patch: Partial<AppStore>) 
 }
 
 function finishTurn(thread: Thread, turnId?: string): Partial<Thread> {
-  if (thread.turnStartedAt == null) return {};
+  if (thread.turnStartedAt == null) return { tokenSpeed: undefined };
+  const finishedAt = Date.now();
   const reported = turnTokens(thread);
   const estimate = estimateTurnTokens(thread.items);
   const outputTokens = reported || estimate || undefined;
   const inputTokens = turnPromptTokens(thread) || undefined;
   const cachedTokens = turnCacheTokens(thread) || undefined;
-  return { turnStats: { turnId, durationMs: Date.now() - thread.turnStartedAt, outputTokens, inputTokens, cachedTokens, estimated: !reported && Boolean(estimate) }, turnStartedAt: undefined };
+  const tokensPerSecond = readTokenSpeed(thread.tokenSpeed, finishedAt)?.tokensPerSecond;
+  return {
+    turnStats: { turnId, durationMs: finishedAt - thread.turnStartedAt, outputTokens, inputTokens, cachedTokens, estimated: !reported && Boolean(estimate), tokensPerSecond },
+    turnStartedAt: undefined,
+    tokenSpeed: undefined,
+  };
 }
 
 function settlePlan(plan: PlanItem[] | undefined, outcome: "cancelled" | "failed" | "interrupted") {
@@ -1267,10 +1300,10 @@ export const useAppStore = create<AppStore>((set, get) => ({
   mcpLoading: false,
   mcpError: null,
   harnessMcp: null,
-  harnessMcpLoading: false,
+  harnessMcpLoading: null,
   harnessMcpError: null,
   harnessMcpConfig: null,
-  harnessMcpConfigLoading: false,
+  harnessMcpConfigLoading: null,
   harnessMcpConfigError: null,
   catalogEntries: [],
   catalogSkillsRoot: null,
@@ -1289,6 +1322,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   modelsAgentId: "muse",
   settingsOpen: false,
   settingsTab: "Models",
+  trajectoryThreadId: null,
   composerFocus: 0,
   titleEditRequest: 0,
   requestTitleEdit: () => set({ titleEditRequest: get().titleEditRequest + 1 }),
@@ -1400,9 +1434,10 @@ export const useAppStore = create<AppStore>((set, get) => ({
         if (saved) {
           // `allowAll` is a per-thread composer choice, never a durable default:
           // a stored value (older build or hand-edited file) is clamped on load.
-          if (saved.defaultApprovalMode === "allowAll" || saved.defaultApprovalMode === "guarded") {
+          // Full access is a per-thread choice. A saved Ask-me is Ask.
+          if (saved.defaultApprovalMode === "allowAll" || saved.defaultApprovalMode === "promptUnmatched") {
             log.info("settings.approval_default_coerced");
-            saved.defaultApprovalMode = "promptUnmatched";
+            saved.defaultApprovalMode = "onRequest";
             coerced = true;
           }
           set({ ...DEFAULT_SETTINGS, ...saved, threadMeta: memory.threadMeta, drafts: memory.drafts, promptHistory: memory.promptHistory, lineComments: memory.lineComments, recentCommands: memory.recentCommands, settingsTab: memory.settingsTab, dockOpen: memory.dockOpen, dockWidth: memory.dockWidth, zoom: memory.zoom, sidebarCollapsed: memory.sidebarCollapsed, sidebarWidth: memory.sidebarWidth });
@@ -1491,7 +1526,12 @@ export const useAppStore = create<AppStore>((set, get) => ({
   },
 
   commitSettings: async (patch) => {
-    const settings = settingsFields({ ...get(), ...patch });
+    // Apply before the first await: a later change must build its complete
+    // settings document from this patch, not from the pre-change state.
+    set({ ...patch });
+    const settings = settingsFields(get());
+    set({ enabledAgents: settings.enabledAgents, acpUnisolatedConsent: settings.acpUnisolatedConsent === true });
+    applyTheme(settings);
     // A failed write must not reject into a `void` call site (which would leave
     // the toggle looking inert with no explanation). Surface it and still apply
     // the patch, so the control responds and the next successful save heals it.
@@ -1503,8 +1543,6 @@ export const useAppStore = create<AppStore>((set, get) => ({
       try { await acpConsentSet(settings.acpUnisolatedConsent === true); }
       catch { /* native gate stays at its last durable value */ }
     }
-    set({ ...patch, enabledAgents: settings.enabledAgents, acpUnisolatedConsent: settings.acpUnisolatedConsent === true });
-    applyTheme(settings);
     // The native menu holds its own copy of the accelerators.
     if ("shortcutOverrides" in patch) void setMenuShortcuts(menuAccelerators(settings.shortcutOverrides ?? {})).catch((error) => log.warn("shortcuts.menu_failed", { error: message(error) }));
     const next = get();
@@ -1644,51 +1682,69 @@ export const useAppStore = create<AppStore>((set, get) => ({
   },
 
   startHost: async (restart = false) => {
-    if (!hostStart) hostStart = (async (): Promise<boolean> => {
-      const museApiKey = get().museApiKey.trim() || undefined;
-      const museAuthMode = get().museAuthMode;
-      const trustWorkspace = currentWorkspace(get())?.trusted === true;
-      const posture = { ephemeralSessions: get().ephemeralSessions, disableWrite: get().disableWrite, disableShell: get().disableShell, sandboxNetwork: get().sandboxNetwork, contributorMode: get().contributorMode };
-      // Nearly every call finds the host already running the way it is wanted. The
-      // renderer hears about every exit (`hostExit`, `bridgeExit`), so what it holds
-      // is current: asking the bridge again would cost a round trip per thread open.
-      const running = get().hostInfo;
-      if (!restart && running?.posture && get().hostTrust === trustWorkspace && samePosture(running.posture, posture)) return false;
-      const result = await bridge<{ running?: boolean; compat?: HostCompat; trustWorkspace?: boolean; posture?: HostPosture | null }>("status", { museApiKey, museAuthMode });
-      // A running host of the wrong trust class restarts: skills and rules
-      // must never mix classes on one host.
-      const wrongTrust = result.running && result.trustWorkspace !== undefined && result.trustWorkspace !== trustWorkspace;
-      // Posture is also host-construction: a running host built with
-      // different flags restarts so the settings always describe the host.
-      const runningPosture = result.posture ?? get().hostInfo?.posture ?? null;
-      const wrongPosture = result.running && runningPosture !== null && !samePosture(runningPosture, posture);
-      if (restart || wrongTrust || wrongPosture || !result.running) {
-        if (wrongTrust) settleHostRestart(get, set, "The host restarted: workspace trust changed.");
-        if (wrongPosture) settleHostRestart(get, set, runningPosture?.contributorMode !== posture.contributorMode
-          ? "The host restarted: Contributor mode changed." : "The host restarted: sandbox posture changed.");
-        const started = await bridge<HostInfo>("startHost", {
-          museBin: get().museBin || get().detection?.path || undefined,
-          museApiKey,
-          museAuthMode,
-          trustWorkspace,
-          noSessionLog: posture.ephemeralSessions,
-          disableWrite: posture.disableWrite,
-          disableShell: posture.disableShell,
-          sandboxNetwork: posture.sandboxNetwork,
-          contributorMode: posture.contributorMode,
-        });
-        set({ hostInfo: started, hostTrust: started.trustWorkspace ?? trustWorkspace });
-        return true;
-      } else if (result.compat && !get().hostInfo?.compat) {
-        set({ hostInfo: { ...get().hostInfo, compat: result.compat }, hostTrust: result.trustWorkspace ?? get().hostTrust });
-      } else if (get().hostTrust === null && result.trustWorkspace !== undefined) {
-        set({ hostTrust: result.trustWorkspace });
+    let corrected = false;
+    while (true) {
+      if (!hostStart) hostStart = (async (): Promise<boolean> => {
+        const museApiKey = get().museApiKey.trim() || undefined;
+        const museAuthMode = get().museAuthMode;
+        const trustWorkspace = currentWorkspace(get())?.trusted === true;
+        const posture = { ephemeralSessions: get().ephemeralSessions, disableWrite: get().disableWrite, disableShell: get().disableShell, sandboxNetwork: get().sandboxNetwork, contributorMode: get().contributorMode };
+        // Nearly every call finds the host already running the way it is wanted. The
+        // renderer hears about every exit (`hostExit`, `bridgeExit`), so what it holds
+        // is current: asking the bridge again would cost a round trip per thread open.
+        const running = get().hostInfo;
+        if (!restart && running?.posture && get().hostTrust === trustWorkspace && samePosture(running.posture, posture)) return false;
+        const result = await bridge<{ running?: boolean; compat?: HostCompat; trustWorkspace?: boolean; posture?: HostPosture | null }>("status", { museApiKey, museAuthMode });
+        // A running host of the wrong trust class restarts: skills and rules
+        // must never mix classes on one host.
+        const wrongTrust = result.running && result.trustWorkspace !== undefined && result.trustWorkspace !== trustWorkspace;
+        // Posture is also host-construction: a running host built with
+        // different flags restarts so the settings always describe the host.
+        const runningPosture = result.posture ?? get().hostInfo?.posture ?? null;
+        const wrongPosture = result.running && runningPosture !== null && !samePosture(runningPosture, posture);
+        if (restart || wrongTrust || wrongPosture || !result.running) {
+          if (wrongTrust) settleHostRestart(get, set, "The host restarted: workspace trust changed.");
+          if (wrongPosture) settleHostRestart(get, set, runningPosture?.contributorMode !== posture.contributorMode
+            ? "The host restarted: Contributor mode changed." : "The host restarted: sandbox posture changed.");
+          const started = await bridge<HostInfo>("startHost", {
+            museBin: get().museBin || get().detection?.path || undefined,
+            museApiKey,
+            museAuthMode,
+            trustWorkspace,
+            noSessionLog: posture.ephemeralSessions,
+            disableWrite: posture.disableWrite,
+            disableShell: posture.disableShell,
+            sandboxNetwork: posture.sandboxNetwork,
+            contributorMode: posture.contributorMode,
+          });
+          set({ hostInfo: started, hostTrust: started.trustWorkspace ?? trustWorkspace });
+          return true;
+        } else if (result.compat && !get().hostInfo?.compat) {
+          set({ hostInfo: { ...get().hostInfo, compat: result.compat }, hostTrust: result.trustWorkspace ?? get().hostTrust });
+        } else if (get().hostTrust === null && result.trustWorkspace !== undefined) {
+          set({ hostTrust: result.trustWorkspace });
+        }
+        return false;
+      })().finally(() => { hostStart = null; });
+      const started = await hostStart;
+      const matchesCurrentWorkspace = () => {
+        const trustWorkspace = currentWorkspace(get())?.trusted === true;
+        const posture = { ephemeralSessions: get().ephemeralSessions, disableWrite: get().disableWrite, disableShell: get().disableShell, sandboxNetwork: get().sandboxNetwork, contributorMode: get().contributorMode };
+        const running = get().hostInfo;
+        return running?.posture ? get().hostTrust === trustWorkspace && samePosture(running.posture, posture) : get().hostTrust === trustWorkspace;
+      };
+      // A shared start captures the first caller's workspace. Every waiter must
+      // revalidate before using that host, and again after a slow catalog read.
+      if (matchesCurrentWorkspace()) {
+        if (started || !get().models.length || get().modelsAgentId !== activeAgentId(get())) await get().refreshModels();
+        if (matchesCurrentWorkspace()) return;
       }
-      return false;
-    })().finally(() => { hostStart = null; });
-    const started = await hostStart;
-    // The catalog only moves when the host does (or was never fetched for this agent).
-    if (started || !get().models.length || get().modelsAgentId !== activeAgentId(get())) await get().refreshModels();
+      // One corrective restart is enough. A bridge that still disagrees after
+      // it must fail visibly rather than recursing forever.
+      if (corrected) throw new Error("The agent host could not apply the current workspace trust and sandbox settings.");
+      corrected = true;
+      restart = true;
+    }
   },
 
   loadModelCatalog: async (agentId) => {
@@ -1846,8 +1902,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
   removeWorkspace: (id) => {
     const removed = get().workspaces.find((workspace) => workspace.id === id);
     const removedThreads = get().threads.filter((thread) => removed?.path === thread.workspacePath);
-    void cancelThreadTurns(removedThreads);
-    releaseThreadSessions(removedThreads.map((thread) => thread.sessionId));
+    const stopped = cancelThreadTurns(removedThreads);
+    releaseThreadSessions(removedThreads.map((thread) => thread.sessionId), stopped);
     if (removed?.grantId) void removeGrant(removed.grantId).catch(() => {});
     const workspaces = get().workspaces.filter((workspace) => workspace.id !== id);
     const threadMeta = { ...get().threadMeta };
@@ -1902,6 +1958,11 @@ export const useAppStore = create<AppStore>((set, get) => ({
     scheduleMemory(get);
   },
 
+  setThreadUnread: (sessionId, unread) => {
+    set({ threads: get().threads.map((thread) => thread.sessionId === sessionId ? { ...thread, unread } : thread) });
+    scheduleMemory(get);
+  },
+
   swapThreadOrder: (sessionId, otherId) => {
     const threads = get().threads;
     const a = threads.find((thread) => thread.sessionId === sessionId);
@@ -1933,7 +1994,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     // approval cards stay answerable while the thread is restored.
     set({
       threads: get().threads.map((thread) => thread.sessionId === sessionId ? { ...thread, archived } : thread),
-      ...(selected && archived ? { selectedSessionId: null, composer: "", images: [], contextRefs: [] } : {}),
+      ...(selected && archived ? switchDraft(get(), get().selectedWorkspaceId, null) : {}),
     });
     scheduleMemory(get);
     rescope(get, set, scope);
@@ -1949,7 +2010,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     const stopped = cancelThreadTurns(removed ? [removed] : []);
     const owner = threadScope(get(), removed);
     const forgotten = owner?.grantId && !get().preview ? forgetTurnSnapshots(owner.grantId, sessionId).catch(() => {}) : Promise.resolve();
-    releaseThreadSessions([sessionId]);
+    releaseThreadSessions([sessionId], stopped);
     // A worktree goes with its last thread. Forks share their source's worktree,
     // so it stays while any other thread still lives there. Removal waits for
     // the stop and the snapshot cleanup, which both still need the grant.
@@ -1963,12 +2024,13 @@ export const useAppStore = create<AppStore>((set, get) => ({
     delete drafts[`thread:${sessionId}`];
     const lineComments = { ...get().lineComments };
     delete lineComments[`thread:${sessionId}`];
+    const next = selected ? switchDraft(get(), get().selectedWorkspaceId, null) : null;
     set({
       lineComments,
       threads: get().threads.filter((thread) => thread.sessionId !== sessionId),
       drafts,
       threadMeta: { ...get().threadMeta, [sessionId]: { ...get().threadMeta[sessionId], deleted: true, archived: true } },
-      ...(selected ? { selectedSessionId: null, composer: "", images: [], contextRefs: [] } : {}),
+      ...(next ?? {}),
     });
     scheduleMemory(get);
     rescope(get, set, scope);
@@ -2324,7 +2386,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     const workspace = activeWorkspace(get());
     if (!workspace) return;
     const path = relativeToWorkspace(raw, workspace.path);
-    set({ dockOpen: true, dockTab: "files", inspectorTab: "files" });
+    set({ dockOpen: true, terminalOpen: false, browserOpen: false, dockTab: "files", inspectorTab: "files" });
     scheduleMemory(get);
     if (!path) { set({ fileView: { path: raw, loading: false, error: "That file is outside this workspace, so it cannot be shown here." } }); return; }
     if (!workspace.grantId && isTauri() && !get().preview) { set({ fileView: { path, loading: false, error: UNGRANTED_ERROR } }); return; }
@@ -2528,40 +2590,40 @@ export const useAppStore = create<AppStore>((set, get) => ({
   },
 
   refreshHarnessMcp: async (sessionId, refresh = false) => {
-    if (get().harnessMcpLoading) return;
-    set({ harnessMcpLoading: true, harnessMcpError: null });
+    if (get().harnessMcpLoading === sessionId) return;
+    set({ harnessMcpLoading: sessionId, harnessMcp: { servers: [], error: null }, harnessMcpError: null });
     try {
       const status = await bridge<HarnessMcpStatus>("harnessMcp", { sessionId, agentId: "harness", ...(refresh ? { refresh: true } : {}) });
-      set({ harnessMcp: { servers: status.servers ?? [], error: status.error ?? null } });
+      if (currentThread(get())?.sessionId === sessionId) set({ harnessMcp: { servers: status.servers ?? [], error: status.error ?? null } });
     } catch (error) {
-      set({ harnessMcpError: describeError("Could not load the Harness MCP servers", error) });
+      if (currentThread(get())?.sessionId === sessionId) set({ harnessMcpError: describeError("Could not load the Harness MCP servers", error) });
     } finally {
-      set({ harnessMcpLoading: false });
+      if (get().harnessMcpLoading === sessionId && currentThread(get())?.sessionId === sessionId) set({ harnessMcpLoading: null });
     }
   },
 
   refreshHarnessMcpConfig: async (sessionId) => {
-    if (get().harnessMcpConfigLoading) return;
-    set({ harnessMcpConfigLoading: true, harnessMcpConfigError: null });
+    if (get().harnessMcpConfigLoading === sessionId) return;
+    set({ harnessMcpConfigLoading: sessionId, harnessMcpConfig: { servers: [], error: null }, harnessMcpConfigError: null });
     try {
       const config = await bridge<HarnessMcpConfig>("harnessMcpConfig", { sessionId, agentId: "harness" });
-      set({ harnessMcpConfig: { servers: config.servers ?? [], error: config.error ?? null } });
+      if (currentThread(get())?.sessionId === sessionId) set({ harnessMcpConfig: { servers: config.servers ?? [], error: config.error ?? null } });
     } catch (error) {
-      set({ harnessMcpConfigError: describeError("Could not load the Harness MCP configuration", error) });
+      if (currentThread(get())?.sessionId === sessionId) set({ harnessMcpConfigError: describeError("Could not load the Harness MCP configuration", error) });
     } finally {
-      set({ harnessMcpConfigLoading: false });
+      if (get().harnessMcpConfigLoading === sessionId && currentThread(get())?.sessionId === sessionId) set({ harnessMcpConfigLoading: null });
     }
   },
 
   addHarnessMcpServer: async (sessionId, scope, server) => {
     const config = await bridge<HarnessMcpConfig>("harnessMcpAddServer", { sessionId, agentId: "harness", scope, server });
-    set({ harnessMcpConfig: { servers: config.servers ?? [], error: config.error ?? null }, harnessMcpConfigError: null });
+    if (currentThread(get())?.sessionId === sessionId) set({ harnessMcpConfig: { servers: config.servers ?? [], error: config.error ?? null }, harnessMcpConfigError: null });
     await get().refreshHarnessMcp(sessionId, true);
   },
 
   removeHarnessMcpServer: async (sessionId, scope, name) => {
     const config = await bridge<HarnessMcpConfig>("harnessMcpRemoveServer", { sessionId, agentId: "harness", scope, name });
-    set({ harnessMcpConfig: { servers: config.servers ?? [], error: config.error ?? null }, harnessMcpConfigError: null });
+    if (currentThread(get())?.sessionId === sessionId) set({ harnessMcpConfig: { servers: config.servers ?? [], error: config.error ?? null }, harnessMcpConfigError: null });
     await get().refreshHarnessMcp(sessionId, true);
   },
 
@@ -2740,7 +2802,73 @@ export const useAppStore = create<AppStore>((set, get) => ({
   setSidebarWidth: (width) => { set({ sidebarWidth: normalizeSidebarWidth(width) }); scheduleMemory(get); },
   setPaletteOpen: (open) => set({ paletteOpen: open }),
   terminalOpen: false,
-  setTerminalOpen: (open) => set({ terminalOpen: open }),
+  setTerminalOpen: (open) => set({ terminalOpen: open, ...(open ? { dockOpen: false, dockExpanded: false, browserOpen: false } : {}) }),
+  browserOpen: false,
+  browserState: null,
+  browserFrame: null,
+  browserBusy: false,
+  browserError: null,
+  setBrowserOpen: (open) => set({ browserOpen: open, ...(open ? { dockOpen: false, dockExpanded: false, terminalOpen: false } : {}) }),
+  openBrowser: async (url, viewport) => {
+    const scope = activeWorkspace(get());
+    get().setBrowserOpen(true);
+    if (!scope?.grantId) {
+      set({ browserError: "Open a workspace to use Browser." });
+      return;
+    }
+    const root = scope.path;
+    const current = () => activeWorkspace(get())?.path === root;
+    set({ browserBusy: true, browserError: null });
+    try {
+      const result = await bridge<BrowserControlResult>("browserOpen", { grantId: scope.grantId, ...(url ? { url } : {}), ...(viewport ?? {}) });
+      if (current()) set({ browserState: result.state, browserError: null });
+    } catch (error) {
+      if (current()) set({ browserError: describeError("Could not open Browser", error) });
+    } finally {
+      if (current()) set({ browserBusy: false });
+    }
+  },
+  controlBrowser: async (input) => {
+    const scope = activeWorkspace(get());
+    if (!scope?.grantId) {
+      set({ browserError: "Open a workspace to use Browser." });
+      return null;
+    }
+    const root = scope.path;
+    const current = () => activeWorkspace(get())?.path === root;
+    const busy = ["navigate", "back", "forward", "reload"].includes(input.action);
+    if (busy) set({ browserBusy: true });
+    try {
+      const result = await bridge<BrowserControlResult>("browserControl", { ...input, grantId: scope.grantId });
+      if (current()) set({
+        browserState: result.state,
+        browserError: null,
+        ...(result.image ? { browserFrame: { workspaceRoot: root, mediaType: result.image.mediaType, data: result.image.data, url: result.state.url, sequence: (get().browserFrame?.sequence ?? 0) + 1 } } : {}),
+      });
+      return result;
+    } catch (error) {
+      if (current()) set({ browserError: describeError("Browser action failed", error) });
+      return null;
+    } finally {
+      if (busy && current()) set({ browserBusy: false });
+    }
+  },
+  closeBrowser: async () => {
+    const scope = activeWorkspace(get());
+    const root = scope?.path;
+    if (!scope?.grantId || !root) {
+      get().setBrowserOpen(false);
+      set({ browserState: null, browserFrame: null });
+      return;
+    }
+    try {
+      await bridge<BrowserControlResult>("browserClose", { grantId: scope.grantId });
+      if (activeWorkspace(get())?.path === root) set({ browserState: null, browserFrame: null, browserError: null, browserBusy: false });
+      get().setBrowserOpen(false);
+    } catch (error) {
+      if (activeWorkspace(get())?.path === root) set({ browserError: describeError("Could not close Browser", error) });
+    }
+  },
   findOpen: false,
   findFocus: 0,
   setFindOpen: (open) => set({ findOpen: open, findFocus: get().findFocus + 1 }),
@@ -2814,10 +2942,11 @@ export const useAppStore = create<AppStore>((set, get) => ({
     if (thread.agentId) {
       try {
         const opened = await bridge<{ agentConfig?: AgentSessionConfig; alreadyOpen?: boolean }>("resumeSession", { agentId: thread.agentId, sessionId });
-        // A reopened thread keeps the permission mode it was left in, on any agent.
-        if (thread.config?.approvalMode) await bridge("setApprovalMode", { agentId: thread.agentId, sessionId, mode: approvalModeForAgent(thread.agentId, thread.config.approvalMode) }).catch(() => {});
+        // A reopened thread keeps the app's permission mode, on any agent.
+        const approvalMode = approvalModeForAgent(thread.agentId, thread.config?.approvalMode);
+        if (approvalMode) await bridge("setApprovalMode", { agentId: thread.agentId, sessionId, mode: approvalMode }).catch(() => {});
         void get().refreshTurnSnapshots(sessionId);
-        update({ opened: true, config: { ...thread.config, ...agentConfigPatch(opened.agentConfig), agentId: thread.agentId }, modes: opened.agentConfig?.modes ?? thread.modes });
+        update({ opened: true, config: { ...thread.config, ...agentConfigPatch(opened.agentConfig), agentId: thread.agentId, ...(approvalMode ? { approvalMode } : {}) }, modes: opened.agentConfig?.modes ?? thread.modes });
         // The picker keeps showing the last catalog meanwhile; opening does not wait on it.
         if (get().selectedSessionId === sessionId) void get().refreshModels();
       } catch (error) {
@@ -2841,12 +2970,14 @@ export const useAppStore = create<AppStore>((set, get) => ({
       const session = opened.opening?.result.session;
       const latest = get().threads.find((item) => item.sessionId === sessionId);
       const unchanged = latest?.status === thread.status && latest?.activeTurnId === thread.activeTurnId && latest?.lastTurnId === thread.lastTurnId;
+      const approvalMode = approvalModeForAgent(thread.agentId, thread.config?.approvalMode);
+      if (approvalMode) await bridge("setApprovalMode", { sessionId, mode: approvalMode }).catch(() => {});
       if (latest?.userInputVersion === thread.userInputVersion) update({ userInputs: opened.userInputs ?? [] });
       update({
         opened: true,
         ...(opened.viewCursor ? { resumeCursor: opened.viewCursor } : {}),
         ...(opened.facts ? { plan: opened.facts.plan, goal: opened.facts.goal, context: opened.facts.context, usage: opened.facts.usage, hostBranch: opened.facts.branch } : {}),
-        ...(session && !opened.alreadyOpen ? { config: metadataConfig(session, thread.config?.effort ?? get().defaultEffort), ...(unchanged ? { status: session.status === "running" ? "running" : session.status === "idle" ? "idle" : latest.status, activeTurnId: session.activeTurnId ?? null, lastOutcome: session.status === "running" ? latest?.lastOutcome : latest?.lastOutcome === "interrupted" ? undefined : latest?.lastOutcome } : {}) } : {}),
+        ...(session && !opened.alreadyOpen ? { config: { ...metadataConfig(session, thread.config?.effort ?? get().defaultEffort), ...(approvalMode ? { approvalMode } : {}) }, ...(unchanged ? { status: session.status === "running" ? "running" : session.status === "idle" ? "idle" : latest.status, activeTurnId: session.activeTurnId ?? null, lastOutcome: session.status === "running" ? latest?.lastOutcome : latest?.lastOutcome === "interrupted" ? undefined : latest?.lastOutcome } : {}) } : {}),
         ...(!opened.alreadyOpen ? { historyCursor: opened.historyCursor ?? null, historyExhausted: opened.historyExhausted ?? true, historyFailed: opened.historyFailed ?? false, viewGap: null } : {}),
       });
       if (get().selectedSessionId === sessionId) void get().refreshModels();
@@ -2942,7 +3073,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
           throw error;
         }
         const metadata = "opening" in opened ? opened.opening?.result.session : undefined;
-        thread = { sessionId: opened.sessionId, workspacePath: workspace.path, worktree, title, order: Date.now(), updatedAt: new Date().toISOString(), status: "idle", unread: false, items: [], opened: true, config: metadata ? metadataConfig(metadata, config.effort) : { ...config, approvalMode }, ...(made?.warning ? { notice: { level: "warning" as const, message: made.warning } } : {}) };
+        thread = { sessionId: opened.sessionId, workspacePath: workspace.path, worktree, title, order: Date.now(), updatedAt: new Date().toISOString(), status: "idle", unread: false, items: [], opened: true, config: metadata ? { ...metadataConfig(metadata, config.effort), ...(approvalMode ? { approvalMode } : {}) } : { ...config, approvalMode }, ...(made?.warning ? { notice: { level: "warning" as const, message: made.warning } } : {}) };
       }
       const opened = { sessionId: thread.sessionId };
       set({ threads: [thread, ...get().threads] });
@@ -2980,22 +3111,22 @@ export const useAppStore = create<AppStore>((set, get) => ({
     const previousId = thread.sessionId;
     const previousName = state.agents.find((agent) => agent.id === (thread.agentId ?? "muse"))?.name ?? thread.agentId ?? "Muse";
     const nextName = state.agents.find((agent) => agent.id === agentId)?.name ?? agentId;
-    const approvalMode = approvalModeForAgent("muse", thread.config?.approvalMode);
+    const approvalMode = approvalModeForAgent(agentId, thread.config?.approvalMode);
     set({ starting: true, error: null });
     try {
       let next: Thread;
       if (agentId !== "muse" && get().preview) {
         const modes = agentId === "opencode" ? OPENCODE_MODES : undefined;
-        next = { ...thread, agentId, opened: true, modes, config: { agentId, ...(modes ? { mode: "build" } : {}) }, error: null, notice: null, status: "idle", configPending: false, pendingConfig: undefined, configNotice: `Now using ${nextName}` };
+        next = { ...thread, agentId, opened: true, modes, config: { agentId, ...(approvalMode ? { approvalMode } : {}), ...(modes ? { mode: "build" } : {}) }, error: null, notice: null, status: "idle", configPending: false, pendingConfig: undefined, configNotice: `Now using ${nextName}` };
       } else if (agentId !== "muse") {
-        const opened = await bridge<{ sessionId: string; agentConfig?: AgentSessionConfig }>("startSession", { agentId, grantId: workspace.grantId ?? undefined });
+        const opened = await bridge<{ sessionId: string; agentConfig?: AgentSessionConfig }>("startSession", { agentId, grantId: workspace.grantId ?? undefined, ...(approvalMode ? { approvalMode } : {}) });
         next = {
           ...thread,
           sessionId: opened.sessionId,
           agentId,
           opened: true,
           opening: false,
-          config: { ...agentConfigPatch(opened.agentConfig), agentId },
+          config: { ...agentConfigPatch(opened.agentConfig), agentId, ...(approvalMode ? { approvalMode } : {}) },
           modes: opened.agentConfig?.modes,
           error: null,
           notice: null,
@@ -3094,15 +3225,15 @@ export const useAppStore = create<AppStore>((set, get) => ({
   sendPrompt: async (options) => {
     const initial = get();
     const active = currentThread(initial);
-    if (initial.starting || initial.submitting || active?.opening || active?.configPending || active?.snapshotPending || active?.rewindPending) return;
+    if (initial.starting || initial.submitting || active?.opening || active?.configPending || active?.snapshotPending || active?.rewindPending) return false;
     // Busy sends are Muse and Harness. ACP agents and preview keep the Stop-to-send lock.
     const busySend = active?.status === "running" && acceptsBusySend(active.agentId) && !initial.preview;
-    if (active?.status === "running" && !busySend) return;
-    if (!currentWorkspace(initial)) { set({ error: "Open a workspace before sending." }); return; }
+    if (active?.status === "running" && !busySend) return false;
+    if (!currentWorkspace(initial)) { set({ error: "Open a workspace before sending." }); return false; }
     const text = initial.composer.trim();
     const images = initial.images;
     const refs = initial.contextRefs;
-    if (!text && !images.length && !refs.length) return;
+    if (!text && !images.length && !refs.length) return false;
     const payload = composePrompt(text, refs);
     // Persist the draft now: a pending debounce firing mid-send would be fine
     // (it reads get() at fire time), but this guarantees it lands before the
@@ -3139,7 +3270,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         // stranded in the workspace draft.
         sessionId = held ? await get().createThread().finally(() => set({ pendingSend: null })) : await get().createThread();
       }
-      if (!sessionId) return;
+      if (!sessionId) return false;
       const thread = get().threads.find((item) => item.sessionId === sessionId);
       if (!thread?.opened && !get().preview) throw new Error("Thread is not open. Select it again to reconnect before sending.");
       // A leading `!command` is the TUI shell escape: it runs in the session's
@@ -3160,7 +3291,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         if (live.selectedSessionId === sessionId && live.composer.trim() === text) {
           set({ composer: "", images: [], contextRefs: [], drafts: { ...live.drafts, [shellKey]: { ...live.drafts[shellKey], text: "", images: [], refs: [] } } });
         }
-        return;
+        return true;
       }
       // A leading `/selector` invokes a session skill for real: the typed
       // spelling matches the catalog verbatim (unknown stays plain text),
@@ -3172,7 +3303,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       const skillPart = skill ? { selector: skill.selector, ...(invocation!.args ? { arguments: invocation!.args } : {}) } : undefined;
       if (busySend && thread) {
         await sendBusyTurn(sessionId, options?.disposition ?? "queue", skillPart ? composePrompt("", refs) : payload, text, images, skillPart);
-        return;
+        return true;
       }
       const previousOutcome = thread?.lastOutcome;
       // Idempotency keys are a Muse/MSP feature (ACP agents reject overlapping sends themselves).
@@ -3183,14 +3314,14 @@ export const useAppStore = create<AppStore>((set, get) => ({
         ? [...(thread?.items ?? [])].reverse().find((item) => item.kind === "userMessage" && item.optimistic && item.text === (text || payload))
         : undefined;
       const turnKey = keptOptimistic && thread?.pendingTurnKey ? thread.pendingTurnKey : uid();
-      const userItem: TranscriptItem = keptOptimistic ?? { itemId: uid(), kind: "userMessage", status: "completed", text: text || payload, images, refs, optimistic: !get().preview, ...(get().preview ? { turnId: `preview-turn-${uid()}` } : {}) };
-      set({ threads: get().threads.map((item) => item.sessionId === sessionId ? { ...applyItem(item, userItem), status: "running", error: null, activeTurnId: get().preview ? userItem.turnId : null, cancelRequested: false, activity: "working", lastOutcome: undefined, turnStartedAt: Date.now(), turnStartOutput: item.usage?.outputTokens ?? 0, turnStartPrompt: item.usage?.promptTokens ?? 0, turnStartCache: cacheTokens(item.usage), turnStats: undefined, turnCalls: [], ...(options?.resetTaskState ? { plan: undefined, planAnchor: undefined, goal: null } : {}) } : item) });
+      const userItem: TranscriptItem = keptOptimistic ?? { itemId: uid(), kind: "userMessage", status: "completed", text: text || payload, images, refs, recordedAt: new Date().toISOString(), optimistic: !get().preview, ...(get().preview ? { turnId: `preview-turn-${uid()}` } : {}) };
+      set({ threads: get().threads.map((item) => item.sessionId === sessionId ? { ...applyItem(item, userItem), status: "running", error: null, activeTurnId: get().preview ? userItem.turnId : null, cancelRequested: false, activity: "working", lastOutcome: undefined, turnStartedAt: Date.now(), turnStartOutput: item.usage?.outputTokens ?? 0, turnStartPrompt: item.usage?.promptTokens ?? 0, turnStartCache: cacheTokens(item.usage), turnStats: undefined, tokenSpeed: undefined, turnCalls: [], ...(options?.resetTaskState ? { plan: undefined, planAnchor: undefined, goal: null } : {}) } : item) });
       try {
         if (get().preview) {
           const id = sessionId;
           previewTimers.set(id, window.setTimeout(() => {
             previewTimers.delete(id);
-            set({ threads: get().threads.map((item) => item.sessionId === id && item.status === "running" ? { ...applyItem(item, { itemId: uid(), kind: "agentMessage", status: "completed", turnId: userItem.turnId, text: "Preview response — connect the Muse CLI to work in a real workspace." }), status: "idle", lastTurnId: userItem.turnId, lastOutcome: "completed", activeTurnId: null, unread: get().selectedSessionId !== id, activity: undefined } : item) });
+            set({ threads: get().threads.map((item) => item.sessionId === id && item.status === "running" ? { ...applyItem(item, { itemId: uid(), kind: "agentMessage", status: "completed", turnId: userItem.turnId, recordedAt: new Date().toISOString(), text: "Preview response — connect the Muse CLI to work in a real workspace." }), status: "idle", lastTurnId: userItem.turnId, lastOutcome: "completed", activeTurnId: null, unread: get().selectedSessionId !== id, activity: undefined } : item) });
           }, 1600));
         } else {
           const result = await bridge<{ turnId: string; deduped?: boolean }>("sendTurn", { agentId: thread?.agentId, sessionId, text: skillPart ? composePrompt("", refs) : payload, reasoningEffort: thread?.config?.effort ?? (thread?.agentId ? undefined : initial.defaultEffort), images: images.map(({ mediaType, base64Data }) => ({ mediaType, base64Data })), ...(keyed ? { clientTurnId: turnKey } : {}), ...(skillPart ? { skill: skillPart } : {}) });
@@ -3221,6 +3352,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       }
     } catch (error) { set({ error: describeError("Send failed", error) }); }
     finally { putBack(); set({ submitting: false }); }
+    return delivered;
   },
 
   stopTurn: async () => {
@@ -3519,18 +3651,19 @@ export const useAppStore = create<AppStore>((set, get) => ({
     // composer. The user's own draft is set aside and put back afterwards.
     const text = composeLineComments(comments);
     const held = { composer: state.composer, images: state.images, contextRefs: state.contextRefs };
-    const workspaceId = state.selectedWorkspaceId;
     set({ composer: text, images: [], contextRefs: [] });
-    try { await get().sendPrompt(running ? { disposition: "steer" } : undefined); }
+    let sent = false;
+    try { sent = await get().sendPrompt(running ? { disposition: "steer" } : undefined); }
     finally {
-      const sent = get().composer !== text;
-      if (get().selectedWorkspaceId === workspaceId) set(held);
+      const drafts = { ...get().drafts, [key]: { ...get().drafts[key], text: held.composer, images: held.images, refs: held.contextRefs } };
+      if (draftKey(get()) === key) set({ ...held, drafts });
+      else set({ drafts });
       if (sent) {
         const lineComments = { ...get().lineComments };
         delete lineComments[key];
         set({ lineComments });
-        scheduleMemory(get);
       }
+      scheduleMemory(get);
     }
     if (get().lineComments[key]) throw new Error(currentThread(get())?.error ?? get().error ?? "The comments were not sent. They are still here.");
   },
@@ -3727,11 +3860,17 @@ export const useAppStore = create<AppStore>((set, get) => ({
   openViewer: (images, index = 0) => set({ viewer: images.length ? { images, index: Math.min(Math.max(index, 0), images.length - 1) } : null }),
   closeViewer: () => set({ viewer: null }),
   stepViewer: (delta) => set((state) => state.viewer ? { viewer: { images: state.viewer.images, index: (state.viewer.index + delta + state.viewer.images.length) % state.viewer.images.length } } : {}),
+  openThreadTrajectory: (sessionId) => {
+    if (!get().threads.some((thread) => thread.sessionId === sessionId)) return;
+    set({ settingsOpen: true, settingsTab: "Usage", trajectoryThreadId: sessionId });
+    scheduleMemory(get);
+  },
+  clearThreadTrajectory: () => set({ trajectoryThreadId: null }),
   setSettingsOpen: (open, tab) => {
-    set({ settingsOpen: open, ...(tab ? { settingsTab: tab } : {}) });
+    set({ settingsOpen: open, trajectoryThreadId: null, ...(tab ? { settingsTab: tab } : {}) });
     if (tab) scheduleMemory(get);
   },
-  setDockOpen: (open) => { set({ dockOpen: open, ...(open ? {} : { dockExpanded: false }) }); scheduleMemory(get); },
+  setDockOpen: (open) => { set({ dockOpen: open, ...(open ? { terminalOpen: false, browserOpen: false } : { dockExpanded: false }) }); scheduleMemory(get); },
   setDockTab: (tab) => set({ dockTab: tab, inspectorTab: tab }),
   setDockWidth: (width) => { set({ dockWidth: normalizeDockWidth(width) }); scheduleMemory(get); },
   zoomBy: (direction) => {
@@ -3753,6 +3892,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
       diffTabs: base.includes(path) ? base : [...base, path],
       diffActive: path,
       dockOpen: true,
+      terminalOpen: false,
+      browserOpen: false,
       inspectorTab: "diff",
       dockTab: "diff",
     });
@@ -3874,6 +4015,7 @@ const ABANDONED: Partial<Thread> = {
   approvalPending: false,
   cancelRequested: false,
   activity: undefined,
+  tokenSpeed: undefined,
   configPending: false,
   pendingConfig: undefined,
 };
@@ -3978,7 +4120,7 @@ async function sendBusyTurn(sessionId: string, disposition: "queue" | "steer" | 
   const patch = (part: Partial<Thread>) => useAppStore.setState({ threads: useAppStore.getState().threads.map((item) => item.sessionId === sessionId ? { ...item, ...part } : item) });
   // Pre-replace turn state, so a failed `replace` can roll back exactly what it
   // changed instead of leaving a thread stuck "running" with no active turn.
-  const before = { status: thread.status, activeTurnId: thread.activeTurnId, lastOutcome: thread.lastOutcome, turnStartedAt: thread.turnStartedAt, activity: thread.activity, turnStats: thread.turnStats };
+  const before = { status: thread.status, activeTurnId: thread.activeTurnId, lastOutcome: thread.lastOutcome, turnStartedAt: thread.turnStartedAt, activity: thread.activity, tokenSpeed: thread.tokenSpeed, turnStats: thread.turnStats };
   let replaceItem: TranscriptItem | undefined;
   const clearDraft = () => {
     recordPrompt(state.workspaces.find((workspace) => workspace.path === thread.workspacePath)?.id, text);
@@ -4026,9 +4168,9 @@ async function sendBusyTurn(sessionId: string, disposition: "queue" | "steer" | 
       return;
     }
     if (disposition === "replace") {
-      const userItem: TranscriptItem = keptOptimistic ?? { itemId: uid(), kind: "userMessage", status: "completed", text: text || payload, images, refs: state.contextRefs, optimistic: true };
+      const userItem: TranscriptItem = keptOptimistic ?? { itemId: uid(), kind: "userMessage", status: "completed", text: text || payload, images, refs: state.contextRefs, recordedAt: new Date().toISOString(), optimistic: true };
       replaceItem = userItem;
-      patch({ ...applyItem(thread, userItem), error: null, activeTurnId: null, cancelRequested: false, activity: "working", lastOutcome: undefined, turnStartedAt: Date.now(), turnStartOutput: thread.usage?.outputTokens ?? 0, turnStartPrompt: thread.usage?.promptTokens ?? 0, turnStartCache: cacheTokens(thread.usage), turnStats: undefined, turnCalls: [] });
+      patch({ ...applyItem(thread, userItem), error: null, activeTurnId: null, cancelRequested: false, activity: "working", lastOutcome: undefined, turnStartedAt: Date.now(), turnStartOutput: thread.usage?.outputTokens ?? 0, turnStartPrompt: thread.usage?.promptTokens ?? 0, turnStartCache: cacheTokens(thread.usage), turnStats: undefined, tokenSpeed: undefined, turnCalls: [] });
     }
     const result = await bridge<{ turnId: string; disposition?: string; deduped?: boolean }>("sendTurn", { sessionId, agentId: thread.agentId, text: payload, reasoningEffort: thread.config?.effort ?? state.defaultEffort, images: images.map(({ mediaType, base64Data }) => ({ mediaType, base64Data })), clientTurnId: turnKey, ifBusy: disposition, ...(skill ? { skill } : {}) });
     const latest = useAppStore.getState().threads.find((item) => item.sessionId === sessionId);
@@ -4080,8 +4222,8 @@ async function deliverApprovalFeedback(sessionId: string): Promise<void> {
       const live = useAppStore.getState().threads.find((item) => item.sessionId === sessionId);
       if (!live || live.cancelRequested || live.lastOutcome === "cancelled") throw new Error("Turn stopped. Feedback was not sent.");
       started = live.status !== "running";
-      before = { status: live.status, activeTurnId: live.activeTurnId, lastOutcome: live.lastOutcome, activity: live.activity, turnStartedAt: live.turnStartedAt, turnStartOutput: live.turnStartOutput, turnStartPrompt: live.turnStartPrompt, turnStartCache: live.turnStartCache, turnStats: live.turnStats };
-      if (started) patch((current) => ({ ...current, status: "running", activeTurnId: null, lastOutcome: undefined, activity: "working", turnStartedAt: Date.now(), turnStartOutput: current.usage?.outputTokens ?? 0, turnStartPrompt: current.usage?.promptTokens ?? 0, turnStartCache: cacheTokens(current.usage), turnStats: undefined, turnCalls: [] }));
+      before = { status: live.status, activeTurnId: live.activeTurnId, lastOutcome: live.lastOutcome, activity: live.activity, turnStartedAt: live.turnStartedAt, turnStartOutput: live.turnStartOutput, turnStartPrompt: live.turnStartPrompt, turnStartCache: live.turnStartCache, tokenSpeed: live.tokenSpeed, turnStats: live.turnStats };
+      if (started) patch((current) => ({ ...current, status: "running", activeTurnId: null, lastOutcome: undefined, activity: "working", turnStartedAt: Date.now(), turnStartOutput: current.usage?.outputTokens ?? 0, turnStartPrompt: current.usage?.promptTokens ?? 0, turnStartCache: cacheTokens(current.usage), turnStats: undefined, tokenSpeed: undefined, turnCalls: [] }));
       const result = await bridge<{ turnId: string; disposition?: string }>("sendTurn", {
         sessionId, agentId: live.agentId, text: feedback.text,
         ...(acceptsBusySend(live.agentId) ? { clientTurnId: feedback.id, ifBusy: "queue" as const } : {}),
@@ -4125,7 +4267,7 @@ function recordPrompt(workspaceId: string | null | undefined, text: string) {
  * quota invisibly — and its next approval would arrive for a session nothing can answer.
  */
 function cancelThreadTurns(threads: Thread[]): Promise<unknown> {
-  return Promise.all(threads.filter((thread) => thread.status === "running" && thread.activeTurnId).map((thread) => cancelSession(thread.sessionId, thread.activeTurnId ?? undefined)));
+  return Promise.all(threads.filter((thread) => thread.status === "running").map((thread) => cancelSession(thread.sessionId, thread.activeTurnId ?? undefined)));
 }
 
 /**
@@ -4133,8 +4275,10 @@ function cancelThreadTurns(threads: Thread[]): Promise<unknown> {
  * nothing else ever drops it, so deleting threads would otherwise grow its session maps
  * for the process's lifetime. Reopening the thread resumes it again.
  */
-function releaseThreadSessions(sessionIds: string[]) {
-  for (const sessionId of sessionIds) void bridge("closeSession", { sessionId }).catch(() => {});
+function releaseThreadSessions(sessionIds: string[], stopped: Promise<unknown> = Promise.resolve()) {
+  void stopped.finally(() => {
+    for (const sessionId of sessionIds) void bridge("closeSession", { sessionId }).catch(() => {});
+  });
 }
 
 async function cancelSession(sessionId: string, turnId?: string) {
@@ -4179,6 +4323,7 @@ function flushDeltas() {
       const thread = state.threads.find((item) => item.sessionId === sessionId);
       if (!thread) return state;
       let items = thread.items;
+      let tokenSpeed = thread.tokenSpeed;
       let touched = false;
       for (const [itemId, delta] of deltas) {
         const index = items.findIndex((item) => item.itemId === itemId);
@@ -4196,6 +4341,8 @@ function flushDeltas() {
           continue;
         }
         touched = true;
+        const streamedItem = items[index];
+        if (delta.text && thread.status === "running" && countsForTokenSpeed(streamedItem)) tokenSpeed = recordTokenSpeed(tokenSpeed, delta.text, Date.now());
         items = items.map((item, at) => at !== index ? item : {
           ...item,
           ...(delta.text ? { text: `${item.text ?? ""}${delta.text}` } : {}),
@@ -4203,7 +4350,7 @@ function flushDeltas() {
         });
       }
       if (!touched) return state;
-      return { threads: state.threads.map((item) => item.sessionId === sessionId ? { ...item, unread: selected !== sessionId, items } : item) };
+      return { threads: state.threads.map((item) => item.sessionId === sessionId ? { ...item, unread: selected !== sessionId, items, tokenSpeed } : item) };
     });
   }
 }
@@ -4326,7 +4473,12 @@ export function bindBridgeEvents() {
     }
     if (event === "sessionApprovalMode") {
       const data = payload as BridgeEventPayloads["sessionApprovalMode"];
-      update(data.sessionId, (thread) => ({ ...thread, config: { ...thread.config, approvalMode: data.mode } }));
+      update(data.sessionId, (thread) => {
+        // The app owns the mode. A provider echoing its own value must not replace it.
+        const owned = approvalModeForAgent(thread.agentId, thread.config?.approvalMode);
+        if (owned && data.mode !== owned) return thread;
+        return { ...thread, config: { ...thread.config, approvalMode: approvalModeForAgent(thread.agentId, data.mode) ?? data.mode } };
+      });
     }
     if (event === "sessionEffort") {
       const data = payload as BridgeEventPayloads["sessionEffort"];
@@ -4391,6 +4543,10 @@ export function bindBridgeEvents() {
             thread = { ...thread, items: thread.items.filter((item) => item !== optimistic) };
             incoming = { ...incoming, images: optimistic.images };
           }
+          incoming = { ...incoming, recordedAt: incoming.recordedAt ?? optimistic?.recordedAt ?? new Date().toISOString() };
+        }
+        if (incoming.kind === "agentMessage" && incoming.status === "completed" && !incoming.recordedAt) {
+          incoming = { ...incoming, recordedAt: prior?.recordedAt ?? new Date().toISOString() };
         }
         const next = applyItem(thread, incoming);
         // An edit-kind step that just completed may have changed files on
@@ -4448,6 +4604,22 @@ export function bindBridgeEvents() {
     if (event === "accountChanged") {
       void useAppStore.getState().refreshDetection().catch(() => {});
     }
+    if (event === "browserState") {
+      const data = payload as BrowserStateEvent;
+      if (activeWorkspace(store)?.path !== data.workspaceRoot) return;
+      useAppStore.setState({
+        browserState: data,
+        browserError: data.error ?? null,
+        ...(data.status === "closed" ? { browserFrame: null, browserBusy: false } : {}),
+        ...(data.reveal ? { browserOpen: true, terminalOpen: false, dockOpen: false, dockExpanded: false } : {}),
+      });
+    }
+    if (event === "browserFrame") {
+      const data = payload as BrowserFrame;
+      if (activeWorkspace(store)?.path !== data.workspaceRoot) return;
+      if (store.browserFrame && data.sequence <= store.browserFrame.sequence) return;
+      useAppStore.setState({ browserFrame: data });
+    }
     if (event === "turnError") {
       const data = payload as BridgeEventPayloads["turnError"];
       const stopped = data.code === "interrupted" || data.code === "cancelled";
@@ -4489,7 +4661,7 @@ export function bindBridgeEvents() {
       const data = payload as BridgeEventPayloads["turnStarted"];
       update(data.sessionId, (thread) => {
         if (data.cause !== "userInput" && !(thread.queuedTurns ?? []).some((entry) => entry.turnId === data.turnId)) return thread;
-        return { ...thread, status: "running", activeTurnId: data.turnId, cancelRequested: false, activity: "working", lastOutcome: undefined, turnStartedAt: Date.now(), turnStartOutput: thread.usage?.outputTokens ?? 0, turnStartPrompt: thread.usage?.promptTokens ?? 0, turnStartCache: cacheTokens(thread.usage), turnStats: undefined, turnCalls: [], queuedTurns: (thread.queuedTurns ?? []).filter((entry) => entry.turnId !== data.turnId), notice: null };
+        return { ...thread, status: "running", activeTurnId: data.turnId, cancelRequested: false, activity: "working", lastOutcome: undefined, turnStartedAt: Date.now(), turnStartOutput: thread.usage?.outputTokens ?? 0, turnStartPrompt: thread.usage?.promptTokens ?? 0, turnStartCache: cacheTokens(thread.usage), turnStats: undefined, tokenSpeed: undefined, turnCalls: [], queuedTurns: (thread.queuedTurns ?? []).filter((entry) => entry.turnId !== data.turnId), notice: null };
       });
     }
     if (event === "turnCompleted") {

@@ -1,4 +1,4 @@
-import { THINKING_BUDGET, effortTiers, splitModelId, type ResolvedProvider, type Tier } from "./providers.js";
+import { THINKING_BUDGET, effortTiers, isCustomProvider, splitModelId, type ResolvedProvider, type Tier } from "./providers.js";
 
 /**
  * One streaming chat call against a provider, in the harness's own message
@@ -6,13 +6,14 @@ import { THINKING_BUDGET, effortTiers, splitModelId, type ResolvedProvider, type
  * reasoning, usage); this file is the only place that knows either of them.
  */
 
-export type ContentPart = { type: "text"; text: string } | { type: "image"; mediaType: string; data: string };
+export type ImagePart = { type: "image"; mediaType: string; data: string };
+export type ContentPart = { type: "text"; text: string } | ImagePart;
 /** `started` is harness bookkeeping: set once execution begins, never sent to a provider. */
 export type ToolCall = { id: string; name: string; input: Record<string, unknown>; started?: boolean };
 /** Anthropic thinking blocks must be sent back verbatim (with their signature) inside a tool loop. */
 export type ThinkingBlock = { text: string; signature?: string; redacted?: string };
 export type AssistantMessage = { role: "assistant"; text: string; thinking?: ThinkingBlock[]; toolCalls?: ToolCall[] };
-export type ToolResultMessage = { role: "tool"; results: Array<{ id: string; name: string; output: string; isError?: boolean }> };
+export type ToolResultMessage = { role: "tool"; results: Array<{ id: string; name: string; output: string; isError?: boolean; images?: ImagePart[] }> };
 export type ChatMessage = { role: "user"; content: ContentPart[] } | AssistantMessage | ToolResultMessage;
 export type ToolSchema = { name: string; description: string; parameters: Record<string, unknown> };
 
@@ -84,6 +85,8 @@ export type ChatRequest = {
   messages: ChatMessage[];
   tools: readonly ToolSchema[];
   effort?: string;
+  /** Catalog-reported reasoning support for custom OpenAI-compatible providers. */
+  listedReasoning?: boolean;
   signal?: AbortSignal;
   /** Tests shorten the watchdogs. Production uses the defaults. */
   timeouts?: StreamTimeouts;
@@ -267,7 +270,7 @@ function closedEarly(request: ChatRequest, opened: boolean, finished: boolean) {
 
 // ─── Anthropic Messages ─────────────────────────────────────────────────────
 
-function anthropicMessages(messages: ChatMessage[]) {
+export function anthropicMessages(messages: ChatMessage[]) {
   const out: Array<{ role: string; content: unknown[] }> = [];
   for (const message of messages) {
     let next: { role: string; content: unknown[] };
@@ -279,7 +282,18 @@ function anthropicMessages(messages: ChatMessage[]) {
           : { type: "image", source: { type: "base64", media_type: part.mediaType, data: part.data } }),
       };
     } else if (message.role === "tool") {
-      next = { role: "user", content: message.results.map((result) => ({ type: "tool_result", tool_use_id: result.id, content: result.output || "(no output)", ...(result.isError ? { is_error: true } : {}) })) };
+      next = {
+        role: "user",
+        content: message.results.map((result) => ({
+          type: "tool_result",
+          tool_use_id: result.id,
+          content: result.images?.length ? [
+            { type: "text", text: result.output || "(no output)" },
+            ...result.images.map((image) => ({ type: "image", source: { type: "base64", media_type: image.mediaType, data: image.data } })),
+          ] : result.output || "(no output)",
+          ...(result.isError ? { is_error: true } : {}),
+        })),
+      };
     } else {
       const content: unknown[] = [];
       for (const block of message.thinking ?? []) {
@@ -301,7 +315,7 @@ function anthropicMessages(messages: ChatMessage[]) {
 
 async function* streamAnthropic(request: ChatRequest): AsyncGenerator<StreamEvent> {
   const { model } = splitModelId(request.modelId);
-  const tiers = effortTiers("anthropic", model);
+  const tiers = effortTiers(request.provider.id, model, "anthropic");
   const tier = request.effort as Tier | undefined;
   const budget = tier && tier !== "none" && tiers.includes(tier) ? THINKING_BUDGET[tier] : undefined;
   const small = /claude-3-(?!7)/i.test(model);
@@ -383,7 +397,7 @@ function anthropicSystem(system: SystemPrompt) {
   return blocks;
 }
 
-function openAiMessages(system: SystemPrompt, messages: ChatMessage[]) {
+export function openAiMessages(system: SystemPrompt, messages: ChatMessage[]) {
   const out: unknown[] = [{ role: "system", content: system.stable }];
   if (system.volatile.trim()) out.push({ role: "system", content: system.volatile });
   for (const message of messages) {
@@ -396,7 +410,18 @@ function openAiMessages(system: SystemPrompt, messages: ChatMessage[]) {
           : message.content.map((part) => part.type === "text" ? part.text : "").join("\n"),
       });
     } else if (message.role === "tool") {
+      // Chat Completions keeps tool results text-only. Send every result first,
+      // then attach their images in one following user message so a multi-call
+      // batch never breaks the assistant → tool-call pairing.
+      const images = message.results.flatMap((result) => result.images ?? []);
       for (const result of message.results) out.push({ role: "tool", tool_call_id: result.id, content: result.output || "(no output)" });
+      if (images.length) out.push({
+        role: "user",
+        content: [
+          { type: "text", text: `Image output from the preceding tool result${images.length === 1 ? "" : "s"}.` },
+          ...images.map((image) => ({ type: "image_url", image_url: { url: `data:${image.mediaType};base64,${image.data}` } })),
+        ],
+      });
     } else {
       out.push({
         role: "assistant",
@@ -409,9 +434,9 @@ function openAiMessages(system: SystemPrompt, messages: ChatMessage[]) {
 }
 
 /** The request field that carries a reasoning effort, per provider. */
-function effortField(providerId: string, model: string, effort?: string): Record<string, unknown> {
+function effortField(providerId: string, model: string, effort: string | undefined, wire: ResolvedProvider["wire"], listedReasoning?: boolean): Record<string, unknown> {
   if (!effort) return {};
-  const tiers = effortTiers(providerId, model) as string[];
+  const tiers = effortTiers(providerId, model, wire, listedReasoning) as string[];
   if (!tiers.includes(effort)) return {};
   // OpenRouter, and the Kilo gateway in front of it, take `reasoning.effort` (including "none").
   if (providerId === "openrouter" || providerId === "kilo") return { reasoning: { effort } };
@@ -425,22 +450,37 @@ function effortField(providerId: string, model: string, effort?: string): Record
   return { reasoning_effort: effort };
 }
 
-/** Providers known to accept `stream_options.include_usage`; others may reject unknown fields. */
+/**
+ * Providers known to accept `stream_options.include_usage`. NIM, Cline and Kilo
+ * stay off this list. A custom gateway such as ZenMux is asked too: without the
+ * flag its stream omits `usage`, and the app then counts only the reply.
+ */
 const USAGE_IN_STREAM = new Set(["openai", "openrouter", "xai", "deepseek", "groq", "google"]);
 
 async function* streamOpenAi(request: ChatRequest): AsyncGenerator<StreamEvent> {
   const { providerId, model } = splitModelId(request.modelId);
+  const askUsage = USAGE_IN_STREAM.has(providerId) || isCustomProvider(providerId);
   const body: Record<string, unknown> = {
     model,
     messages: openAiMessages(request.system, request.messages),
     stream: true,
-    ...(USAGE_IN_STREAM.has(providerId) ? { stream_options: { include_usage: true } } : {}),
+    ...(askUsage ? { stream_options: { include_usage: true } } : {}),
     ...(request.tools.length ? { tools: request.tools.map((tool) => ({ type: "function", function: { name: tool.name, description: tool.description, parameters: tool.parameters } })) } : {}),
-    ...effortField(providerId, model, request.effort),
+    ...effortField(providerId, model, request.effort, request.provider.wire, request.listedReasoning),
   };
   const headers: Record<string, string> = request.provider.apiKey ? { authorization: `Bearer ${request.provider.apiKey}` } : {};
   if (providerId === "openrouter") headers["x-title"] = "Glitter";
-  const response = await post(request, `${request.provider.root}/chat/completions`, headers, body);
+  const url = `${request.provider.root}/chat/completions`;
+  let response: Response;
+  try {
+    response = await post(request, url, headers, body);
+  } catch (error) {
+    // A strict local gateway can reject the usage flag. Ask once more without it.
+    const rejected = askUsage && error instanceof ProviderError && error.status === 400 && /stream_options|include_usage/i.test(error.message);
+    if (!rejected) throw error;
+    delete body.stream_options;
+    response = await post(request, url, headers, body);
+  }
   type PromptDetails = { cached_tokens?: number };
   let text = "";
   let reasoning = "";

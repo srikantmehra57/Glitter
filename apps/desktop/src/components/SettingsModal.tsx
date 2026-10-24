@@ -2,19 +2,21 @@ import { lazy, Suspense, useDeferredValue, useEffect, useRef, useState, type CSS
 import { useModalDialog } from "../lib/dialogFocus";
 import { describeError } from "../lib/errors";
 import { useShallow } from "zustand/react/shallow";
-import { Activity, ArchiveRestore, ArrowLeft, Bot, ChartNoAxesColumn, Check, Command, Cpu, Eye, EyeOff, FilePlus, FolderOpen, Info, KeyRound, Lock, MessagesSquare, Monitor, Moon, Palette, Plug, Puzzle, RefreshCw, Search, Settings2, ShieldCheck, Sun, Trash2, TriangleAlert, X } from "lucide-react";
+import { Activity, ArchiveRestore, ArrowLeft, Bot, ChartNoAxesColumn, Check, Command, Cpu, Eye, EyeOff, FilePlus, FolderOpen, Info, KeyRound, Lock, MessagesSquare, Minus, Monitor, Moon, Palette, Plug, Plus, Puzzle, RefreshCw, Search, Settings2, ShieldAlert, ShieldCheck, Sun, Trash2, TriangleAlert, X } from "lucide-react";
 import { diagnosticsSnapshot, openLogFolder } from "../lib/bridge";
 import { isMacPlatform, isTauri } from "../lib/format";
 import { modelFor, VOCABULARY } from "../lib/effort";
 import { APP_VERSION } from "../lib/version";
 import { AgentMark, ModelIcon } from "./AgentPicker";
-import { AGENT_IDS, AGENT_LABELS, APPROVAL_DESCRIPTIONS, APPROVAL_LABELS, APPROVAL_ORDER, AUTH_MODE_DESCRIPTIONS, AUTH_MODE_LABELS, AUTH_MODE_ORDER, AUTH_SOURCE_LABELS, AUTH_SOURCE_SHORT, DARK_INTENSITIES, DEFAULT_ENABLED_AGENTS, EDITOR_CHOICES, EDITOR_LABELS, EFFORT_LABELS, THINKING_ORBS, agentEnabled, type CustomCommand, type EditorChoice, type AccentColor, type AgentId, type AgentInfo, type CliApprovalMode, type AuthMode, type CliUpdateOutcome, type CliUpdateStatus, type Detection, type HostPosture, type ReasoningEffort, type SandboxNetwork, type SettingsTab, type ThemeMode, type ThinkingOrbStyle, type DarkIntensity, type Settings } from "../lib/types";
+import { AGENT_IDS, AGENT_LABELS, APPROVAL_DESCRIPTIONS, APPROVAL_LABELS, APPROVAL_ORDER, AUTH_MODE_DESCRIPTIONS, AUTH_MODE_LABELS, AUTH_MODE_ORDER, AUTH_SOURCE_LABELS, AUTH_SOURCE_SHORT, DARK_INTENSITIES, DEFAULT_ENABLED_AGENTS, EDITOR_CHOICES, EDITOR_LABELS, EFFORT_LABELS, SIDEBAR_DENSITIES, THINKING_ORBS, UI_FONTS, agentEnabled, type CustomCommand, type EditorChoice, type AccentColor, type AgentId, type AgentInfo, type ApprovalMode, type AuthMode, type CliUpdateOutcome, type CliUpdateStatus, type Detection, type HostPosture, type ReasoningEffort, type SandboxNetwork, type SettingsTab, type ThemeMode, type ThinkingOrbStyle, type DarkIntensity, type SidebarDensity, type Settings } from "../lib/types";
 import { humanizeModelLabel, humanizeProvider, relativeTime, shortCliVersion, shortHash, shortcutLabel, worktreeRemovalNote } from "../lib/format";
 import { settingsFields } from "../lib/settingsPersistence";
 import { SETTINGS_NAV_GROUPS, SETTINGS_TAB_COPY, SETTINGS_TAB_LABELS, settingsTabsMatching } from "../lib/settingsNav";
 import { customCommandProblem } from "../lib/composerText";
 import { customProviders, providerName } from "../lib/providers";
 import { FIXED_SHORTCUTS, REMAPPABLE, SHORTCUT_IDS, bindingFor, bindingProblem, chordLabel, chordOf, type ShortcutId, type ShortcutOverrides } from "../lib/shortcuts";
+import { UI_FONT_COPY, UI_FONT_STACKS } from "../lib/fonts";
+import { ZOOM_LEVELS } from "../lib/zoom";
 import { applyTheme, currentThread, currentWorkspace, hasWindowMaterial, preferredAgent, useAppStore } from "../lib/store";
 import type { Model } from "../lib/types";
 const ExtensionsView = lazy(() => import("./ExtensionsView").then((module) => ({ default: module.ExtensionsView })));
@@ -74,6 +76,13 @@ const DARK_INTENSITY_COPY: Record<DarkIntensity, { label: string; description: s
   black: { label: "Pure black", description: "True black, at home on OLED." },
 };
 const DARK_INTENSITY_OPTIONS: SelectMenuOption[] = DARK_INTENSITIES.map((value) => ({ value, ...DARK_INTENSITY_COPY[value], ...(value === "mid" ? { tag: "Default" } : {}) }));
+const FONT_OPTIONS: SelectMenuOption[] = UI_FONTS.map((value) => ({ value, ...UI_FONT_COPY[value], fontFamily: UI_FONT_STACKS[value], ...(value === "system" ? { tag: "Default" } : {}) }));
+const SIDEBAR_DENSITY_COPY: Record<SidebarDensity, { label: string; description: string }> = {
+  standard: { label: "Standard", description: "The current balanced row spacing." },
+  comfortable: { label: "Comfortable", description: "More room between workspaces and threads." },
+  compact: { label: "Compact", description: "Fit more workspaces and threads on screen." },
+};
+const SIDEBAR_DENSITY_OPTIONS: SelectMenuOption[] = SIDEBAR_DENSITIES.map((value) => ({ value, ...SIDEBAR_DENSITY_COPY[value], ...(value === "standard" ? { tag: "Default" } : {}) }));
 
 function tabIcon(tab: SettingsTab) {
   const props = { size: 15, strokeWidth: 1.8, "aria-hidden": true } as const;
@@ -140,7 +149,7 @@ function TranslucencySlider({ id, value, disabled, onPreview, onCommit }: { id: 
 /** The one-word surface name the Dark tile shows, following the chosen intensity. */
 const DARK_TILE_NAMES: Record<DarkIntensity, string> = { subtle: "Graphite", mid: "Smoke", black: "True black" };
 
-function ThemePanel({ draft, onChange }: { draft: Settings; onChange: (patch: Partial<Settings>) => void }) {
+function ThemePanel({ draft, onChange, zoom, onZoom }: { draft: Settings; onChange: (patch: Partial<Settings>) => void; zoom: number; onZoom: (direction: 1 | -1 | 0) => void }) {
   // Only where the window has a material to show: elsewhere there is nothing behind the sidebar.
   const translucent = hasWindowMaterial();
   const [reducedTransparency] = useState(() => translucent && window.matchMedia("(prefers-reduced-transparency: reduce)").matches);
@@ -174,6 +183,36 @@ function ThemePanel({ draft, onChange }: { draft: Settings; onChange: (patch: Pa
       </div>
     </section>
 
+    <section className="theme-section" aria-labelledby="display-title">
+      <SectionHead id="display-title" title="Display & accessibility" help="Scale the desktop window and limit non-essential animation." />
+      <div className="settings-card">
+        <SettingRow label={<span className="setting-label">Interface zoom</span>} help="Scale the whole window. The View menu and its keyboard shortcuts still work.">
+          <div className="zoom-stepper" role="group" aria-label="Interface zoom">
+            <button type="button" className="icon-btn small" aria-label="Zoom out" disabled={zoom <= ZOOM_LEVELS[0]} onClick={() => onZoom(-1)}><Minus size={13} aria-hidden="true" /></button>
+            <output aria-live="polite" aria-atomic="true">{Math.round(zoom * 100)}%</output>
+            <button type="button" className="icon-btn small" aria-label="Zoom in" disabled={zoom >= ZOOM_LEVELS[ZOOM_LEVELS.length - 1]} onClick={() => onZoom(1)}><Plus size={13} aria-hidden="true" /></button>
+            <button type="button" className="ghost-btn small" disabled={zoom === 1} onClick={() => onZoom(0)}>Reset</button>
+          </div>
+        </SettingRow>
+        <button type="button" role="switch" aria-checked={draft.reduceMotion} className={`setting-row setting-switch ${draft.reduceMotion ? "selected" : ""}`} onClick={() => onChange({ reduceMotion: !draft.reduceMotion })}>
+          <span className="setting-copy"><strong className="setting-label">Reduce interface motion</strong><span className="field-help">Limit animation throughout Glitter. Your Mac’s Reduce motion setting is always honored.</span></span>
+          <span className="toggle" aria-hidden="true" aria-checked={draft.reduceMotion}><i /></span>
+        </button>
+      </div>
+    </section>
+
+    <section className="theme-section" aria-labelledby="font-title">
+      <SectionHead id="font-title" title="Font" help="The face for the whole interface. Code, diffs and the terminal keep a monospace face." />
+      <div className="settings-card">
+        <SettingRow label={<label htmlFor="ui-font">Font</label>} help={UI_FONT_COPY[draft.uiFont].description}>
+          <SelectMenu id="ui-font" ariaLabel="Font" value={draft.uiFont} placeholder="System" options={FONT_OPTIONS} onChange={(value) => {
+            const font = UI_FONTS.find((candidate) => candidate === value);
+            if (font) onChange({ uiFont: font });
+          }} />
+        </SettingRow>
+      </div>
+    </section>
+
     <section className="theme-section" aria-labelledby="accent-color-title">
       <SectionHead id="accent-color-title" title="Accent color" help="Selections and highlights, in both light and dark." />
       <div className="settings-card">
@@ -191,10 +230,16 @@ function ThemePanel({ draft, onChange }: { draft: Settings; onChange: (patch: Pa
     <section className="theme-section" aria-labelledby="sidebar-title">
       <SectionHead id="sidebar-title" title="Sidebar" help="How the left navigation sits against your desktop and your accent." />
       <div className="settings-card">
+        <SettingRow label={<label htmlFor="sidebar-density">Row density</label>} help="Choose how much vertical space workspaces and threads take.">
+          <SelectMenu id="sidebar-density" ariaLabel="Sidebar row density" value={draft.sidebarDensity} placeholder="Standard" options={SIDEBAR_DENSITY_OPTIONS} onChange={(value) => {
+            const density = SIDEBAR_DENSITIES.find((candidate) => candidate === value);
+            if (density) onChange({ sidebarDensity: density });
+          }} />
+        </SettingRow>
         {translucent ? <SettingRow label={<label htmlFor="sidebar-translucency">Translucency</label>} help={reducedTransparency ? "Off while Reduce transparency is on in System Settings." : "Let your desktop show through the sidebar."}>
           <TranslucencySlider id="sidebar-translucency" value={draft.sidebarTranslucency} disabled={reducedTransparency} onPreview={(value) => applyTheme({ ...draft, sidebarTranslucency: value })} onCommit={(value) => onChange({ sidebarTranslucency: value })} />
         </SettingRow> : null}
-        <button type="button" role="switch" aria-checked={draft.accentSidebar} className={`setting-row sidebar-accent-option ${draft.accentSidebar ? "selected" : ""}`} onClick={() => onChange({ accentSidebar: !draft.accentSidebar })}>
+        <button type="button" role="switch" aria-checked={draft.accentSidebar} className={`setting-row setting-switch ${draft.accentSidebar ? "selected" : ""}`} onClick={() => onChange({ accentSidebar: !draft.accentSidebar })}>
           <span className="setting-copy"><strong className="setting-label">Tint the sidebar</strong><span className="field-help">Use the accent color in the left navigation.</span></span>
           <span className="toggle" aria-hidden="true" aria-checked={draft.accentSidebar}><i /></span>
         </button>
@@ -219,16 +264,15 @@ function ThemePanel({ draft, onChange }: { draft: Settings; onChange: (patch: Pa
   </div>;
 }
 
-const PERMISSION_BADGES: Record<CliApprovalMode, string> = {
+const PERMISSION_BADGES: Partial<Record<ApprovalMode, string>> = {
   onRequest: "Recommended",
-  promptUnmatched: "More review",
   denyUnmatched: "Strict",
-  allowAll: "No prompts",
 };
 
-const PERMISSION_ICONS: Record<CliApprovalMode, ReactNode> = {
+const PERMISSION_ICONS: Record<ApprovalMode, ReactNode> = {
   onRequest: <ShieldCheck size={15} aria-hidden="true" />,
   promptUnmatched: <ShieldCheck size={15} aria-hidden="true" />,
+  guarded: <ShieldAlert size={15} aria-hidden="true" />,
   denyUnmatched: <Lock size={15} aria-hidden="true" />,
   allowAll: <TriangleAlert size={15} aria-hidden="true" />,
 };
@@ -335,16 +379,18 @@ function ShortcutsPanel({ overrides, onChange }: { overrides: ShortcutOverrides;
 }
 
 function PermissionsPanel({ draft, onChange }: { draft: Settings; onChange: (patch: Partial<Settings>) => void }) {
+  const offered: ApprovalMode[] = draft.defaultApprovalMode === "denyUnmatched" ? ["denyUnmatched", ...APPROVAL_ORDER] : [...APPROVAL_ORDER];
+  const modes = offered.filter((mode) => mode !== "allowAll");
   return <div className="permissions-panel">
-    <SectionHead title="Approvals" help="How freely an agent works before it asks you. The built-in agent and Muse both follow it." />
+    <SectionHead title="Approvals" help="How freely every agent works before it asks. The same choice for every model." />
     <div className="permission-options" role="radiogroup" aria-label="Default permissions for new threads">
-      {APPROVAL_ORDER.filter((mode) => mode !== "allowAll").map((mode) => <button key={mode} type="button" role="radio" aria-checked={draft.defaultApprovalMode === mode} className={`permission-option ${draft.defaultApprovalMode === mode ? "selected" : ""}`} onClick={() => onChange({ defaultApprovalMode: mode })}>
+      {modes.map((mode) => <button key={mode} type="button" role="radio" aria-checked={draft.defaultApprovalMode === mode} className={`permission-option ${draft.defaultApprovalMode === mode ? "selected" : ""}`} onClick={() => onChange({ defaultApprovalMode: mode })}>
         <span className="permission-radio" aria-hidden="true"><i /></span>
         <span className="permission-icon" aria-hidden="true">{PERMISSION_ICONS[mode]}</span>
-        <span className="permission-copy"><span><strong>{APPROVAL_LABELS[mode]}</strong><em>{PERMISSION_BADGES[mode]}</em></span><small>{APPROVAL_DESCRIPTIONS[mode]}</small></span>
+        <span className="permission-copy"><span><strong>{APPROVAL_LABELS[mode]}</strong>{PERMISSION_BADGES[mode] ? <em>{PERMISSION_BADGES[mode]}</em> : null}</span><small>{APPROVAL_DESCRIPTIONS[mode]}</small></span>
       </button>)}
     </div>
-    <p className="settings-note">The default for new threads. Change it per thread from the composer’s permissions menu, where Unrestricted is also available. Other agent CLIs keep their own permission settings.</p>
+    <p className="settings-note">The default for new threads. Full access is chosen on a thread, from the composer.</p>
     <SectionHead title="Muse host sandbox" help="Applied when the Muse connection starts; saving a change restarts it." />
     <div className="settings-card posture-list">
       {POSTURE_TOGGLES.map((item) => (
@@ -429,10 +475,13 @@ export function SettingsModal() {
     disableShell: state.disableShell,
     sandboxNetwork: state.sandboxNetwork,
     theme: state.theme,
+    uiFont: state.uiFont,
     darkIntensity: state.darkIntensity,
     accentColor: state.accentColor,
     accentSidebar: state.accentSidebar,
     sidebarTranslucency: state.sidebarTranslucency,
+    sidebarDensity: state.sidebarDensity,
+    reduceMotion: state.reduceMotion,
     thinkingOrb: state.thinkingOrb,
     defaultModel: state.defaultModel,
     defaultProviderId: state.defaultProviderId,
@@ -478,6 +527,8 @@ export function SettingsModal() {
     startHost: state.startHost,
     signOut: state.signOut,
     setSettingsOpen: state.setSettingsOpen,
+    zoom: state.zoom,
+    zoomBy: state.zoomBy,
     refreshAgentIdentities: state.refreshAgentIdentities,
     refreshEnterprise: state.refreshEnterprise,
     confirmAgentBin: state.confirmAgentBin,
@@ -918,7 +969,7 @@ export function SettingsModal() {
             </> : null}
           </section>
         </> : null}
-        {page === "Theme" ? <ThemePanel draft={draft} onChange={edit} /> : null}
+        {page === "Theme" ? <ThemePanel draft={draft} onChange={edit} zoom={s.zoom} onZoom={s.zoomBy} /> : null}
         {page === "Shortcuts" ? <>
           <CustomCommandsCard commands={draft.customCommands ?? []} onChange={(customCommands) => edit({ customCommands })} />
           <ShortcutsPanel overrides={draft.shortcutOverrides ?? {}} onChange={(shortcutOverrides) => edit({ shortcutOverrides })} />

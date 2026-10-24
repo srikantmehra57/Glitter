@@ -1,20 +1,22 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { backgroundAgents, describeAgents, describeLive, estimateTurnTokens, hasVisibleReply, trailingWork } from "../lib/agent";
-import { ArrowDown, TriangleAlert, Bug, ChevronRight, CircleAlert, FlaskConical, FolderOpen, GitBranch, GitCompareArrows, GitFork, History, LoaderCircle, PanelRight, Pencil, RotateCcw, ScanSearch, Sparkles, SquareTerminal, WifiOff, X } from "lucide-react";
+import { ArrowDown, TriangleAlert, Bug, ChevronRight, CircleAlert, FlaskConical, FolderOpen, GitBranch, GitCompareArrows, GitFork, Globe2, History, LoaderCircle, PanelRight, Pencil, RotateCcw, ScanSearch, Sparkles, SquareTerminal, WifiOff, X } from "lucide-react";
 import { Orb } from "./Orb";
 import { BranchMenu } from "./BranchMenu";
 import { FindBar } from "./FindBar";
 import { TurnRail } from "./TurnRail";
 import { WorkLocation } from "./WorkLocation";
 import { TerminalPane } from "./TerminalPane";
+import { BrowserPane } from "./BrowserPane";
 import { shortcutText } from "../lib/commands";
 import { EXIT_FAST_MS, usePresence, useRetained } from "../lib/presence";
 import { Collapse } from "./Presence";
 import { currentThread, currentWorkspace, needsGrant, needsWorkspace, turnTokens, useAppStore } from "../lib/store";
 import { formatDuration, formatTokens } from "../lib/format";
+import { formatTokenSpeed, readTokenSpeed } from "../lib/tokenSpeed";
 import type { Thread } from "../lib/types";
-import { AgentTimeline, PlanView, WorkingIndicator } from "./AgentTimeline";
+import { AgentTimeline, PlanMenu, WorkingIndicator } from "./AgentTimeline";
 import { ReviewDock } from "./ReviewDock";
 import { defaultTier, isPeak, modelFor, tiersFor } from "../lib/effort";
 import { ApprovalCard } from "./ApprovalCard";
@@ -32,7 +34,9 @@ function Activity({ thread, closing = false }: { thread: Thread; closing?: boole
   const estimated = estimateTurnTokens(thread.items);
   // Prefer the host's count; until it catches up, show the streamed estimate marked with "~".
   const tokens = reported >= estimated ? (reported ? `${formatTokens(reported)} tokens` : "") : `~${formatTokens(estimated)} tokens`;
-  const meta = [formatDuration(now - (thread.turnStartedAt ?? seen)), tokens].filter(Boolean).join(" · ");
+  const speedReading = readTokenSpeed(thread.tokenSpeed, now);
+  const speed = !closing && !waiting && !thread.cancelRequested && speedReading && !speedReading.idle ? formatTokenSpeed(speedReading.tokensPerSecond) : "";
+  const meta = [formatDuration(now - (thread.turnStartedAt ?? seen)), tokens, speed].filter(Boolean).join(" · ");
   const live = useMemo(() => trailingWork(thread.items), [thread.items]);
   const label = thread.userInputs?.length ? "Waiting for your answer" : thread.pendingApproval ? "Waiting for approval" : thread.cancelRequested ? "Stopping…" : describeLive(live) ?? describeAgents(backgroundAgents(thread.items)) ?? thread.goal?.currentWork ?? "Thinking";
   const models = useAppStore((state) => state.models);
@@ -115,13 +119,13 @@ export function ThreadView() {
   const following = useRef(true);
   const positions = useRef(new Map<string, { top: number; follow: boolean }>());
   const [showLatest, setShowLatest] = useState(false);
-  // A plan stays where the agent made it in the thread; pinning it to the top is the user's choice.
-  const [pinnedPlans, setPinnedPlans] = useState<Record<string, boolean>>({});
-  const planPinned = Boolean(thread && pinnedPlans[thread.sessionId] && thread.status === "running" && thread.plan?.some((item) => item.status === "pending" || item.status === "inProgress"));
-  const pinPlan = (pinned: boolean) => { if (thread) setPinnedPlans((state) => ({ ...state, [thread.sessionId]: pinned })); };
+  // Active plans float above the composer by default; completed plans return to their place in the thread.
+  const planFloating = Boolean(thread && thread.status === "running" && thread.plan?.some((item) => item.status === "pending" || item.status === "inProgress"));
   const findOpen = useAppStore((state) => state.findOpen);
   const terminalOpen = useAppStore((state) => state.terminalOpen);
   const setTerminalOpen = useAppStore((state) => state.setTerminalOpen);
+  const browserOpen = useAppStore((state) => state.browserOpen);
+  const setBrowserOpen = useAppStore((state) => state.setBrowserOpen);
   const [editingTitle, setEditingTitle] = useState(false);
   const titleEditRequest = useAppStore((state) => state.titleEditRequest);
   const seenTitleEdit = useRef(titleEditRequest);
@@ -200,17 +204,19 @@ export function ThreadView() {
   const suggestionsVisible = Boolean(workspace && newThreadView && !starting && !restoring && !thread?.opening && !thread?.historyFailed);
   // The chips fade out with the empty state instead of vanishing under the first message.
   const starters = usePresence(suggestionsVisible, EXIT_FAST_MS);
-  // The empty state lifts the composer to the middle of the column; the open
-  // terminal sits between them, so with it open the composer stays docked.
-  const centered = Boolean(workspace && newThreadView && !starting && !terminalOpen);
+  // The empty state lifts the composer to the middle of the column. A terminal
+  // opens beside the thread, so it does not change that vertical placement.
+  const centered = Boolean(workspace && newThreadView && !starting);
   const aboveComposer = useMemo(() => {
+    const planMenu = planFloating && thread?.plan ? <PlanMenu key={thread.sessionId} items={thread.plan} /> : null;
     const jumpRow = latest.mounted ? <div className="jump-latest-row"><button className={`jump-latest${latest.closing ? " closing" : ""}`} tabIndex={latest.closing ? -1 : undefined} onClick={jump}><ArrowDown size={13} />Jump to latest</button></div> : null;
     // Starter chips hug the composer's top edge; centred on the empty stage they read as decoration.
-    if (!starters.mounted || !workspace) return jumpRow ?? undefined;
+    if (!starters.mounted || !workspace) return planMenu || jumpRow ? <>{planMenu}{jumpRow}</> : undefined;
     const predicted = s.suggestionsEnabled && s.suggestions?.workspaceId === workspace.id ? s.suggestions : null;
     const chips: Array<{ icon?: typeof Sparkles; title: string; prompt: string }> = predicted?.items ?? SUGGESTIONS;
     const agentName = predicted?.agentId ? s.agents.find((agent) => agent.id === predicted.agentId)?.name ?? AGENT_LABELS[predicted.agentId] : null;
     return <>
+      {planMenu}
       {/* A fresh prediction re-pops the chips so the swap-in is noticed. */}
       <div className={`suggestions${starters.closing ? " closing" : ""}`} key={predicted?.signature ?? "static"} inert={starters.closing}>
         {predicted ? <p className="suggestion-src">Predicted from workspace state{agentName ? ` by ${agentName}` : ""}</p> : null}
@@ -223,7 +229,7 @@ export function ThreadView() {
       </div>
       {jumpRow}
     </>;
-  }, [latest.mounted, latest.closing, jump, starters.mounted, starters.closing, workspace, s.suggestionsEnabled, s.suggestions, s.agents, s.setComposer]);
+  }, [latest.mounted, latest.closing, jump, starters.mounted, starters.closing, workspace, s.suggestionsEnabled, s.suggestions, s.agents, s.setComposer, planFloating, thread?.plan, thread?.sessionId]);
   // The title bar is the window's own strip on the shell; the panel below it is the canvas.
   return <>
     <header className="topbar" data-tauri-drag-region>
@@ -255,6 +261,7 @@ export function ThreadView() {
       {thread && !thread.agentId ? <button className="icon-btn topbar-action" aria-label="Fork thread" data-tooltip="Fork into a new thread" onClick={() => void s.forkThread(thread.sessionId)}><GitFork size={15} /><span>Fork</span></button> : null}
       <WorkLocation />
       {branch ? <BranchMenu branch={branch} worktree={Boolean(thread?.worktree)} locked={thread?.status === "running"} /> : null}
+      {workspace ? <button className="icon-btn topbar-action" aria-label="Toggle browser" aria-pressed={browserOpen} data-tooltip="Browser" onClick={() => setBrowserOpen(!browserOpen)}><Globe2 size={15} /><span>Browser</span></button> : null}
       {workspace ? <button className="icon-btn topbar-action" aria-label="Toggle terminal" aria-pressed={terminalOpen} data-tooltip={`Terminal  ${shortcutText("terminal")}`} onClick={() => setTerminalOpen(!terminalOpen)}><SquareTerminal size={15} /><span>Terminal</span></button> : null}
       {/* One button for the side pane. Its tabs (Changes, Diff, Files, Monitor)
           choose the view; a second title-bar button for Monitor duplicated them. */}
@@ -264,10 +271,10 @@ export function ThreadView() {
       }}><PanelRight size={15} /><span>Changes</span></button>
       {/* Compact widths and the expanded dock show Changes full-pane; the
           thread is still one tap away without losing the composer. */}
-      <div className="review-toggle segmented" role="group" aria-label="Thread or Changes view">
+      {!browserOpen ? <div className="review-toggle segmented" role="group" aria-label="Thread or Changes view">
         <button aria-pressed={!s.dockOpen} onClick={() => s.setDockOpen(false)}>Thread</button>
         <button aria-pressed={s.dockOpen} onClick={() => { if (s.inspectorTab === "activity") s.setInspectorTab("changes"); s.setDockOpen(true); }}>Changes</button>
-      </div>
+      </div> : null}
     </header>
     <main id="main-content" tabIndex={-1} className={`main ${s.dockOpen ? "" : "solo"}${s.dockExpanded && s.dockOpen ? " dock-focused" : ""}`}>
     {/* Banners grow in and shrink out, so the panel below them slides instead of jumping. */}
@@ -277,12 +284,11 @@ export function ThreadView() {
     <Collapse open={thread?.viewGap?.state === "filling"}>{() => <div className="banner info" role="status"><LoaderCircle size={14} className="spin" aria-hidden="true" /><span>Recovering dropped events…</span></div>}</Collapse>
     <Collapse open={thread?.viewGap?.state === "failed" && !error}>{() => <div className="banner" role="alert"><CircleAlert size={14} aria-hidden="true" /><span>Events after {viewGapAfter?.slice(-8)} never arrived. Retry the rebuild to replay them from the log.</span><button className="ghost-btn small" onClick={() => void s.rebuildThread()}>Retry rebuild</button></div>}</Collapse>
     <Collapse open={Boolean(thread?.viewHealth)}>{() => <div className="banner warn" role="status"><TriangleAlert size={14} aria-hidden="true" /><span>Live updates unavailable{viewHealth?.noneReason ? ` (${viewHealth.noneReason})` : ""}. Reconnect to restore them.</span>{thread && <button className="ghost-btn small" onClick={() => void s.selectThread(thread.sessionId)}>Reconnect</button>}</div>}</Collapse>
-    <div className={`review-layout${s.dockOpen ? " docked" : ""}${s.dockExpanded && s.dockOpen ? " expanded" : ""}`}>
+    <div className={`review-layout${s.dockOpen ? " docked" : ""}${s.dockExpanded && s.dockOpen ? " expanded" : ""}${browserOpen ? " browser-docked" : ""}`}>
     <div className={`thread-main${centered ? " centered" : ""}`}>
     <div className="thread-transcript">
     {thread && workspace && !newThreadView ? <TurnRail key={thread.sessionId} thread={thread} scroller={scroller} /> : null}
     {find.mounted && thread ? <FindBar key={`find-${thread.sessionId}`} thread={thread} scroller={scroller} closing={find.closing} /> : null}
-    {planPinned && thread?.plan ? <div className="pinned-plan"><PlanView key={thread.sessionId} items={thread.plan} pinnable pinned onPin={pinPlan} /></div> : null}
     {!workspace ? (
       <div className="empty welcome-stage">
         <section className="welcome-card" aria-labelledby="workspace-welcome-title">
@@ -336,7 +342,7 @@ export function ThreadView() {
             </button>
           </div>
         ) : null}
-        {thread ? <AgentTimeline thread={thread} scrollContainerRef={scroller} planPinned={planPinned} onPlanPin={pinPlan} /> : null}
+        {thread ? <AgentTimeline thread={thread} scrollContainerRef={scroller} planFloating={planFloating} /> : null}
         <ApprovalCard />
         <UserInputCards />
         {activity.mounted && thread ? <Activity key={thread.sessionId} thread={thread} closing={activity.closing} /> : null}
@@ -344,9 +350,10 @@ export function ThreadView() {
         {thread?.lastOutcome === "cancelled" && thread.status !== "running" && !thread.items.length ? <p className="muted">Turn cancelled.</p> : null}
       </div></div>}
     </div>
-    {workspace ? <TerminalPane /> : null}
     <Composer above={aboveComposer} />
     </div>
+    {workspace ? <BrowserPane /> : null}
+    {workspace ? <TerminalPane /> : null}
     <ReviewDock />
     </div>
     </main>

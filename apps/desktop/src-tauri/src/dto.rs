@@ -66,6 +66,9 @@ const MCP_KEY_LIMIT: usize = 128;
 const MCP_VALUE_LIMIT: usize = 4_096;
 const MCP_TIMEOUT_MS_MIN: u64 = 1_000;
 const MCP_TIMEOUT_MS_MAX: u64 = 600_000;
+const BROWSER_URL_LIMIT: usize = 4_096;
+const BROWSER_SELECTOR_LIMIT: usize = 4_096;
+const BROWSER_KEY_LIMIT: usize = 64;
 
 /// Image types the native drop inspector can produce — the only image source.
 const IMAGE_MEDIA_TYPES: &[&str] = &["image/png", "image/jpeg", "image/gif", "image/webp", "image/avif", "image/bmp", "image/x-icon", "image/svg+xml", "image/tiff", "image/heic", "image/heif"];
@@ -696,6 +699,79 @@ struct UserShellParams {
     command_text: String,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+enum BrowserAction {
+    Open,
+    Navigate,
+    State,
+    Snapshot,
+    Screenshot,
+    Click,
+    Type,
+    Key,
+    Scroll,
+    Back,
+    Forward,
+    Reload,
+    Wait,
+    Console,
+    Resize,
+    SetStreaming,
+    Close,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct BrowserOpenParams {
+    grant_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    width: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    height: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct BrowserControlParams {
+    grant_id: String,
+    action: BrowserAction,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    selector: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    r#ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    x: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    y: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    delta_x: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    delta_y: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    width: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    height: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    stream: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct BrowserCloseParams {
+    grant_id: String,
+}
+
 fn capped(method: &str, field: &str, value: &str, limit: usize) -> Result<(), String> {
     if value.len() > limit {
         return Err(format!("Invalid {method} parameters: {field} is longer than {limit} bytes."));
@@ -718,6 +794,71 @@ fn check_id(method: &str, field: &str, value: &str) -> Result<(), String> {
 fn check_maybe_id(method: &str, field: &str, value: Option<&str>) -> Result<(), String> {
     if let Some(value) = value {
         capped(method, field, value, ID_LIMIT)?;
+    }
+    Ok(())
+}
+
+fn check_browser_number(method: &str, field: &str, value: Option<i64>, min: i64, max: i64) -> Result<(), String> {
+    if value.is_some_and(|number| number < min || number > max) {
+        return Err(format!("Invalid {method} parameters: {field} must be between {min} and {max}."));
+    }
+    Ok(())
+}
+
+fn check_browser_url(method: &str, url: &str) -> Result<(), String> {
+    required(method, "url", url.trim())?;
+    capped(method, "url", url, BROWSER_URL_LIMIT)?;
+    let lower = url.trim().to_ascii_lowercase();
+    let authority = lower.strip_prefix("http://").or_else(|| lower.strip_prefix("https://")).ok_or_else(|| format!("Invalid {method} parameters: url must use http or https."))?;
+    if authority.split('/').next().is_some_and(|part| part.contains('@')) || url.chars().any(|ch| ch.is_control()) {
+        return Err(format!("Invalid {method} parameters: url cannot contain credentials or control characters."));
+    }
+    Ok(())
+}
+
+fn check_browser_control(method: &str, parsed: &BrowserControlParams) -> Result<(), String> {
+    capped(method, "grantId", &parsed.grant_id, GRANT_ID_LIMIT)?;
+    if let Some(url) = parsed.url.as_deref() {
+        check_browser_url(method, url)?;
+    }
+    if let Some(selector) = parsed.selector.as_deref() {
+        capped(method, "selector", selector, BROWSER_SELECTOR_LIMIT)?;
+    }
+    if let Some(reference) = parsed.r#ref.as_deref() {
+        capped(method, "ref", reference, BROWSER_KEY_LIMIT)?;
+        if reference.is_empty() || !reference.chars().all(|ch| ch.is_ascii_alphanumeric()) {
+            return Err(format!("Invalid {method} parameters: ref is not an accessibility reference."));
+        }
+    }
+    if let Some(text) = parsed.text.as_deref() {
+        capped(method, "text", text, SHORT_TEXT_LIMIT)?;
+    }
+    if let Some(key) = parsed.key.as_deref() {
+        required(method, "key", key.trim())?;
+        capped(method, "key", key, BROWSER_KEY_LIMIT)?;
+    }
+    for (field, value, min, max) in [
+        ("x", parsed.x, 0, 4_096),
+        ("y", parsed.y, 0, 4_096),
+        ("deltaX", parsed.delta_x, -20_000, 20_000),
+        ("deltaY", parsed.delta_y, -20_000, 20_000),
+        ("ms", parsed.ms, 1, 10_000),
+        ("width", parsed.width, 320, 2_560),
+        ("height", parsed.height, 240, 1_600),
+    ] {
+        check_browser_number(method, field, value, min, max)?;
+    }
+    if parsed.x.is_some() != parsed.y.is_some() {
+        return Err(format!("Invalid {method} parameters: x and y must be supplied together."));
+    }
+    match parsed.action {
+        BrowserAction::Navigate if parsed.url.as_deref().map_or(true, |url| url.trim().is_empty()) => return Err(format!("Invalid {method} parameters: navigate requires url.")),
+        BrowserAction::Click if parsed.r#ref.is_none() && parsed.selector.is_none() && (parsed.x.is_none() || parsed.y.is_none()) => return Err(format!("Invalid {method} parameters: click requires ref, selector, or coordinates.")),
+        BrowserAction::Type if parsed.text.is_none() => return Err(format!("Invalid {method} parameters: type requires text.")),
+        BrowserAction::Key if parsed.key.is_none() => return Err(format!("Invalid {method} parameters: key is required.")),
+        BrowserAction::Resize if parsed.width.is_none() || parsed.height.is_none() => return Err(format!("Invalid {method} parameters: resize requires width and height.")),
+        BrowserAction::SetStreaming if parsed.stream.is_none() => return Err(format!("Invalid {method} parameters: setStreaming requires stream.")),
+        _ => {}
     }
     Ok(())
 }
@@ -1037,6 +1178,26 @@ pub fn validate_params(method: &str, params: &Value) -> Result<Value, String> {
             }
             emit(method, &parsed)
         }
+        "browserOpen" => {
+            let parsed: BrowserOpenParams = parse(method, body)?;
+            capped(method, "grantId", &parsed.grant_id, GRANT_ID_LIMIT)?;
+            if let Some(url) = parsed.url.as_deref() {
+                check_browser_url(method, url)?;
+            }
+            check_browser_number(method, "width", parsed.width, 320, 2_560)?;
+            check_browser_number(method, "height", parsed.height, 240, 1_600)?;
+            emit(method, &parsed)
+        }
+        "browserControl" => {
+            let parsed: BrowserControlParams = parse(method, body)?;
+            check_browser_control(method, &parsed)?;
+            emit(method, &parsed)
+        }
+        "browserClose" => {
+            let parsed: BrowserCloseParams = parse(method, body)?;
+            capped(method, "grantId", &parsed.grant_id, GRANT_ID_LIMIT)?;
+            emit(method, &parsed)
+        }
         "readOutput" => {
             let mut parsed: ReadOutputParams = parse(method, body)?;
             check_id(method, "sessionId", &parsed.session_id)?;
@@ -1320,6 +1481,10 @@ mod tests {
             ("pageHistory", json!({ "sessionId": "s-1" })),
             ("readOutput", json!({ "sessionId": "s-1", "itemId": "i-1", "outputRef": "r-1" })),
             ("readOutput", json!({ "sessionId": "s-1", "itemId": "i-1", "outputRef": "r-1", "offsetBytes": 8, "lengthBytes": 4096 })),
+            ("browserOpen", json!({ "grantId": "wg-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "url": "http://localhost:3000", "width": 1100, "height": 760 })),
+            ("browserControl", json!({ "grantId": "wg-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "action": "click", "ref": "e2" })),
+            ("browserControl", json!({ "grantId": "wg-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "action": "setStreaming", "stream": true })),
+            ("browserClose", json!({ "grantId": "wg-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" })),
             ("setReasoningEffort", json!({ "sessionId": "s-1", "reasoningEffort": "low" })),
             ("subagentControl", json!({ "sessionId": "s-1", "subagentId": "k-1", "action": "sendMessage", "body": "use the cache" })),
             ("subagentControl", json!({ "sessionId": "s-1", "subagentId": "k-1", "action": "stop", "reason": "stale" })),
@@ -1383,6 +1548,16 @@ mod tests {
         assert!(validate_params("resumeSession", &json!({ "sessionId": "s", "workspaceRoot": "/etc" })).is_err());
         assert!(validate_params("listSessions", &json!({ "grantId": "g", "workspaceRoot": "/etc" })).is_err());
         assert!(validate_params("suggest", &json!({ "grantId": "g", "prompt": "names", "workspaceRoot": "/etc" })).is_err());
+        for (method, mut params) in [
+            ("startSession", json!({ "agentId": "harness", "grantId": "g" })),
+            ("resumeSession", json!({ "sessionId": "h-1" })),
+            ("sendTurn", json!({ "sessionId": "h-1", "text": "hi" })),
+            ("harnessMcp", json!({ "sessionId": "h-1" })),
+            ("harnessMcpConfig", json!({ "sessionId": "h-1" })),
+        ] {
+            params.as_object_mut().unwrap().insert("harnessMcpTrust".into(), json!({ "workspaceTrusted": true }));
+            assert!(validate_params(method, &params).is_err(), "{method} accepted renderer-supplied MCP consent");
+        }
         assert!(validate_params("suggest", &json!({ "grantId": "g", "prompt": "" })).is_err());
         assert!(validate_params("suggest", &json!({ "grantId": "g", "prompt": "names", "timeoutMs": 0 })).is_err());
         assert!(validate_params("suggest", &json!({ "grantId": "g", "prompt": "names", "contributorMode": "auto" })).is_err());

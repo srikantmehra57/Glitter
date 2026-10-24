@@ -6,7 +6,7 @@ import { log } from "./logger";
 import { MOCK_FILES, MOCK_GIT, MOCK_MODELS, MOCK_THREADS, mockGitReview, mockThreads, mockWorkspaceFile, mockWorktree } from "./mock";
 import type { ProviderStatus } from "./providers";
 export type { ProviderStatus } from "./providers";
-import type { DiagnosticsSnapshot, EditorChoice, ThemeMode } from "./types";
+import type { DiagnosticsSnapshot, EditorChoice, SupportPaths, ThemeMode, BrowserControlResult, BrowserFrame, BrowserStateEvent } from "./types";
 import type { AgentId, AgentIdentity, AgentSessionConfig, ApprovalRequest, CatalogEntry, CatalogInstallResult, CatalogList, CatalogRemoveResult, CliUpdateOutcome, CliUpdateStatus, ContextUsage, Detection, DroppedFile, EnterpriseStatus, GitBranch, GoalState, HarnessMcpConfig, HarnessMcpConfigServer, HarnessMcpScope, HarnessMcpServerInput, ModelCall, PlanItem, PullRequest, GitReview, GitReviewRequest, GitSnapshot, SessionConfig, SessionMetadata, SnapshotRestore, ThreadWorktree, TokenUsage, TranscriptItem, TurnSnapshot, UserInputRequest, WorkspaceFile, WorktreeRemoval, PluginDetail, PluginEntry, SkillDetail, SkillEntry } from "./types";
 
 /**
@@ -50,6 +50,8 @@ export interface BridgeEventPayloads {
   turnError: { sessionId: string; turnId?: string; error?: string; code?: string };
   gapError: { sessionId: string; turnId?: string; error?: string; reason?: string; after?: string; next?: string };
   turnSnapshot: TurnSnapshot;
+  browserState: BrowserStateEvent;
+  browserFrame: BrowserFrame;
   /** `cause: "userInput"`: the agent continued on its own after a question was answered, not from the queue. */
   turnStarted: { sessionId: string; turnId: string; cause?: "userInput" };
   turnCompleted: { sessionId: string; turnId: string; outcome: { kind: string; params?: { terminal?: string; reason?: string; error?: { kind?: string; message: string } } }; viewCursor?: string };
@@ -228,6 +230,13 @@ function mockBridge(method: string, params: Record<string, unknown>): unknown {
       return { models: MOCK_MODELS, providerId: "meta", profileId: null, source: "preview" };
     case "usage":
       return {};
+    case "browserOpen":
+    case "browserControl":
+    case "browserClose":
+      return {
+        state: { status: "closed", url: "", title: "", viewport: { width: 1100, height: 760 } },
+        text: "Browser control needs the desktop app with a real workspace.",
+      } satisfies BrowserControlResult;
     case "startHost":
       return {
         server: { name: "preview", version: "0.0.0" },
@@ -711,6 +720,18 @@ export async function acpConsentSet(consented: boolean): Promise<void> {
 export async function openLogFolder(): Promise<string> {
   if (!isTauri()) throw new Error("The log folder needs the desktop app.");
   return invoke<string>("open_log_folder");
+}
+
+/** App-owned support paths. Harness is the only agent with a canonical session log. */
+export async function supportPaths(sessionId?: string, agentId?: AgentId): Promise<SupportPaths> {
+  if (!isTauri()) throw new Error("Support paths need the desktop app.");
+  return invoke<SupportPaths>("support_paths", { sessionId, agentId });
+}
+
+/** Open Glitter's own settings document with the OS default JSON editor. */
+export async function openConfigFile(): Promise<void> {
+  if (!isTauri()) throw new Error("The config file needs the desktop app.");
+  await invoke<void>("open_config_file");
 }
 
 export async function diagnosticsSnapshot(): Promise<DiagnosticsSnapshot> {

@@ -8,7 +8,7 @@ import type { UserInputIntent } from "../protocol.js";
 import type { Asked, Question } from "./questions.js";
 import { dangerGuard } from "./permission/guards.js";
 import type { Extension } from "./registry.js";
-import type { ToolSchema } from "./wire.js";
+import type { ImagePart, ToolSchema } from "./wire.js";
 
 /**
  * The harness's tools. Every path is resolved against the workspace root and
@@ -17,7 +17,7 @@ import type { ToolSchema } from "./wire.js";
  * never sees provider keys and cannot write outside the workspace and temp.
  */
 
-export type ToolKind = "read" | "edit" | "shell" | "plan" | "mcp" | "delegate";
+export type ToolKind = "read" | "edit" | "shell" | "plan" | "mcp" | "delegate" | "browser";
 export type OffsetUnit = "line" | "match" | "file";
 
 /** The truth a tool produced. Frozen by `runTool` before anyone renders it. */
@@ -34,6 +34,8 @@ export type ToolValue =
   | { kind: "mcp"; server: string; tool: string; text: string; isError?: boolean }
   /** A delegated child agent's final reply. */
   | { kind: "task"; childSessionId: string; summary: string; text: string; failed?: boolean }
+  /** The shared browser's current page and a receipt for the requested action. */
+  | { kind: "browser"; path: string; text: string }
   | { kind: "error"; message: string };
 
 /** Replayable card state. Pure: no I/O, no clock, no session. */
@@ -83,6 +85,8 @@ export type ToolOutcome = {
   continuation?: Continuation;
   /** Deferred tools this call makes callable for the rest of the turn, by advertised name. */
   activate?: readonly string[];
+  /** Image evidence produced by a tool, sent to the model with its text result. */
+  images?: ImagePart[];
 };
 
 const READ_LIMIT_LINES = 2000;
@@ -101,7 +105,7 @@ const ARTIFACT_DIR = join(".muse", "tool-output");
 const SKIP_DIRS = new Set([".git", "node_modules", ".next", "dist", "build", "target", ".venv", "venv", "__pycache__", ".cache", ".turbo", "coverage", ".muse"]);
 
 /** What a handler produces before it is rendered, packed and possibly saved to an artifact. */
-export type ToolProduced = { value: ToolValue; continuation?: Continuation; activate?: readonly string[] };
+export type ToolProduced = { value: ToolValue; continuation?: Continuation; activate?: readonly string[]; images?: ImagePart[] };
 
 /**
  * One tool, as an extension contributes it. The host reads only these fields:
@@ -178,6 +182,7 @@ export const BUILTIN_TOOLS: readonly ToolDefinition[] = [
     validate: (root, input) => {
       if (!str(input.path).trim()) return "A path is required.";
       confine(root, str(input.path));
+      if (typeof input.content !== "string") return "content is required and must be a string.";
       return undefined;
     },
     run: (root, input) => writeTool(root, input),
@@ -375,6 +380,9 @@ export function render(value: ToolValue, continuation?: Continuation): string {
     case "task":
       text = value.text;
       break;
+    case "browser":
+      text = value.text;
+      break;
     case "error":
       text = value.message;
       break;
@@ -402,6 +410,8 @@ export function presentationMeta(value: ToolValue): PresentationMeta {
       return { kind: "mcp", path: `${value.server} › ${value.tool}` };
     case "task":
       return { kind: "task" };
+    case "browser":
+      return { kind: "browser", path: value.path };
     case "error":
       return { kind: "error" };
   }
@@ -691,7 +701,8 @@ async function writeTool(root: string, input: Record<string, unknown>): Promise<
   if (!str(input.path).trim()) throw new ToolError("A path is required.");
   const existed = existsSync(path);
   const oldText = existed ? await readFile(path, "utf8").catch(() => "") : "";
-  const newText = str(input.content);
+  if (typeof input.content !== "string") throw new ToolError("content is required and must be a string.");
+  const newText = input.content;
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, newText, "utf8");
   return { value: { kind: "diff", path: display(root, path), oldText, newText, created: !existed } };
@@ -700,7 +711,8 @@ async function writeTool(root: string, input: Record<string, unknown>): Promise<
 /** Why these exact strings cannot be applied to the file's current text. */
 function editProblemText(pathLabel: string, before: string | null, input: Record<string, unknown>): string | undefined {
   if (before == null) return `${pathLabel} does not exist. Use write_file to create it.`;
-  const oldText = str(input.old_string);
+  if (typeof input.old_string !== "string" || typeof input.new_string !== "string") return "old_string and new_string are required and must be strings.";
+  const oldText = input.old_string;
   if (!oldText) return "old_string is empty. Use write_file to create or replace a whole file.";
   const count = before.split(oldText).length - 1;
   if (count === 0) return `old_string was not found in ${pathLabel}. Read the file and copy the text exactly, including whitespace.`;
@@ -788,8 +800,8 @@ function failure(message: string): ToolOutcome {
 }
 
 function pack(produced: ToolProduced): ToolOutcome {
-  const { value, continuation, activate } = produced;
-  const outcome: ToolOutcome = { output: render(value, continuation), value, presentation: presentationMeta(value), ...(continuation ? { continuation } : {}), ...(activate?.length ? { activate } : {}) };
+  const { value, continuation, activate, images } = produced;
+  const outcome: ToolOutcome = { output: render(value, continuation), value, presentation: presentationMeta(value), ...(continuation ? { continuation } : {}), ...(activate?.length ? { activate } : {}), ...(images?.length ? { images } : {}) };
   if (value.kind === "terminal") {
     outcome.exitCode = value.exitCode;
     outcome.command = value.command;

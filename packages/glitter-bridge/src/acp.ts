@@ -7,6 +7,9 @@ import { readFile, readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { AgentSpec } from "./agents.js";
+import type { ApprovalMode } from "./protocol.js";
+import { isReadOnly } from "./harness/permission/classify.js";
+import { assessCommand } from "./harness/permission/danger.js";
 import {
   approvalAlive,
   approvalExpiry,
@@ -182,22 +185,42 @@ type SessionState = {
   muted?: boolean;
   collected?: string;
   /**
-   * How the app answers this session's permission requests: show each one
-   * (`promptUnmatched`, the default), decline any that would change files or
-   * run commands (`denyUnmatched`), or approve each once (`allowAll`). The
-   * agent's own configuration still decides which actions it asks about.
+   * The app's permission mode for this session. The agent still chooses which
+   * calls it reports; the app answers each report with the same rules it uses
+   * for the built-in harness.
    */
-  approvalMode?: AcpApprovalMode;
+  approvalMode?: ApprovalMode;
 };
 
-export type AcpApprovalMode = "promptUnmatched" | "denyUnmatched" | "allowAll";
-const ACP_APPROVAL_MODES: readonly AcpApprovalMode[] = ["promptUnmatched", "denyUnmatched", "allowAll"];
+const ACP_APPROVAL_MODES: readonly ApprovalMode[] = ["promptUnmatched", "onRequest", "guarded", "denyUnmatched", "allowAll"];
 /** ACP tool kinds that only look: Read only lets these through and declines the rest. */
 const READ_KINDS = new Set(["read", "search", "think", "fetch"]);
+/** Workspace writes. Ask lets these run; a command still asks. */
+const WRITE_KINDS = new Set(["edit", "delete", "move"]);
+
+/** How the app answers one ACP permission request. `ask` shows the card. */
+export function acpPermissionDecision(mode: string, toolCall: { kind?: unknown; rawInput?: unknown }): "allow" | "deny" | "ask" {
+  const known: ApprovalMode = ACP_APPROVAL_MODES.find((item) => item === mode) ?? "promptUnmatched";
+  const kind = str(toolCall.kind) ?? "other";
+  const raw = asRecord(toolCall.rawInput);
+  const command = str(raw.command) ?? str(raw.cmd);
+  const risks = command ? assessCommand(command) : [];
+  if (risks.some((risk) => risk.level === "block")) return "deny";
+  if (known === "allowAll") return "allow";
+  if (known === "denyUnmatched") return READ_KINDS.has(kind) ? "ask" : "deny";
+  if (risks.some((risk) => risk.level === "ask")) return "ask";
+  if (known === "guarded") return "allow";
+  if (known === "onRequest") {
+    if (READ_KINDS.has(kind) || WRITE_KINDS.has(kind)) return "allow";
+    if (command && isReadOnly(command)) return "allow";
+    return "ask";
+  }
+  return "ask";
+}
 
 /** The option an automatic answer picks: once, never "always", so no rule outlives the thread's mode. */
 function automaticChoice(options: Json[], allow: boolean): string | null {
-  const kinds = allow ? ["allow_once", "allow_always"] : ["reject_once", "reject_always"];
+  const kinds = allow ? ["allow_once"] : ["reject_once"];
   for (const kind of kinds) {
     const match = options.find((option) => option.kind === kind && typeof option.optionId === "string");
     if (match) return String(match.optionId);
@@ -768,7 +791,7 @@ export class AcpAgentHost {
   setApprovalMode(sessionId: string, mode: string) {
     const session = this.sessions.get(sessionId);
     if (!session) throw new Error(`Unknown ${this.spec.name} session: ${sessionId}`);
-    const next = ACP_APPROVAL_MODES.find((item) => item === mode) ?? "promptUnmatched";
+    const next = ACP_APPROVAL_MODES.find((item) => item === mode) ?? "onRequest";
     session.approvalMode = next;
     return { status: "accepted" as const, effectiveMode: { mode: next } };
   }
@@ -1138,16 +1161,14 @@ export class AcpAgentHost {
       const approvalId = randomUUID();
       // The thread's mode may answer for the user. Every automatic answer is audited like a click.
       const mode = session?.approvalMode ?? "promptUnmatched";
-      const kind = str(toolCall.kind) ?? "other";
-      const automatic = mode === "allowAll" ? automaticChoice(options, true)
-        : mode === "denyUnmatched" && !READ_KINDS.has(kind) ? automaticChoice(options, false)
-        : null;
+      const decision = acpPermissionDecision(mode, toolCall);
+      const automatic = decision === "ask" ? null : automaticChoice(options, decision === "allow");
       if (automatic) {
-        this.emit("approvalAudit", { approvalId, sessionId, turnId: session?.turnId ?? null, choiceId: automatic, outcome: mode === "allowAll" ? "auto-approved" : "auto-denied" });
+        this.emit("approvalAudit", { approvalId, sessionId, turnId: session?.turnId ?? null, choiceId: automatic, outcome: decision === "allow" ? "auto-approved" : "auto-denied" });
         return { outcome: { outcome: "selected", optionId: automatic } };
       }
-      // Read only with no decline option on offer: cancel rather than ask or allow.
-      if (mode === "denyUnmatched" && !READ_KINDS.has(kind)) return { outcome: { outcome: "cancelled" } };
+      // A refusal with no decline option on offer: cancel rather than ask or allow.
+      if (decision === "deny") return { outcome: { outcome: "cancelled" } };
       const expiresAt = approvalExpiry();
       const expiresAtMono = approvalExpiryMono();
       const choice = await new Promise<string | null>((resolve) => {

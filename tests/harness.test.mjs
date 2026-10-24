@@ -23,11 +23,15 @@ export { decide } from ${JSON.stringify(resolve('packages/glitter-bridge/src/har
 export { catalogPrompt, discoverSkills, parseFrontmatter } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/skills.ts'))};
 export { isTruncatedStop, repairHistory, classifyProviderFailure } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/wire.ts'))};
 export { clipRecency, contextBudget, estimateRequestTokens, fitHistory, headTail, outputReserve, skeleton } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/context.ts'))};
-export { effortTiers, resolveProvider } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/providers.ts'))};
+export { effortTiers, nativeProviderCredentials, resolveProvider } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/providers.ts'))};
+export { mcpConfigFingerprints } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/mcp-config.ts'))};
+export { diagnosticEvent } from ${JSON.stringify(resolve('packages/glitter-bridge/src/redaction.ts'))};
 export { McpManager, readMcpServers, readMcpConfig, addMcpServer, removeMcpServer, mcpToolName } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/mcp.ts'))};
 `);
 await build({ entryPoints: [join(temporary, 'entry.ts')], bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'silent' });
-const { HarnessHost, SessionStore, BUILTIN_TOOLS, ExtensionRegistry, parseScript, isReadOnly, assessCommand, covers, scopesFor, runGuards, decide, catalogPrompt, discoverSkills, parseFrontmatter, confine, globRegex, runTool, scheduleToolCalls, encodeSegment, repairHistory, isTruncatedStop, retryBudgetOpen, effortTiers, resolveProvider, classifyProviderFailure, McpManager, readMcpServers, readMcpConfig, addMcpServer, removeMcpServer, mcpToolName, clipRecency, contextBudget, estimateRequestTokens, fitHistory, headTail, outputReserve, skeleton } = await import(pathToFileURL(outfile).href);
+const { HarnessHost, SessionStore, BUILTIN_TOOLS, ExtensionRegistry, parseScript, isReadOnly, assessCommand, covers, scopesFor, runGuards, decide, catalogPrompt, discoverSkills, parseFrontmatter, confine, globRegex, runTool, scheduleToolCalls, encodeSegment, repairHistory, isTruncatedStop, retryBudgetOpen, effortTiers, nativeProviderCredentials, resolveProvider, classifyProviderFailure, McpManager, diagnosticEvent, mcpConfigFingerprints, readMcpServers, readMcpConfig, addMcpServer, removeMcpServer, mcpToolName, clipRecency, contextBudget, estimateRequestTokens, fitHistory, headTail, outputReserve, skeleton } = await import(pathToFileURL(outfile).href);
+
+const authorization = async (root, home) => ({ workspaceTrusted: true, ...await mcpConfigFingerprints(root, home) });
 
 const sse = (frames) => new Response(new ReadableStream({
   start(controller) {
@@ -101,13 +105,23 @@ test('providers need a key unless they are local or a custom endpoint, which the
   assert.equal(custom?.root, 'https://llm.example/v1', 'the saved address is the root, trailing slash dropped');
   assert.equal(custom?.wire, 'anthropic', 'the saved wire decides the protocol');
   assert.equal(custom?.name, 'Gateway', 'the saved name is the provider name');
+  const native = nativeProviderCredentials({ 'custom-1': { key: 'k', baseUrl: 'https://llm.example/v1', name: 'Anthropic Gateway', wire: 'anthropic' } });
+  assert.deepEqual(native['custom-1'], { key: 'k', baseUrl: 'https://llm.example/v1', name: 'Anthropic Gateway', wire: 'anthropic' });
+  assert.equal(resolveProvider('custom-1', native)?.wire, 'anthropic', 'the IPC adapter preserves custom Anthropic endpoints');
   assert.equal(resolveProvider('custom-9', { 'custom-9': { key: 'k', name: 'vLLM', baseUrl: 'http://localhost:8000/v1' } })?.keyless, undefined, 'a keyed custom endpoint is not keyless');
   assert.equal(resolveProvider('custom', { custom: { key: 'k', baseUrl: 'https://llm.example/v1' } }), null, 'the create sentinel never resolves');
   assert.equal(resolveProvider('attacker', { attacker: { key: 'k', baseUrl: 'https://evil.example' } }), null, 'an arbitrary id is not a provider');
   assert.deepEqual(effortTiers('anthropic', 'claude-3-5-haiku-latest'), [], 'pre-3.7 Claude has no thinking');
   assert.ok(effortTiers('anthropic', 'claude-sonnet-4-5').includes('high'));
   assert.deepEqual(effortTiers('openai', 'gpt-4o'), []);
-  assert.deepEqual(effortTiers('custom-1', 'claude-sonnet-9'), [], 'a custom endpoint reports no effort tiers');
+  assert.deepEqual(effortTiers('custom-1', 'anthropic/claude-sonnet-4-6'), ['minimal', 'low', 'medium', 'high'], 'a custom gateway recognizes vendor-prefixed reasoning models');
+  assert.deepEqual(effortTiers('custom-9', 'openai/gpt-5.4'), ['minimal', 'low', 'medium', 'high']);
+  assert.deepEqual(effortTiers('custom-1', 'gpt-4.1'), [], 'a custom endpoint does not claim efforts for non-reasoning models');
+  assert.deepEqual(effortTiers('custom-1', 'moonshotai/kimi-k3.1-pro', 'openai', true), ['low', 'high', 'max'], 'Kimi K3.1 Pro takes Moonshot levels, not the gateway four');
+  assert.deepEqual(effortTiers('custom-1', 'moonshotai/kimi-k3.1-pro-highspeed'), ['low', 'high', 'max']);
+  assert.deepEqual(effortTiers('custom-1', 'moonshotai/kimi-k2.8-preview'), ['low', 'high', 'max']);
+  assert.deepEqual(effortTiers('custom-1', 'moonshotai/kimi-k2.6'), ['minimal', 'low', 'medium', 'high'], 'older Kimi on a custom gateway keeps the generic list');
+  assert.deepEqual(effortTiers('custom-1', 'claude-sonnet-4-5', 'anthropic'), ['none', 'low', 'medium', 'high', 'xhigh', 'max'], 'an Anthropic-wire endpoint keeps thinking budgets');
   assert.deepEqual(effortTiers('nvidia', 'openai/gpt-oss-120b'), ['low', 'medium', 'high'], 'NIM gpt-oss takes reasoning_effort');
   assert.deepEqual(effortTiers('nvidia', 'nvidia/nemotron-3.5-super'), ['none', 'high'], 'a NIM hybrid thinker is a switch');
   assert.deepEqual(effortTiers('nvidia', 'meta/llama-3.3-70b-instruct'), [], 'a plain NIM model has no effort');
@@ -143,6 +157,24 @@ test('edit_file needs a unique exact match, and read_file numbers lines', async 
   assert.equal((await runTool(root, 'edit_file', { path: 'dup.txt', old_string: 'a', new_string: 'b', replace_all: true })).isError, undefined);
   assert.equal(await readFile(join(root, 'dup.txt'), 'utf8'), 'b\nb\n');
   assert.match((await runTool(root, 'grep', { pattern: 'thr' })).output, /hello\.txt:3: three/);
+});
+
+test('malformed write and edit arguments are refused without changing the file', async () => {
+  const root = await workspace();
+  const missingContent = await runTool(root, 'write_file', { path: 'hello.txt' });
+  assert.equal(missingContent.isError, true);
+  assert.match(missingContent.output, /content is required/);
+  assert.equal(await readFile(join(root, 'hello.txt'), 'utf8'), 'one\ntwo\nthree\n');
+  const wrongContent = await runTool(root, 'write_file', { path: 'hello.txt', content: null });
+  assert.equal(wrongContent.isError, true);
+  assert.equal(await readFile(join(root, 'hello.txt'), 'utf8'), 'one\ntwo\nthree\n');
+  const missingReplacement = await runTool(root, 'edit_file', { path: 'hello.txt', old_string: 'one' });
+  assert.equal(missingReplacement.isError, true);
+  assert.match(missingReplacement.output, /new_string/);
+  assert.equal(await readFile(join(root, 'hello.txt'), 'utf8'), 'one\ntwo\nthree\n');
+  const wrongReplacement = await runTool(root, 'edit_file', { path: 'hello.txt', old_string: 'one', new_string: false });
+  assert.equal(wrongReplacement.isError, true);
+  assert.equal(await readFile(join(root, 'hello.txt'), 'utf8'), 'one\ntwo\nthree\n');
 });
 
 test('a stopped turn\'s unanswered tool calls are filled in before the next request', () => {
@@ -289,6 +321,46 @@ test('OpenAI-compatible providers stream text and tool calls through the same lo
   assert.equal(bodies[1].messages.at(-1).role, 'tool');
   assert.match(bodies[1].messages.at(-1).content, /hello\.txt/);
   assert.equal(events.filter(({ payload }) => payload.item?.kind === 'agentMessage').at(-1).payload.item.text, 'Found hello.txt.');
+});
+
+test('custom OpenAI-compatible gateways expose and send reasoning effort', async () => {
+  const root = await workspace();
+  const bodies = [];
+  const fetchImpl = async (url, init) => {
+    if (String(url).endsWith('/models')) return Response.json({ data: [
+      { id: 'anthropic/claude-sonnet-4-6' },
+      { id: 'openai/gpt-5.4' },
+      { id: 'moonshotai/kimi-k3.1-pro', display_name: 'MoonshotAI: Kimi K3.1 Pro', capabilities: { reasoning: true } },
+      { id: 'openai/gpt-4.1', capabilities: { reasoning: false } },
+      { id: 'moonshotai/kimi-k3.1-flash' },
+    ] });
+    bodies.push(JSON.parse(init.body));
+    return sse([{ choices: [{ delta: { content: 'Done.' }, finish_reason: 'stop' }] }, { choices: [], usage: { prompt_tokens: 4000, completion_tokens: 12, prompt_tokens_details: { cached_tokens: 1000 } } }, '[DONE]']);
+  };
+  const events = [];
+  const instance = new HarnessHost((event, payload) => events.push({ event, payload }), new SessionStore(await mkdtemp(join(temporary, 'store-'))), fetchImpl);
+  instance.setCredentials({ 'custom-1': { key: 'sk-zenmux-test', name: 'ZenMux', baseUrl: 'https://zenmux.ai/api/v1' } });
+  const listed = await instance.listModels();
+  assert.deepEqual(listed.models[0].reasoningEfforts, ['minimal', 'low', 'medium', 'high']);
+  assert.equal(listed.models[0].defaultReasoningEffort, 'medium');
+  assert.deepEqual(listed.models.find((model) => model.modelId === 'custom-1/moonshotai/kimi-k3.1-pro').reasoningEfforts, ['low', 'high', 'max'], 'Kimi K3.1 Pro offers Moonshot levels');
+  assert.equal(listed.models.find((model) => model.modelId === 'custom-1/moonshotai/kimi-k3.1-pro').defaultReasoningEffort, 'max');
+  assert.deepEqual(listed.models.find((model) => model.modelId === 'custom-1/moonshotai/kimi-k3.1-flash').reasoningEfforts, ['low', 'high', 'max'], 'the Kimi K3 id shape wins without metadata');
+  assert.deepEqual(listed.models.find((model) => model.modelId === 'custom-1/openai/gpt-4.1').reasoningEfforts, [], 'non-reasoning models keep the picker hidden');
+  const { sessionId } = await instance.startSession({ workspaceRoot: root, modelId: 'custom-1/moonshotai/kimi-k3.1-pro', effort: 'high' });
+  await instance.sendTurn({ sessionId, text: 'hello' });
+  await until(events, ({ event }) => event === 'turnCompleted');
+  assert.equal(bodies[0].reasoning_effort, 'high');
+  assert.equal(bodies[0].reasoning, undefined, 'custom gateways use the documented reasoning_effort field');
+  assert.deepEqual(bodies[0].stream_options, { include_usage: true }, 'ZenMux reports usage only when the stream asks for it');
+  const call = events.find(({ event, payload }) => event === 'modelCall' && payload.sessionId === sessionId).payload.call;
+  assert.equal(call.inputTokens, 4000);
+  assert.equal(call.cachedTokens, 1000);
+  assert.equal(call.outputTokens, 12);
+  const stale = await instance.startSession({ workspaceRoot: root, modelId: 'custom-1/moonshotai/kimi-k3.1-pro', effort: 'medium' });
+  await instance.sendTurn({ sessionId: stale.sessionId, text: 'again' });
+  await until(events, ({ event, payload }) => event === 'turnCompleted' && payload.sessionId === stale.sessionId);
+  assert.equal(bodies.at(-1).reasoning_effort, 'max', 'a level Kimi K3.1 Pro does not accept is sent as max');
 });
 
 test('NVIDIA NIM lists its chat models and runs a tool-call turn over the OpenAI wire', async () => {
@@ -816,6 +888,35 @@ test('an ambiguous edit fails before the approval card', async () => {
   assert.equal(await readFile(join(root, 'dup.txt'), 'utf8'), 'a\na\n');
 });
 
+test('a malformed write fails before its approval card and leaves the file intact', async () => {
+  const root = await workspace();
+  const { calls, fetchImpl } = anthropicStub([
+    () => toolReply('bad_write', 'write_file', { path: 'hello.txt' }),
+    () => textReply('nothing changed'),
+  ]);
+  const { instance, events } = host(fetchImpl, new SessionStore(await mkdtemp(join(temporary, 'store-'))));
+  const { sessionId } = await instance.startSession({ workspaceRoot: root, approvalMode: 'promptUnmatched' });
+  await instance.sendTurn({ sessionId, text: 'overwrite the file' });
+  await until(events, ({ event }) => event === 'turnCompleted');
+  assert.equal(events.some(({ event }) => event === 'approval'), false);
+  assert.match(JSON.stringify(calls[1].body.messages), /content is required/);
+  assert.equal(await readFile(join(root, 'hello.txt'), 'utf8'), 'one\ntwo\nthree\n');
+});
+
+test('an AGENTS.md symlink cannot disclose rules from outside the workspace', async () => {
+  const root = await workspace();
+  const outside = join(temporary, 'outside-rules.md');
+  await writeFile(outside, 'PRIVATE-RULES-CANARY\n');
+  await symlink(outside, join(root, 'AGENTS.md'));
+  const { calls, fetchImpl } = anthropicStub([() => textReply('done')]);
+  const { instance, events } = host(fetchImpl, new SessionStore(await mkdtemp(join(temporary, 'store-'))));
+  const { sessionId } = await instance.startSession({ workspaceRoot: root });
+  await instance.sendTurn({ sessionId, text: 'hello' });
+  await until(events, ({ event }) => event === 'turnCompleted');
+  const prompt = calls[0].body.system.map((block) => block.text).join('\n');
+  assert.doesNotMatch(prompt, /PRIVATE-RULES-CANARY/);
+});
+
 test('the stable prompt is snapshotted once per turn', async () => {
   const root = await workspace();
   await writeFile(join(root, 'AGENTS.md'), 'RULE-ALPHA\n');
@@ -909,6 +1010,77 @@ test('a steered message is folded in after the tool result, not between the call
   assert.equal(follow.content[0].type, 'tool_result');
   assert.ok(follow.content.some((block) => block.type === 'text' && /also check the date/.test(block.text)));
   assert.equal(messages.slice(0, assistant + 1).some((message) => JSON.stringify(message).includes('also check the date')), false);
+});
+
+test('a steered message survives cancellation before the next provider call', async () => {
+  const root = await workspace();
+  const store = new SessionStore(await mkdtemp(join(temporary, 'store-')));
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    if (String(url).endsWith('/models?limit=1000')) return Response.json({ data: [{ id: 'claude-sonnet-9' }] });
+    calls.push(JSON.parse(init.body));
+    await gate;
+    return sse(textReply('done'));
+  };
+  const { instance, events } = host(fetchImpl, store);
+  try {
+    const { sessionId } = await instance.startSession({ workspaceRoot: root });
+    await instance.sendTurn({ sessionId, text: 'initial' });
+    for (let waited = 0; waited < 2000 && !calls.length; waited += 10) await new Promise((r) => setTimeout(r, 10));
+    assert.ok(calls.length, 'the first model call is pending');
+    await instance.sendTurn({ sessionId, text: 'steer me', ifBusy: 'steer' });
+    const cancelling = instance.cancelTurn({ sessionId });
+    release();
+    await cancelling;
+    await settled(events, 1);
+    const persisted = await store.read(sessionId);
+    assert.equal(persisted.steering, undefined, 'cancellation settles the pending steer');
+    assert.match(JSON.stringify(persisted.messages), /steer me/);
+    const freshStub = anthropicStub([() => textReply('after cancel')]);
+    const freshEvents = [];
+    const fresh = new HarnessHost((event, payload) => freshEvents.push({ event, payload }), store, freshStub.fetchImpl);
+    fresh.setCredentials({ anthropic: { key: 'sk-ant-test-key' } });
+    await fresh.resumeSession({ sessionId, workspaceRoot: root });
+    await fresh.sendTurn({ sessionId, text: 'after cancel' });
+    await settled(freshEvents, 1);
+    assert.match(JSON.stringify(freshStub.calls[0].body.messages), /steer me/);
+    await fresh.stop();
+  } finally {
+    await instance.stop();
+  }
+});
+
+test('an unsettled steer is reconstructed by a fresh host after an abandoned turn', async () => {
+  const root = await workspace();
+  const store = new SessionStore(await mkdtemp(join(temporary, 'store-')));
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    if (String(url).endsWith('/models?limit=1000')) return Response.json({ data: [{ id: 'claude-sonnet-9' }] });
+    calls.push(JSON.parse(init.body));
+    await gate;
+    return sse(textReply('done'));
+  };
+  const { instance } = host(fetchImpl, store);
+  const { sessionId } = await instance.startSession({ workspaceRoot: root });
+  await instance.sendTurn({ sessionId, text: 'initial' });
+  for (let waited = 0; waited < 2000 && !calls.length; waited += 10) await new Promise((r) => setTimeout(r, 10));
+  assert.ok(calls.length, 'the first model call is pending');
+  await instance.sendTurn({ sessionId, text: 'steer me', ifBusy: 'steer' });
+  const freshStub = anthropicStub([() => textReply('after restart')]);
+  const freshEvents = [];
+  const fresh = new HarnessHost((event, payload) => freshEvents.push({ event, payload }), store, freshStub.fetchImpl);
+  fresh.setCredentials({ anthropic: { key: 'sk-ant-test-key' } });
+  await fresh.resumeSession({ sessionId, workspaceRoot: root });
+  await fresh.sendTurn({ sessionId, text: 'after restart' });
+  await settled(freshEvents, 1);
+  assert.match(JSON.stringify(freshStub.calls[0].body.messages), /steer me/);
+  release();
+  await instance.stop();
+  await fresh.stop();
 });
 
 test('replacing a running turn aborts it and starts the new one', async () => {
@@ -1265,6 +1437,7 @@ test('an extension tool runs through the host, and a registration made mid-turn 
     () => textReply('second done'),
   ]);
   const made = host(fetchImpl, new SessionStore(await mkdtemp(join(temporary, 'store-'))), {
+    homeDir: await mkdtemp(join(temporary, 'home-')),
     beforeTool: (name) => {
       if (name === 'echo') instance.registry.register({ id: 'late', tools: [echoTool('late')] });
     },
@@ -1294,7 +1467,7 @@ test('an extension tool runs through the host, and a registration made mid-turn 
   assert.match(calls[0].body.system[0].text, /ECHO-RULE/, 'a stable prompt section joins the cached prefix');
   assert.match(calls[1].body.messages.at(-1).content[0].content, /echo:hi/, 'the tool result reaches the model');
   assert.deepEqual(order, ['turn:build', 'start:echo:hi', 'end:echo:echo:hi', 'done:completed']);
-  const warning = made.events.find(({ event, payload }) => event === 'agentNotice' && payload.level === 'warning');
+  const warning = made.events.find(({ event, payload }) => event === 'agentNotice' && payload.level === 'warning' && /echoer extension failed/.test(payload.message));
   assert.match(warning.payload.message, /echoer extension failed in toolFinished: observer broke/);
   assert.equal((await settled(made.events, 1))[0].payload.outcome.params.terminal, 'completed', 'a failing hook does not fail the turn');
   await instance.sendTurn({ sessionId, text: 'again' });
@@ -1791,6 +1964,16 @@ createInterface({ input: process.stdin }).on('line', (line) => {
 });
 `;
 
+test('missing MCP config files mean no servers, not invalid JSON', async () => {
+  const root = await workspace();
+  const home = await mkdtemp(join(temporary, 'home-'));
+  assert.deepEqual(await readMcpServers(root, home), { servers: [], sources: {} });
+  const manager = new McpManager(home, () => {});
+  await manager.ensure(root, { workspaceTrusted: false }, 'missing-config');
+  assert.deepEqual(manager.status('missing-config'), { servers: [], error: null });
+  await manager.close();
+});
+
 test('MCP config merges the workspace over home and refuses unsafe values', async () => {
   const root = await workspace();
   const home = await mkdtemp(join(temporary, 'home-'));
@@ -1805,7 +1988,7 @@ test('MCP config merges the workspace over home and refuses unsafe values', asyn
     remote: { type: 'http', url: 'https://workspace.example/rpc', headers: { Authorization: 'Bearer ws' } },
     shared: { command: 'node', args: ['workspace.js'], env: { TOKEN: 'one' } },
   } }));
-  const servers = await readMcpServers(root, home);
+  const { servers } = await readMcpServers(root, home);
   assert.deepEqual(servers.map((server) => server.name), ['docs', 'home-remote', 'remote', 'shared'], 'sorted, and the workspace file wins a duplicate name');
   assert.equal(servers[1].transport, 'http', 'a bare url means streamable HTTP');
   assert.equal(servers[2].transport, 'http');
@@ -1903,7 +2086,7 @@ test('the host manages MCP servers in the thread workspace and never returns the
   const home = await mkdtemp(join(temporary, 'home-'));
   const { instance } = host(anthropicStub([]).fetchImpl, new SessionStore(await mkdtemp(join(temporary, 'store-'))), { homeDir: home });
   try {
-    const { sessionId } = await instance.startSession({ workspaceRoot: root });
+    const { sessionId } = await instance.startSession({ workspaceRoot: root, mcpAuthorization: await authorization(root, home) });
     assert.deepEqual(await instance.mcpConfig({ sessionId }), { servers: [], error: null });
     const added = await instance.addMcpServer({
       sessionId,
@@ -1950,8 +2133,8 @@ test('an HTTP MCP server is reached with its configured headers and session', as
       remote: { type: 'http', url: `http://127.0.0.1:${port}/rpc`, headers: { Authorization: 'Bearer test-token' } },
     } }));
     const manager = new McpManager(home, () => {});
-    await manager.ensure(root, 's-1');
-    assert.deepEqual(manager.status(root), { servers: [{ name: 'remote', transport: 'http', tools: 1 }], error: null });
+    await manager.ensure(root, await authorization(root, home), 's-1');
+    assert.deepEqual(manager.status('s-1'), { servers: [{ name: 'remote', transport: 'http', tools: 1 }], error: null });
     const context = { sessionId: 's-1', turnId: 't-1', workspaceRoot: root, mode: 'build' };
     const generation = manager.acquire(context);
     const row = generation.byName.get(mcpToolName('remote', 'lookup'));
@@ -1971,7 +2154,7 @@ test('an HTTP MCP server is reached with its configured headers and session', as
   }
 });
 
-test('a failing server rolls back the whole MCP generation and keeps the previous one', async () => {
+test('a failing MCP refresh retires the old generation and recovers from valid config', async () => {
   const root = await workspace();
   const home = await mkdtemp(join(temporary, 'home-'));
   const scriptPath = join(temporary, 'mcp-echo-server.mjs');
@@ -1982,22 +2165,45 @@ test('a failing server rolls back the whole MCP generation and keeps the previou
   const notices = [];
   const manager = new McpManager(home, (event, payload) => notices.push({ event, payload }));
   try {
-    await manager.ensure(root, 's-1');
-    assert.deepEqual(manager.status(root), { servers: [{ name: 'echo', transport: 'stdio', tools: 1 }], error: null });
+    await manager.ensure(root, await authorization(root, home), 's-1');
+    assert.deepEqual(manager.status('s-1'), { servers: [{ name: 'echo', transport: 'stdio', tools: 1 }], error: null });
     await config({
       echo: { command: process.execPath, args: [scriptPath] },
       broken: { command: '/bin/sh', args: ['-c', 'exit 3'] },
     });
-    await manager.ensure(root, 's-1');
-    const failed = manager.status(root);
-    assert.deepEqual(failed.servers.map((server) => server.name), ['echo'], 'the previous complete generation is still in use');
+    await manager.ensure(root, await authorization(root, home), 's-1');
+    const failed = manager.status('s-1');
+    assert.deepEqual(failed.servers, [], 'changed config cannot keep the old authority after a failed replacement');
     assert.match(failed.error, /broken/);
-    assert.match(failed.error, /previous 1 MCP server is still in use/);
+    assert.match(failed.error, /No MCP tools are available/);
     assert.ok(notices.some(({ event, payload }) => event === 'agentNotice' && /MCP sync failed/.test(payload.message)));
-    // Removing the broken server restores the config the live generation was built from; no reconnect is needed.
+    // Removing the broken server builds a fresh, complete generation.
     await config({ echo: { command: process.execPath, args: [scriptPath] } });
-    await manager.ensure(root, 's-1');
-    assert.deepEqual(manager.status(root), { servers: [{ name: 'echo', transport: 'stdio', tools: 1 }], error: null });
+    await manager.ensure(root, await authorization(root, home), 's-1');
+    assert.deepEqual(manager.status('s-1'), { servers: [{ name: 'echo', transport: 'stdio', tools: 1 }], error: null });
+  } finally {
+    await manager.close();
+  }
+});
+
+test('MCP startup failures redact configured secrets from notices and status', async () => {
+  const root = await workspace();
+  const home = await mkdtemp(join(temporary, 'home-'));
+  const secret = `CANARY-MCP-SECRET-${Math.random().toString(36).slice(2)}`;
+  const scriptPath = join(temporary, 'mcp-secret-server.mjs');
+  await writeFile(scriptPath, "process.stderr.write(process.env.ORDINARY_VALUE || 'missing'); process.exit(2);\n");
+  await mkdir(join(root, '.glitter'));
+  await writeFile(join(root, '.glitter', 'mcp.json'), JSON.stringify({ mcpServers: {
+    broken: { command: process.execPath, args: [scriptPath], env: { ORDINARY_VALUE: secret } },
+  } }));
+  const notices = [];
+  const manager = new McpManager(home, (event, payload) => notices.push({ event, payload: diagnosticEvent(event, payload) }));
+  try {
+    await manager.ensure(root, await authorization(root, home), 'secret-session');
+    const status = manager.status('secret-session');
+    assert.doesNotMatch(status.error, /CANARY-MCP-SECRET/);
+    assert.match(status.error, /redacted sensitive diagnostic/);
+    assert.doesNotMatch(JSON.stringify(notices), /CANARY-MCP-SECRET/);
   } finally {
     await manager.close();
   }
@@ -2059,7 +2265,7 @@ test('MCP tools are discovered on demand, ask, run, and are revoked without a pa
   ]);
   const { instance, events } = host(fetchImpl, new SessionStore(await mkdtemp(join(temporary, 'store-'))), { homeDir: home });
   try {
-    const { sessionId } = await instance.startSession({ workspaceRoot: root });
+    const { sessionId } = await instance.startSession({ workspaceRoot: root, mcpAuthorization: await authorization(root, home) });
     assert.deepEqual(await instance.mcpStatus({ sessionId }), { servers: [{ name: 'echo', transport: 'stdio', tools: 1 }], error: null });
     await instance.sendTurn({ sessionId, text: 'use the echo server' });
     for (let waited = 0; waited < 4000 && !calls.length; waited += 10) await new Promise((resolve) => setTimeout(resolve, 10));
@@ -2078,7 +2284,7 @@ test('MCP tools are discovered on demand, ask, run, and are revoked without a pa
     assert.match(JSON.stringify(calls[2].body.messages.at(-1)), /echo: hi/);
     const tool = events.filter(({ event, payload }) => event === 'item' && payload.item.kind === 'toolCall' && payload.item.tool === 'mcp__echo__echo').at(-1);
     assert.equal(tool.payload.item.status, 'completed');
-    const old = instance.mcp.generations.get(root);
+    const old = instance.mcp.generations.get(sessionId);
     // Revoking every server removes the whole generation, search tool included.
     await config({});
     assert.deepEqual(await instance.mcpStatus({ sessionId }), { servers: [], error: null });
@@ -2090,6 +2296,28 @@ test('MCP tools are discovered on demand, ask, run, and are revoked without a pa
     await settled(events, 2);
     assert.equal(toolNames(calls[3].body).includes('tool_search'), false, 'no MCP generation leaves no search tool behind');
     assert.doesNotMatch(calls[3].body.system.map((block) => block.text).join('\n'), /MCP servers are connected/);
+  } finally {
+    await instance.stop();
+  }
+});
+
+test('closing one Harness session cleans only its own MCP generation', async () => {
+  const root = await workspace();
+  const home = await mkdtemp(join(temporary, 'home-'));
+  const scriptPath = join(temporary, 'mcp-echo-server.mjs');
+  await writeFile(scriptPath, MCP_ECHO_SERVER);
+  await mkdir(join(root, '.glitter'));
+  await writeFile(join(root, '.glitter', 'mcp.json'), JSON.stringify({ mcpServers: { echo: { command: process.execPath, args: [scriptPath] } } }));
+  const { instance } = host(anthropicStub([]).fetchImpl, new SessionStore(await mkdtemp(join(temporary, 'store-'))), { homeDir: home });
+  try {
+    const mcpAuthorization = await authorization(root, home);
+    const first = (await instance.startSession({ workspaceRoot: root, mcpAuthorization })).sessionId;
+    const second = (await instance.startSession({ workspaceRoot: root, mcpAuthorization })).sessionId;
+    await instance.mcpStatus({ sessionId: first });
+    await instance.mcpStatus({ sessionId: second });
+    assert.deepEqual(await instance.closeSession({ sessionId: first }), { closed: true });
+    assert.deepEqual(instance.mcp.status(first), { servers: [], error: null });
+    assert.deepEqual(instance.mcp.status(second).servers.map((server) => server.name), ['echo'], 'the other session keeps its own generation');
   } finally {
     await instance.stop();
   }
@@ -2132,6 +2360,9 @@ test('a delegated task runs in a hidden child and persists the scope the user ca
   const view = await instance.readChildSession({ sessionId, childSessionId: childId });
   assert.deepEqual(view.history.items.map((entry) => entry.kind), ['userMessage', 'reasoning', 'toolCall', 'agentMessage']);
   assert.equal(view.history.items.at(-1).text, 'It says one, two, three.');
+  const usage = events.filter(({ event, payload }) => event === 'sessionFacts' && payload.usage && payload.sessionId === sessionId).at(-1).payload.usage;
+  assert.equal(usage.promptTokens, 4200, 'the parent turn includes the delegated calls');
+  assert.equal(usage.outputTokens, 18);
   await assert.rejects(instance.readChildSession({ sessionId: 'h-someone-else', childSessionId: childId }), /not a delegated child/);
   await assert.rejects(instance.readChildSession({ sessionId, childSessionId: sessionId }), /not a delegated child/);
   assert.deepEqual((await instance.listSessions(root)).sessions.map((session) => session.sessionId), [sessionId], 'a child never becomes a sidebar thread');
@@ -2195,6 +2426,34 @@ test('a child with no approval channel has its asks refused instead of waiting',
   assert.equal(write.status, 'failed');
   assert.match(write.failureReason, /No one can approve tool calls/);
   assert.match(JSON.stringify(calls[3].body.messages.at(-1)), /I could not write it/);
+});
+
+test('browser approval is rechecked when the page changes origin while waiting', async () => {
+  const root = await workspace();
+  const store = new SessionStore(await mkdtemp(join(temporary, 'store-')));
+  const { fetchImpl } = anthropicStub([
+    () => toolReply('b1', 'browser_probe', {}),
+    () => textReply('Browser acted only after the new origin was allowed.'),
+  ]);
+  const { instance, events } = host(fetchImpl, store);
+  let origin = 'https://one.test';
+  instance.registry.register({ id: 'browser-race', tools: [{
+    schema: { name: 'browser_probe', description: 'Probe origin approval.', parameters: { type: 'object', properties: {} } },
+    kind: 'browser',
+    subject: () => ({ kind: 'browser', control: true, origin }),
+    run: () => ({ value: { kind: 'browser', path: origin, text: 'Browser acted.' } }),
+  }] });
+  const { sessionId } = await instance.startSession({ workspaceRoot: root, approvalMode: 'guarded' });
+  await instance.sendTurn({ sessionId, text: 'Use the browser.' });
+  const first = await until(events, ({ event, payload }) => event === 'approval' && payload.subject.origin === 'https://one.test');
+  origin = 'https://two.test';
+  await instance.decideApproval({ approvalId: first.payload.approvalId, choiceId: 'allow-once' });
+  const second = await until(events, ({ event, payload }) => event === 'approval' && payload.subject.origin === 'https://two.test');
+  assert.ok(second, 'the new origin gets a fresh approval instead of inheriting the old one');
+  await instance.decideApproval({ approvalId: second.payload.approvalId, choiceId: 'allow-once' });
+  await settled(events, 1);
+  const step = events.filter(({ event, payload }) => event === 'item' && payload.item.tool === 'browser_probe').at(-1);
+  assert.equal(step.payload.item.status, 'completed');
 });
 
 test.after(async () => { await rm(temporary, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });

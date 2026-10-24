@@ -174,7 +174,8 @@ test('a folded group says what ran in as few honest words as possible', () => {
   const thought = toStep({ itemId: 'r', kind: 'reasoning', status: 'completed', text: 'hmm' });
   assert.equal(activityTitle([tool('a')]), 'Ran 1 tool');
   assert.equal(activityTitle([tool('a'), tool('b')]), 'Ran 2 tools');
-  assert.equal(activityTitle([tool('a'), thought]), '2 steps', 'a group with thoughts is steps, not tools');
+  assert.equal(activityTitle([tool('a'), thought]), 'Ran 1 tool', 'thoughts stay inside the tool count');
+  assert.equal(activityTitle([thought, thought]), '2 thoughts');
   assert.equal(activityTitle([tool('a'), tool('b')], true), 'Running');
 });
 

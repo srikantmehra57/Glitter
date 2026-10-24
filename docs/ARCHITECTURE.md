@@ -20,6 +20,7 @@ flowchart LR
   Muse["muse serve<br/>(MSP)"]
   ACP["ACP agent CLIs<br/>opencode, grok, gemini, qwen, goose, cline"]
   Providers["Model providers<br/>Anthropic, OpenAI-compatible,<br/>local servers"]
+  Browser["Managed Chromium<br/>fresh workspace contexts"]
   OS[("OS keychain<br/>app data · logs<br/>git · dialogs")]
 
   UI -- "invoke()" --> Shell
@@ -28,6 +29,8 @@ flowchart LR
   Bridge -- "@muse-code/sdk" --> Muse
   Bridge -- "JSON-RPC over stdio" --> ACP
   Bridge -- "HTTPS, user's keys<br/>(built-in harness)" --> Providers
+  Bridge -- "Playwright" --> Browser
+  Browser -- "screenshots + frames" --> Bridge
   Shell --> OS
 ```
 
@@ -36,6 +39,7 @@ flowchart LR
 | Renderer (OS webview) | `apps/desktop/src/main.tsx` → `App.tsx` | All UI. One Zustand store. Talks only to the native shell. |
 | Native shell | `apps/desktop/src-tauri/src/main.rs` → `lib.rs::run()` | Trust boundary. Validates every renderer request, owns workspace grants, credentials, git, dialogs, files, logs, and the bridge child process. |
 | Bridge | `packages/glitter-bridge/src/index.ts` (bundled to `dist/index.js`) | Line-delimited JSON RPC on stdio. Runs the built-in `HarnessHost`, one `MuseHost` (MSP via the SDK) and one `AcpAgentHost` per third-party agent, and turns their streams into one event vocabulary. |
+| Managed Chromium | Started by `browser.ts` through Playwright | One fresh incognito context and page per workspace root. Agent tools and panel input share its operation queue. The renderer receives raster frames and plain text, never remote DOM. |
 | `muse serve` | Started by `host.ts` | The real agent: sessions, turns, tools, approvals, models, usage. |
 
 ## The renderer is untrusted
@@ -59,6 +63,11 @@ The native shell treats the webview as possibly compromised:
 - **Executable identity.** Agent binaries are canonicalized and validated, then
   pinned by digest. Third-party ACP agents also need an explicit, keyring-stored
   isolation consent (`exec.rs`).
+- **Browser launch is native-authorized.** The shell chooses a compatible
+  Chromium, validates its executable identity and supplies its canonical path
+  and digest to the bridge. The renderer cannot nominate a binary, profile or
+  CDP endpoint. Browser verbs require a live workspace grant; revocation closes
+  the associated context. Production always enables Chromium's sandbox.
 - **Release builds verify the bridge.** `build.rs` bakes the SHA-256 of
   `packages/glitter-bridge/dist/index.js` into the binary, and the packaged script
   is checked before it runs. The bridge runs on a bundled Node runtime (the
@@ -125,6 +134,27 @@ this for UI work without Rust or a CLI. The website's screenshot script
 (`apps/website/scripts/capture.mjs`) uses it too. Dev-only URL flags:
 `?boot=1` (boot screen), `?usage=preview`.
 
+## Controlled Browser
+
+This is separate from the mock browser preview above. `browser.ts` in the bridge
+owns one Playwright `BrowserManager`, shared by the built-in Harness's `browser`
+tool and the renderer's `browserOpen` / `browserControl` / `browserClose` verbs.
+Each workspace or worktree root gets a fresh, non-persistent incognito context
+with one page, disabled downloads, blocked service workers and http(s)-only
+navigation. The renderer's `BrowserPane` shows JPEG frames at 5 fps only while
+visible and forwards pointer/keyboard input through the same per-root queue.
+
+Read actions (snapshot, screenshot, console, scroll and wait) do not prompt.
+Navigation and page-changing actions require an origin grant in Ask and Auto;
+the origin is checked again after an approval wait. Full access bypasses prompts,
+while Plan mode keeps the browser read-only. Explicit screenshots travel as
+image content to the selected model provider. Older images leave the request
+view with an omission note, and bulky image bytes are not persisted in session
+JSONL. Playwright's package and registry metadata are embedded by
+`scripts/playwright-metadata.mjs`, so the packaged single-file bridge needs no
+`node_modules` directory. Chromium is installed separately; Glitter does not
+bundle a browser binary.
+
 ## Module map
 
 ### `apps/desktop/src` (renderer)
@@ -133,8 +163,8 @@ this for UI work without Rust or a CLI. The website's screenshot script
 - `components/`: one file per surface. Main views: `Sidebar`, `ThreadView`
   (`AgentTimeline`, `Composer`, `ApprovalCard`, `UserInputCards`), `ReviewDock`
   (`TaskMonitor`), `SettingsModal` (lazy; it loads `ExtensionsView`, `UsageView`
-  and `LoginPanel`). The rest are pickers, dialogs and visuals (`Orb`,
-  `ModelPicker`, `EffortPicker`).
+  and `LoginPanel`), `BrowserPane` (shared Chromium view and controls). The rest
+  are pickers, dialogs and visuals (`Orb`, `ModelPicker`, `EffortPicker`).
 - `lib/store.ts`: the single store, with all actions and the bridge event
   binding.
 - `lib/bridge.ts`: every `invoke` call and the preview mock fallback.
@@ -163,6 +193,9 @@ this for UI work without Rust or a CLI. The website's screenshot script
 ### `packages/glitter-bridge/src` (bridge)
 
 - `index.ts`: stdio dispatch and agent routing.
+- `browser-types.ts`: renderer-safe browser protocol; `browser.ts`: the shared
+  Playwright manager, Harness browser extension, native-pinned launch, fresh
+  contexts, action validation, screenshots and visible-panel streaming.
 - `harness/`: the built-in agent. `providers.ts` (catalog, keys, effort tiers),
   `wire.ts` (streaming Anthropic Messages and OpenAI-compatible Chat
   Completions), `tools.ts` (workspace-confined read, list, grep, write, edit, a

@@ -725,25 +725,31 @@ fn display_commands(servers: &[&CatalogServer], home: &Path, workspace: Option<&
         .collect()
 }
 
-fn entry_row(
-    id: &str,
-    kind: &str,
-    name: &str,
-    summary: &str,
-    description: &str,
-    tags: &[&str],
+struct EntrySpec<'a> {
+    id: &'a str,
+    kind: &'a str,
+    name: &'a str,
+    summary: &'a str,
+    description: &'a str,
+    tags: &'a [&'a str],
     version: u32,
-    skills: &[&CatalogSkill],
-    servers: &[&CatalogServer],
-    skills_installed: &[String],
-    servers_installed: &[String],
-    home: &Path,
-    workspace: Option<&Path>,
-) -> CatalogEntry {
+    skills: &'a [&'a CatalogSkill],
+    servers: &'a [&'a CatalogServer],
+}
+
+struct EntryState<'a> {
+    skills_installed: &'a [String],
+    servers_installed: &'a [String],
+    home: &'a Path,
+    workspace: Option<&'a Path>,
+}
+
+fn entry_row(entry: EntrySpec<'_>, state: &EntryState<'_>) -> CatalogEntry {
+    let EntrySpec { id, kind, name, summary, description, tags, version, skills, servers } = entry;
     let skill_names: Vec<String> = skills.iter().map(|skill| skill.id.to_string()).collect();
     let server_names: Vec<String> = servers.iter().map(|server| server.id.to_string()).collect();
-    let installed_parts = skill_names.iter().filter(|id| skills_installed.contains(id)).count()
-        + server_names.iter().filter(|id| servers_installed.contains(id)).count();
+    let installed_parts = skill_names.iter().filter(|id| state.skills_installed.contains(id)).count()
+        + server_names.iter().filter(|id| state.servers_installed.contains(id)).count();
     let total_parts = skill_names.len() + server_names.len();
     CatalogEntry {
         id: id.to_string(),
@@ -757,7 +763,7 @@ fn entry_row(
         servers: server_names,
         scope: entry_scope(servers).to_string(),
         requires_workspace: servers.iter().any(|server| server.scope == ServerScope::Workspace),
-        commands: display_commands(servers, home, workspace),
+        commands: display_commands(servers, state.home, state.workspace),
         installed: total_parts > 0 && installed_parts == total_parts,
         installed_parts: installed_parts as u32,
         total_parts: total_parts as u32,
@@ -767,6 +773,7 @@ fn entry_row(
 pub fn list(home: &Path, workspace: Option<&Path>) -> CatalogList {
     let skills_installed = installed_skills(home);
     let (servers_installed, error) = installed_servers(home, workspace);
+    let state = EntryState { skills_installed: &skills_installed, servers_installed: &servers_installed, home, workspace };
     let mut entries = Vec::new();
     for plugin in PLUGINS {
         let skills = plugin
@@ -779,55 +786,43 @@ pub fn list(home: &Path, workspace: Option<&Path>) -> CatalogList {
             .iter()
             .filter_map(|id| SERVERS.iter().find(|server| server.id == *id))
             .collect::<Vec<_>>();
-        entries.push(entry_row(
-            plugin.id,
-            "plugin",
-            plugin.name,
-            plugin.summary,
-            plugin.description,
-            plugin.tags,
-            plugin.version,
-            &skills,
-            &servers,
-            &skills_installed,
-            &servers_installed,
-            home,
-            workspace,
-        ));
+        entries.push(entry_row(EntrySpec {
+            id: plugin.id,
+            kind: "plugin",
+            name: plugin.name,
+            summary: plugin.summary,
+            description: plugin.description,
+            tags: plugin.tags,
+            version: plugin.version,
+            skills: &skills,
+            servers: &servers,
+        }, &state));
     }
     for skill in SKILLS {
-        entries.push(entry_row(
-            skill.id,
-            "skill",
-            skill.name,
-            skill.summary,
-            skill.description,
-            skill.tags,
-            skill.version,
-            &[skill],
-            &[],
-            &skills_installed,
-            &servers_installed,
-            home,
-            workspace,
-        ));
+        entries.push(entry_row(EntrySpec {
+            id: skill.id,
+            kind: "skill",
+            name: skill.name,
+            summary: skill.summary,
+            description: skill.description,
+            tags: skill.tags,
+            version: skill.version,
+            skills: &[skill],
+            servers: &[],
+        }, &state));
     }
     for server in SERVERS {
-        entries.push(entry_row(
-            server.id,
-            "mcp",
-            server.name,
-            server.summary,
-            server.description,
-            server.tags,
-            server.version,
-            &[],
-            &[server],
-            &skills_installed,
-            &servers_installed,
-            home,
-            workspace,
-        ));
+        entries.push(entry_row(EntrySpec {
+            id: server.id,
+            kind: "mcp",
+            name: server.name,
+            summary: server.summary,
+            description: server.description,
+            tags: server.tags,
+            version: server.version,
+            skills: &[],
+            servers: &[server],
+        }, &state));
     }
     CatalogList {
         entries,

@@ -147,7 +147,7 @@ test('a failed probe is remembered only briefly, a successful one for longer', a
   assert.equal(cachedProbe(file, now + 6 * 60_000), undefined, 'even a success is re-checked eventually');
 });
 
-test('agent detection probes each CLI once and answers repeat scans from memory', async () => {
+test('agent detection resolves ACP paths without executing the binaries', async () => {
   const bin = join(fakeHome, '.opencode', 'bin');
   await mkdir(bin, { recursive: true });
   const counter = join(fakeHome, 'probes');
@@ -161,12 +161,12 @@ test('agent detection probes each CLI once and answers repeat scans from memory'
     const first = await detectAgents(null, null, 'auto');
     const opencode = first.find((agent) => agent.id === 'opencode');
     assert.equal(opencode.found, true);
-    assert.equal(opencode.version, '9.8.7');
+    assert.equal(opencode.version, null, 'version metadata comes from the authorized native probe');
     assert.equal(first.map((agent) => agent.id).join(), 'harness,muse,opencode,grok,gemini,qwen,goose,cline', 'the agent order is stable, the built-in agent first');
-    assert.equal(await probes(), 1);
+    assert.equal(await probes(), 0, 'path detection must not execute an unapproved CLI');
     const again = await detectAgents(null, null, 'auto');
-    assert.equal(again.find((agent) => agent.id === 'opencode').version, '9.8.7');
-    assert.equal(await probes(), 1, 'a second scan must not spawn the CLI again');
+    assert.equal(again.find((agent) => agent.id === 'opencode').version, null);
+    assert.equal(await probes(), 0, 'repeat scans stay metadata-only');
   } finally {
     process.env.HOME = realHome;
   }

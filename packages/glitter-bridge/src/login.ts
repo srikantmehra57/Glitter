@@ -27,7 +27,7 @@ export function parseLoginPrompt(output: string): LoginPrompt | null {
 type SpawnFn = (
   command: string,
   args: string[],
-  options: { stdio: ["ignore", "pipe", "pipe"]; env?: NodeJS.ProcessEnv },
+  options: { stdio: ["ignore", "pipe", "pipe"]; env?: NodeJS.ProcessEnv; detached?: boolean },
 ) => ChildProcess;
 
 /**
@@ -52,7 +52,7 @@ export class LoginFlow {
     const bin = resolveMuseBin(museBin);
     if (!bin) throw new Error("Muse CLI was not found. Install it or set a custom binary path in Settings.");
     diagnostics.remember(process.env);
-    const child = spawnFn(bin, ["login"], { stdio: ["ignore", "pipe", "pipe"], env: filterChildEnv(process.env, "muse") });
+    const child = spawnFn(bin, ["login"], { stdio: ["ignore", "pipe", "pipe"], env: filterChildEnv(process.env, "muse"), detached: true });
     this.child = child;
     // Parse stdout only: a stderr warning must never inject a decoy URL/code.
     let stdout = "";

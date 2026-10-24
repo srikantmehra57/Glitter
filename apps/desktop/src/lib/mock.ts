@@ -44,6 +44,13 @@ const inspectItems: TranscriptItem[] = [
     visibleOutput: "export function App() {\n  return <Shell />\n}",
   },
   {
+    itemId: "a1-note",
+    kind: "agentMessage",
+    status: "completed",
+    turnId: "turn-1",
+    text: "The shell already has a clear state boundary. I’ll preserve it and keep the layout changes in the desktop components.",
+  },
+  {
     itemId: "t2",
     kind: "toolCall",
     status: "completed",
@@ -167,6 +174,13 @@ export const MOCK_THREADS: Thread[] = [
         args: '{"path":"packages/glitter-bridge/src/host.ts"}',
         durationMs: 90,
         visibleOutput: "export async function startHost() { … }",
+      },
+      {
+        itemId: "live-note",
+        kind: "agentMessage",
+        status: "completed",
+        turnId: "turn-live",
+        text: "The session events arrive in order. I’m checking the child-agent lifecycle before wiring the final command.",
       },
       {
         itemId: "sub-live",

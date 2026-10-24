@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { SettingsModal } from "./SettingsModal";
 import { resetStore, seedStore } from "../test/store";
 import { useAppStore } from "../lib/store";
+import { motionReduced } from "../lib/presence";
 import desktopPackage from "../../package.json";
 
 vi.mock("./Orb", () => ({ Orb: ({ state, size }: { state: string; size: number }) => <span data-testid={`orb-${size}`} data-state={state} /> }));
@@ -15,6 +16,8 @@ vi.mock("../lib/store", async (original) => ({ ...(await original<typeof import(
 describe("settings navigation", () => {
   beforeEach(() => {
     resetStore();
+    delete document.documentElement.dataset.motion;
+    delete document.documentElement.dataset.sidebarDensity;
     Element.prototype.scrollTo = vi.fn();
     material.on = false;
     diagnostics.snapshot.mockReset();
@@ -213,18 +216,65 @@ describe("settings navigation", () => {
     expect(screen.getByTestId("orb-20")).toHaveAttribute("data-state", "working");
   });
 
-  it("groups Appearance into theme, accent, sidebar and thinking orb sections", () => {
+  it("groups Appearance into theme, display, font, accent, sidebar and thinking orb sections", () => {
     seedStore({ settingsTab: "Theme" });
     render(<SettingsModal />);
     expect(within(screen.getByRole("region", { name: "Interface theme" })).getByRole("radiogroup", { name: "Interface mode" })).toBeInTheDocument();
+    const display = screen.getByRole("region", { name: "Display & accessibility" });
+    expect(within(display).getByRole("group", { name: "Interface zoom" })).toBeInTheDocument();
+    expect(within(display).getByRole("switch", { name: /Reduce interface motion/ })).toBeInTheDocument();
+    expect(within(screen.getByRole("region", { name: "Font" })).getByRole("button", { name: "Font" })).toBeInTheDocument();
     expect(within(screen.getByRole("region", { name: "Accent color" })).getByRole("radiogroup", { name: "Accent color" })).toBeInTheDocument();
     const sidebar = screen.getByRole("region", { name: "Sidebar" });
+    expect(within(sidebar).getByRole("button", { name: "Sidebar row density" })).toBeInTheDocument();
     expect(within(sidebar).getByRole("switch", { name: /Tint the sidebar/ })).toBeInTheDocument();
     // Nothing is behind the sidebar here, so there is no translucency to offer.
     expect(within(sidebar).queryByRole("slider")).toBeNull();
     const orb = screen.getByRole("region", { name: "Thinking orb" });
     expect(within(orb).getByRole("button", { name: "Orb animation" })).toBeInTheDocument();
     expect(within(orb).getByLabelText("Thinking orb preview")).toBeInTheDocument();
+  });
+
+  it("steps and resets native interface zoom from Appearance", async () => {
+    seedStore({ settingsTab: "Theme", zoom: 1 });
+    render(<SettingsModal />);
+    const group = screen.getByRole("group", { name: "Interface zoom" });
+    expect(within(group).getByText("100%")).toBeInTheDocument();
+    expect(within(group).getByRole("button", { name: "Reset" })).toBeDisabled();
+    fireEvent.click(within(group).getByRole("button", { name: "Zoom in" }));
+    await vi.waitFor(() => expect(useAppStore.getState().zoom).toBe(1.1));
+    expect(within(group).getByText("110%")).toBeInTheDocument();
+    fireEvent.click(within(group).getByRole("button", { name: "Zoom in" }));
+    await vi.waitFor(() => expect(useAppStore.getState().zoom).toBe(1.25));
+    expect(within(group).getByText("125%")).toBeInTheDocument();
+    fireEvent.click(within(group).getByRole("button", { name: "Reset" }));
+    await vi.waitFor(() => expect(useAppStore.getState().zoom).toBe(1));
+    expect(within(group).getByText("100%")).toBeInTheDocument();
+  });
+
+  it("saves sidebar density and reduces motion without overriding the OS preference", async () => {
+    vi.stubGlobal("matchMedia", () => ({ matches: false }));
+    seedStore({ settingsTab: "Theme", sidebarDensity: "standard", reduceMotion: false });
+    render(<SettingsModal />);
+    expect(motionReduced()).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Sidebar row density" }));
+    const list = screen.getByRole("listbox", { name: "Sidebar row density" });
+    expect(within(list).getAllByRole("option")).toHaveLength(3);
+    fireEvent.click(within(list).getByRole("option", { name: /Compact/ }));
+    await vi.waitFor(() => expect(useAppStore.getState().sidebarDensity).toBe("compact"));
+    expect(document.documentElement.dataset.sidebarDensity).toBe("compact");
+
+    const motion = screen.getByRole("switch", { name: /Reduce interface motion/ });
+    fireEvent.click(motion);
+    await vi.waitFor(() => expect(useAppStore.getState().reduceMotion).toBe(true));
+    expect(document.documentElement.dataset.motion).toBe("reduce");
+    expect(motionReduced()).toBe(true);
+    fireEvent.click(motion);
+    await vi.waitFor(() => expect(useAppStore.getState().reduceMotion).toBe(false));
+    expect(document.documentElement.dataset.motion).toBe("system");
+    expect(motionReduced()).toBe(false);
+    vi.stubGlobal("matchMedia", () => ({ matches: true }));
+    expect(motionReduced()).toBe(true);
   });
 
   it("previews the sidebar's translucency while dragging and saves it once the drag ends", async () => {
@@ -251,6 +301,27 @@ describe("settings navigation", () => {
     fireEvent.change(screen.getByRole("textbox", { name: "Search settings" }), { target: { value: "orb" } });
     fireEvent.click(screen.getByRole("button", { name: "Theme" }));
     expect(screen.getByRole("button", { name: "Orb animation" })).toBeInTheDocument();
+  });
+
+  it("applies a font across the app as soon as it is chosen", async () => {
+    seedStore({ settingsTab: "Theme", uiFont: "system" });
+    render(<SettingsModal />);
+    fireEvent.click(screen.getByRole("button", { name: "Font" }));
+    const list = screen.getByRole("listbox", { name: "Font" });
+    expect(within(list).getAllByRole("option")).toHaveLength(6);
+    const helvetica = within(list).getByRole("option", { name: /Helvetica/ });
+    expect(helvetica.style.fontFamily).toContain("Helvetica Neue");
+    fireEvent.click(helvetica);
+    await vi.waitFor(() => expect(useAppStore.getState().uiFont).toBe("helvetica"));
+    expect(document.documentElement.style.getPropertyValue("--font-sans")).toBe('"Helvetica Neue", Helvetica, Arial, sans-serif');
+    expect(screen.getByRole("button", { name: "Font" })).toHaveTextContent("Helvetica");
+  });
+
+  it("finds Appearance when searching for a font", () => {
+    render(<SettingsModal />);
+    fireEvent.change(screen.getByRole("textbox", { name: "Search settings" }), { target: { value: "helvetica" } });
+    fireEvent.click(screen.getByRole("button", { name: "Theme" }));
+    expect(screen.getByRole("button", { name: "Font" })).toBeInTheDocument();
   });
 
   it("groups the pages under AI, Workspace, App and System, with Muse's connection under Agents", () => {

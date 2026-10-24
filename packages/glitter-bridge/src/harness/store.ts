@@ -4,7 +4,9 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { PendingQuestion } from "./questions.js";
 import type { ApprovalMode } from "./permission/policy.js";
-import type { ChatMessage } from "./wire.js";
+import type { ChatMessage, ContentPart } from "./wire.js";
+
+export type PendingSteer = { itemId: string; text: string; images?: Array<{ mediaType: string; base64Data: string }> };
 
 /**
  * The harness owns its sessions, so it keeps them: one append-only JSONL file
@@ -52,7 +54,10 @@ type Record_ =
   | { type: "delegation"; delegation: DelegationPolicy }
   /** A turn ended asking the user; `questionSettled` closes it. */
   | { type: "question"; question: PendingQuestion }
-  | { type: "questionSettled"; userInputId: string };
+  | { type: "questionSettled"; userInputId: string }
+  /** Accepted steering is durable before its model-history boundary. */
+  | { type: "steer"; steering: PendingSteer }
+  | { type: "steerSettled"; itemIds: string[] };
 
 const SESSION_ID = /^h-[a-z0-9-]{8,64}$/;
 
@@ -131,26 +136,57 @@ export class SessionStore {
 
   append(sessionId: string, records: Record_[]): Promise<void> {
     if (!records.length) return Promise.resolve();
+    // Tool screenshots belong to the live context, not an ever-growing JSONL
+    // log. A resumed turn gets an explicit omission note and can recapture.
+    const durable = records.map((record): Record_ => {
+      if (record.type !== "message" || record.message.role !== "tool" || !record.message.results.some((result) => result.images?.length)) return record;
+      return {
+        ...record,
+        message: {
+          ...record.message,
+          results: record.message.results.map((result) => result.images?.length
+            ? { ...result, output: `${result.output}\n[Tool image omitted from saved history. Capture a new image if it is needed.]`, images: undefined }
+            : result),
+        },
+      };
+    });
     return this.serial(async () => {
       await mkdir(this.sessionsDir, { recursive: true, mode: 0o700 });
-      await appendFile(this.file(sessionId), records.map((record) => `${JSON.stringify(record)}\n`).join(""), { mode: 0o600 });
+      await appendFile(this.file(sessionId), durable.map((record) => `${JSON.stringify(record)}\n`).join(""), { mode: 0o600 });
     });
   }
 
+  private steerMessage(steer: PendingSteer): ChatMessage {
+    const content: ContentPart[] = [];
+    if (steer.text.trim()) content.push({ type: "text", text: steer.text });
+    for (const image of steer.images ?? []) content.push({ type: "image", mediaType: image.mediaType, data: image.base64Data });
+    return { role: "user", content };
+  }
+
   /** Messages for the model and items for the transcript. A torn last line (a crash mid-write) is skipped. */
-  async read(sessionId: string): Promise<{ messages: ChatMessage[]; items: Array<Record<string, unknown>>; question?: PendingQuestion; delegation?: DelegationPolicy }> {
+  async read(sessionId: string): Promise<{ messages: ChatMessage[]; items: Array<Record<string, unknown>>; steering?: PendingSteer[]; question?: PendingQuestion; delegation?: DelegationPolicy }> {
     const path = this.file(sessionId);
     if (!existsSync(path)) return { messages: [], items: [] };
     let question: PendingQuestion | undefined;
     let delegation: DelegationPolicy | undefined;
     const messages: ChatMessage[] = [];
     const items = new Map<string, Record<string, unknown>>();
+    const steering = new Map<string, PendingSteer>();
     const started = new Set<string>();
     for (const line of (await readFile(path, "utf8")).split("\n")) {
       if (!line.trim()) continue;
       let record: Record_;
       try { record = JSON.parse(line) as Record_; } catch { continue; }
       if (record.type === "message") messages.push(record.message);
+      else if (record.type === "steer" && typeof record.steering?.itemId === "string" && typeof record.steering.text === "string") steering.set(record.steering.itemId, record.steering);
+      else if (record.type === "steerSettled" && Array.isArray(record.itemIds)) {
+        for (const itemId of record.itemIds) {
+          const pending = steering.get(itemId);
+          if (!pending) continue;
+          messages.push(this.steerMessage(pending));
+          steering.delete(itemId);
+        }
+      }
       else if (record.type === "item" && typeof record.item.itemId === "string") items.set(record.item.itemId, record.item);
       else if (record.type === "toolStarted" && typeof record.id === "string") started.add(record.id);
       else if (record.type === "question" && record.question) question = record.question;
@@ -162,7 +198,7 @@ export class SessionStore {
       if (message.role !== "assistant") continue;
       for (const call of message.toolCalls ?? []) if (started.has(call.id)) call.started = true;
     }
-    return { messages, items: [...items.values()], ...(question ? { question } : {}), ...(delegation ? { delegation } : {}) };
+    return { messages, items: [...items.values()], ...(steering.size ? { steering: [...steering.values()] } : {}), ...(question ? { question } : {}), ...(delegation ? { delegation } : {}) };
   }
 
   remove(sessionId: string): Promise<void> {

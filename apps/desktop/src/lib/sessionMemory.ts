@@ -92,6 +92,8 @@ export type ThreadMeta = {
   pinned?: boolean;
   order?: number;
   archived?: boolean;
+  /** Manual unread state, restored with the other local thread metadata. */
+  unread?: boolean;
   /** Locally removed; skip this session if the host lists it again. */
   deleted?: boolean;
   lastStatus?: "idle" | "running" | "error";

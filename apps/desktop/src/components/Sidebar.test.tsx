@@ -10,6 +10,8 @@ import type { ApprovalRequest, Thread } from "../lib/types";
 
 const exporter = vi.hoisted(() => ({ exportSession: vi.fn() }));
 vi.mock("../lib/bridge", async (original) => ({ ...(await original<typeof import("../lib/bridge")>()), exportSession: exporter.exportSession }));
+const threadActions = vi.hoisted(() => ({ openThreadFolder: vi.fn(), copyThreadPath: vi.fn(), copyThreadLogPath: vi.fn(), copyAppLogPath: vi.fn(), copySessionId: vi.fn(), openAppConfig: vi.fn(), reportThreadIssue: vi.fn() }));
+vi.mock("../lib/threadActions", () => threadActions);
 
 const thread = (sessionId: string, partial: Partial<Thread> = {}): Thread => ({
   sessionId,
@@ -59,7 +61,10 @@ function mount() {
 }
 
 describe("Sidebar", () => {
-  beforeEach(resetStore);
+  beforeEach(() => {
+    resetStore();
+    for (const action of Object.values(threadActions)) action.mockReset();
+  });
 
   it("lists the workspace's threads with their status", () => {
     seed([thread("a", { status: "running" }), thread("b", { title: "Failing one", lastOutcome: "failed" }), thread("c", { unread: true })]);
@@ -180,6 +185,49 @@ describe("Sidebar", () => {
     expect(useAppStore.getState().settingsTab).toBe("Threads");
   });
 
+  it("runs the screenshot's support actions from a Harness thread menu", async () => {
+    seed([thread("h-thread-123", { agentId: "harness", title: "Alpha" })]);
+    const user = userEvent.setup();
+    render(<Sidebar />);
+    await user.click(screen.getByRole("button", { name: "Actions for Alpha" }));
+    for (const name of ["Mark as unread", "Open in Finder", "Copy path", "Copy task path", "Copy log path", "Copy session ID", "Go to config", "View model trajectory", "Report issue"]) {
+      expect(screen.getByRole("menuitem", { name })).toBeInTheDocument();
+    }
+    await user.click(screen.getByRole("menuitem", { name: "Mark as unread" }));
+    expect(useAppStore.getState().threads[0].unread).toBe(true);
+    await user.click(screen.getByRole("button", { name: "Actions for Alpha" }));
+    await user.click(screen.getByRole("menuitem", { name: "Mark as read" }));
+    expect(useAppStore.getState().threads[0].unread).toBe(false);
+
+    const actions: Array<[string, () => unknown, ...unknown[]]> = [
+      ["Open in Finder", threadActions.openThreadFolder, "h-thread-123"],
+      ["Copy path", threadActions.copyThreadPath, "h-thread-123"],
+      ["Copy task path", threadActions.copyThreadLogPath, "h-thread-123"],
+      ["Copy log path", threadActions.copyAppLogPath],
+      ["Copy session ID", threadActions.copySessionId, "h-thread-123"],
+      ["Go to config", threadActions.openAppConfig],
+      ["Report issue", threadActions.reportThreadIssue, "h-thread-123"],
+    ];
+    for (const [name, action, ...args] of actions) {
+      await user.click(screen.getByRole("button", { name: "Actions for Alpha" }));
+      await user.click(screen.getByRole("menuitem", { name }));
+      expect(action).toHaveBeenCalledWith(...args);
+    }
+  });
+
+  it("opens a thread-filtered trajectory and hides task logs for other agents", async () => {
+    seed([thread("a", { title: "Alpha" })]);
+    const user = userEvent.setup();
+    render(<Sidebar />);
+    await user.click(screen.getByRole("button", { name: "Actions for Alpha" }));
+    expect(screen.queryByRole("menuitem", { name: "Copy task path" })).toBeNull();
+    expect(screen.getByRole("menuitem", { name: "Copy log path" })).toBeInTheDocument();
+    await user.click(screen.getByRole("menuitem", { name: "View model trajectory" }));
+    expect(useAppStore.getState().settingsOpen).toBe(true);
+    expect(useAppStore.getState().settingsTab).toBe("Usage");
+    expect(useAppStore.getState().trajectoryThreadId).toBe("a");
+  });
+
   it("does not re-render while a reply streams into the open thread", () => {
     seed([thread("a", { status: "running", items: [{ itemId: "m", kind: "agentMessage", status: "inProgress", text: "Hel" }] }), thread("b"), thread("c")]);
     const commits = mount();
@@ -243,25 +291,85 @@ describe("Sidebar", () => {
     expect(useAppStore.getState().settingsTab).toBe("Agents");
   });
 
-  it("opens the Usage page straight from the footer, with no popup, and shows no account name or Ready", async () => {
+  it("opens Usage straight from the footer beside the profile and Settings controls", async () => {
     seed([]);
     seedStore({
       detection: { found: true, path: "/bin/muse", version: "Muse Code 3.14.3", authenticated: true, method: "auth.json", accountName: "Ada" },
       agents: [{ id: "muse", name: "Muse", protocol: "msp", found: true, path: "/bin/muse", version: "3.14.3", verified: true, signIn: "", authenticated: true }],
     });
     render(<Sidebar />);
-    expect(screen.queryByText("Ada")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Profile menu, Ada" })).toHaveTextContent("Ada");
     expect(screen.queryByText("Ready")).not.toBeInTheDocument();
     expect(screen.queryByText("Glitter")).not.toBeInTheDocument();
     const usage = screen.getByRole("button", { name: "Usage" });
-    // In the sidebar's foot at the end of the Settings row, carrying a figure rather than a label.
     expect(usage.closest(".sidebar-foot")).not.toBeNull();
     expect(usage).not.toHaveTextContent("Usage");
-    expect(screen.getByRole("button", { name: "Settings" })).toHaveTextContent("Settings");
+    expect(screen.getByRole("button", { name: "Settings" })).not.toHaveTextContent("Settings");
     await userEvent.setup().click(usage);
     expect(screen.queryByRole("dialog", { name: "Usage" })).not.toBeInTheDocument();
     expect(useAppStore.getState().settingsOpen).toBe(true);
     expect(useAppStore.getState().settingsTab).toBe("Usage");
+  });
+
+  it("opens App theme, Usage stats and shortcuts from the profile menu", async () => {
+    seed([]);
+    seedStore({
+      detection: { found: true, path: "/bin/muse", version: "3.14.3", authenticated: true, method: "auth.json", accountName: "Ada", accountEmail: "ada@example.com" },
+      agents: [{ id: "muse", name: "Muse", protocol: "msp", found: true, path: "/bin/muse", version: "3.14.3", verified: true, signIn: "", authenticated: true }],
+    });
+    const user = userEvent.setup();
+    render(<Sidebar />);
+    await user.click(screen.getByRole("button", { name: "Profile menu, Ada" }));
+    const menu = screen.getByRole("menu", { name: "Profile" });
+    expect(within(menu).getByText("ada@example.com")).toBeInTheDocument();
+    expect(within(menu).getByRole("menuitem", { name: "Usage stats" })).toBeInTheDocument();
+    expect(within(menu).getByRole("menuitem", { name: "Commands & shortcuts" })).toBeInTheDocument();
+    expect(within(menu).getByRole("menuitem", { name: /^Settings/ })).toBeInTheDocument();
+
+    await user.click(within(menu).getByRole("menuitem", { name: "App theme" }));
+    expect(useAppStore.getState().settingsTab).toBe("Theme");
+    await user.click(screen.getByRole("button", { name: "Profile menu, Ada" }));
+    await user.click(screen.getByRole("menuitem", { name: "Usage stats" }));
+    expect(useAppStore.getState().settingsTab).toBe("Usage");
+    await user.click(screen.getByRole("button", { name: "Profile menu, Ada" }));
+    await user.click(screen.getByRole("menuitem", { name: "Commands & shortcuts" }));
+    expect(useAppStore.getState().settingsTab).toBe("Shortcuts");
+  });
+
+  it("supports keyboard navigation in the profile menu and returns focus on Escape", async () => {
+    seed([]);
+    const user = userEvent.setup();
+    render(<Sidebar />);
+    const trigger = screen.getByRole("button", { name: "Profile menu, Profile" });
+    expect(trigger).toHaveTextContent("Profile");
+    trigger.focus();
+    await user.keyboard("{ArrowDown}");
+    expect(screen.getByRole("menuitem", { name: "App theme" })).toHaveFocus();
+    await user.keyboard("{ArrowDown}");
+    expect(screen.getByRole("menuitem", { name: "Usage stats" })).toHaveFocus();
+    expect(screen.getByText("Preferences on this Mac")).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    expect(trigger).toHaveFocus();
+    expect(screen.queryByRole("menu", { name: "Profile" })).not.toBeInTheDocument();
+  });
+
+  it("offers Muse sign-out only for an authenticated account", async () => {
+    seed([]);
+    const signOut = vi.fn(async () => {});
+    seedStore({
+      signOut,
+      detection: { found: true, path: "/bin/muse", version: "3.14.3", authenticated: true, method: "auth.json", accountName: "Ada" },
+      agents: [{ id: "muse", name: "Muse", protocol: "msp", found: true, path: "/bin/muse", version: "3.14.3", verified: true, signIn: "", authenticated: true }],
+    });
+    const user = userEvent.setup();
+    render(<Sidebar />);
+    await user.click(screen.getByRole("button", { name: "Profile menu, Ada" }));
+    await user.click(screen.getByRole("menuitem", { name: "Sign out of Muse" }));
+    expect(signOut).toHaveBeenCalledTimes(1);
+
+    act(() => useAppStore.setState({ detection: { found: true, path: "/bin/muse", version: "3.14.3", authenticated: false, method: null } }));
+    await user.click(screen.getByRole("button", { name: "Profile menu, Profile" }));
+    expect(screen.queryByRole("menuitem", { name: "Sign out of Muse" })).not.toBeInTheDocument();
   });
 
   it("puts New thread and Settings in the sidebar, and leaves Extensions to Settings", async () => {

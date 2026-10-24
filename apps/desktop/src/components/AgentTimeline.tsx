@@ -1,21 +1,24 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { describeError } from "../lib/errors";
 import {
-  BellRing, Bot, Brain, Check, CircleCheck, CircleDot, ChevronRight, CircleAlert, CircleSlash, Copy, Eye, FilePen, FileText, GitFork, Globe, Info, Layers, ListChecks,
-  LoaderCircle, Maximize2, MessageCircle, Pencil, Pin, PinOff, Play, RotateCcw, Search, Send, SkipForward, SquareTerminal, Target, Undo2, Workflow, Wrench, X,
+  BellRing, Bot, Brain, Check, CircleDot, ChevronRight, ChevronUp, CircleAlert, CircleSlash, Copy, Eye, FilePen, FileText, GitFork, Globe, Info, Layers, ListChecks,
+  LoaderCircle, Maximize2, MessageCircle, Pencil, Play, RotateCcw, Search, Send, SkipForward, SquareTerminal, Target, Undo2, Workflow, Wrench, X,
 } from "lucide-react";
 import { Orb } from "./Orb";
 import { ACTIVITY_KINDS, activitySummary, activityTitle, agentCounts, backgroundAgents, computeVirtualWindow, estimateRunHeight, groupAgentRuns, messageRewindBoundary, parseWorkflowMessage, relativeToWorkspace, runSummary, showTerminalReceipt, stabilizeRuns, type AgentState, type AgentRun, type AgentStep, type AgentStepKind } from "../lib/agent";
 import { copyText, formatArgs, formatBytes, formatDuration, formatTokens, humanizeModelLabel, humanizeProvider, humanizeToolName, shortcutLabel, summarizeArgs } from "../lib/format";
 import { estimateCost, formatCost } from "../lib/cost";
+import { formatTokenSpeed, readTokenSpeed, TOKEN_SPEED_ESTIMATE } from "../lib/tokenSpeed";
 import { modelFor } from "../lib/effort";
 import { currentThread, useAppStore } from "../lib/store";
 import { agentEnabled } from "../lib/types";
-import { AGENT_LABELS, type AgentId, type PlanItem, type Thread } from "../lib/types";
+import { AGENT_LABELS, type AgentId, type PlanItem, type Thread, type TokenSpeed } from "../lib/types";
 import { approvalPreview } from "../lib/approvalPreview";
 import { EditPreview } from "./EditPreview";
 import { Markdown } from "./Markdown";
 import { Collapse } from "./Presence";
+import { menuPosition } from "../lib/menuPosition";
+import { EXIT_FAST_MS, usePresence } from "../lib/presence";
 import { AgentMark as ProductAgentMark, ModelIcon } from "./AgentPicker";
 
 
@@ -48,17 +51,16 @@ function StepIcon({ kind }: { kind: AgentStepKind }) {
   }
 }
 
-/** A square disclosure on the work column: the only permanent chrome a folded group gets. */
 function Disclosure({ open }: { open: boolean }) {
-  return <span className="disclosure" aria-hidden="true"><ChevronRight size={13} className={`caret ${open ? "open" : ""}`} /></span>;
+  return <span className="disclosure" aria-hidden="true"><ChevronRight size={12} className={`caret ${open ? "open" : ""}`} /></span>;
 }
 
-/** The step's outcome, separate from what kind of work it was. */
-function StepStatus({ status }: { status: AgentStep["status"] }) {
-  if (status === "failed") return <CircleAlert size={14} aria-hidden="true" />;
-  if (status === "running") return <LoaderCircle size={13} className="spin" aria-hidden="true" />;
-  if (status === "cancelled" || status === "skipped") return <CircleSlash size={13} aria-hidden="true" />;
-  return <CircleCheck size={14} aria-hidden="true" />;
+/** One quiet mark: the kind of work at rest, its state when that needs attention. */
+function StepStatus({ step }: { step: AgentStep }) {
+  if (step.status === "failed") return <CircleAlert size={14} aria-hidden="true" />;
+  if (step.status === "running") return <LoaderCircle size={13} className="spin" aria-hidden="true" />;
+  if (step.status === "cancelled" || step.status === "skipped") return <CircleSlash size={13} aria-hidden="true" />;
+  return <StepIcon kind={step.kind} />;
 }
 
 function seconds(ms?: number) {
@@ -76,33 +78,35 @@ function PlanMark({ status }: { status: PlanItem["status"] }) {
 }
 
 /**
- * A pinned plan lives above the scroller and starts as a compact strip.
+ * The inline plan card is also the checklist inside the floating PlanMenu.
  * `live` is whether a turn is running: once it has stopped, a step the agent
  * left in progress is shown as not done, without a spinner nothing is behind.
  */
-export function PlanView({ items, pinnable, pinned, onPin, live = true }: { items: PlanItem[]; pinnable?: boolean; pinned?: boolean; onPin?: (pinned: boolean) => void; live?: boolean }) {
-  const [open, setOpen] = useState(!pinned);
+export function PlanView({ items, floating = false, live = true }: { items: PlanItem[]; floating?: boolean; live?: boolean }) {
+  const [open, setOpen] = useState(true);
   const [toggled, setToggled] = useState(false);
   if (!items.length) return null;
   const done = items.filter((item) => item.status === "completed").length;
   const pct = Math.round((done / items.length) * 100);
+  const heading = <>
+    <ListChecks size={14} aria-hidden="true" />
+    <span className="card-title">Plan</span>
+    <span className="plan-count">{done} of {items.length}</span>
+    <span className="plan-progress" aria-hidden="true"><span style={{ width: `${pct}%` }} /></span>
+  </>;
   return (
-    <section className={`card plan ${pinned ? "pinned" : ""}`} aria-label="Plan">
+    <section className={`card plan ${floating ? "floating" : ""}`} aria-label="Plan">
       <div className="plan-head">
-        <button type="button" className="card-head" aria-expanded={open} onClick={() => { setToggled(true); setOpen(!open); }}>
-          <ListChecks size={14} aria-hidden="true" />
-          <span className="card-title">Plan</span>
-          <span className="plan-count">{done} of {items.length}</span>
-          <span className="plan-progress" aria-hidden="true"><span style={{ width: `${pct}%` }} /></span>
-          <ChevronRight size={13} className={`caret ${open ? "open" : ""}`} aria-hidden="true" />
-        </button>
-        {pinnable ? (
-          <button type="button" className="icon-btn small plan-pin" aria-pressed={pinned} aria-label={pinned ? "Unpin plan from top" : "Pin plan to top"} data-tooltip={pinned ? "Unpin from top" : "Pin to top"} onClick={() => onPin?.(!pinned)}>
-            {pinned ? <PinOff size={13} /> : <Pin size={13} />}
+        {floating ? (
+          <div className="card-head plan-popup-head">{heading}</div>
+        ) : (
+          <button type="button" className="card-head" aria-expanded={open} onClick={() => { setToggled(true); setOpen(!open); }}>
+            {heading}
+            <ChevronRight size={13} className={`caret ${open ? "open" : ""}`} aria-hidden="true" />
           </button>
-        ) : null}
+        )}
       </div>
-      <Collapse open={open} animate={toggled}>{() => (
+      <Collapse open={floating || open} animate={!floating && toggled}>{() => (
         <ol>
           {items.map((item) => {
             const status = !live && item.status === "inProgress" ? "pending" : item.status;
@@ -116,6 +120,106 @@ export function PlanView({ items, pinnable, pinned, onPin, live = true }: { item
         </ol>
       )}</Collapse>
     </section>
+  );
+}
+
+/** An active plan floats over the composer; its checklist opens above and to the pill's right. */
+export function PlanMenu({ items, live = true }: { items: PlanItem[]; live?: boolean }) {
+  const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+  const popoverId = `${useId()}-plan`;
+  const [open, setOpen] = useState(false);
+  const pop = usePresence(open, EXIT_FAST_MS);
+  const [position, setPosition] = useState<(ReturnType<typeof menuPosition> & { position: "fixed" }) | null>(null);
+  const done = items.filter((item) => item.status === "completed").length;
+
+  useEffect(() => {
+    if (!open) return;
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      setOpen(false);
+      triggerRef.current?.focus();
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    // Capture before the composer sees Escape: dismiss this popup, not the turn.
+    document.addEventListener("keydown", closeOnEscape, true);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsidePointer);
+      document.removeEventListener("keydown", closeOnEscape, true);
+    };
+  }, [open]);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    const trigger = triggerRef.current;
+    const popover = popoverRef.current;
+    if (!trigger || !popover) return;
+    const update = () => {
+      const width = Math.min(320, Math.max(0, window.innerWidth - 16));
+      const previousWidth = popover.style.width;
+      popover.style.width = `${width}px`;
+      const contentHeight = Math.ceil(popover.scrollHeight + popover.offsetHeight - popover.clientHeight);
+      popover.style.width = previousWidth;
+      const height = Math.min(380, contentHeight);
+      const triggerRect = trigger.getBoundingClientRect();
+      const anchor = { left: triggerRect.right + 12, right: triggerRect.right + 12, top: triggerRect.top, bottom: triggerRect.bottom };
+      setPosition({
+        ...menuPosition(
+          anchor,
+          { width, height },
+          { left: 0, top: 0, right: window.innerWidth, bottom: window.innerHeight },
+          false,
+        ),
+        position: "fixed",
+      });
+    };
+    const observer = typeof ResizeObserver === "function" ? new ResizeObserver(update) : null;
+    const composer = trigger.closest(".composer-wrap");
+    if (composer) observer?.observe(composer);
+    update();
+    window.addEventListener("resize", update);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener("resize", update);
+    };
+  }, [items, open]);
+
+  return (
+    <div ref={rootRef} className="plan-menu">
+      <button
+        ref={triggerRef}
+        type="button"
+        className="plan-menu-trigger"
+        aria-label={`Plan: ${done} of ${items.length} completed`}
+        aria-expanded={open}
+        aria-controls={popoverId}
+        onClick={() => {
+          if (!open) setPosition(null);
+          setOpen(!open);
+        }}
+      >
+        <ListChecks size={14} aria-hidden="true" />
+        <span>Plan</span>
+        <span className="plan-menu-count">{done}/{items.length}</span>
+        <ChevronUp size={12} className="plan-menu-chevron" aria-hidden="true" />
+      </button>
+      {pop.mounted ? (
+        <div
+          ref={popoverRef}
+          id={popoverId}
+          className={`plan-popover${pop.closing ? " closing" : ""}`}
+          style={position ?? { visibility: "hidden" }}
+        >
+          <PlanView items={items} floating live={live} />
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -201,29 +305,30 @@ function StepRowView({ step }: { step: AgentStep }) {
     : step.kind === "reasoning" || step.kind === "subagent" || step.kind === "workflow" || step.kind === "compaction"
     ? step.detail
     : step.output || step.error || (step.item.args && formatArgs(step.item.args));
-  const [open, setOpen] = useState(failed);
-  // Only detail the user opens or closes animates; a failed step restored open must not shift the scroll.
+  const [open, setOpen] = useState(false);
+  // A failure that happens while this row is on screen opens itself. One restored
+  // already failed stays a single line, so a past error does not dump its log into the thread.
   const [toggled, setToggled] = useState(false);
-  useEffect(() => { if (failed) setOpen(true); }, [failed]);
-  const duration = seconds(step.durationMs);
+  const wasFailed = useRef(failed);
+  useEffect(() => {
+    if (!wasFailed.current && failed) { setToggled(true); setOpen(true); }
+    wasFailed.current = failed;
+  }, [failed]);
   const preview = step.kind === "edit" && step.status === "completed" ? completedEditPreview(step.item) : null;
   const expandable = Boolean(body || preview);
-  const showGlyph = !["reasoning", "compaction", "reminder"].includes(step.kind);
   return (
     <li className={`step ${step.kind} ${step.status} ${open ? "open" : ""}`}>
       <span className="step-node" aria-hidden="true">
-        <StepStatus status={step.status} />
+        <StepStatus step={step} />
       </span>
       <div className="step-main">
         <button type="button" className="step-head" aria-expanded={expandable ? open : undefined} disabled={!expandable} onClick={() => { setToggled(true); setOpen(!open); }}>
-          <span className={`step-verb ${running ? "shimmer" : ""}`}>{verb}</span>
-          {showGlyph ? <span className={`step-kind ${step.kind}`} aria-hidden="true"><StepIcon kind={step.kind} /></span> : null}
+          <span className="step-verb">{verb}</span>
           {summary && !(step.kind === "reasoning" && open) ? <span className="step-summary" title={summary}>{summary}</span> : null}
           {toolArgs ? <span className="step-args" title={toolArgs}>{toolArgs}</span> : null}
           <span className="step-meta">
             {step.item.background ? <span className="task-bg" title={step.item.backgroundInitiator ? `Backgrounded by ${step.item.backgroundInitiator}` : "Running in the background"}>background</span> : null}
             {step.item.exitCode != null && step.item.exitCode !== 0 ? <span className="exit bad">exit {step.item.exitCode}</span> : null}
-            {duration ? <span>{duration}</span> : null}
             {expandable ? <ChevronRight size={12} className={`caret ${open ? "open" : ""}`} aria-hidden="true" /> : null}
           </span>
         </button>
@@ -258,10 +363,10 @@ const StepRow = memo(StepRowView);
 
 function ActivityGroupView({ steps, live }: { steps: AgentStep[]; live: boolean }) {
   const failed = steps.some((step) => step.status === "failed");
-  const [open, setOpen] = useState(live || failed);
-  // Only a group the user opens animates; one restored by the virtual list must not shift the scroll.
+  // Closed until the reader opens it, including while it is running and when a step failed.
+  // A restored group mounts closed and still; only a click animates it.
+  const [open, setOpen] = useState(false);
   const [toggled, setToggled] = useState(false);
-  useEffect(() => { if (live || failed) setOpen(true); }, [live, failed]);
   const summary = useMemo(() => activitySummary(steps), [steps]);
   const plural = (count: number, one: string) => `${count} ${one}${count === 1 ? "" : "s"}`;
   if (steps.length < 2) {
@@ -283,11 +388,10 @@ function ActivityGroupView({ steps, live }: { steps: AgentStep[]; live: boolean 
         <Disclosure open={open} />
         <span className="group-title">{activityTitle(steps, live)}</span>
         {failed ? <span className="group-fail">{plural(summary.failures || 1, "failure")}</span> : null}
-        {live ? <span className="group-live-dot" aria-hidden="true" /> : null}
         {summary.durationMs ? <span className="group-meta">{seconds(summary.durationMs)}</span> : null}
       </button>
       <Collapse open={open} animate={toggled}>{() => (
-        <div className="activity-body" tabIndex={0} aria-label="Work steps">
+        <div className="activity-body">
           <ol className="steps">{steps.map((step) => <StepRow key={step.id} step={step} />)}</ol>
         </div>
       )}</Collapse>
@@ -297,8 +401,20 @@ function ActivityGroupView({ steps, live }: { steps: AgentStep[]; live: boolean 
 
 const ActivityGroup = memo(ActivityGroupView, (previous, next) => previous.live === next.live && previous.steps.length === next.steps.length && previous.steps.every((step, index) => step === next.steps[index]));
 
-function MessageActions({ text, onEdit, editLabel, onRetry, retryLabel, busy }: {
+function messageTimeValue(recordedAt?: string) {
+  if (!recordedAt) return undefined;
+  const date = new Date(recordedAt);
+  if (Number.isNaN(date.getTime())) return undefined;
+  return {
+    text: date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hourCycle: "h23" }),
+    title: date.toLocaleString(),
+  };
+}
+
+function MessageActions({ text, recordedAt, tooltipAlign = "start", onEdit, editLabel, onRetry, retryLabel, busy }: {
   text: string;
+  recordedAt?: string;
+  tooltipAlign?: "start" | "end";
   onEdit?: () => void;
   editLabel?: string;
   onRetry?: () => void;
@@ -308,37 +424,45 @@ function MessageActions({ text, onEdit, editLabel, onRetry, retryLabel, busy }: 
   const [copied, setCopied] = useState(false);
   const timer = useRef<number | null>(null);
   useEffect(() => () => { if (timer.current != null) window.clearTimeout(timer.current); }, []);
-  if (!text && !onRetry) return null;
+  const time = messageTimeValue(recordedAt);
+  if (!text && !onRetry && !time) return null;
   return (
-    <div className="msg-actions" role="toolbar" aria-label="Message actions">
-      {text ? (
-        <button
-          type="button"
-          className="icon-btn small"
-          aria-label={copied ? "Copied to clipboard" : "Copy message"}
-          data-tooltip={copied ? "Copied" : "Copy"}
-          onClick={() => {
-            void copyText(text).then((ok) => {
-              if (!ok) return;
-              setCopied(true);
-              if (timer.current != null) window.clearTimeout(timer.current);
-              timer.current = window.setTimeout(() => setCopied(false), 1500);
-            });
-          }}
-        >
-          {copied ? <Check size={13} aria-hidden="true" /> : <Copy size={13} aria-hidden="true" />}
-        </button>
+    <div className="msg-foot">
+      {text || onRetry ? (
+        <div className="msg-actions" role="toolbar" aria-label="Message actions">
+          {text ? (
+            <button
+              type="button"
+              className="icon-btn small"
+              aria-label={copied ? "Copied to clipboard" : "Copy message"}
+              data-tooltip={copied ? "Copied" : "Copy"}
+              data-tooltip-side="top"
+              data-tooltip-align={tooltipAlign}
+              onClick={() => {
+                void copyText(text).then((ok) => {
+                  if (!ok) return;
+                  setCopied(true);
+                  if (timer.current != null) window.clearTimeout(timer.current);
+                  timer.current = window.setTimeout(() => setCopied(false), 1500);
+                });
+              }}
+            >
+              {copied ? <Check size={13} aria-hidden="true" /> : <Copy size={13} aria-hidden="true" />}
+            </button>
+          ) : null}
+          {onEdit ? (
+            <button type="button" className="icon-btn small" aria-label={editLabel ?? "Edit message"} data-tooltip={editLabel ?? "Edit"} data-tooltip-side="top" data-tooltip-align={tooltipAlign} disabled={busy} onClick={onEdit}>
+              <Pencil size={13} aria-hidden="true" />
+            </button>
+          ) : null}
+          {onRetry ? (
+            <button type="button" className="icon-btn small" aria-label={retryLabel ?? "Retry"} data-tooltip={retryLabel ?? "Retry"} data-tooltip-side="top" data-tooltip-align={tooltipAlign} disabled={busy} onClick={onRetry}>
+              <RotateCcw size={13} aria-hidden="true" />
+            </button>
+          ) : null}
+        </div>
       ) : null}
-      {onEdit ? (
-        <button type="button" className="icon-btn small" aria-label={editLabel ?? "Edit message"} data-tooltip={editLabel ?? "Edit"} disabled={busy} onClick={onEdit}>
-          <Pencil size={13} aria-hidden="true" />
-        </button>
-      ) : null}
-      {onRetry ? (
-        <button type="button" className="icon-btn small" aria-label={retryLabel ?? "Retry"} data-tooltip={retryLabel ?? "Retry"} disabled={busy} onClick={onRetry}>
-          <RotateCcw size={13} aria-hidden="true" />
-        </button>
-      ) : null}
+      {time ? <time className="msg-time" dateTime={recordedAt} title={time.title}>{time.text}</time> : null}
     </div>
   );
 }
@@ -437,6 +561,8 @@ function UserMessageView({ step }: { step: AgentStep }) {
       {!editing ? (
         <MessageActions
           text={text}
+          recordedAt={step.item.recordedAt}
+          tooltipAlign="end"
           busy={busy}
           onEdit={text ? () => {
             const thread = currentThread(useAppStore.getState());
@@ -457,24 +583,27 @@ function UserMessageView({ step }: { step: AgentStep }) {
 
 const UserMessage = memo(UserMessageView);
 
-/** The agent's face, once at the top of its side of a turn, on the same column as the work rail below it. */
-function AgentHeadView() {
-  const agentId: AgentId = useAppStore((state) => currentThread(state)?.agentId ?? "muse");
-  const agentName = useAppStore((state) => state.agents.find((agent) => agent.id === agentId)?.name ?? AGENT_LABELS[agentId]);
-  return <div className="agent-message-head"><ProductAgentMark id={agentId} size={22} /><span>{agentName}</span></div>;
+function StreamingTokenSpeed({ speed }: { speed: TokenSpeed }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const reading = readTokenSpeed(speed, now);
+  if (!reading || reading.idle) return null;
+  return <span className="turn-stats msg-speed" title={TOKEN_SPEED_ESTIMATE}>{formatTokenSpeed(reading.tokensPerSecond)}</span>;
 }
 
-const AgentHead = memo(AgentHeadView);
-
 /** The answer a turn settles on. `final` adds its actions once the turn has ended. */
-function AgentMessageView({ step, final, canRetry }: { step: AgentStep; final: boolean; canRetry: boolean }) {
+function AgentMessageView({ step, final, canRetry, tokenSpeed }: { step: AgentStep; final: boolean; canRetry: boolean; tokenSpeed?: TokenSpeed }) {
   const retryLast = useAppStore((state) => state.retryLast);
   const busy = useAppStore((state) => currentThread(state)?.status === "running" || state.submitting);
   const text = step.detail ?? "";
   return (
     <article className="msg agent" data-item={step.id}>
       <div className="agent-message-body"><Markdown>{text}</Markdown></div>
-      {final ? <MessageActions text={text} busy={busy} onRetry={canRetry ? () => void retryLast() : undefined} retryLabel="Retry last turn" /> : null}
+      {!final && canRetry && tokenSpeed ? <StreamingTokenSpeed speed={tokenSpeed} /> : null}
+      {final ? <MessageActions text={text} recordedAt={step.item.recordedAt} busy={busy} onRetry={canRetry ? () => void retryLast() : undefined} retryLabel="Retry last turn" /> : null}
     </article>
   );
 }
@@ -482,22 +611,16 @@ function AgentMessageView({ step, final, canRetry }: { step: AgentStep; final: b
 const AgentMessage = memo(AgentMessageView);
 
 /**
- * A note the agent wrote between steps: narration of the work, so it sits on the
- * rail in the quieter voice. Only the newest note of a live turn stays open;
- * once the agent moves past a note it folds to its first line, so past thinking
- * never stacks into walls of prose.
+ * A note the agent wrote between steps: narration, not the answer. One quiet
+ * line until the reader opens it, including the newest note of a live turn.
+ * A note the reader opened stays open.
  */
-function AgentNoteView({ step, current }: { step: AgentStep; current: boolean }) {
+function AgentNoteView({ step }: { step: AgentStep }) {
   const text = step.detail ?? "";
   const summary = text.replace(/[#*_`>]/g, "").split("\n").map((line) => line.trim()).find(Boolean) ?? "";
-  const [open, setOpen] = useState(current);
-  // Only a note the agent moves past animates; one restored folded must not shift the scroll.
+  const [open, setOpen] = useState(false);
+  // Only a note the reader opens animates; one restored folded must not shift the scroll.
   const [toggled, setToggled] = useState(false);
-  const wasCurrent = useRef(current);
-  useEffect(() => {
-    if (wasCurrent.current && !current) { setToggled(true); setOpen(false); }
-    wasCurrent.current = current;
-  }, [current]);
   return (
     <div className={`trace-note${open ? " open" : ""}`} data-item={step.id}>
       <div className="trace-note-main">
@@ -509,8 +632,8 @@ function AgentNoteView({ step, current }: { step: AgentStep; current: boolean })
           title={open ? "Fold note" : summary}
           onClick={() => { setToggled(true); setOpen(!open); }}
         >
+          <Disclosure open={open} />
           {open ? null : <span className="trace-note-summary">{summary}</span>}
-          <ChevronRight size={12} className={`caret ${open ? "open" : ""}`} aria-hidden="true" />
         </button>
         <Collapse open={open} animate={toggled}>{() => (
           <div className="trace-note-body"><Markdown>{text}</Markdown></div>
@@ -542,10 +665,9 @@ function ContextDivider({ step }: { step: AgentStep }) {
 type TraceEntry = { node: ReactNode; loose?: boolean };
 
 /**
- * A turn's work — its notes and steps — on one rail under the agent's name.
- * While the turn runs it stays open; once the turn settles on an answer it
- * folds to one line above it, so the answer reads on its own. Cards, errors
- * and the plan are `loose`: they never hide inside the fold.
+ * A turn's notes and steps form one flat work stream. Once the turn settles on
+ * an answer, that work folds to one line above it, so the answer reads on its
+ * own. Cards, errors and the plan are `loose`: they never hide inside the fold.
  */
 function Trace({ entries, steps, holds, foldable, run, isLast }: { entries: TraceEntry[]; steps: AgentStep[]; holds: string[]; foldable: boolean; run: AgentRun; isLast: boolean }) {
   const [open, setOpen] = useState(!foldable);
@@ -562,19 +684,14 @@ function Trace({ entries, steps, holds, foldable, run, isLast }: { entries: Trac
   if (!entries.length) return null;
   const plural = (count: number, one: string) => `${count} ${one}${count === 1 ? "" : "s"}`;
   const duration = turnMs ? formatDuration(turnMs) : summary.durationMs ? `~${formatDuration(summary.durationMs)}` : "";
-  const chips = [
-    duration && summary.steps ? plural(summary.steps, "step") : "",
-    summary.edits ? plural(summary.edits, "edit") : "",
-    summary.files ? plural(summary.files, "file") : "",
-    summary.commands ? plural(summary.commands, "command") : "",
-  ].filter(Boolean);
+  const stepFact = duration && summary.steps ? plural(summary.steps, "step") : "";
   return <>
     {foldable ? (
       <button type="button" className={`trace-head${summary.failures ? " failed" : ""}`} aria-expanded={open} data-holds={holds.join(" ")} onClick={() => { setToggled(true); setOpen(!open); }}>
         <Disclosure open={open} />
         <span className="trace-title">{duration ? `Worked for ${duration}` : plural(summary.steps, "step")}</span>
         {summary.failures ? <span className="group-fail">{plural(summary.failures, "failure")}</span> : null}
-        {chips.length ? <span className="trace-facts">{chips.join(" · ")}</span> : null}
+        {stepFact ? <span className="trace-facts">{stepFact}</span> : null}
       </button>
     ) : null}
     <Collapse open={!foldable || open} animate={toggled}>{() => <div className="trace">{inside.map((entry) => entry.node)}</div>}</Collapse>
@@ -610,8 +727,22 @@ function Completion({ run, isLast }: { run: AgentRun; isLast: boolean }) {
     return Boolean(snapshot?.files.length || stats);
   });
   if (run.status === "running" || run.status === "waiting") return null;
-  if (run.status === "completed" ? !hasDetails && !runSummary(run).changed.length : !isLast) return null;
+  const hasAnswer = Boolean(settledAnswerId(run.steps));
+  if (run.status === "completed" ? !hasDetails && !runSummary(run).changed.length && !hasAnswer : !isLast) return null;
   return <Receipt run={run} isLast={isLast} />;
+}
+
+/** Provider totals when they were reported; the reply estimate otherwise. Input includes cache, matching what the provider billed. */
+function tokenFact(stats: { inputTokens?: number; cachedTokens?: number; outputTokens?: number; estimated?: boolean }) {
+  const input = (stats.inputTokens ?? 0) + (stats.cachedTokens ?? 0);
+  const output = stats.outputTokens ?? 0;
+  const mark = stats.estimated ? "~" : "";
+  if (input > 0) {
+    const text = output > 0 ? `${mark}${formatTokens(input)} in · ${mark}${formatTokens(output)} out` : `${mark}${formatTokens(input)} in`;
+    return <span title={stats.estimated ? "Estimated tokens for this turn" : "Input and output tokens reported for this turn"}>{text}</span>;
+  }
+  if (!output) return null;
+  return <span title={stats.estimated ? "Estimated output tokens for this turn" : "Output tokens for this turn"}>{mark}{formatTokens(output)} tokens</span>;
 }
 
 function ReceiptView({ run, isLast }: { run: AgentRun; isLast: boolean }) {
@@ -643,10 +774,11 @@ function ReceiptView({ run, isLast }: { run: AgentRun; isLast: boolean }) {
   // Hosts that report no per-turn usage still reported each step's time; their
   // sum, marked ~, fills the receipt's otherwise-empty metrics row.
   const derivedMs = run.steps.reduce((sum, step) => sum + (step.durationMs ?? 0), 0);
-  // One quiet line of facts, most useful first: time, tokens, cost, then the model that did the work.
+  // One quiet line of facts, most useful first: time, speed, tokens, cost, then the model that did the work.
   const metrics = stats ? <span className="turn-stats" aria-label="Turn usage">
     <span className="turn-duration" title="Time spent on this turn">{formatDuration(stats.durationMs)}</span>
-    {stats.outputTokens ? <span title="Output tokens for this turn">{stats.estimated ? "~" : ""}{formatTokens(stats.outputTokens)} tokens</span> : null}
+    {stats.tokensPerSecond != null ? <span title={TOKEN_SPEED_ESTIMATE}>{formatTokenSpeed(stats.tokensPerSecond)}</span> : null}
+    {tokenFact(stats)}
     {turnCost != null && costModel ? <span title="Estimated cost for this turn">≈{formatCost(turnCost, costModel.cost?.currency)}</span> : null}
     {costModel ? <span className="turn-model" title={costModel.providerId ? `${humanizeModelLabel(costModel.modelId, costModel.displayLabel)} via ${humanizeProvider(costModel.providerId)}` : undefined}><ModelIcon modelId={costModel.modelId} providerId={costModel.providerId} size={12} fallback={<ProductAgentMark id={agentId} size={12} />} />{humanizeModelLabel(costModel.modelId, costModel.displayLabel)}</span> : null}
   </span> : derivedMs > 0 ? <span className="turn-stats" aria-label="Turn duration">
@@ -665,8 +797,10 @@ function ReceiptView({ run, isLast }: { run: AgentRun; isLast: boolean }) {
   // file, a busy shell) is not something to act on, so the strip says nothing;
   // only an Undo or Reapply the user started and that failed gets a line.
   const snapshotNote = snapshotError ? <span className="receipt-note danger" role="alert"><Info size={12} aria-hidden="true" /><span>{snapshotError}</span></span> : null;
+  const reviewAction = <button type="button" className="ghost-btn small" title="Open this turn’s changes in the Changes panel" onClick={() => { setInspectorTab("changes"); setDockOpen(true); }}>Review</button>;
   if (run.status === "completed") {
-    if (!fileCount && !stats) return null;
+    const hasAnswer = Boolean(settledAnswerId(run.steps));
+    if (!fileCount && !stats && !hasAnswer) return null;
     const cuttable = agentId === "muse" && run.turnId != null && !run.turnId.startsWith("local:") && run.turnId !== "history";
     return (
       <section className="receipt completed" aria-label="Done">
@@ -676,6 +810,7 @@ function ReceiptView({ run, isLast }: { run: AgentRun; isLast: boolean }) {
           {metrics}
           <span className="receipt-actions">
             {snapshotActions}
+            {reviewAction}
             {cuttable && sessionId ? <button type="button" className="ghost-btn small" title="Fork the thread with history up to this turn" onClick={() => void forkThread(sessionId, run.turnId)}><GitFork size={12} aria-hidden="true" />Fork here</button> : null}
           </span>
         </div>
@@ -687,7 +822,6 @@ function ReceiptView({ run, isLast }: { run: AgentRun; isLast: boolean }) {
               <div className="changes-head">
                 <FilePen size={13} aria-hidden="true" />
                 <span className="changes-title">Changed {fileCount} file{fileCount === 1 ? "" : "s"}</span>
-                <button type="button" className="ghost-btn small changes-review" title="Open these changes in the Changes panel" onClick={() => { setInspectorTab("changes"); setDockOpen(true); }}>Review<ChevronRight size={11} aria-hidden="true" /></button>
               </div>
               <ul className="change-rows">
                 {files.map((path) => {
@@ -744,9 +878,9 @@ function ReceiptView({ run, isLast }: { run: AgentRun; isLast: boolean }) {
 const Receipt = memo(ReceiptView);
 
 /**
- * One live status at a time (like Claude desktop): the working indicator under the run says
- * "Thinking", so an in-progress thought only joins the list once it's done. Host reminder
- * child sessions with nothing but the generic placeholder are bookkeeping, not work.
+ * One live status at a time: an in-progress thought only joins the list once
+ * it's done. Host reminder child sessions with nothing but the generic
+ * placeholder are bookkeeping, not work.
  */
 function hiddenStep(step: AgentStep) {
   if (step.kind === "reasoning" && step.status === "running") return true;
@@ -922,7 +1056,7 @@ function AgentsCardView({ step }: { step: AgentStep }) {
 
 const AgentsCard = memo(AgentsCardView);
 
-function RunViewView({ run, header, inline, isLast, onHeightChange }: { run: AgentRun; header?: ReactNode; inline?: { after: string; node: ReactNode }; isLast: boolean; onHeightChange?: (id: string, height: number) => void }) {
+function RunViewView({ run, header, inline, isLast, onHeightChange, tokenSpeed }: { run: AgentRun; header?: ReactNode; inline?: { after: string; node: ReactNode }; isLast: boolean; onHeightChange?: (id: string, height: number) => void; tokenSpeed?: TokenSpeed }) {
   const rootRef = useRef<HTMLElement>(null);
   useEffect(() => {
     const el = rootRef.current;
@@ -938,8 +1072,8 @@ function RunViewView({ run, header, inline, isLast, onHeightChange }: { run: Age
   }, [run.id, onHeightChange]);
 
   const live = run.status === "running" || run.status === "waiting";
-  // The user's message (and the goal or plan under it), then the agent's side:
-  // its work on the rail, the answer, and anything that came after the answer.
+  // The user's message (and the goal or plan under it), then the agent's work,
+  // its answer, and anything that came after the answer.
   const blocks: ReactNode[] = [];
   const entries: TraceEntry[] = [];
   const after: ReactNode[] = [];
@@ -949,8 +1083,6 @@ function RunViewView({ run, header, inline, isLast, onHeightChange }: { run: Age
   let buffer: AgentStep[] = [];
   let placed = false;
   const answerId = settledAnswerId(run.steps);
-  // The newest note is the agent's current thought; every older one is history and folds.
-  const liveNoteId = live ? [...run.steps].reverse().find((step) => step.kind === "message" && step.detail && step.id !== answerId)?.id : undefined;
   const push = (node: ReactNode, loose = false) => { if (answer) after.push(node); else entries.push({ node, loose }); };
   const flush = () => {
     if (!buffer.length) return;
@@ -981,8 +1113,8 @@ function RunViewView({ run, header, inline, isLast, onHeightChange }: { run: Age
     }
     else if (step.kind === "workflow" || step.kind === "subagent") push(<AgentsCard key={step.id} step={step} />, true);
     else if (step.kind === "error") push(<div key={step.id} className="system-note" role="alert"><CircleAlert size={13} aria-hidden="true" /><span>{step.detail || "Something went wrong."}</span></div>, true);
-    else if (step.detail && step.id === answerId) answer = <AgentMessage key={step.id} step={step} final={!live} canRetry={isLast} />;
-    else if (step.detail) { push(<AgentNote key={step.id} step={step} current={step.id === liveNoteId} />); holds.push(step.id); }
+    else if (step.detail && step.id === answerId) answer = <AgentMessage key={step.id} step={step} final={!live} canRetry={isLast} tokenSpeed={live && isLast ? tokenSpeed : undefined} />;
+    else if (step.detail) { push(<AgentNote key={step.id} step={step} />); holds.push(step.id); }
     place(step);
   }
   // While the run is live, the work since the last message belongs to the live status line
@@ -997,7 +1129,6 @@ function RunViewView({ run, header, inline, isLast, onHeightChange }: { run: Age
       {blocks}
       {entries.length || answer || after.length ? (
         <div className="agent-turn">
-          <AgentHead />
           <Trace entries={entries} steps={traceSteps} holds={holds} foldable={foldable} run={run} isLast={isLast} />
           {answer}
           {after}
@@ -1010,22 +1141,18 @@ function RunViewView({ run, header, inline, isLast, onHeightChange }: { run: Age
 
 const RunView = memo(RunViewView);
 
-/** The single live status line. Opens (like Claude desktop's thinking row) to show what the agent is doing right now. */
+/** The single live status line opens to show what the agent is doing right now. */
 export function WorkingIndicator({ label, paused, peak, meta, live, agentId = "muse", agentName = "Muse", closing = false }: { label: string; paused?: boolean; peak?: boolean; meta?: string; live?: AgentStep[]; agentId?: AgentId; agentName?: string; closing?: boolean }) {
   const thinkingOrb = useAppStore((state) => state.thinkingOrb ?? "auto");
   const [open, setOpen] = useState(false);
   const thought = live?.find((step) => step.kind === "reasoning" && step.status === "running");
   // A compaction is a seam in the trace above, never a step in the live list.
   const actions = live?.filter((step) => step !== thought && step.kind !== "compaction") ?? [];
-  // The newest running step names the current action; its icon keeps the status
-  // line in the same visual language as the step rows it opens onto.
-  const current = live ? [...live].reverse().find((step) => step.status === "running" && step.kind !== "reminder") : undefined;
   return (
     <div className={`working-wrap${closing ? " closing" : ""}`} aria-live="polite">
       <button type="button" className={`working ${peak ? "peak" : ""}`} aria-expanded={live ? open : undefined} disabled={!live} onClick={() => setOpen(!open)}>
         {agentId === "muse" || agentId === "harness" ? <Orb state={paused ? "breathing" : thinkingOrb !== "auto" ? thinkingOrb : peak ? "solving" : "working"} size={20} speed={peak && !paused ? 1.9 : 1} paused={paused} aria-label={agentName} /> : <span className={`working-agent ${paused ? "paused" : ""}`} aria-label={agentName}><ProductAgentMark id={agentId} size={20} /><i aria-hidden="true" /></span>}
-        {live ? <span className={`working-node${paused ? " paused" : ""}`} aria-hidden="true"><StepIcon kind={current?.kind ?? "reasoning"} /></span> : null}
-        <span className={`working-label ${paused ? "" : "shimmer"}`} title={label}>{label}</span>
+        <span className="working-label" title={label}>{label}</span>
         {meta ? <span className="working-meta">{meta}</span> : null}
         {live ? <ChevronRight size={12} className={`caret ${open ? "open" : ""}`} aria-hidden="true" /> : null}
       </button>
@@ -1046,7 +1173,7 @@ export function WorkingIndicator({ label, paused, peak, meta, live, agentId = "m
   );
 }
 
-export function AgentTimeline({ thread, scrollContainerRef, planPinned = false, onPlanPin }: { thread: Thread; scrollContainerRef?: React.RefObject<HTMLDivElement | null>; planPinned?: boolean; onPlanPin?: (pinned: boolean) => void }) {
+export function AgentTimeline({ thread, scrollContainerRef, planFloating = false }: { thread: Thread; scrollContainerRef?: React.RefObject<HTMLDivElement | null>; planFloating?: boolean }) {
   // Last render's runs, so a stream frame hands every settled run back as the same
   // object and only the run being written re-renders (see `stabilizeRuns`).
   const previousRuns = useRef<AgentRun[]>([]);
@@ -1112,9 +1239,8 @@ export function AgentTimeline({ thread, scrollContainerRef, planPinned = false, 
     }
   }, [runs]);
 
-  const executing = thread.status === "running" && Boolean(thread.plan?.some((item) => item.status === "pending" || item.status === "inProgress"));
-  const plan = thread.plan?.length && !planPinned ? (
-    <PlanView items={thread.plan} pinnable={executing && Boolean(onPlanPin)} pinned={false} onPin={onPlanPin} live={thread.status === "running"} />
+  const plan = thread.plan?.length && !planFloating ? (
+    <PlanView items={thread.plan} live={thread.status === "running"} />
   ) : null;
   const anchor = plan && thread.planAnchor ? thread.planAnchor : undefined;
   const anchorRun = anchor ? runs.findIndex((run) => run.steps.some((step) => step.id === anchor)) : -1;
@@ -1154,6 +1280,7 @@ export function AgentTimeline({ thread, scrollContainerRef, planPinned = false, 
     return index >= virtualWindow.startIndex && index <= virtualWindow.endIndex;
   };
 
+  const liveTokenSpeed = thread.status === "running" && !thread.pendingApproval && !thread.userInputs?.length && !thread.cancelRequested ? thread.tokenSpeed : undefined;
   return (
     <div className="timeline">
       {runs.map((run, index) => {
@@ -1166,6 +1293,7 @@ export function AgentTimeline({ thread, scrollContainerRef, planPinned = false, 
             key={run.id}
             run={run}
             isLast={index === runs.length - 1}
+            tokenSpeed={index === runs.length - 1 ? liveTokenSpeed : undefined}
             header={index === runs.length - 1 ? header : undefined}
             inline={anchor && index === anchorRun ? { after: anchor, node: plan } : undefined}
             onHeightChange={onHeightChange}

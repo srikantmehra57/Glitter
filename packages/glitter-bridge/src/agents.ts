@@ -1,10 +1,7 @@
-import { execFile } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 import { detectMuse } from "./detect.js";
-import { confinedCwd, filterChildEnv } from "./isolation.js";
-import { cachedProbe, rememberProbe } from "./probe-cache.js";
 
 /**
  * Coding-agent CLIs this app can drive. Muse speaks MSP through its SDK; the rest
@@ -99,37 +96,6 @@ export function checkAgentBin(raw: string): string | null {
   }
 }
 
-/** The version a `--version` banner reports: its first semver-looking token, else its first line. */
-function versionFromOutput(output: string): string | null {
-  const line = output.split("\n").map((text) => text.trim()).find(Boolean);
-  return line?.match(/\d+\.\d+(\.\d+)?/)?.[0] ?? line ?? null;
-}
-
-/**
- * `--version` for a third-party agent, remembered per binary and run
- * asynchronously. The old synchronous probe blocked the bridge's whole event
- * loop — every stream, every response — for as long as each CLI took to start,
- * one after another, on every detection.
- */
-function versionOf(bin: string): Promise<string | null> {
-  const known = cachedProbe(bin);
-  if (known !== undefined) return Promise.resolve(known);
-  return new Promise((resolve) => {
-    const finish = (output: string) => {
-      const version = versionFromOutput(output);
-      rememberProbe(bin, version);
-      resolve(version);
-    };
-    try {
-      execFile(bin, ["--version"], { encoding: "utf8", timeout: 6000, cwd: confinedCwd(), env: filterChildEnv(process.env) }, (_error, stdout, stderr) => {
-        finish(`${stdout ?? ""}${stderr ?? ""}`);
-      });
-    } catch {
-      finish("");
-    }
-  });
-}
-
 export type AgentInfo = {
   id: AgentId;
   name: string;
@@ -144,15 +110,13 @@ export type AgentInfo = {
 };
 
 export async function detectAgents(museBin?: string | null, museApiKey?: string | null, museAuthMode?: string | null, harnessProviders: string[] = []): Promise<AgentInfo[]> {
-  // Start every probe before awaiting any of them. They are child processes,
-  // so a cold binary that takes seconds to page in overlaps the others
-  // instead of queueing behind them: detection costs the slowest probe,
-  // not the sum of all of them.
-  const found = new Map<AgentId, { path: string; version: Promise<string | null> }>();
+  // ACP detection is metadata-only: authorized native code probes versions after
+  // the identity check, never an unapproved binary found during a Settings scan.
+  const found = new Map<AgentId, string>();
   for (const spec of AGENTS) {
     if (spec.id === "muse") continue;
     const path = resolveAgentBin(spec);
-    if (path) found.set(spec.id, { path, version: versionOf(path) });
+    if (path) found.set(spec.id, path);
   }
   const muse = detectMuse(museBin, museApiKey, museAuthMode);
   // The built-in agent ships with the app; it is ready once a provider is configured.
@@ -162,7 +126,7 @@ export async function detectAgents(museBin?: string | null, museApiKey?: string 
       const detection = await muse;
       return { id: spec.id, name: spec.name, protocol: spec.protocol, found: detection.found, path: detection.path, version: detection.version?.match(/\d+\.\d+(\.\d+)?/)?.[0] ?? detection.version, verified: true, signIn: spec.signIn, authenticated: detection.authenticated };
     }
-    const hit = found.get(spec.id);
-    return { id: spec.id, name: spec.name, protocol: spec.protocol, found: Boolean(hit), path: hit?.path ?? null, version: hit ? await hit.version : null, verified: spec.verified, signIn: spec.signIn };
+    const path = found.get(spec.id);
+    return { id: spec.id, name: spec.name, protocol: spec.protocol, found: Boolean(path), path: path ?? null, version: null, verified: spec.verified, signIn: spec.signIn };
   }))];
 }

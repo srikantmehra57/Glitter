@@ -62,6 +62,20 @@ describe("EffortPicker", () => {
     expect(row(/^Extra high/)).toHaveAttribute("aria-selected", "true");
   });
 
+  it("lists Low, High, and Max for Kimi K3.1 Pro and tags Max as the default", () => {
+    seed({
+      modelsAgentId: "harness",
+      agents: [{ id: "harness", name: "Harness", protocol: "native", found: true, path: null, version: null, verified: true, signIn: "", authenticated: true }],
+      models: [{ modelId: "custom-1/moonshotai/kimi-k3.1-pro", providerId: "custom-1", displayLabel: "MoonshotAI: Kimi K3.1 Pro", description: "ZenMux", reasoningEfforts: ["low", "high", "max"], defaultReasoningEffort: "max", effortSource: "host", isDefault: true, isActive: true }],
+      threads: [thread({ agentId: "harness", config: { agentId: "harness", modelId: "custom-1/moonshotai/kimi-k3.1-pro", providerId: "custom-1", effort: "max", approvalMode: "guarded" } })],
+    });
+    render(<Composer />);
+    fireEvent.click(chip());
+    expect(screen.getAllByRole("option").map((option) => option.querySelector(".option-copy > span")?.firstChild?.textContent)).toEqual(["Low", "High", "Max"]);
+    expect(row(/^Max/)).toHaveTextContent("Default");
+    expect(row(/^High/)).not.toHaveTextContent("Default");
+  });
+
   it("tags the model default and does not describe each level", () => {
     render(<EffortPicker value="low" tiers={["low", "medium", "high"]} fallback="medium" disabled={false} onChange={vi.fn()} />);
     fireEvent.click(chip());

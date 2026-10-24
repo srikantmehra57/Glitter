@@ -49,9 +49,14 @@ export class DiagnosticRedactor {
 
   remember(values: Record<string, string | undefined | null>) {
     for (const [key, value] of Object.entries(values)) {
-      if (sensitiveField(key) && value && value.length >= 4 && value.length <= DIAGNOSTIC_LIMIT && this.secrets.size < 256) {
-        this.secrets.add(value);
-      }
+      if (sensitiveField(key)) this.rememberValues([value]);
+    }
+  }
+
+  /** Secrets whose config keys do not prove sensitivity, such as MCP env values. */
+  rememberValues(values: Iterable<string | undefined | null>) {
+    for (const value of values) {
+      if (value && value.length >= 4 && value.length <= DIAGNOSTIC_LIMIT && this.secrets.size < 256) this.secrets.add(value);
     }
   }
 

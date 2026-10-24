@@ -40,16 +40,18 @@ files (see the README's known limitations).
 | Domain types, default settings | `apps/desktop/src/lib/types.ts` |
 | Pure logic (formatting, parsing, diffing, effort tiers) | `apps/desktop/src/lib/*.ts` |
 | A command shared by slash, the palette and shortcuts | `apps/desktop/src/lib/commands.ts` (`runBuiltinCommand`, `openPicker`), names in `lib/composerText.ts` |
-| Theme, accent, sidebar tint and translucency | `lib/theme.ts` (`resolveTheme`), `applyTheme` in `store.ts`, the token blocks in `styles.css`, native `set_window_appearance` in `lib.rs` and the window in `tauri.conf.json` |
+| Thread-menu support actions | `apps/desktop/src/lib/threadActions.ts`, `lib/store.ts` (unread and trajectory state), `UsageView.tsx`, native `support_paths` / `open_config_file` in `lib.rs` |
+| Theme, typography and display preferences | `lib/fonts.ts` (installed faces), `lib/theme.ts` (`resolveTheme`), `applyTheme` in `store.ts`, `lib/zoom.ts` (native scaling), `lib/presence.ts` (`motionReduced`), the token blocks in `styles.css`, native `set_window_appearance` in `lib.rs` and the window in `tauri.conf.json` |
 | A keyboard shortcut | an entry in `lib/shortcuts.ts` and its action in `runShortcut` (`App.tsx`); add a native menu item in `lib.rs` only if it needs one |
 | Browser-preview mock data | `apps/desktop/src/lib/mock.ts` + `mockBridge` in `bridge.ts` |
 | A native command, git, files, dialogs, grants, logging | `apps/desktop/src-tauri/src/lib.rs` |
 | Per-turn file snapshots, retention, Undo and Reapply | `apps/desktop/src-tauri/src/snapshots.rs` |
 | Per-thread worktrees and their derived grants | `apps/desktop/src-tauri/src/worktrees.rs`, `git_worktree_*` in `lib.rs`, `threadScope` / `activeWorkspace` in `store.ts` |
-| The Files tab and read-only viewer | `FilesPanel.tsx`, `lib/fileTree.ts`, native `read_workspace_file` in `lib.rs` |
+| The Files view and read-only viewer | `FilesPanel.tsx`, `lib/fileTree.ts`, native `read_workspace_file` in `lib.rs` |
 | Branches, push and pull requests | `BranchMenu.tsx`, `ReviewDock.tsx`, native `git_branches` / `git_switch` / `git_push` / `git_pull_request` in `lib.rs` |
 | Diff line comments | `lib/lineComments.ts`, `DiffLines.tsx`, `sendLineComments` in `store.ts` |
 | The terminal pane | `TerminalPane.tsx`, native `terminal.rs` and `terminal_*` commands in `lib.rs` |
+| Shared browser control | `BrowserPane.tsx`, `lib/browser.ts`, `browser-types.ts` and `browser.ts` in the bridge, the Harness `browser` extension, `browserOpen` / `browserControl` / `browserClose` in `index.ts`, `dto.rs` and `BRIDGE_METHODS` |
 | Review scopes and their grant-scoped reads | `ReviewDock.tsx`, `lib/diff.ts`, native `git_review` in `lib.rs` (+ `snapshots.rs` for Last turn) |
 | Validation for a bridge method | `apps/desktop/src-tauri/src/dto.rs` + `BRIDGE_METHODS` in `lib.rs` |
 | Executable or agent binary trust | `apps/desktop/src-tauri/src/exec.rs` |
@@ -59,7 +61,7 @@ files (see the README's known limitations).
 | Muse protocol behavior | `packages/glitter-bridge/src/host.ts` |
 | Third-party (ACP) agents | `packages/glitter-bridge/src/acp.ts`, registry in `agents.ts` |
 | The built-in harness agent | `packages/glitter-bridge/src/harness/` (providers, wire, tools, registry, store, host) |
-| Harness permissions: read-only commands, risky and blocked commands, thread grants, the Autonomous mode | `packages/glitter-bridge/src/harness/permission/` (`classify.ts`, `danger.ts`, `grants.ts`, `policy.ts`, `guards.ts`, over the `shell.ts` reader) |
+| Permissions: Ask, Auto and Full access, the same for every agent | `apps/desktop/src/lib/types.ts` (`APPROVAL_ORDER`) and `packages/glitter-bridge/src/harness/permission/` (`classify.ts`, `danger.ts`, `grants.ts`, `policy.ts`, `guards.ts`). Muse is told the CLI mode it accepts (`museCliMode` in `host.ts`); an ACP request is answered by `acpPermissionDecision` |
 | Harness skills: discovery, the catalog in the prompt, the `skill` tool, `/name` | `packages/glitter-bridge/src/harness/skills.ts`; the app side is `supportsSkills` in `store.ts` and `ExtensionsView.tsx` |
 | Harness MCP: config, transports, all-or-nothing sync, deferred tools, adding and removing servers | `packages/glitter-bridge/src/harness/mcp.ts` (`readMcpConfig`, `addMcpServer`, `removeMcpServer`); `mcpConfig`, `addMcpServer`, `removeMcpServer` in `harness/host.ts`; the app side is `harnessMcpConfig` and `addHarnessMcpServer` / `removeHarnessMcpServer` in `store.ts`, `lib/mcpConfig.ts` for parsing what the form collects, and the agent-aware MCP section in `ExtensionsView.tsx` |
 | The bundled extension store: curated skills, MCP servers and skill bundles, installed in one click with no CLI or network | `apps/desktop/src-tauri/src/catalog.rs` (the catalog, its writer and ownership markers) with `catalog_list` / `catalog_install` / `catalog_remove` in `lib.rs`, the skill text in `apps/desktop/src-tauri/catalog/skills/`, and the app side is `catalogEntries` + `installCatalogEntry` / `removeCatalogEntry` in `store.ts` and `ExtensionsStore.tsx` |

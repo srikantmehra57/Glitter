@@ -1,4 +1,5 @@
-import { DEFAULT_SETTINGS, type AccentColor, type DarkIntensity, type Settings, type ThemeMode } from "./types";
+import { uiFontStack } from "./fonts";
+import { DEFAULT_SETTINGS, type AccentColor, type DarkIntensity, type Settings, type SidebarDensity, type ThemeMode } from "./types";
 
 /**
  * The theme engine: appearance settings in, what the document root should carry
@@ -7,7 +8,7 @@ import { DEFAULT_SETTINGS, type AccentColor, type DarkIntensity, type Settings, 
  */
 
 /** The appearance settings the engine reads. */
-export type ThemeSettings = Pick<Settings, "theme" | "darkIntensity" | "accentColor" | "accentSidebar" | "sidebarTranslucency">;
+export type ThemeSettings = Pick<Settings, "theme" | "darkIntensity" | "accentColor" | "accentSidebar" | "sidebarTranslucency" | "sidebarDensity" | "reduceMotion" | "uiFont">;
 
 /** What the engine cannot know from settings alone. */
 export type ThemeEnvironment = {
@@ -21,9 +22,9 @@ export type ThemeEnvironment = {
 
 export type ResolvedTheme = {
   /** `data-*` attributes for the document root. The token blocks in styles.css select on them. */
-  attributes: { theme: "light" | "dark"; dark: DarkIntensity; accent: AccentColor; sidebarAccent: "true" | "false"; translucent: "true" | "false" };
+  attributes: { theme: "light" | "dark"; dark: DarkIntensity; accent: AccentColor; sidebarAccent: "true" | "false"; translucent: "true" | "false"; sidebarDensity: SidebarDensity; motion: "system" | "reduce" };
   /** Custom properties for the document root. */
-  properties: { "--shell-opacity": string };
+  properties: { "--shell-opacity": string; "--font-sans": string };
   /** The appearance the native window takes, so its material matches the interface. */
   windowAppearance: ThemeMode;
 };
@@ -56,8 +57,10 @@ export function resolveTheme(settings: ThemeSettings, environment: ThemeEnvironm
       accent: settings.accentColor,
       sidebarAccent: settings.accentSidebar ? "true" : "false",
       translucent: opacity < 100 ? "true" : "false",
+      sidebarDensity: settings.sidebarDensity ?? "standard",
+      motion: settings.reduceMotion === true ? "reduce" : "system",
     },
-    properties: { "--shell-opacity": String(opacity / 100) },
+    properties: { "--shell-opacity": String(opacity / 100), "--font-sans": uiFontStack(settings.uiFont) },
     windowAppearance: settings.theme,
   };
 }

@@ -60,16 +60,32 @@ fn keep_env_key(key: &str) -> bool {
     BASE_ENV.contains(&key) || PROVIDER_KEYS.contains(&key) || PROVIDER_PREFIXES.iter().any(|prefix| key.starts_with(prefix))
 }
 
-/// Clear inherited secrets, then keep PATH/HOME and known provider keys.
-pub fn apply_minimal_env(cmd: &mut Command) {
+/// Version probes run before an agent needs any account credential.
+const PROBE_ENV: &[&str] = &["PATH", "HOME", "USER", "LOGNAME", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE", "LANGUAGE"];
+
+fn keep_probe_env_key(key: &str) -> bool {
+    PROBE_ENV.contains(&key)
+}
+
+fn apply_env(cmd: &mut Command, keep: fn(&str) -> bool) {
     cmd.env_clear();
     let mut kept = HashSet::new();
     for (key, value) in std::env::vars() {
-        if keep_env_key(&key) && kept.insert(key.clone()) {
+        if keep(&key) && kept.insert(key.clone()) {
             cmd.env(key, value);
         }
     }
     cmd.env("NODE_NO_WARNINGS", "1");
+}
+
+/// Clear inherited secrets, then keep PATH/HOME and known provider keys.
+pub fn apply_minimal_env(cmd: &mut Command) {
+    apply_env(cmd, keep_env_key);
+}
+
+/// Metadata probes never receive provider credentials or agent configuration.
+pub fn apply_probe_env(cmd: &mut Command) {
+    apply_env(cmd, keep_probe_env_key);
 }
 
 pub fn isolate_command(cmd: &mut Command) {
@@ -83,6 +99,18 @@ pub fn isolate_command(cmd: &mut Command) {
 /// (spawned with `process_group(0)`), as the bridge and `run_cli` children are.
 pub fn kill_tree(pid: u32) {
     signal_group(pid, "-TERM");
+}
+
+/// Stop immediately, including descendants that ignored the earlier TERM.
+pub fn kill_tree_now(pid: u32) {
+    signal_group(pid, "-KILL");
+}
+
+/// Give the group a bounded chance to exit, then escalate even if its leader is gone.
+pub fn kill_tree_with_grace(pid: u32, grace: Duration) {
+    kill_tree(pid);
+    std::thread::sleep(grace);
+    kill_tree_now(pid);
 }
 
 fn signal_group(pid: u32, signal: &str) {
@@ -128,5 +156,14 @@ mod tests {
         assert!(keep_env_key("HOME"));
         assert!(keep_env_key("XAI_API_KEY"));
         assert!(keep_env_key("OPENCODE_TOKEN"));
+    }
+
+    #[test]
+    fn version_probe_env_drops_provider_credentials() {
+        assert!(keep_probe_env_key("PATH"));
+        assert!(keep_probe_env_key("HOME"));
+        for key in ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENCODE_TOKEN", "GOOGLE_API_KEY", "XAI_API_KEY", "MUSE_API_KEY", "SSH_AUTH_SOCK", "NODE_OPTIONS"] {
+            assert!(!keep_probe_env_key(key), "probe kept {key}");
+        }
     }
 }

@@ -158,6 +158,7 @@ const TOOL_LABELS: Record<string, string> = {
   bash: "Terminal",
   web_search: "Web search",
   web_fetch: "Web lookup",
+  browser: "Browser",
 };
 
 export function humanizeToolName(tool?: string, kind?: string): string {

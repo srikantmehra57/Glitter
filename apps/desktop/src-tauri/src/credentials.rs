@@ -276,7 +276,7 @@ pub struct ProviderStatus {
     pub wire: Option<String>,
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(not(test))]
 fn provider_keys_entry() -> Result<keyring::Entry, String> {
     keyring::Entry::new(SERVICE, "provider-keys").map_err(|_| "Could not access the system credential store".into())
 }
@@ -284,19 +284,34 @@ fn provider_keys_entry() -> Result<keyring::Entry, String> {
 /// The keychain entry is read once and cached: every harness request injects
 /// the keys, and a keyring round trip each time would cost the UI.
 static PROVIDER_KEYS: Mutex<Option<std::collections::BTreeMap<String, ProviderCredential>>> = Mutex::new(None);
+#[cfg(test)]
+static TEST_PROVIDER_STORE: Mutex<Option<std::collections::BTreeMap<String, ProviderCredential>>> = Mutex::new(None);
+#[cfg(test)]
+static PROVIDER_UPDATE_DELAY: Mutex<Option<std::time::Duration>> = Mutex::new(None);
 
 /// Reads the raw map. `CREDENTIAL_LOCK` must already be held.
-#[cfg(target_os = "macos")]
 fn provider_keys_read_locked() -> Result<std::collections::BTreeMap<String, ProviderCredential>, String> {
-    match provider_keys_entry()?.get_password() {
-        Ok(raw) => Ok(serde_json::from_str::<std::collections::BTreeMap<String, ProviderCredential>>(&raw).unwrap_or_default()),
-        Err(keyring::Error::NoEntry) => Ok(Default::default()),
-        Err(_) => Err("Could not read provider keys from the system credential store. Unlock it and try again.".into()),
+    #[cfg(test)]
+    {
+        return Ok(TEST_PROVIDER_STORE.lock().map_err(|_| "Credential store lock failed")?.clone().unwrap_or_default());
+    }
+    #[cfg(not(test))]
+    {
+        match provider_keys_entry()?.get_password() {
+            Ok(raw) => Ok(serde_json::from_str::<std::collections::BTreeMap<String, ProviderCredential>>(&raw).unwrap_or_default()),
+            Err(keyring::Error::NoEntry) => Ok(Default::default()),
+            Err(_) => Err("Could not read provider keys from the system credential store. Unlock it and try again.".into()),
+        }
     }
 }
 
 /// Writes the raw map and refreshes the cache. `CREDENTIAL_LOCK` must already be held.
 fn provider_keys_write_locked(keys: &std::collections::BTreeMap<String, ProviderCredential>) -> Result<(), String> {
+    #[cfg(test)]
+    {
+        *TEST_PROVIDER_STORE.lock().map_err(|_| "Credential store lock failed")? = Some(keys.clone());
+    }
+    #[cfg(not(test))]
     #[cfg(target_os = "macos")]
     {
         let entry = provider_keys_entry()?;
@@ -341,11 +356,10 @@ fn retain_known_and_migrate(keys: &mut std::collections::BTreeMap<String, Provid
     migrate_legacy_custom(keys)
 }
 
-pub fn provider_keys_value() -> Result<std::collections::BTreeMap<String, ProviderCredential>, String> {
+fn provider_keys_value_locked() -> Result<std::collections::BTreeMap<String, ProviderCredential>, String> {
     if let Some(known) = PROVIDER_KEYS.lock().ok().and_then(|cached| cached.clone()) {
         return Ok(known);
     }
-    let _guard = CREDENTIAL_LOCK.lock().map_err(|_| "Credential store lock failed")?;
     #[cfg(target_os = "macos")]
     let keys = {
         let mut keys = provider_keys_read_locked()?;
@@ -364,9 +378,12 @@ pub fn provider_keys_value() -> Result<std::collections::BTreeMap<String, Provid
     Ok(keys)
 }
 
-fn provider_keys_store(keys: &std::collections::BTreeMap<String, ProviderCredential>) -> Result<(), String> {
+pub fn provider_keys_value() -> Result<std::collections::BTreeMap<String, ProviderCredential>, String> {
+    if let Some(known) = PROVIDER_KEYS.lock().ok().and_then(|cached| cached.clone()) {
+        return Ok(known);
+    }
     let _guard = CREDENTIAL_LOCK.lock().map_err(|_| "Credential store lock failed")?;
-    provider_keys_write_locked(keys)
+    provider_keys_value_locked()
 }
 
 /// An address a key may be sent to: https anywhere, or plain http only to this
@@ -508,9 +525,14 @@ pub async fn provider_keys_get() -> Result<Vec<ProviderStatus>, String> {
 #[tauri::command]
 pub async fn provider_key_set(provider: String, key: Option<String>, base_url: Option<String>, name: Option<String>, wire: Option<String>, clear: Option<bool>) -> Result<Vec<ProviderStatus>, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let mut keys = provider_keys_value()?;
+        let _guard = CREDENTIAL_LOCK.lock().map_err(|_| "Credential store lock failed")?;
+        let mut keys = provider_keys_value_locked()?;
+        #[cfg(test)]
+        if PROVIDER_UPDATE_DELAY.lock().map_err(|_| "Credential store lock failed")?.is_some() {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
         apply_provider_change(&mut keys, &provider, key, base_url, name, wire, clear == Some(true))?;
-        provider_keys_store(&keys)?;
+        provider_keys_write_locked(&keys)?;
         Ok(provider_status(&keys))
     })
     .await
@@ -675,6 +697,42 @@ mod tests {
         apply_provider_change(&mut keys, "custom-1", None, None, None, None, true).expect("clear");
         assert!(!keys.contains_key("custom-1") && keys.contains_key("custom-2"));
         assert_eq!(keys.get("custom-2").and_then(|row| row.base_url.clone()).as_deref(), Some("https://moved.example/v1"), "a clear targets one endpoint only");
+    }
+
+    fn reset_provider_test_store() {
+        *PROVIDER_KEYS.lock().unwrap() = None;
+        *TEST_PROVIDER_STORE.lock().unwrap() = None;
+        *PROVIDER_UPDATE_DELAY.lock().unwrap() = None;
+    }
+
+    #[tokio::test]
+    async fn concurrent_provider_updates_do_not_lose_keys() {
+        reset_provider_test_store();
+        *PROVIDER_UPDATE_DELAY.lock().unwrap() = Some(std::time::Duration::from_millis(50));
+        let first = tokio::spawn(provider_key_set("anthropic".into(), Some("sk-ant".into()), None, None, None, None));
+        let second = tokio::spawn(provider_key_set("openai".into(), Some("sk-openai".into()), None, None, None, None));
+        let (first, second) = tokio::join!(first, second);
+        first.unwrap().unwrap();
+        second.unwrap().unwrap();
+        let keys = provider_keys_value().unwrap();
+        assert_eq!(keys.get("anthropic").and_then(|row| row.key.as_deref()), Some("sk-ant"));
+        assert_eq!(keys.get("openai").and_then(|row| row.key.as_deref()), Some("sk-openai"));
+        reset_provider_test_store();
+    }
+
+    #[tokio::test]
+    async fn concurrent_custom_creations_mint_distinct_ids() {
+        reset_provider_test_store();
+        *PROVIDER_UPDATE_DELAY.lock().unwrap() = Some(std::time::Duration::from_millis(50));
+        let first = tokio::spawn(provider_key_set("custom".into(), None, Some("https://one.example/v1".into()), Some("One".into()), Some("openai".into()), None));
+        let second = tokio::spawn(provider_key_set("custom".into(), None, Some("https://two.example/v1".into()), Some("Two".into()), Some("anthropic".into()), None));
+        let (first, second) = tokio::join!(first, second);
+        first.unwrap().unwrap();
+        second.unwrap().unwrap();
+        let keys = provider_keys_value().unwrap();
+        assert!(keys.contains_key("custom-1"));
+        assert!(keys.contains_key("custom-2"));
+        reset_provider_test_store();
     }
 
     #[test]

@@ -101,6 +101,28 @@ describe("UsageView", () => {
     expect(within(rows[1]).getByText("1.4K in · 80 out")).toHaveAttribute("title", "1,400 input, 900 of it cached · 80 output tokens");
   });
 
+  it("filters trajectory calls to one thread and returns to all threads", () => {
+    const now = Date.now();
+    const call = { at: now - 60_000, providerId: "anthropic", modelId: "anthropic/claude-sonnet-5", inputTokens: 100, cachedTokens: 0, outputTokens: 20, stopReason: "end_turn", durationMs: 1_000, toolCalls: 0 };
+    seed({
+      trajectoryThreadId: "s1",
+      threads: [{ sessionId: "s1", workspacePath: "/repo", title: "Fix the composer", updatedAt: new Date(now).toISOString(), status: "idle", unread: false, items: [] }],
+      usageLedger: { version: 1, days: [], turns: [
+        turn({ key: "s1:t1", threadId: "s1", calls: [call] }),
+        turn({ key: "s2:t2", threadId: "s2", providerId: "openai", modelId: "openai/gpt-5.5", calls: [{ ...call, providerId: "openai", modelId: "openai/gpt-5.5" }] }),
+      ] },
+    });
+    render(<UsageView embedded />);
+    expect(screen.getByText("Fix the composer")).toBeInTheDocument();
+    const card = screen.getByRole("region", { name: "Trajectory" });
+    expect(card.querySelectorAll(".usage-call-turns > li")).toHaveLength(1);
+    expect(within(card).getAllByText("claude-sonnet-5")).not.toHaveLength(0);
+    expect(within(card).queryByText("gpt-5.5")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "View all threads" }));
+    expect(useAppStore.getState().trajectoryThreadId).toBeNull();
+    expect(screen.getByRole("region", { name: "Trajectory" }).querySelectorAll(".usage-call-turns > li")).toHaveLength(2);
+  });
+
   it("says what the trajectory needs when no turn carries calls", () => {
     seed();
     render(<UsageView embedded />);
@@ -295,6 +317,30 @@ describe("UsageView", () => {
       await vi.waitFor(() => expect(lead()).toBe("≈10K"));
       expect(within(summary).getByText("0 m")).toBeInTheDocument();
       expect(within(summary).getAllByText("1 day")).toHaveLength(2);
+    } finally {
+      raf.mockRestore();
+      now.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("finishes an active count immediately when Reduce motion is enabled", async () => {
+    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: false }));
+    let at = 0;
+    const now = vi.spyOn(performance, "now").mockImplementation(() => at);
+    const raf = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback: FrameRequestCallback) => {
+      at += 100;
+      const stamp = at;
+      return window.setTimeout(() => callback(stamp), 0) as unknown as number;
+    });
+    try {
+      seed();
+      render(<UsageView embedded />);
+      const summary = screen.getByRole("region", { name: "Usage summary" });
+      const lead = () => summary.querySelector(".lead strong")?.textContent;
+      expect(lead()).toBe("≈0");
+      act(() => useAppStore.setState({ reduceMotion: true }));
+      await vi.waitFor(() => expect(lead()).toBe("≈10K"));
     } finally {
       raf.mockRestore();
       now.mockRestore();

@@ -17,6 +17,8 @@ import { observeNotifications, UserInputRelay } from "./user-input.js";
 import { factsFromSession, isSessionFactNotification } from "./session-facts.js";
 import { annotateEfforts, TIER_ORDER, vocabularyTiers } from "./efforts.js";
 import { approvalAlive, approvalExpiry, approvalExpiryMono, APPROVAL_TTL_MS, describeIsolation, confinedCwd, wrapSandboxedCommand, type IsolationReport } from "./isolation.js";
+import { isReadOnly } from "./harness/permission/classify.js";
+import { assessCommand } from "./harness/permission/danger.js";
 
 type ApprovalWaiter = {
   resolve: (choiceId: string) => void;
@@ -233,6 +235,56 @@ export function compatFrom(spawned: {
   };
 }
 
+/**
+ * The mode Muse's CLI will accept. Ask and Auto both make the CLI surface
+ * approvals; the app then decides which of those run. Full access and Read
+ * only pass through.
+ */
+export function museCliMode(mode: ApprovalMode | undefined): Exclude<ApprovalMode, "guarded"> {
+  if (mode === "allowAll" || mode === "denyUnmatched") return mode;
+  return "promptUnmatched";
+}
+
+type ApprovalOffer = { choiceId?: unknown; decision?: unknown };
+
+function offeredChoice(offered: readonly ApprovalOffer[], allow: boolean): string | null {
+  const decision = allow ? "approved" : "denied";
+  const byDecision = offered.find((choice) => String(choice.decision ?? "") === decision && choice.choiceId);
+  if (byDecision?.choiceId) return String(byDecision.choiceId);
+  const pattern = allow ? /allow|approve|accept|yes/i : /deny|reject|decline|block|cancel/i;
+  const byId = offered.find((choice) => choice.choiceId && pattern.test(String(choice.choiceId)));
+  return byId?.choiceId ? String(byId.choiceId) : null;
+}
+
+function commandOf(rawArgs: string | undefined): string | undefined {
+  if (!rawArgs) return undefined;
+  try {
+    const parsed = JSON.parse(rawArgs) as unknown;
+    if (typeof parsed === "string") return parsed;
+    if (parsed && typeof parsed === "object") {
+      const record = parsed as Record<string, unknown>;
+      for (const key of ["command", "cmd", "commandText", "script"]) {
+        if (typeof record[key] === "string" && record[key]) return record[key] as string;
+      }
+    }
+  } catch { /* The CLI sometimes sends a non-JSON blob. */ }
+  return undefined;
+}
+
+/** A choice the app can make without a card, or null when the user should see it. */
+export function musePermissionChoice(mode: ApprovalMode, request: { toolName?: string; rawArgs?: string }, offered: readonly ApprovalOffer[]): string | null {
+  const command = commandOf(request.rawArgs);
+  const risks = command ? assessCommand(command) : [];
+  if (risks.some((risk) => risk.level === "block")) return offeredChoice(offered, false);
+  if (mode === "denyUnmatched") return offeredChoice(offered, false);
+  if (mode === "allowAll") return offeredChoice(offered, true);
+  if (risks.some((risk) => risk.level === "ask")) return null;
+  if (mode === "guarded") return offeredChoice(offered, true);
+  if (command && isReadOnly(command)) return offeredChoice(offered, true);
+  if (!command && /edit|write|patch|str_replace|create_file|apply_patch/i.test(request.toolName ?? "")) return offeredChoice(offered, true);
+  return null;
+}
+
 export class MuseHost {
   /**
    * A quiet host forwards nothing to the renderer: no session rows, facts,
@@ -248,6 +300,8 @@ export class MuseHost {
    * stops, so a later retry can start a fresh turn.
    */
   private turnKeys = new Map<string, Promise<string>>();
+  /** The app's permission mode per session. Muse is told only the mode its CLI accepts. */
+  private appModes = new Map<string, ApprovalMode>();
   /**
    * `sessionId + turnId` of submits the server queued (admitted, not
    * launched). A `turn/started` for a member emits `turnStarted` so the UI
@@ -570,6 +624,7 @@ export class MuseHost {
     const current = this.state;
     this.state = null;
     this.turnKeys.clear();
+    this.appModes.clear();
     this.openGaps.clear();
     this.lastCursors.clear();
     if (!current) return { stopped: true };
@@ -590,6 +645,15 @@ export class MuseHost {
 
     session.onApproval(async (request) => {
       if (state.stopping || this.state !== state) throw new Error("Host stopped");
+      const offered = (request.availableChoices ?? []) as ApprovalOffer[];
+      const mode = this.appModes.get(session.sessionId) ?? "onRequest";
+      const automatic = musePermissionChoice(mode, request, offered);
+      if (automatic) {
+        const sessionId = String((request as { sessionId?: string }).sessionId ?? session.sessionId);
+        const turnId = typeof (request as { turnId?: string }).turnId === "string" ? (request as { turnId: string }).turnId : null;
+        if (!this.quiet) emit("approvalAudit", { approvalId: request.approvalId, sessionId, turnId, choiceId: automatic, outcome: offeredChoice(offered, false) === automatic ? "auto-denied" : "auto-approved" });
+        return { choiceId: automatic };
+      }
       // The renderer gets the wall-clock deadline for its countdown; the
       // waiter enforces a monotonic one.
       const expiresAt = approvalExpiry();
@@ -597,16 +661,11 @@ export class MuseHost {
       emit("approval", { ...request, expiresAt });
       const sessionId = String((request as { sessionId?: string }).sessionId ?? session.sessionId);
       const turnId = typeof (request as { turnId?: string }).turnId === "string" ? (request as { turnId: string }).turnId : undefined;
-      const offered = (request.availableChoices ?? []) as Array<{ choiceId: string; decision?: unknown }>;
       // An unanswered approval must not park the SDK round trip forever: at
       // the deadline the bridge answers with the offered deny choice when one
       // exists so the host closes the stage; without one the waiter rejects
       // and the failure surfaces through `onApprovalError`.
-      const denyChoiceId = offered.find((choice) => {
-        const id = String(choice.choiceId ?? "");
-        const decision = String(choice.decision ?? "");
-        return decision === "denied" || (!decision && /deny|reject|decline|block|cancel/i.test(id));
-      })?.choiceId;
+      const denyChoiceId = offeredChoice(offered, false) ?? undefined;
       const choiceId = await new Promise<string>((resolve, reject) => {
         const choices = new Set(offered.map((choice) => String(choice.choiceId)));
         state.approvals.set(request.approvalId, { resolve, reject, choices, sessionId, turnId, expiresAt, expiresAtMono, ...(denyChoiceId ? { denyChoiceId } : {}) });
@@ -774,13 +833,13 @@ export class MuseHost {
   }) {
     const { client } = this.requireState();
     const { approvalMode } = options;
-    if (approvalMode === "guarded") throw new Error("Muse sessions do not have an Autonomous mode.");
     const session = await client.startSession({
       workspaceRoot: options.workspaceRoot,
-      approvalMode,
+      approvalMode: approvalMode ? museCliMode(approvalMode) : undefined,
       modelId: options.modelId,
       providerId: options.providerId,
     });
+    if (approvalMode) this.appModes.set(session.sessionId, approvalMode);
     this.wireSession(session);
     emit("sessionFacts", factsFromSession(session));
     const opening = session.opening;
@@ -1351,13 +1410,14 @@ export class MuseHost {
   async setApprovalMode(options: { sessionId: string; mode: ApprovalMode }) {
     const { spawned } = this.requireState();
     const { mode } = options;
-    if (mode === "guarded") throw new Error("Muse sessions do not have an Autonomous mode.");
     const commandId = spawned.connection.mintCommandId();
-    return spawned.connection.command(
+    const result = await spawned.connection.command(
       "session/setApprovalMode",
-      { commandId, sessionId: options.sessionId, mode },
+      { commandId, sessionId: options.sessionId, mode: museCliMode(mode) },
       { commandId },
-    );
+    ) as { status?: string };
+    this.appModes.set(options.sessionId, mode);
+    return { status: result.status ?? "accepted", effectiveMode: { mode } };
   }
 
   async setModel(options: { sessionId: string; modelId: string; providerId?: string }) {

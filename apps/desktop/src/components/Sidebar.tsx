@@ -1,10 +1,11 @@
 import { memo, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type DragEvent, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { Archive, ChartColumn, ChevronRight, Copy, Download, ExternalLink, FileText, Folder, FolderOpen, GitBranch, GitFork, LoaderCircle, LogOut, MoreHorizontal, PanelLeft, Pencil, Pin, PinOff, Plus, RotateCcw, ScanSearch, Search, Settings, ShieldCheck, SquarePen, Trash2, X } from "lucide-react";
+import { Archive, Bug, ChartColumn, ChevronRight, ChevronsUpDown, Copy, Download, ExternalLink, FileText, Folder, FolderOpen, GitBranch, GitFork, Keyboard, LoaderCircle, LogOut, Mail, MailOpen, MoreHorizontal, Palette, PanelLeft, Pencil, Pin, PinOff, Plus, RotateCcw, ScanSearch, Search, Settings, ShieldCheck, SquarePen, Trash2, X } from "lucide-react";
 import { formatResetIn, formatTokens, isMacPlatform, needsAttention, relativeTime, shortCliVersion, threadMatches, usageWindowLabel, windowPercent, worktreeRemovalNote } from "../lib/format";
 import { openPath } from "../lib/bridge";
 import { describeError } from "../lib/errors";
 import { exportThread, shortcutText } from "../lib/commands";
+import { copyAppLogPath, copySessionId, copyThreadLogPath, copyThreadPath, openAppConfig, openThreadFolder, reportThreadIssue } from "../lib/threadActions";
 import { activeWorkspace, currentWorkspace, readyAgents, useAppStore } from "../lib/store";
 import { threadChangeCounts } from "../lib/agent";
 import { AgentMark } from "./AgentPicker";
@@ -310,6 +311,15 @@ type ThreadActions = {
   cancelRename: () => void;
   pin: (id: string) => void;
   archive: (id: string) => void;
+  setUnread: (id: string, unread: boolean) => void;
+  openFolder: (id: string) => void;
+  copyPath: (id: string) => void;
+  copyTaskPath: (id: string) => void;
+  copyLogPath: () => void;
+  copySessionId: (id: string) => void;
+  openConfig: () => void;
+  viewTrajectory: (id: string) => void;
+  reportIssue: (id: string) => void;
   exportThread: (row: ThreadRow, redacted: boolean, format?: "json" | "markdown") => void;
   fork: (id: string) => void;
   preview: (id: string) => void;
@@ -404,14 +414,16 @@ function ThreadItemView({ row, active, menuOpen, renaming, dragging, dropTarget,
             onContextMenu={(event) => { event.preventDefault(); actions.showMenu(row.sessionId); }}
             onDoubleClick={() => actions.startRename(row.sessionId)}
           >
-            {/* The status sits in the sidebar's icon column, under the workspace's
-                folder, so every title starts on the same line as the names above it. */}
-            <span className="thread-dot"><ThreadStatus thread={row} /></span>
+            {/* The agent's mark fills the sidebar's icon column, under the
+                workspace's folder, so every title starts on the same line as
+                the names above it. The thread's state rides at the row's end,
+                in the time's slot — a running thread has no time. */}
+            <span className="thread-mark" title={agentName}><AgentMark id={row.agentId ?? "muse"} size={15} /></span>
             <span className="title"><span className="title-text">{row.title}</span></span>
             {row.pinned ? <Pin size={11} className="pin-mark" aria-label="Pinned" /> : null}
-            {row.agentId ? <span className="thread-agent" title={agentName}><AgentMark id={row.agentId} size={12} /></span> : null}
             {row.branch ? <span className="thread-branch" title={`Worktree on ${row.branch}`}><GitBranch size={10} aria-hidden="true" />{row.branch}</span> : null}
             {row.added || row.removed ? <span className="thread-changes" title="Uncommitted lines in files this thread edited">{row.added ? <span className="add">+{row.added}</span> : null}{row.removed ? <span className="del">−{row.removed}</span> : null}</span> : null}
+            <ThreadStatus thread={row} />
             <span className="time">{row.time}</span>
           </button>
           <button
@@ -435,6 +447,14 @@ function ThreadItemView({ row, active, menuOpen, renaming, dragging, dropTarget,
           <button type="button" role="menuitem" onClick={() => actions.startRename(row.sessionId)}><Pencil size={13} />Rename</button>
           <button type="button" role="menuitem" onClick={() => actions.pin(row.sessionId)}>{row.pinned ? <PinOff size={13} /> : <Pin size={13} />}{row.pinned ? "Unpin" : "Pin"}</button>
           <button type="button" role="menuitem" onClick={() => actions.archive(row.sessionId)}><Archive size={13} />Archive</button>
+          <button type="button" role="menuitem" onClick={() => actions.setUnread(row.sessionId, !row.unread)}>{row.unread ? <MailOpen size={13} /> : <Mail size={13} />}{row.unread ? "Mark as read" : "Mark as unread"}</button>
+          <div className="menu-sep" />
+          <button type="button" role="menuitem" onClick={() => actions.openFolder(row.sessionId)}><FolderOpen size={13} />Open in Finder</button>
+          <button type="button" role="menuitem" onClick={() => actions.copyPath(row.sessionId)}><Copy size={13} />Copy path</button>
+          {!preview && row.agentId === "harness" ? <button type="button" role="menuitem" onClick={() => actions.copyTaskPath(row.sessionId)}><FileText size={13} />Copy task path</button> : null}
+          {!preview ? <button type="button" role="menuitem" onClick={actions.copyLogPath}><FileText size={13} />Copy log path</button> : null}
+          <button type="button" role="menuitem" onClick={() => actions.copySessionId(row.sessionId)}><Copy size={13} />Copy session ID</button>
+          {!preview ? <button type="button" role="menuitem" onClick={actions.openConfig}><Settings size={13} />Go to config</button> : null}
           {(row.agentId ?? "muse") === "muse" && !preview ? <>
             <button type="button" role="menuitem" onClick={() => actions.fork(row.sessionId)}><GitFork size={13} />Fork thread</button>
             {/* The four export formats fold under one item instead of filling the menu. */}
@@ -451,6 +471,9 @@ function ThreadItemView({ row, active, menuOpen, renaming, dragging, dropTarget,
             )}</Collapse>
             {!row.opened ? <button type="button" role="menuitem" onClick={() => actions.preview(row.sessionId)}><ScanSearch size={13} />Preview without opening</button> : null}
           </> : null}
+          <div className="menu-sep" />
+          <button type="button" role="menuitem" onClick={() => actions.viewTrajectory(row.sessionId)}><ChartColumn size={13} />View model trajectory</button>
+          {!preview ? <button type="button" role="menuitem" onClick={() => actions.reportIssue(row.sessionId)}><Bug size={13} />Report issue</button> : null}
           <div className="menu-sep" />
           <button type="button" role="menuitem" className="danger" onClick={() => actions.remove(row)}>
             <Trash2 size={13} />Delete
@@ -618,6 +641,7 @@ export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) 
     openTrustDialog: state.openTrustDialog,
     setSidebarCollapsed: state.setSidebarCollapsed,
     setSettingsOpen: state.setSettingsOpen,
+    signOut: state.signOut,
     refreshCliUpdate: state.refreshCliUpdate,
     updateCli: state.updateCli,
     confirm: state.confirm,
@@ -631,6 +655,11 @@ export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) 
   const [wsMenu, setWsMenu] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [updateOpen, setUpdateOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const profilePop = usePresence(profileOpen, EXIT_FAST_MS);
+  const profileRef = useRef<HTMLButtonElement>(null);
+  const profileMenuRef = useRef<HTMLDivElement>(null);
+  const profileFocusEnd = useRef(false);
   const updatePop = usePresence(updateOpen, EXIT_FAST_MS);
   const wsMenuPop = usePresence(wsMenu !== null, EXIT_FAST_MS);
   // A closing workspace menu still names its workspace until it unmounts.
@@ -747,6 +776,32 @@ export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) 
     return () => { window.clearTimeout(timer); document.removeEventListener("click", close); };
   }, [updateOpen]);
 
+  const closeProfileMenu = () => {
+    setProfileOpen(false);
+    profileRef.current?.focus();
+  };
+
+  useEffect(() => {
+    if (!profileOpen) return;
+    const close = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (profileRef.current?.contains(target) || profileMenuRef.current?.contains(target)) return;
+      setProfileOpen(false);
+    };
+    document.addEventListener("click", close);
+    return () => document.removeEventListener("click", close);
+  }, [profileOpen]);
+
+  // A menu opens with a useful item focused, not with keyboard focus left on its trigger.
+  useEffect(() => {
+    if (!profileOpen) return;
+    const items = profileMenuRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]:not(:disabled)');
+    if (!items?.length) return;
+    items[profileFocusEnd.current ? items.length - 1 : 0].focus();
+  }, [profileOpen]);
+
+  useEffect(() => { if (s.sidebarCollapsed) setProfileOpen(false); }, [s.sidebarCollapsed]);
+
   // Dragging reorders within one workspace and one pin group; the dropped list
   // is handed to the store verbatim so what you see is what gets saved. The
   // lists and the dragged id live in refs so the row handlers never change.
@@ -770,6 +825,15 @@ export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) 
       cancelRename: () => setRenaming(null),
       pin: (id) => { store().pinThread(id); setMenu(null); },
       archive: (id) => { store().archiveThread(id); setMenu(null); },
+      setUnread: (id, unread) => { store().setThreadUnread(id, unread); setMenu(null); },
+      openFolder: (id) => { setMenu(null); void openThreadFolder(id); },
+      copyPath: (id) => { setMenu(null); void copyThreadPath(id); },
+      copyTaskPath: (id) => { setMenu(null); void copyThreadLogPath(id); },
+      copyLogPath: () => { setMenu(null); void copyAppLogPath(); },
+      copySessionId: (id) => { setMenu(null); void copySessionId(id); },
+      openConfig: () => { setMenu(null); void openAppConfig(); },
+      viewTrajectory: (id) => { setMenu(null); store().openThreadTrajectory(id); },
+      reportIssue: (id) => { setMenu(null); void reportThreadIssue(id); },
       exportThread: (row, redacted, format) => {
         setMenu(null);
         void exportThread(row, redacted, format);
@@ -818,13 +882,18 @@ export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) 
     : installed.length ? { tone: "warn", label: "Sign in needed", tab: "Agents" }
     : { tone: "bad", label: "No agent CLI found", tab: "Agents" };
   const statusTitle = installed.map((agent) => `${agent.name}${agent.version ? ` ${agent.version}` : ""} — ${agent.path}`).join("\n") || undefined;
+  const profileName = s.preview ? "Preview" : s.detection?.accountName || s.detection?.accountEmail || "Profile";
+  const profileDetail = s.preview ? "Demo data" : s.detection?.authenticated
+    ? s.detection.accountEmail && s.detection.accountEmail !== profileName ? s.detection.accountEmail : "Muse connected"
+    : "Preferences on this Mac";
+  const profileInitial = Array.from(profileName.trim())[0]?.toUpperCase() ?? "P";
   const newThread = () => { onOpenThreads?.(); void s.newThread(); };
   // Selecting a workspace opens its draft, so a new thread elsewhere is one click too.
   const newThreadIn = (item: Workspace) => {
     if (item.id !== s.selectedWorkspaceId) void s.selectWorkspace(item.id);
     newThread();
   };
-  const openSettings = (tab?: SettingsTab) => { s.setSettingsOpen(true, tab); };
+  const openSettings = (tab?: SettingsTab) => { setProfileOpen(false); s.setSettingsOpen(true, tab); };
   const searchShown = s.threadSearchOpen || Boolean(s.threadSearch);
   const updateAvailable = !s.preview && s.cliUpdate?.available === true && Boolean(s.cliUpdate.latest);
   const closeWorkspaceMenu = (id: string) => {
@@ -854,7 +923,7 @@ export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) 
       dropTarget={dropTarget === row.sessionId}
       reorderable={reorderable}
       preview={s.preview}
-      agentName={row.agentId ? s.agents.find((agent) => agent.id === row.agentId)?.name : undefined}
+      agentName={s.agents.find((agent) => agent.id === (row.agentId ?? "muse"))?.name}
       actions={actions}
     />
   );
@@ -1102,12 +1171,59 @@ export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) 
             )
           ) : null}
           <div className="sidebar-utilities">
-            <button type="button" className="nav-row settings-row" aria-label="Settings" onClick={() => openSettings()}>
-              <Settings size={15} />
-              <span aria-hidden="true">Settings</span>
-              <kbd aria-hidden="true">{shortcutText("settings")}</kbd>
+            <button
+              ref={profileRef}
+              type="button"
+              className="profile-trigger"
+              aria-label={`Profile menu, ${profileName}`}
+              aria-haspopup="menu"
+              aria-expanded={profileOpen}
+              aria-controls={profileOpen ? "sidebar-profile-menu" : undefined}
+              onClick={() => { profileFocusEnd.current = false; setProfileOpen((open) => !open); }}
+              onKeyDown={(event) => {
+                if (!profileOpen && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
+                  event.preventDefault();
+                  profileFocusEnd.current = event.key === "ArrowUp";
+                  setProfileOpen(true);
+                } else if (event.key === "Escape" && profileOpen) {
+                  event.preventDefault();
+                  closeProfileMenu();
+                }
+              }}
+            >
+              <span className="profile-avatar" aria-hidden="true">{profileInitial}</span>
+              <span className="profile-name">{profileName}</span>
+              <ChevronsUpDown size={13} className="profile-caret" aria-hidden="true" />
             </button>
+            {profilePop.mounted ? (
+              <div
+                ref={profileMenuRef}
+                id="sidebar-profile-menu"
+                className={`menu profile-menu${profilePop.closing ? " closing" : ""}`}
+                role="menu"
+                aria-label="Profile"
+                aria-hidden={profilePop.closing || undefined}
+                inert={profilePop.closing}
+                onClick={(event) => event.stopPropagation()}
+                onKeyDown={(event) => menuKeys(event, closeProfileMenu)}
+              >
+                <div className="profile-menu-head">
+                  <span className="profile-avatar profile-avatar-large" aria-hidden="true">{profileInitial}</span>
+                  <span className="profile-menu-copy"><strong>{profileName}</strong><span>{profileDetail}</span></span>
+                </div>
+                <div className="menu-sep" aria-hidden="true" />
+                <button type="button" role="menuitem" onClick={() => openSettings("Theme")}><Palette size={13} aria-hidden="true" />App theme</button>
+                <button type="button" role="menuitem" onClick={() => openSettings("Usage")}><ChartColumn size={13} aria-hidden="true" />Usage stats</button>
+                <button type="button" role="menuitem" onClick={() => openSettings("Shortcuts")}><Keyboard size={13} aria-hidden="true" />Commands &amp; shortcuts</button>
+                <button type="button" role="menuitem" onClick={() => openSettings()}><Settings size={13} aria-hidden="true" />Settings<span className="menu-hint">{shortcutText("settings")}</span></button>
+                {!s.preview && s.detection?.authenticated ? <>
+                  <div className="menu-sep" aria-hidden="true" />
+                  <button type="button" role="menuitem" onClick={() => { setProfileOpen(false); void s.signOut(); }}><LogOut size={13} aria-hidden="true" />Sign out of Muse</button>
+                </> : null}
+              </div>
+            ) : null}
             <SidebarUsage showToday />
+            <button type="button" className="icon-btn" aria-label="Settings" data-tooltip={`Settings  ${shortcutText("settings")}`} data-tooltip-side="top" data-tooltip-align="end" onClick={() => openSettings()}><Settings size={16} /></button>
           </div>
         </div>
       </div>

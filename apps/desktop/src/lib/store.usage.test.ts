@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetStore, seedStore } from "../test/store";
-import { bindBridgeEvents, useAppStore } from "./store";
+import { bindBridgeEvents, flushDeltasForTest, useAppStore } from "./store";
 import type { ModelCall, Thread } from "./types";
 
 const events = vi.hoisted(() => ({ handler: null as null | ((event: string, payload: unknown) => void) }));
@@ -51,7 +51,7 @@ describe("usage ledger", () => {
     seedStore({ preview: false, threads: [running()] });
     unbind = bindBridgeEvents();
   });
-  afterEach(() => { unbind(); vi.useRealTimers(); });
+  afterEach(() => { unbind(); vi.useRealTimers(); vi.restoreAllMocks(); });
 
   it("records a finished turn's reported tokens under its provider, and keeps them", () => {
     emit("sessionFacts", { sessionId: "h-session-1", usage: { promptTokens: 9_000, outputTokens: 900, totalTokens: 9_900 } });
@@ -106,6 +106,52 @@ describe("usage ledger", () => {
     const turns = useAppStore.getState().usageLedger.turns;
     expect(turns).toHaveLength(1);
     expect(turns[0]).toMatchObject({ inputTokens: 2_000, outputTokens: 400, estimated: false, at });
+  });
+
+  it("measures token speed locally and freezes it into the finished turn", () => {
+    const base = running();
+    seedStore({ threads: [{ ...base, usage: undefined, turnStartedAt: 10_000, turnStartOutput: undefined, turnStartPrompt: undefined, turnStartCache: undefined, items: [] }] });
+    const now = vi.spyOn(Date, "now").mockReturnValue(10_000);
+    emit("item", { sessionId: "h-session-1", item: { itemId: "message", kind: "agentMessage", status: "inProgress", turnId: "t1", text: "a".repeat(40) } });
+    now.mockReturnValue(11_000);
+    emit("delta", { sessionId: "h-session-1", itemId: "message", field: "text", delta: "a".repeat(40) });
+    flushDeltasForTest();
+
+    expect(useAppStore.getState().threads[0].tokenSpeed).toEqual({ characters: 80, activeMs: 1_000, lastAt: 11_000 });
+    emit("turnCompleted", completed);
+    const thread = useAppStore.getState().threads[0];
+    expect(thread.turnStats).toMatchObject({ durationMs: 1_000, outputTokens: 20, estimated: true, tokensPerSecond: 20 });
+    expect(thread.tokenSpeed).toBeUndefined();
+  });
+
+  it("does not count replayed messages, user text, command output or ignored delta fields", () => {
+    const base = running();
+    seedStore({ threads: [{ ...base, usage: undefined, items: [{ itemId: "tool", kind: "toolCall", status: "inProgress", turnId: "t1", tool: "bash" }] }] });
+    vi.spyOn(Date, "now").mockReturnValue(20_000);
+    emit("item", { sessionId: "h-session-1", item: { itemId: "history", kind: "agentMessage", status: "completed", turnId: "t0", text: "h".repeat(400) } });
+    emit("item", { sessionId: "h-session-1", item: { itemId: "user", kind: "userMessage", status: "completed", turnId: "t1", text: "u".repeat(400) } });
+    emit("delta", { sessionId: "h-session-1", itemId: "tool", field: "output", delta: "o".repeat(400) });
+    emit("item", { sessionId: "h-session-1", item: { itemId: "reasoning", kind: "reasoning", status: "inProgress", turnId: "t1", text: "" } });
+    emit("delta", { sessionId: "h-session-1", itemId: "reasoning", field: "reasoning", delta: "ignored" });
+    flushDeltasForTest();
+    expect(useAppStore.getState().threads[0].tokenSpeed).toBeUndefined();
+
+    emit("delta", { sessionId: "h-session-1", itemId: "reasoning", field: "text", delta: "r".repeat(40) });
+    flushDeltasForTest();
+    expect(useAppStore.getState().threads[0].tokenSpeed?.characters).toBe(40);
+  });
+
+  it("counts text buffered before its streaming item exactly once", () => {
+    const base = running();
+    seedStore({ threads: [{ ...base, usage: undefined, items: [] }] });
+    vi.spyOn(Date, "now").mockReturnValue(30_000);
+    emit("delta", { sessionId: "h-session-1", itemId: "early", field: "text", delta: "e".repeat(40) });
+    emit("item", { sessionId: "h-session-1", item: { itemId: "early", kind: "agentMessage", status: "inProgress", turnId: "t1", text: "" } });
+    flushDeltasForTest();
+
+    const thread = useAppStore.getState().threads[0];
+    expect(thread.items.find((item) => item.itemId === "early")?.text).toBe("e".repeat(40));
+    expect(thread.tokenSpeed).toEqual({ characters: 40, activeMs: 0, lastAt: 30_000 });
   });
 
   it("clears on request", () => {

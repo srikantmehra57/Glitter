@@ -7,16 +7,16 @@ import { clipRecency, contextBudget, estimateRequestTokens, fitHistory } from ".
 import type { Grant, Subject } from "./permission/grants.js";
 import { runGuards } from "./permission/guards.js";
 import { decide, type ApprovalMode, type Verdict } from "./permission/policy.js";
-import { SENDS_NONE, TIERS, configuredProviders, effortTiers, providerSpec, resolveProvider, splitModelId, type ProviderCredentials, type ResolvedProvider } from "./providers.js";
+import { SENDS_NONE, TIERS, configuredProviders, defaultEffortTier, effortTiers, providerSpec, resolveProvider, splitModelId, type ProviderCredentials, type ResolvedProvider } from "./providers.js";
 import { ExtensionRegistry, type HookEvents, type HookFailure, type HookName, type TurnContext, type TurnContributions } from "./registry.js";
 import type { UserInputResponse } from "../protocol.js";
-import { McpManager, addMcpServer as writeMcpServer, mcpExtension, readMcpConfig, removeMcpServer as eraseMcpServer, type McpScope, type McpServerInput } from "./mcp.js";
+import { McpManager, addMcpServer as writeMcpServer, mcpExtension, readMcpConfig, removeMcpServer as eraseMcpServer, type McpAuthorization, type McpScope, type McpServerInput } from "./mcp.js";
 import { DELEGATE_LEAF_PROFILE, DELEGATE_PROFILE, MAX_DELEGATED_STEPS, MAX_DELEGATION_DEPTH, delegationExtension, type DelegationRequest, type DelegationResult } from "./delegation.js";
 import { ASK_USER_TOOL, EXIT_PLAN_TOOL, questionRequest, settlement, type Asked, type PendingQuestion } from "./questions.js";
 import { discoverSkills, expandInvocation, skillsExtension } from "./skills.js";
-import { SessionStore, type DelegationPolicy, type SessionMeta } from "./store.js";
-import { BUILTIN_EXTENSION, canonicalize, executeTool, executionMode, prepareTool, repeatReminder, scheduleToolCalls, type PresentationMeta, type ToolKind } from "./tools.js";
-import { CONTEXT_WINDOW, ProviderError, isTransientProviderError, isTruncatedStop, streamChat, truncatedToolResult, type AssistantMessage, type ChatMessage, type ContentPart, type SystemPrompt, type ToolCall, type ToolSchema } from "./wire.js";
+import { SessionStore, type DelegationPolicy, type PendingSteer, type SessionMeta } from "./store.js";
+import { BUILTIN_EXTENSION, canonicalize, confine, executeTool, executionMode, prepareTool, repeatReminder, scheduleToolCalls, type PresentationMeta, type ToolKind } from "./tools.js";
+import { CONTEXT_WINDOW, ProviderError, isTransientProviderError, isTruncatedStop, streamChat, truncatedToolResult, type AssistantMessage, type ChatMessage, type ContentPart, type ImagePart, type SystemPrompt, type ToolCall, type ToolSchema } from "./wire.js";
 
 /**
  * The built-in agent: the app's own harness, driving any provider the user has
@@ -44,6 +44,8 @@ export type HarnessModel = {
   isDefault?: boolean;
   isActive?: boolean;
 };
+
+type CatalogModel = HarnessModel & { listedReasoning?: boolean };
 
 const MODES = [
   { value: "build", name: "Build", description: "Reads, edits files and runs commands, within the permission mode." },
@@ -129,7 +131,7 @@ type TurnRequest = {
   effort?: string;
 };
 
-type SteerRequest = { text: string; images?: Array<{ mediaType: string; base64Data: string }> };
+type SteerRequest = PendingSteer;
 
 type SkillInvocation = { selector: string; arguments?: string };
 
@@ -159,10 +161,11 @@ type Live = {
   question?: PendingQuestion;
   /** The context-shortening notice has been shown for this session; say it once. */
   contextNotified?: boolean;
+  mcpAuthorization: McpAuthorization;
 };
 
 /** One call's result. A call that asks the user also carries its questions and its transcript item. */
-type CallResult = { id: string; name: string; output: string; isError?: boolean; question?: Asked; item?: Json; activate?: readonly string[] };
+type CallResult = { id: string; name: string; output: string; isError?: boolean; question?: Asked; item?: Json; activate?: readonly string[]; images?: ImagePart[] };
 
 type HostLimits = {
   idleMs?: number;
@@ -181,15 +184,15 @@ export class HarnessHost {
   private credentials: ProviderCredentials = {};
   private sessions = new Map<string, Live>();
   private approvals = new Map<string, Approval>();
-  private catalog: { key: string; at: number; models: HarnessModel[] } | null = null;
+  private catalog: { key: string; at: number; models: CatalogModel[] } | null = null;
   /** The listing in flight and the keys it was started with; a newly added key starts a new one. */
-  private catalogLoading: { key: string; run: Promise<HarnessModel[]> } | null = null;
+  private catalogLoading: { key: string; run: Promise<CatalogModel[]> } | null = null;
   private readonly emit: Emit;
   private readonly mcp: McpManager;
   /** Tools, prompt sections and hooks. Each turn works from a snapshot taken when it starts. */
   readonly registry = new ExtensionRegistry();
 
-  constructor(emit: Emit, private readonly store = new SessionStore(), private readonly fetchImpl: typeof fetch = fetch, private readonly limits: HostLimits = {}) {
+  constructor(emit: Emit, private readonly store = new SessionStore(), private readonly fetchImpl: typeof fetch = fetch, private readonly limits: HostLimits = {}, private readonly authorization: (sessionId: string) => McpAuthorization | undefined = () => undefined) {
     this.emit = emit;
     this.registry.register(BUILTIN_EXTENSION);
     this.registry.register(delegationExtension(this));
@@ -258,12 +261,14 @@ export class HarnessHost {
     }
   }
 
-  private async providerModels(provider: ResolvedProvider): Promise<HarnessModel[]> {
+  private async providerModels(provider: ResolvedProvider): Promise<CatalogModel[]> {
     const data = (await this.fetchJson(provider, provider.wire === "anthropic" ? "/models?limit=1000" : "/models")).data;
     const rows = Array.isArray(data) ? data as Json[] : [];
-    return rows.map((row): HarnessModel | null => {
+    return rows.map((row): CatalogModel | null => {
       const raw = typeof row.id === "string" ? row.id.replace(/^models\//, "") : "";
       const parameters = Array.isArray(row.supported_parameters) ? row.supported_parameters.filter((item): item is string => typeof item === "string") : null;
+      const capabilities = row.capabilities as { reasoning?: unknown } | undefined;
+      const listedReasoning = typeof capabilities?.reasoning === "boolean" ? capabilities.reasoning : undefined;
       const kiloUntooled = provider.id === "kilo" && parameters != null && !parameters.includes("tools");
       if (!raw || NOT_CHAT.test(raw) || (provider.id === "cline" && NOT_CLINE_CHAT.test(raw)) || (provider.id === "kilo" && (NOT_KILO_CHAT.test(raw) || kiloUntooled))) return null;
       const pricing = row.pricing as { prompt?: string; completion?: string } | undefined;
@@ -272,7 +277,7 @@ export class HarnessHost {
         const amount = Number(value);
         return value != null && Number.isFinite(amount) && amount >= 0 ? String(Math.round(amount * 1_000_000 * 1000) / 1000) : null;
       };
-      const tiers = effortTiers(provider.id, raw);
+      const tiers = effortTiers(provider.id, raw, provider.wire, listedReasoning);
       const listedWindow = typeof row.context_length === "number" ? row.context_length : null;
       return {
         modelId: `${provider.id}/${raw}`,
@@ -282,16 +287,17 @@ export class HarnessHost {
         contextLimit: contextWindow(provider.id, raw, listedWindow),
         cost: pricing && perMillion(pricing.prompt) != null ? { input: perMillion(pricing.prompt)!, output: perMillion(pricing.completion) ?? "0", currency: "USD" } : null,
         reasoningEfforts: TIERS.filter((tier) => (tiers as string[]).includes(tier)),
-        ...(tiers.length ? { defaultReasoningEffort: tiers.includes("medium") ? "medium" : tiers[Math.floor(tiers.length / 2)] } : {}),
+        ...(tiers.length ? { defaultReasoningEffort: defaultEffortTier(raw, tiers) } : {}),
         effortSource: "host",
+        ...(listedReasoning !== undefined ? { listedReasoning } : {}),
       };
-    }).filter((model): model is HarnessModel => Boolean(model));
+    }).filter((model): model is CatalogModel => Boolean(model));
   }
 
   /** A sensible first model: the newest mainstream coding model from the first provider that has one. */
-  private markDefault(models: HarnessModel[]): HarnessModel[] {
+  private markDefault(models: CatalogModel[]): CatalogModel[] {
     const preferences = [/anthropic\/claude-sonnet/, /anthropic\/claude-opus/, /anthropic\/claude/, /openai\/gpt-5(?!.*(nano|mini))/, /openai\/gpt-4\.1$/, /google\/gemini-.*pro/, /xai\/grok-4/, /deepseek\/deepseek-chat/, /nvidia\/moonshotai\/kimi-k[\d.]+$/, /nvidia\/z-ai\/glm-[\d.]+$/, /nvidia\/nvidia\/nemotron-[\d.]+-super/, /./];
-    let pick: HarnessModel | undefined;
+    let pick: CatalogModel | undefined;
     for (const pattern of preferences) {
       const hits = models.filter((model) => pattern.test(model.modelId));
       // A gateway's `~vendor/…-latest` alias is a pointer, not a release. Prefer a named model when one matches.
@@ -302,7 +308,7 @@ export class HarnessHost {
     return models.map((model) => ({ ...model, isDefault: model === pick }));
   }
 
-  private async loadCatalog(refresh: boolean): Promise<HarnessModel[]> {
+  private async loadCatalog(refresh: boolean): Promise<CatalogModel[]> {
     const key = this.credentialKey();
     if (!refresh && this.catalog && this.catalog.key === key && Date.now() - this.catalog.at < CATALOG_TTL_MS) return this.catalog.models;
     if (this.catalogLoading?.key === key && !refresh) return this.catalogLoading.run;
@@ -346,18 +352,19 @@ export class HarnessHost {
     return { sessions: rows.map((meta) => ({ sessionId: meta.sessionId, name: meta.title, workspaceRoot: meta.workspaceRoot, updatedAt: meta.updatedAt, status: this.sessions.get(meta.sessionId)?.prompting ? "running" : "idle" })) };
   }
 
-  async startSession(options: { workspaceRoot: string; modelId?: string; effort?: string; mode?: string; approvalMode?: string }) {
+  async startSession(options: { workspaceRoot: string; modelId?: string; effort?: string; mode?: string; approvalMode?: string; mcpAuthorization?: McpAuthorization }) {
     if (!options.workspaceRoot) throw new Error("A workspace is required.");
     const modelId = options.modelId && splitModelId(options.modelId).providerId ? options.modelId : await this.defaultModel();
     const now = new Date().toISOString();
     const meta: SessionMeta = { sessionId: `h-${randomUUID()}`, workspaceRoot: options.workspaceRoot, title: null, createdAt: now, updatedAt: now, ...(modelId ? { modelId } : {}), ...(options.effort ? { effort: options.effort } : {}), mode: options.mode === "plan" ? "plan" : "build" };
     await this.store.create(meta);
     const live = this.track(meta, [], options.approvalMode);
+    live.mcpAuthorization = options.mcpAuthorization ?? this.authorization(live.meta.sessionId) ?? { workspaceTrusted: false };
     return { sessionId: meta.sessionId, opening: { result: { session: { sessionId: meta.sessionId, workspaceRoot: meta.workspaceRoot, modelId: modelId ?? null, providerId: modelId ? splitModelId(modelId).providerId : null } } }, agentConfig: this.config(live) };
   }
 
   private track(meta: SessionMeta, messages: ChatMessage[], approvalMode?: string): Live {
-    const live: Live = { meta, messages, approvalMode: APPROVAL_MODES.has(approvalMode as ApprovalMode) ? approvalMode as ApprovalMode : "promptUnmatched", grants: [], prompting: false, controller: null, turnId: "idle", counter: 0, usage: { promptTokens: meta.usage?.promptTokens ?? 0, outputTokens: meta.usage?.outputTokens ?? 0, cacheReadTokens: meta.usage?.cacheReadTokens ?? 0, cacheWriteTokens: meta.usage?.cacheWriteTokens ?? 0 }, queue: [], steering: [], replacing: false, repeatCount: 0 };
+    const live: Live = { meta, messages, mcpAuthorization: this.authorization(meta.sessionId) ?? { workspaceTrusted: false }, approvalMode: APPROVAL_MODES.has(approvalMode as ApprovalMode) ? approvalMode as ApprovalMode : "promptUnmatched", grants: [], prompting: false, controller: null, turnId: "idle", counter: 0, usage: { promptTokens: meta.usage?.promptTokens ?? 0, outputTokens: meta.usage?.outputTokens ?? 0, cacheReadTokens: meta.usage?.cacheReadTokens ?? 0, cacheWriteTokens: meta.usage?.cacheWriteTokens ?? 0 }, queue: [], steering: [], replacing: false, repeatCount: 0 };
     this.sessions.set(meta.sessionId, live);
     return live;
   }
@@ -368,7 +375,7 @@ export class HarnessHost {
     const meta = await this.store.meta(options.sessionId);
     if (!meta) throw new Error("This thread's history is no longer on this device.");
     if (meta.workspaceRoot !== options.workspaceRoot) throw new Error("That thread belongs to another workspace.");
-    const { messages, items, question, delegation } = await this.store.read(options.sessionId);
+    const { messages, items, steering, question, delegation } = await this.store.read(options.sessionId);
     // The log is authoritative for a child's scope: if the index lost the
     // stamp, restore it and persist it, never adopt the caller's mode.
     const policy = meta.delegation ?? delegation;
@@ -378,6 +385,7 @@ export class HarnessHost {
       await this.store.update(options.sessionId, { delegation: policy, mode: meta.mode });
     }
     const live = this.track(meta, messages, policy ? policy.approvalMode : options.approvalMode);
+    live.steering = steering ?? [];
     // Replay the transcript exactly as it was recorded; nothing runs again.
     live.question = question;
     // The call a pending question belongs to is still open: it completes when the question is answered.
@@ -390,6 +398,7 @@ export class HarnessHost {
     const live = this.sessions.get(options.sessionId);
     live?.controller?.abort();
     this.sessions.delete(options.sessionId);
+    await this.mcp.closeSession(options.sessionId);
     return { closed: true };
   }
 
@@ -541,6 +550,23 @@ export class HarnessHost {
     return `${live.meta.sessionId}:${live.turnId}:${kind}:${++live.counter}`;
   }
 
+  /**
+   * The thread the app is showing. A muted child bills through its open
+   * ancestors, so a delegated audit is counted on the turn that started it.
+   */
+  private surface(live: Live): Live {
+    let current = live;
+    const seen = new Set<string>();
+    while (current.muted && !seen.has(current.meta.sessionId)) {
+      seen.add(current.meta.sessionId);
+      const parentId = current.meta.delegation?.parentSessionId;
+      const parent = parentId ? this.sessions.get(parentId) : undefined;
+      if (!parent) break;
+      current = parent;
+    }
+    return current;
+  }
+
   private emitUsage(live: Live) {
     if (live.muted) return;
     const { promptTokens, outputTokens, cacheReadTokens, cacheWriteTokens } = live.usage;
@@ -604,14 +630,20 @@ export class HarnessHost {
   /** The MCP servers this thread's workspace sees. `refresh` re-reads the config files even when the fingerprint matches. */
   async mcpStatus(options: { sessionId: string; refresh?: boolean }) {
     const live = this.requireLive(options.sessionId);
-    await this.mcp.ensure(live.meta.workspaceRoot, options.sessionId, options.refresh === true);
-    return this.mcp.status(live.meta.workspaceRoot);
+    await this.mcp.ensure(live.meta.workspaceRoot, this.mcpAuthorization(live), options.sessionId, options.refresh === true);
+    return this.mcp.status(options.sessionId);
   }
 
   /** The effective server rows for the Extensions screen, including ones the parser refused. Secret values are never returned. */
   async mcpConfig(options: { sessionId: string }) {
     const live = this.requireLive(options.sessionId);
-    return readMcpConfig(live.meta.workspaceRoot, this.homeDir);
+    return readMcpConfig(live.meta.workspaceRoot, this.homeDir, this.mcpAuthorization(live).workspaceTrusted);
+  }
+
+  private mcpAuthorization(live: Live) {
+    const authorization = this.authorization(live.meta.sessionId);
+    if (authorization) live.mcpAuthorization = authorization;
+    return live.mcpAuthorization;
   }
 
   /** Add a server to one config file, then return the effective rows. */
@@ -643,15 +675,17 @@ export class HarnessHost {
       }
       if (options.ifBusy === "steer") {
         if (!text.trim() && !options.images?.length) throw new Error("A message is required to steer the turn.");
-        live.steering.push({ text, images: options.images });
+        const itemId = `${live.turnId}:steer:${randomUUID().slice(0, 8)}`;
+        const steering = { itemId, text, images: options.images };
+        live.steering.push(steering);
+        await this.store.append(live.meta.sessionId, [{ type: "steer", steering }]);
         // The transcript shows it now. The model sees it at the next tool boundary.
-        this.emitItem(live, { itemId: `${live.turnId}:steer:${randomUUID().slice(0, 8)}`, kind: "userMessage", status: "completed", text: display, turnId: live.turnId }, true);
+        this.emitItem(live, { itemId, kind: "userMessage", status: "completed", text: display, turnId: live.turnId }, true);
         return { turnId: live.turnId, disposition: "steered" as const };
       }
       if (options.ifBusy === "replace") {
         const turnId = this.mintTurnId();
         live.replacing = true;
-        live.steering = [];
         live.queue.unshift({ turnId, ...request });
         this.stopInFlight(live);
         return { turnId, disposition: "started" as const };
@@ -706,8 +740,8 @@ export class HarnessHost {
       }
       if (fromQueue) this.emit("turnStarted", { sessionId: live.meta.sessionId, turnId: request.turnId });
       // Sync before the snapshot, so this turn sees the config as it is now. A
-      // broken config reports and keeps the previous complete generation.
-      await this.mcp.ensure(live.meta.workspaceRoot, live.meta.sessionId);
+      // broken config reports and retires the previous generation for future turns.
+      await this.mcp.ensure(live.meta.workspaceRoot, this.mcpAuthorization(live), live.meta.sessionId);
       void this.runTurn(live, request.turnId);
     } catch (error) {
       if (!durable) {
@@ -729,10 +763,7 @@ export class HarnessHost {
 
   async cancelTurn(options: { sessionId: string }) {
     const live = this.sessions.get(options.sessionId);
-    if (live) {
-      live.steering = [];
-      this.stopInFlight(live);
-    }
+    if (live) this.stopInFlight(live);
     for (let waited = 0; live?.prompting && waited < 3000; waited += 50) await new Promise((resolve) => setTimeout(resolve, 50));
     return { status: "terminal" as const };
   }
@@ -761,7 +792,7 @@ export class HarnessHost {
    */
   private async systemPrompt(live: Live, turn: TurnContributions): Promise<SystemPrompt> {
     let rules = "";
-    try { rules = (await readFile(join(live.meta.workspaceRoot, "AGENTS.md"), "utf8")).slice(0, 20_000); } catch { /* no project rules */ }
+    try { rules = (await readFile(confine(live.meta.workspaceRoot, "AGENTS.md"), "utf8")).slice(0, 20_000); } catch { /* no readable in-workspace project rules */ }
     const stable = [
       `You are ${HARNESS_NAME}, a coding agent working in the user's local workspace through tools. You are running inside a desktop app; the user sees your tool calls and replies as they happen.`,
       `Workspace root: ${live.meta.workspaceRoot}. Platform: ${platform()}.`,
@@ -783,13 +814,11 @@ export class HarnessHost {
   private async flushSteering(live: Live): Promise<boolean> {
     if (!live.steering.length) return false;
     const batch = live.steering.splice(0);
-    const records: Array<{ type: "message"; message: ChatMessage }> = [];
     for (const item of batch) {
       const message: ChatMessage = { role: "user", content: this.userContent(item.text, item.images) };
       live.messages.push(message);
-      records.push({ type: "message", message });
     }
-    await this.store.append(live.meta.sessionId, records);
+    await this.store.append(live.meta.sessionId, [{ type: "steerSettled", itemIds: batch.map((item) => item.itemId) }]);
     this.resetRepeat(live);
     return true;
   }
@@ -871,7 +900,9 @@ export class HarnessHost {
         rawArgs: JSON.stringify(call.input),
         subject: subject.kind === "mcp"
           ? { kind: "mcp", server: subject.server, tool: subject.tool, path: `${subject.server} › ${subject.tool}`, ...(verdict.risk ? { risk: verdict.risk } : {}) }
-          : { kind: kind === "shell" ? "command" : "edit", ...(verdict.risk ? { risk: verdict.risk } : {}) },
+          : subject.kind === "browser"
+            ? { kind: "browser", path: subject.origin || "this page", origin: subject.origin, ...(verdict.risk ? { risk: verdict.risk } : {}) }
+            : { kind: kind === "shell" ? "command" : "edit", ...(verdict.risk ? { risk: verdict.risk } : {}) },
         expiresAt: approvalExpiry(),
         availableChoices: choices,
       });
@@ -940,9 +971,10 @@ export class HarnessHost {
         const { providerId, model } = splitModelId(modelId);
         const provider = resolveProvider(providerId, this.credentials);
         if (!provider) throw new ProviderError(`${providerSpec(providerId)?.name ?? providerId} has no key. Add it in Settings → Providers, or pick another model.`, undefined, "MISSING_CREDENTIAL");
-        // The listed window beats the family default, so the catalog is loaded before it is consulted.
-        const window = (await this.loadCatalog(false).catch(() => [])).find((row) => row.modelId === modelId)?.contextLimit ?? contextWindow(provider.id, model);
-        const { message: reply, stopReason } = await this.callModel(live, provider, modelId, model, system, offered(), controller.signal, window);
+        // The listed window and capability beat the family default, so the catalog is loaded before they are consulted.
+        const listed = (await this.loadCatalog(false).catch(() => [])).find((row) => row.modelId === modelId);
+        const window = listed?.contextLimit ?? contextWindow(provider.id, model);
+        const { message: reply, stopReason } = await this.callModel(live, provider, modelId, model, system, offered(), controller.signal, window, listed?.listedReasoning);
         live.messages.push(reply);
         await this.store.append(sessionId, [{ type: "message", message: reply }]);
         // A cut-off reply can carry valid JSON that is still an incomplete tool call. Do not run it.
@@ -1001,9 +1033,9 @@ export class HarnessHost {
         ? { kind: "completed", params: { terminal: "cancelled" } }
         : { kind: "failed", params: { terminal: "failed", error: { message: error instanceof Error ? error.message : String(error) } } };
     } finally {
-      // A steer accepted in the last moment stays in history. Cancel and replace drop what was not flushed.
-      if (controller.signal.aborted) live.steering = [];
-      else await this.flushSteering(live).catch(() => {});
+      // A steer accepted in the last moment stays in history, including after
+      // cancellation or replacement. Its durable pending record settles here.
+      await this.flushSteering(live).catch(() => {});
       // While the turn still holds the session, so no next turn starts before its observers have run.
       const finished = turn ? await turn.runHook("turnFinished", { context: turn.context, outcome }) : [];
       const startNext = live.replacing || !controller.signal.aborted;
@@ -1024,16 +1056,21 @@ export class HarnessHost {
   }
 
   /** One model call, streamed into reasoning and message items, with retries for transient failures. */
-  private async callModel(live: Live, provider: ResolvedProvider, modelId: string, model: string, system: SystemPrompt, tools: readonly ToolSchema[], signal: AbortSignal, window: number | null): Promise<{ message: AssistantMessage; stopReason: string }> {
+  private async callModel(live: Live, provider: ResolvedProvider, modelId: string, model: string, system: SystemPrompt, tools: readonly ToolSchema[], signal: AbortSignal, window: number | null, listedReasoning?: boolean): Promise<{ message: AssistantMessage; stopReason: string }> {
     let effort = live.meta.effort && (live.meta.effort !== "none" || SENDS_NONE.has(provider.id)) ? live.meta.effort : undefined;
-    const tiers = effortTiers(provider.id, model) as string[];
+    const tiers = effortTiers(provider.id, model, provider.wire, listedReasoning) as string[];
     if (effort && !tiers.includes(effort)) effort = undefined;
+    // ZenMux fills an omitted effort with medium. Kimi K3 does not accept that, and its published default is max.
+    if (!effort && tiers.length === 3 && tiers[0] === "low" && tiers[1] === "high" && tiers[2] === "max") effort = "max";
     const startedAt = Date.now();
     const cap = this.limits.retryElapsedMs ?? RETRY_ELAPSED_MS;
     // The window is only known for catalog and family-known models. Unknown means no fitting: current behaviour, unchanged.
-    const budget = window ? contextBudget(window) : null;
+    let budget = window ? contextBudget(window) : null;
     // System prompt and tool schemas never change within a call, so their cost is measured once.
-    const fixedTokens = budget ? estimateRequestTokens({ system, messages: [], tools }) : 0;
+    let fixedTokens = budget ? estimateRequestTokens({ system, messages: [], tools }) : 0;
+    let providerOverflow = false;
+    // One tighter refit after a reported overflow. A second rejection stands.
+    let overflowRetried = false;
     // The request view, re-fitted per attempt: a retry after an overflow fits the already-trimmed
     // view again, so each attempt is strictly smaller than the one the provider rejected.
     let view: ChatMessage[] | undefined;
@@ -1053,14 +1090,21 @@ export class HarnessHost {
       // `view` persists across attempts, so a retry after an overflow fits the
       // already-trimmed view again — each attempt strictly smaller than the last.
       view ??= this.history(live);
-      const fitted = budget ? fitHistory({ messages: view, budget: Math.max(1, budget.input - fixedTokens) }) : { messages: view, trimmed: false, tokens: 0 };
+      const fitted = budget ? fitHistory({ messages: view, budget: Math.max(1, budget.input - fixedTokens), force: providerOverflow }) : { messages: view, trimmed: false, tokens: 0, fitted: false };
+      providerOverflow = false;
       view = fitted.messages;
       if (fitted.trimmed && !live.muted && !live.contextNotified) {
         live.contextNotified = true;
-        this.emit("agentNotice", { sessionId: live.meta.sessionId, level: "info", message: "The thread's history was shortened to fit the model's context window; the full transcript keeps everything." });
+        this.emit("agentNotice", {
+          sessionId: live.meta.sessionId,
+          level: fitted.fitted ? "info" : "warning",
+          message: fitted.fitted
+            ? "The thread's history was shortened to fit the model's context window; the full transcript keeps everything."
+            : "The thread's history was shortened, but may still exceed the model's context window. Glitter will retry if the provider reports an overflow; the full transcript keeps everything.",
+        });
       }
       try {
-        for await (const event of streamChat({ provider, modelId, system, messages: fitted.messages, tools, effort, signal, timeouts: { idleMs: this.limits.idleMs, firstEventMs: this.limits.firstEventMs }, fetchImpl: this.fetchImpl })) {
+        for await (const event of streamChat({ provider, modelId, system, messages: fitted.messages, tools, effort, listedReasoning, signal, timeouts: { idleMs: this.limits.idleMs, firstEventMs: this.limits.firstEventMs }, fetchImpl: this.fetchImpl })) {
           if (event.type === "text" || event.type === "reasoning") {
             const kind = event.type;
             // A reply that switches from thinking to text closes the thinking item first.
@@ -1085,9 +1129,10 @@ export class HarnessHost {
             if (event.cacheWriteTokens != null) spent.cacheWrite = event.cacheWriteTokens;
             const reportedInput = event.inputTokens != null || event.cacheReadTokens != null || event.cacheWriteTokens != null;
             const window = this.catalog?.models.find((row) => row.modelId === modelId)?.contextLimit ?? contextWindow(provider.id, model);
-            if (reportedInput && window && !live.muted) {
+            const surface = this.surface(live);
+            if (reportedInput && window && !surface.muted) {
               this.emit("sessionFacts", {
-                sessionId: live.meta.sessionId,
+                sessionId: surface.meta.sessionId,
                 context: {
                   usedTokens: spent.input + spent.cacheRead + spent.cacheWrite,
                   windowTokens: window,
@@ -1099,16 +1144,25 @@ export class HarnessHost {
           } else if (event.type === "done") {
             close();
             if (spent.input || spent.output || spent.cacheRead || spent.cacheWrite) {
-              live.usage = {
-                promptTokens: live.usage.promptTokens + spent.input,
-                outputTokens: live.usage.outputTokens + spent.output,
-                cacheReadTokens: live.usage.cacheReadTokens + spent.cacheRead,
-                cacheWriteTokens: live.usage.cacheWriteTokens + spent.cacheWrite,
-              };
-              this.emitUsage(live);
-              void this.store.update(live.meta.sessionId, { usage: live.usage });
+              let current: Live | undefined = live;
+              const seen = new Set<string>();
+              while (current && !seen.has(current.meta.sessionId)) {
+                seen.add(current.meta.sessionId);
+                current.usage = {
+                  promptTokens: current.usage.promptTokens + spent.input,
+                  outputTokens: current.usage.outputTokens + spent.output,
+                  cacheReadTokens: current.usage.cacheReadTokens + spent.cacheRead,
+                  cacheWriteTokens: current.usage.cacheWriteTokens + spent.cacheWrite,
+                };
+                void this.store.update(current.meta.sessionId, { usage: current.usage });
+                if (!current.muted) break;
+                const parentId: string | undefined = current.meta.delegation?.parentSessionId;
+                current = parentId ? this.sessions.get(parentId) : undefined;
+              }
+              this.emitUsage(this.surface(live));
             }
-            this.emitCall(live, {
+            const reported = Boolean(spent.input || spent.output || spent.cacheRead || spent.cacheWrite);
+            if (!live.muted || reported) this.emitCall(this.surface(live), {
               at: attemptAt,
               providerId: provider.id,
               modelId,
@@ -1138,17 +1192,23 @@ export class HarnessHost {
           if (!live.muted) this.emit("agentNotice", { sessionId: live.meta.sessionId, level: "info", message: `${model} does not accept that effort level; continuing without it.` });
           continue;
         }
-        // An input overflow cannot be retried as-is: the bytes are the problem. The provider's
-        // real count is higher than our estimate (that is why it overflowed), so the refit is
-        // not budget-driven: every result that is not a skeleton yet becomes one, which is
-        // strictly smaller no matter what any tokenizer says. A view already at the bottom
-        // fails at once, which keeps the overflow code non-retryable in effect; ordinary
-        // transient errors keep their backoff and their budget.
+        // An input overflow cannot be retried as-is. One retry refits the original
+        // history against half the budget and forces the next trim rung. A second
+        // rejection stands. An unknown window gets no speculative shrinking.
         const overflow = error instanceof ProviderError && (error.code === "CONTEXT_WINDOW_EXCEEDED" || (error.status === 400 && CONTEXT_WINDOW.test(message)));
         if (overflow) {
-          const tighter = budget ? fitHistory({ messages: view, budget: 1 }) : null;
-          if (tighter?.trimmed) {
-            view = tighter.messages;
+          if (!overflowRetried && budget) {
+            const original = this.history(live);
+            const input = Math.max(1, Math.floor(budget.input / 2));
+            const fixed = estimateRequestTokens({ system, messages: [], tools });
+            const tighter = fitHistory({ messages: original, budget: Math.max(1, input - fixed), force: true });
+            // A second provider call is useful only when the request can actually shrink.
+            if (!tighter.trimmed) throw error;
+            overflowRetried = true;
+            view = original;
+            budget = { input, output: budget.output };
+            fixedTokens = fixed;
+            providerOverflow = true;
             if (!live.muted) this.emit("agentNotice", { sessionId: live.meta.sessionId, level: "warning", message: `${message} Shortening the thread's history further and retrying.` });
             continue;
           }
@@ -1210,6 +1270,35 @@ export class HarnessHost {
       }
       if (outcome.grant) live.grants.push(outcome.grant);
     }
+    // A user can navigate the shared page while an approval waits. Do not let
+    // the old origin's approval act on the new one: ask again before execution.
+    if (kind === "browser" && subject?.kind === "browser" && subject.control) {
+      let latest: Subject | undefined;
+      try { latest = definition.subject?.(live.meta.workspaceRoot, frozen) ?? subject; } catch { latest = undefined; }
+      if (!latest) {
+        const output = noted("The browser permission check failed, so this call was refused.");
+        this.emitItem(live, { ...base, status: "failed", failureReason: output, visibleOutput: output }, true);
+        return { id: call.id, name: call.name, output, isError: true };
+      }
+      if (latest.kind === "browser" && (latest.origin !== subject.origin || latest.control !== subject.control)) {
+        const refreshed = decide({ kind, subject: latest, mode: live.approvalMode, planMode: live.meta.mode === "plan", grants: live.grants });
+        if (refreshed.kind === "deny") {
+          const output = noted(refreshed.reason);
+          this.emitItem(live, { ...base, status: "failed", failureReason: output, visibleOutput: output }, true);
+          return { id: call.id, name: call.name, output, isError: true };
+        }
+        if (refreshed.kind === "ask") {
+          const outcome = await this.ask(live, call, kind, latest, refreshed);
+          if (outcome.kind !== "allowed") {
+            const output = noted(REFUSALS[outcome.kind]);
+            this.emitItem(live, { ...base, status: outcome.kind === "cancelled" ? "cancelled" : "failed", failureReason: output, visibleOutput: output }, true);
+            return { id: call.id, name: call.name, output, isError: true };
+          }
+          if (outcome.grant) live.grants.push(outcome.grant);
+        }
+        subject = latest;
+      }
+    }
     if (this.limits.beforeTool) await this.limits.beforeTool(call.name);
     const observed = { id: call.id, name: call.name, input: frozen };
     await this.hook(turn, "toolStarting", { context: turn.context, call: observed });
@@ -1239,7 +1328,7 @@ export class HarnessHost {
       ...(result.exitCode != null ? { exitCode: result.exitCode } : {}),
       ...(result.isError ? { failureReason: visible.split("\n")[0].slice(0, 300) } : {}),
     }, true);
-    return { id: call.id, name: call.name, output, ...(result.isError ? { isError: true } : {}), ...(result.activate?.length ? { activate: result.activate } : {}) };
+    return { id: call.id, name: call.name, output, ...(result.isError ? { isError: true } : {}), ...(result.activate?.length ? { activate: result.activate } : {}), ...(result.images?.length ? { images: result.images } : {}) };
   }
 
   /** The question this thread is waiting on, as the app's card renders it. */

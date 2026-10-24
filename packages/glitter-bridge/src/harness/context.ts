@@ -34,7 +34,11 @@ export function clipRecency(messages: readonly ChatMessage[]): ChatMessage[] {
     if (index >= keepFrom || message.role !== "tool") return message;
     return {
       ...message,
-      results: message.results.map((result) => (result.output.length > OLD_OUTPUT_CHARS ? { ...result, output: `${result.output.slice(0, OLD_OUTPUT_CHARS / 2)}\n… (older output shortened)` } : result)),
+      results: message.results.map((result) => {
+        const shortened = result.output.length > OLD_OUTPUT_CHARS ? `${result.output.slice(0, OLD_OUTPUT_CHARS / 2)}\n… (older output shortened)` : result.output;
+        if (!result.images?.length) return shortened === result.output ? result : { ...result, output: shortened };
+        return { ...result, output: `${shortened}\n[Older tool image omitted from this context view.]`, images: undefined };
+      }),
     };
   });
 }
@@ -89,7 +93,7 @@ export function estimateRequestTokens(options: {
       for (const block of message.thinking ?? []) tokens += textTokens(block.text);
       for (const call of message.toolCalls ?? []) tokens += textTokens(call.name) + textTokens(JSON.stringify(call.input));
     } else {
-      for (const result of message.results) tokens += textTokens(result.output);
+      for (const result of message.results) tokens += textTokens(result.output) + (result.images?.length ?? 0) * IMAGE_TOKENS;
     }
   }
   return tokens;
@@ -126,9 +130,13 @@ function rungOf(output: string): TrimRung {
  * A result already carrying a marker (a view fitted on an earlier attempt)
  * continues from that rung, so a retry is strictly smaller than the request
  * before it. Returns the fitted messages (the input array is never mutated),
- * whether anything changed, and the estimate afterwards.
+ * whether anything changed, the estimate afterwards, and whether it now fits.
+ * `force` is reserved for a provider-reported overflow: it advances one rung
+ * even when the conservative local estimate already fits.
  */
-export function fitHistory(options: { messages: readonly ChatMessage[]; budget: number }): { messages: ChatMessage[]; trimmed: boolean; tokens: number } {
+export type FitHistory = { messages: ChatMessage[]; trimmed: boolean; tokens: number; fitted: boolean };
+
+export function fitHistory(options: { messages: readonly ChatMessage[]; budget: number; force?: boolean }): FitHistory {
   const measure = (messages: readonly ChatMessage[]): number => {
     let tokens = 0;
     for (const message of messages) {
@@ -138,13 +146,13 @@ export function fitHistory(options: { messages: readonly ChatMessage[]; budget: 
         for (const block of message.thinking ?? []) tokens += textTokens(block.text);
         for (const call of message.toolCalls ?? []) tokens += textTokens(call.name) + textTokens(JSON.stringify(call.input));
       } else {
-        for (const result of message.results) tokens += Math.ceil(result.output.length / CHARS_PER_TOKEN);
+        for (const result of message.results) tokens += Math.ceil(result.output.length / CHARS_PER_TOKEN) + (result.images?.length ?? 0) * IMAGE_TOKENS;
       }
     }
     return tokens;
   };
   let tokens = measure(options.messages);
-  if (tokens <= options.budget) return { messages: options.messages as ChatMessage[], trimmed: false, tokens };
+  if (tokens <= options.budget && !options.force) return { messages: options.messages as ChatMessage[], trimmed: false, tokens, fitted: true };
 
   // Clone the tool messages (the only mutable rung) so the canonical history is untouched.
   const messages = options.messages.map((message) => (message.role === "tool" ? { ...message, results: message.results.map((result) => ({ ...result })) } : message));
@@ -153,12 +161,26 @@ export function fitHistory(options: { messages: readonly ChatMessage[]; budget: 
   // it gives up the most bytes first, and the newest stays verbatim as long as it can.
   const state = new Map<string, { rung: TrimRung; original: number }>();
   let changed = false;
-  outer: for (let index = 0; index < messages.length && tokens > options.budget; index += 1) {
+  // Images are large and cannot be shortened like text. Drop the oldest ones
+  // first, before spending another text-trimming rung, and say what was removed.
+  for (const message of messages) {
+    if (message.role !== "tool") continue;
+    for (const result of message.results) {
+      if ((!options.force && tokens <= options.budget) || !result.images?.length) continue;
+      tokens -= result.images.length * IMAGE_TOKENS;
+      result.images = undefined;
+      const note = "\n[Tool image omitted to fit the context window.]";
+      result.output += note;
+      tokens += textTokens(note);
+      changed = true;
+    }
+  }
+  outer: for (let index = 0; index < messages.length && (options.force || tokens > options.budget); index += 1) {
     const message = messages[index];
     if (message.role !== "tool") continue;
     for (const result of message.results) {
       const recorded = state.get(`${index}:${result.id}`) ?? { rung: rungOf(result.output), original: result.output.length };
-      while (tokens > options.budget && recorded.rung !== "skeleton") {
+      while ((options.force || tokens > options.budget) && recorded.rung !== "skeleton") {
         const current = result.output;
         const next = recorded.rung === "full" ? headTail(current) : skeleton(result.name, current, recorded.original);
         recorded.rung = recorded.rung === "full" ? "head_tail" : "skeleton";
@@ -172,5 +194,5 @@ export function fitHistory(options: { messages: readonly ChatMessage[]; budget: 
       if (tokens <= options.budget) break outer;
     }
   }
-  return { messages, trimmed: changed, tokens: Math.max(0, tokens) };
+  return { messages, trimmed: changed, tokens: Math.max(0, tokens), fitted: tokens <= options.budget };
 }

@@ -95,7 +95,7 @@ async function bootedStore({ workspaces, selectedWorkspaceId = null, selectedSes
     calls.push([method, params]);
     if (method === 'detect') { await globalThis.detectGate?.promise; return detected; }
     if (method === 'status') return { running: true, trustWorkspace: false, posture: POSTURE };
-    if (method === 'startHost') return { trustWorkspace: false, posture: POSTURE };
+    if (method === 'startHost') return { trustWorkspace: params.trustWorkspace === true, posture: { ...POSTURE, ephemeralSessions: params.noSessionLog === true, disableWrite: params.disableWrite === true, disableShell: params.disableShell === true, sandboxNetwork: typeof params.sandboxNetwork === 'string' ? params.sandboxNetwork : POSTURE.sandboxNetwork, contributorMode: params.contributorMode } };
     if (method === 'listSessions') return { sessions: globalThis.sessionRows ?? [], nextCursor: null };
     if (method === 'listModels') { await globalThis.modelsGate?.promise; return { models: globalThis.modelRows ?? [] }; }
     if (method === 'startSession') return { sessionId: 'new-1' };
@@ -289,6 +289,40 @@ test('startHost asks the bridge once, then trusts a host that already matches', 
   await store.getState().startHost();
   assert.ok(count(calls, 'status') > statusCalls, 'a host that exited is checked again');
   globalThis.modelRows = undefined;
+});
+
+test('a shared host start revalidates trust for every waiter', async () => {
+  const { store, calls } = await bootedStore();
+  store.setState({
+    workspaces: [
+      { id: 'trusted', path: '/trusted', name: 'trusted', grantId: 'gt', trusted: true },
+      { id: 'untrusted', path: '/untrusted', name: 'untrusted', grantId: 'gu', trusted: false },
+    ],
+    selectedWorkspaceId: 'trusted', preview: false, hostInfo: null, hostTrust: null,
+  });
+  const gate = deferred();
+  let running = false;
+  let hostTrust = false;
+  globalThis.storeBridge = async (method, params) => {
+    calls.push([method, params]);
+    if (method === 'status') return { running, trustWorkspace: hostTrust, posture: POSTURE };
+    if (method === 'startHost') {
+      if (!running) await gate.promise;
+      running = true;
+      hostTrust = params.trustWorkspace === true;
+      return { trustWorkspace: hostTrust, posture: POSTURE };
+    }
+    if (method === 'listModels') return { models: [] };
+    return {};
+  };
+  const first = store.getState().startHost();
+  await settle();
+  store.setState({ selectedWorkspaceId: 'untrusted' });
+  const second = store.getState().startHost();
+  gate.resolve();
+  await Promise.all([first, second]);
+  assert.deepEqual(calls.filter(([method]) => method === 'startHost').map(([, params]) => params.trustWorkspace), [true, false], 'the untrusted waiter cannot use the trusted host');
+  assert.equal(store.getState().hostTrust, false);
 });
 
 test('concurrent model refreshes share one listing and never blank a picker that already has models', async () => {

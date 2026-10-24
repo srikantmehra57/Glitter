@@ -8,6 +8,7 @@ const grokCatalog = process.argv.includes("--grok-catalog");
 const authRequired = process.argv.includes("--auth-required");
 const rejectModel = process.argv.includes("--reject-model");
 const growCatalog = process.argv.includes("--grow-catalog");
+const alwaysOnly = process.argv.includes("--always-only");
 // The first discovery lists no models (a provider still warming up); later ones list them.
 const lateCatalog = process.argv.includes("--late-catalog");
 let catalogPasses = 0;
@@ -86,7 +87,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     update("s1", { sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "hard." } });
     update("s1", { sessionUpdate: "plan", entries: [{ content: "Run ls", status: "in_progress", priority: "medium" }] });
     update("s1", { sessionUpdate: "tool_call", toolCallId: "t1", title: "Execute `ls`", kind: "execute", status: "pending", rawInput: { command: "ls" } });
-    return send({ id: 900, method: "session/request_permission", params: { sessionId: "s1", toolCall: { toolCallId: "t1", title: "Execute `ls`", kind: "execute", rawInput: { command: "ls" } }, options: [{ optionId: "yes", name: "Allow once", kind: "allow_once" }, { optionId: "no", name: "Reject", kind: "reject_once" }] } });
+    return send({ id: 900, method: "session/request_permission", params: { sessionId: "s1", toolCall: { toolCallId: "t1", title: "Execute `ls`", kind: "execute", rawInput: { command: "ls" } }, options: [{ optionId: "yes", name: alwaysOnly ? "Allow always" : "Allow once", kind: alwaysOnly ? "allow_always" : "allow_once" }, { optionId: "no", name: alwaysOnly ? "Reject always" : "Reject", kind: alwaysOnly ? "reject_always" : "reject_once" }] } });
   }
   if (id === 900 && message.result) {
     const allowed = message.result.outcome?.optionId === "yes";

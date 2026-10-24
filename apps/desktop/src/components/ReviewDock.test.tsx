@@ -22,6 +22,50 @@ beforeEach(() => {
   } });
 });
 
+it("keeps Changes primary and opens Files and Monitor from More views", () => {
+  render(<ReviewDock />);
+  expect(screen.queryByRole("tablist", { name: "Changes view" })).toBeNull();
+  expect(screen.getByRole("region", { name: "Changes" })).toBeInTheDocument();
+  expect(screen.queryByText("Modified")).toBeNull();
+
+  fireEvent.click(screen.getByRole("button", { name: "More views" }));
+  fireEvent.click(screen.getByRole("option", { name: /^Files/ }));
+  expect(useAppStore.getState().inspectorTab).toBe("files");
+  expect(screen.getByRole("region", { name: "Files" })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Back to changes" }));
+  expect(screen.getByRole("region", { name: "Changes" })).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: "More views" }));
+  fireEvent.click(screen.getByRole("option", { name: /^Monitor/ }));
+  expect(useAppStore.getState().inspectorTab).toBe("activity");
+  expect(screen.getByRole("region", { name: "Monitor" })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Back to changes" }));
+  expect(useAppStore.getState().inspectorTab).toBe("changes");
+});
+
+it("opens a scoped diff from Changes without a separate Diff destination", async () => {
+  render(<ReviewDock />);
+  fireEvent.click(screen.getByRole("button", { name: "Review scope" }));
+  fireEvent.click(screen.getByRole("option", { name: "Staged" }));
+  await waitFor(() => expect(screen.getByRole("log", { name: "Staged diff" })).toBeInTheDocument());
+  expect(useAppStore.getState().inspectorTab).toBe("diff");
+  fireEvent.click(screen.getByRole("button", { name: "Back to changes" }));
+  expect(useAppStore.getState().inspectorTab).toBe("changes");
+  expect(screen.getByRole("button", { name: "Review scope" })).toHaveTextContent("All changes");
+});
+
+it("keeps local commit helpers visible and puts remote operations in Git actions", () => {
+  render(<ReviewDock />);
+  expect(screen.getByRole("button", { name: "Stage all" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Draft message" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Pull" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Git actions" }));
+  expect(screen.getByRole("option", { name: /Commit and push/ })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: /^Pull/ })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: /^Push/ })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: /Create pull request/ })).toBeInTheDocument();
+});
+
 it("switches scope from the keyboard and keeps scoped diffs read-only", async () => {
   seedStore({ inspectorTab: "diff" });
   render(<ReviewDock />);

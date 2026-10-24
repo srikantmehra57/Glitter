@@ -10,8 +10,46 @@ licence terms.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Allow once reaches the agent that owns the approval.** Harness decisions now
+  route by live approval ownership after native validation strips `sessionId`,
+  instead of falling through to Muse and leaving the tool call waiting.
+
 ### Added
 
+- **Thread menus expose support and path actions.** Mark threads unread or read,
+  open their worktree in Finder, copy its path or session ID, and open the app
+  config or a pre-filled GitHub issue draft. Harness threads also copy their
+  canonical JSONL task-log path; every thread can copy the app-log path. View
+  model trajectory jumps to Usage and filters only its model-call list to that
+  thread, with a View all threads reset. Manual unread state persists.
+- **The built-in agent can verify web UI in a shared Browser panel.** Open a local
+  dev server or another http(s) page beside the thread, then navigate, inspect
+  AI accessibility refs and console errors, click, fill forms, scroll and capture
+  model-visible screenshots. The same fresh Chromium page is visible and
+  controllable in the app, with per-origin approvals, workspace-scoped lifecycle,
+  a 5 fps live view and no access to your normal browser profile.
+- **Appearance gains display, motion and density controls.** A native Interface
+  zoom stepper shows the current percentage and resets to 100%, sharing the View
+  menu's saved zoom. Reduce interface motion pauses CSS, canvas and terminal
+  animation while always honoring the macOS accessibility preference. Sidebar
+  row density offers Standard, Comfortable and Compact spacing without changing
+  the icon grid.
+- **The sidebar foot has a profile menu.** The signed-in Muse name or email
+  appears beside an initial avatar, with a local Profile fallback. Its upward
+  menu opens App theme, Usage stats, Commands & shortcuts, or Settings, and
+  offers Sign out of Muse only while authenticated. Usage and Settings remain
+  direct icon buttons beside it.
+- **Token speed works with every agent.** The live status and completed-turn
+  receipt show an estimated `tok/s` rate measured from reply and reasoning text
+  streamed to the app. It is calculated locally and does not depend on provider
+  or CLI usage reports.
+- **The interface face is a choice.** Appearance → Font offers System (SF Pro,
+  the default), Helvetica, Avenir, Gill Sans, Futura and New York. Each name
+  in the menu is drawn in that face. The choice covers the whole interface;
+  code, diffs and the terminal keep their monospace face. The faces are ones
+  already installed on the Mac — nothing is downloaded.
 - **Dark mode comes in three depths.** Appearance → Interface theme gains a
   **Dark intensity** picker — Subtle (Graphite, the surface ladder lifted one
   rung), Mid (Smoke, the previous and default look) and Pure black (true black,
@@ -32,16 +70,55 @@ licence terms.
 
 ### Changed
 
-- **The agent's notes fold as it moves on.** Only the newest note of a running
-  turn stays open; once the agent works past one, it folds to a single quiet
-  line that opens on click, so a long turn no longer stacks every thought into
-  a wall of prose.
+- **Settings is a precise, Cursor-style desktop page.** A fixed 240px category
+  rail and opaque, neutral reading surface replace the sidebar-derived glass
+  shell. Compact navigation, 22px page titles, transparent bordered cards,
+  32px inputs, compact switches, flatter buttons and segmented controls now share
+  one visual rhythm across every page, including Providers, Extensions and
+  Usage. Portaled menus match only while Settings is open, and narrow windows
+  keep the same hierarchy with horizontal categories and wrapping rows.
+- An active plan now automatically floats as a centered **Plan** pill above the
+  composer, with no pinning step. The pill is the popup's only disclosure control;
+  its static checklist opens above-right and closes completely with the pill.
+  Finishing the turn returns the plan to its place in the thread.
+- The terminal opens in a right-hand side panel beside the thread instead of
+  taking vertical space above the composer. Terminal and Changes share that
+  panel space, so opening one switches away from the other.
+- **Changes is one quiet review surface.** The four-tab strip is gone: Diff is
+  a detail view with Back to changes, while Files and Monitor live in a compact
+  More views menu. Scope selection is available from the Changes list, remote
+  Git operations sit in one Git actions menu, and file rows are single-line and
+  dense, with repeated Modified labels removed. Stage, commit, discard, review
+  scopes, file navigation, and line comments keep their existing behavior.
+- **Permissions are three modes, and they belong to the app.** The composer
+  offers Ask, Auto and Full access for every agent and model, each with a
+  one-line description. Ask lets edits run and asks for commands. Auto runs
+  ordinary work and still asks when a command looks risky. Full access asks
+  for nothing. A thread already set to Read only keeps that until it is
+  changed. The choice is no longer a different list per provider. Each
+  description stays on one line.
+- **The timeline is a flat, quiet work stream.** Top-level work and the answer
+  share the conversation edge; only expanded children indent. Each step has
+  one small monochrome mark instead of separate outcome and tinted kind
+  icons, and routine rows no longer repeat durations or success checks. A note
+  between steps is a caret and one quiet line until opened, including the
+  newest note of a running turn; its full text stays smaller than the answer.
+  A group is a bare-caret row too — **Ran 4 tools**, with thoughts counted in
+  that title, or **2 thoughts** when it was only reasoning — and stays closed
+  while running and when a step failed. Expanded steps sit inline without a
+  rail or nested scrolling pane. Plans and agent sections are transparent,
+  errors and receipts are unboxed, context compaction is a quiet text seam,
+  and the answer remains the only full-strength prose. Turns no longer wear a
+  provider mark.
 - **The sidebar is rebuilt around projects.** Each workspace is a folder row
   with its threads under it; the folder in view opens on its own, others open
   from their caret and stay open beside it, and a closed folder flags a thread
   that needs you or is still running. Every row sits on one grid, so icons,
-  folders and status dots share a column and every name and title starts on
-  one line. Thread lists keep their order instead of reshuffling into
+  folders and agent marks share a column and every name and title starts on
+  one line: a thread wears its agent's mark (the Harness H, the Muse spark)
+  in that column, and its state — running spinner, failed, unread — rides at
+  the row's end beside the time, where a running thread shows its spinner in
+  place of the time. Thread lists keep their order instead of reshuffling into
   sections, and a list longer than ten folds after eight behind **Show N
   more**, keeping the open thread and live work in place. While an approval
   or a question waits anywhere, one **N threads need you** row under New
@@ -77,28 +154,17 @@ licence terms.
   and each trend legend entry names the full model and the tokens behind it,
   both replacing the native title's delay. Refresh and Clear history move from
   the foot of the page to the top right, level with the heading.
-- **A turn's work reads as a quiet rail, not a dashboard.** A collapsed group
-  is one line on the answer's content column: a square disclosure, **Ran 4
-  tools** (or **3 steps** when it mixed thinking and work), the failure count
-  in danger, and the total duration. Opening it drops a rail through the
-  steps; each row leads with its outcome, verb, a small tinted glyph for the
-  kind of work, and the path or command itself, and long output scrolls inside
-  the group instead of pushing the answer away. The composition bar and chip
-  row are gone. A context compaction is a centred **Context compacted** seam,
-  not a step.
 - **A finished turn's changed files form a review card** on the content
   column: **Changed 3 files** with a **Review** action that opens the Changes
   pane, then up to three file rows with their directories; **Show 2 more
   files** reveals the rest and each row opens its diff. The card reports paths
   and a count, never invented line statistics.
-- The live status line carries the **current action's icon** in a node that
-  matches the step rows it opens onto, accent-tinted while running and neutral
-  while paused, and the streamed thought in its dropdown is framed under a
-  quiet "Thinking" header. Its dropdown borrows the same 22px node grid, and a
-  **Context compacted** seam is not repeated there as a step.
-- On a built-in Harness thread, the turn's head wears the **Harness mark and
-  name** like every other agent. The thinking orb is reserved for the live
-  status line, so a settled turn never wears a paused orb.
+- **The live status is one quiet row.** One Orb or agent mark, the current
+  action, and subdued elapsed/token facts replace the second action icon,
+  accent tile, shimmering label, and pulsing dots. Its dropdown keeps the same
+  step rows and streamed thought, and a **Context compacted** seam is not
+  repeated there as a step. Timeline completion and settle pop animations are
+  gone; reduced-motion behavior is unchanged.
 
 ### Added
 
@@ -107,10 +173,6 @@ licence terms.
   themselves in, the donut fades up, the stat values count up and the provider
   share grows from nothing — changing range or grain repaints colour without
   replaying the motion.
-- Live motion, all disabled under reduced motion: a live group's disclosure
-  tints with the accent and a dot pulses beside its title, a step settling done
-  pops once (history restored by scrolling never replays it), and the freshest
-  turn's receipt lands with a one-shot check pop.
 - Settings → Models has a **model library**: every provider's models, each with
   a switch that keeps it in or out of the composer's model picker, so a
   provider with hundreds of models can show the two you use. A model a thread is
@@ -179,8 +241,8 @@ licence terms.
   demand so their schemas do not fill every request. Extensions → MCP shows
   what the harness connected, its transport and tool count, any sync error, and
   Refresh. A server the parser refuses is listed with what is wrong and can be
-  removed. A broken server leaves the previous complete set in use; removing
-  the last one removes its tools.
+  removed. A broken refresh retires the old set until valid configuration is
+  restored; removing the last one removes its tools.
 - Harness can **delegate**. Its `task` tool runs a child agent in a separate,
   hidden session with a narrower tool set, a 24-step cap and an optional model,
   and reports back as a Subagent card with the job, status, duration and token
@@ -337,11 +399,45 @@ licence terms.
   and a single open file no longer adds a tab row. The light theme's
   secondary and tertiary text are further apart, and selected rows show an
   edge. Checkboxes follow the theme. The title bar's Monitor button is gone:
-  the side pane's tabs open the monitor. Icon buttons show their labels as
+  the side pane's More views menu opens the monitor. Icon buttons show their labels as
   in-app tooltips, which hide once clicked.
 
 ### Fixed
 
+- A shared host start revalidates workspace trust and posture for every waiter,
+  including after a slow model-catalog read, so an untrusted workspace cannot
+  inherit a trusted host. Overlapping settings changes now persist their union.
+- Deleting during a send acknowledgement cancels before closing the session.
+  Archiving preserves the thread and workspace drafts, line-comment delivery
+  cannot overwrite another thread's composer, and accepted steering survives
+  cancellation, replacement and a fresh host after an abandoned turn.
+- Custom Anthropic endpoints keep their name and API type through the native
+  bridge adapter. Provider writes are serialized as complete transactions, and
+  an older settings save retains fields introduced by a newer build.
+- Non-forced worktree removal preserves ignored files. Terminal input uses a
+  per-session writer instead of the global terminal mutex, so a blocked write
+  cannot prevent close or shutdown. Harness MCP refresh and configuration state
+  is fenced to its owning session.
+- Message-action tooltips open above and inward instead of clipping against the
+  transcript. Sent and completed messages show their recorded time beside the
+  actions, and a completed answer keeps Review available even without a usage or
+  edit summary; Undo still requires a reversible file snapshot.
+- `AGENTS.md` can no longer be a symlink to a file outside the workspace: the
+  trust preview and Harness's model prompt stay inside the grant. Malformed
+  write and edit calls with missing or wrongly typed content are refused before
+  approval instead of emptying the file.
+- Third-party agent detection no longer executes unapproved CLIs. Actual use
+  pins or confirms the binary before a credential-free version probe, and
+  automatic ACP approvals never fall back to an always grant.
+- Cancelling a turn or timing out a native command now escalates through the
+  whole process group even after its leader exits. MCP startup diagnostics
+  redact every configured environment and header value in both notices and status.
+- Harness MCP setup works end to end: native configuration consent reaches the
+  bridge, a missing config file means no servers rather than invalid JSON, and
+  status and cleanup stay scoped to their session. Reviewing consent no longer
+  touches the Git index, and a failed refresh cannot retain stale tools.
+- A context-window overflow is retried only when a tighter history actually
+  shortens the request; a request with nothing left to trim fails immediately.
 - In windows narrower than 1200px the sidebar's resize handle took the content
   width and lay over the thread list, catching hovers and clicks meant for
   threads. It keeps its own strip at the sidebar's edge again.

@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { ThreadView } from "./ThreadView";
 import { resetStore, seedStore } from "../test/store";
 import { useAppStore } from "../lib/store";
@@ -15,21 +15,47 @@ describe("thread layout", () => {
       plan: [{ id: "p", text: "Inspect the code", status: "inProgress" }],
     }] });
   });
-  it("keeps the plan where it was made, and pins a compact copy outside the scroller only on request", () => {
+  it("shows an active plan with one floating toggle and restores it inline when complete", async () => {
     render(<ThreadView />);
-    const inline = screen.getByRole("region", { name: "Plan" });
-    expect(inline.closest(".conversation")).not.toBeNull();
-    // It sits after the message that asked for it, not at the top of the thread.
-    expect(screen.getByText("Do the work").compareDocumentPosition(inline) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Pin plan to top" }));
+    const trigger = screen.getByRole("button", { name: "Plan: 0 of 1 completed" });
+    expect(trigger.closest(".composer-wrap")).not.toBeNull();
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("region", { name: "Plan" })).toBeNull();
+
+    fireEvent.click(trigger);
     const plan = screen.getByRole("region", { name: "Plan" });
     expect(plan.closest(".conversation")).toBeNull();
-    expect(within(plan).getByRole("button", { name: /Plan/ })).toHaveAttribute("aria-expanded", "false");
+    expect(plan.closest(".composer-wrap")).not.toBeNull();
+    expect(within(plan).getByText("Plan")).toBeInTheDocument();
+    expect(within(plan).queryByRole("button")).toBeNull();
     expect(screen.getAllByRole("region", { name: "Plan" })).toHaveLength(1);
-    fireEvent.click(screen.getByRole("button", { name: "Unpin plan from top" }));
-    expect(screen.getByRole("region", { name: "Plan" }).closest(".conversation")).not.toBeNull();
+    expect(screen.queryByRole("button", { name: /pin plan/i })).toBeNull();
+    fireEvent.click(trigger);
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    await waitFor(() => expect(screen.queryByRole("region", { name: "Plan" })).toBeNull());
     act(() => useAppStore.setState((s) => ({ threads: s.threads.map((t) => ({ ...t, status: "idle", plan: [{ id: "p", text: "Inspect the code", status: "completed" }] })) })));
+    expect(screen.queryByRole("button", { name: /^Plan:/ })).toBeNull();
     expect(screen.getByRole("region", { name: "Plan" }).closest(".conversation")).not.toBeNull();
+  });
+
+  it("dismisses the floating plan with Escape or an outside pointer without stopping the turn", async () => {
+    const stopTurn = vi.fn(async () => {});
+    seedStore({ stopTurn });
+    render(<ThreadView />);
+    const trigger = screen.getByRole("button", { name: "Plan: 0 of 1 completed" });
+    fireEvent.click(trigger);
+    expect(screen.getByRole("region", { name: "Plan" })).toBeInTheDocument();
+
+    fireEvent.keyDown(document.getElementById("prompt")!, { key: "Escape" });
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(trigger).toHaveFocus();
+    expect(stopTurn).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByRole("region", { name: "Plan" })).toBeNull());
+
+    fireEvent.click(trigger);
+    expect(screen.getByRole("region", { name: "Plan" })).toBeInTheDocument();
+    fireEvent.pointerDown(document.body);
+    await waitFor(() => expect(screen.queryByRole("region", { name: "Plan" })).toBeNull());
   });
   it("places Jump to latest above the composer and jumps to the end", () => {
     render(<ThreadView />);
@@ -63,6 +89,45 @@ describe("thread layout", () => {
     act(() => useAppStore.setState({ dockOpen: false, dockExpanded: false }));
     expect(container.querySelector("main.main.dock-focused")).toBeNull();
     expect(container.querySelectorAll(".composer-wrap")).toHaveLength(1);
+  });
+
+  it("opens the terminal beside the thread and shares the side panel with Changes", () => {
+    seedStore({ dockOpen: true, dockExpanded: true });
+    const { container } = render(<ThreadView />);
+    fireEvent.click(screen.getByRole("button", { name: "Toggle terminal" }));
+    expect(useAppStore.getState().terminalOpen).toBe(true);
+    expect(useAppStore.getState().dockOpen).toBe(false);
+    expect(useAppStore.getState().dockExpanded).toBe(false);
+
+    const terminal = screen.getByRole("complementary", { name: "Terminal" });
+    expect(terminal.closest(".thread-main")).toBeNull();
+    expect(terminal.parentElement).toHaveClass("review-layout");
+    expect(container.querySelector(".thread-main")?.lastElementChild).toHaveClass("composer-wrap");
+
+    fireEvent.click(screen.getByRole("button", { name: "Toggle changes" }));
+    expect(useAppStore.getState().terminalOpen).toBe(false);
+    expect(useAppStore.getState().dockOpen).toBe(true);
+  });
+
+  it("shares the same side panel between Browser, Terminal and Changes", () => {
+    seedStore({ dockOpen: true, dockExpanded: true });
+    const { container } = render(<ThreadView />);
+    fireEvent.click(screen.getByRole("button", { name: "Toggle browser" }));
+    expect(useAppStore.getState().browserOpen).toBe(true);
+    expect(useAppStore.getState().dockOpen).toBe(false);
+    expect(useAppStore.getState().dockExpanded).toBe(false);
+    const browser = screen.getByRole("complementary", { name: "Browser" });
+    expect(browser.closest(".thread-main")).toBeNull();
+    expect(browser.parentElement).toHaveClass("review-layout");
+    expect(container.querySelector(".thread-main")?.lastElementChild).toHaveClass("composer-wrap");
+
+    fireEvent.click(screen.getByRole("button", { name: "Toggle terminal" }));
+    expect(useAppStore.getState().browserOpen).toBe(false);
+    expect(useAppStore.getState().terminalOpen).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Toggle browser" }));
+    fireEvent.click(screen.getByRole("button", { name: "Toggle changes" }));
+    expect(useAppStore.getState().browserOpen).toBe(false);
+    expect(useAppStore.getState().dockOpen).toBe(true);
   });
 
   it("keeps the title bar outside the main panel, directly before it", () => {
@@ -169,10 +234,10 @@ describe("predicted suggestions", () => {
     expect(screen.getByRole("button", { name: /Explain this codebase/ }).closest(".composer-wrap")).not.toBeNull();
   });
 
-  it("docks the composer once the thread has messages or the terminal opens", () => {
-    seedStore({ terminalOpen: true, refreshSuggestions: vi.fn(async () => {}) });
+  it("keeps an empty thread centred beside the terminal and docks the composer once it has messages", () => {
+    seedStore({ terminalOpen: true, dockOpen: false, refreshSuggestions: vi.fn(async () => {}) });
     const terminal = render(<ThreadView />);
-    expect(terminal.container.querySelector(".thread-main")).not.toHaveClass("centered");
+    expect(terminal.container.querySelector(".thread-main")).toHaveClass("centered");
     terminal.unmount();
     seedStore({
       terminalOpen: false,
@@ -259,6 +324,45 @@ describe("find in thread", () => {
   });
 });
 
+describe("live token speed", () => {
+  beforeEach(() => { resetStore(); });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it.each([
+    { name: "Muse", agentId: undefined },
+    { name: "Harness", agentId: "harness" },
+    { name: "ACP", agentId: "grok" },
+  ] as const)("uses the same local estimate for $name", ({ agentId }) => {
+    const now = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    seedStore({
+      workspaces: [{ id: "w", path: "/repo", name: "repo", grantId: "g" }],
+      selectedWorkspaceId: "w",
+      selectedSessionId: "live",
+      threads: [{
+        sessionId: "live",
+        agentId,
+        workspacePath: "/repo",
+        title: "Live",
+        updatedAt: new Date().toISOString(),
+        status: "running",
+        unread: false,
+        opened: true,
+        activeTurnId: "t1",
+        turnStartedAt: now - 5_000,
+        tokenSpeed: { characters: 400, activeMs: 4_000, lastAt: now },
+        items: [{ itemId: "m1", kind: "agentMessage", status: "inProgress", text: "Streaming reply", turnId: "t1" }],
+      }],
+      models: [],
+    });
+
+    render(<ThreadView />);
+    const speed = screen.getByText("~25 tok/s");
+    expect(speed.closest(".msg.agent")).not.toBeNull();
+    expect(speed).toHaveAttribute("title", expect.stringContaining("no provider or CLI usage data"));
+  });
+});
+
 describe("completion usage", () => {
   beforeEach(() => {
     resetStore();
@@ -282,11 +386,18 @@ describe("completion usage", () => {
     const receipt = screen.getByRole("region", { name: "Done" });
     const stats = within(receipt).getByLabelText("Turn usage");
     expect(stats).toHaveTextContent("42s");
-    expect(stats).toHaveTextContent("3.1K tokens");
+    expect(stats).toHaveTextContent("12K in · 3.1K out");
     expect(stats).toHaveTextContent("≈$0.03");
     expect(within(stats).getByTitle("Estimated cost for this turn")).toHaveTextContent("≈$0.03");
     expect(screen.getAllByLabelText("Turn usage")).toHaveLength(1);
     expect(within(receipt).getByRole("button", { name: "Fork here" })).toBeInTheDocument();
+  });
+
+  it("shows the final local token-speed estimate", () => {
+    seedStore({ threads: useAppStore.getState().threads.map((thread) => ({ ...thread, turnStats: { ...thread.turnStats!, tokensPerSecond: 48.6 } })) });
+    render(<ThreadView />);
+    const speed = within(screen.getByRole("region", { name: "Done" })).getByText("~49 tok/s");
+    expect(speed.getAttribute("title")).toContain("no provider or CLI usage data");
   });
 
   it("leaves turn stats alone when the model is unpriced", () => {
@@ -317,7 +428,7 @@ describe("completion usage", () => {
     seedStore({ threads: useAppStore.getState().threads.map((thread) => ({ ...thread, lastOutcome: "cancelled" })) });
     render(<ThreadView />);
     expect(screen.queryByRole("region", { name: "Done" })).toBeNull();
-    expect(within(screen.getByRole("region", { name: "Stopped" })).getByLabelText("Turn usage")).toHaveTextContent("3.1K tokens");
+    expect(within(screen.getByRole("region", { name: "Stopped" })).getByLabelText("Turn usage")).toHaveTextContent("12K in · 3.1K out");
   });
 });
 

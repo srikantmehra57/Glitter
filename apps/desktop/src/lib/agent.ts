@@ -47,7 +47,7 @@ const READ = /^(read_file|read|cat|get_file|view)$/i;
 const EDIT = /^(edit_file|write_file|write|str_replace|apply_patch|create_file)$/i;
 const SEARCH = /^(grep|search|codebase_search|glob|find|list_files)$/i;
 const SHELL = /^(bash|shell|userShell)$/i;
-const WEB = /^(web_search|web_fetch|web_lookup|fetch)$/i;
+const WEB = /^(web_search|web_fetch|web_lookup|fetch|browser)$/i;
 
 export function classifyTool(tool?: string, kind?: string): AgentStepKind {
   if (kind === "userShell" || SHELL.test(tool ?? "")) return "command";
@@ -418,11 +418,13 @@ export type ActivitySummary = {
 
 const TOOL_KINDS = new Set<AgentStepKind>(["read", "edit", "search", "command", "web", "tool"]);
 
-/** The collapsed group's words: what ran, in the fewest honest words. */
+/** The collapsed group's words: what ran, in the fewest honest words. Thoughts stay inside that title so a run of reasoning does not rename the row. */
 export function activityTitle(steps: AgentStep[], live = false): string {
   if (live) return "Running";
   const tools = steps.filter((step) => TOOL_KINDS.has(step.kind)).length;
-  if (tools && tools === steps.length) return `Ran ${tools} tool${tools === 1 ? "" : "s"}`;
+  if (tools > 0) return `Ran ${tools} tool${tools === 1 ? "" : "s"}`;
+  const thoughts = steps.filter((step) => step.kind === "reasoning").length;
+  if (thoughts > 0 && thoughts === steps.length) return `${thoughts} thought${thoughts === 1 ? "" : "s"}`;
   return `${steps.length} step${steps.length === 1 ? "" : "s"}`;
 }
 

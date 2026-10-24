@@ -9,7 +9,11 @@ export const EXIT_MS = 180;
  * motion, or the environment cannot say (no window, or no matchMedia).
  */
 export function motionReduced(): boolean {
-  return typeof window === "undefined" || typeof window.matchMedia !== "function" || window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (typeof window === "undefined") return true;
+  // The in-app preference adds to the OS request; it never overrides a Mac's
+  // accessibility choice. applyTheme owns this root attribute.
+  if (typeof document !== "undefined" && document.documentElement.dataset.motion === "reduce") return true;
+  return typeof window.matchMedia !== "function" || window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
 
 /**

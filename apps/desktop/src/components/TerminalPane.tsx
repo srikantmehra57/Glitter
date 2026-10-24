@@ -5,12 +5,11 @@ import { shortcutText } from "../lib/commands";
 import { onTerminalEvent, terminalClose, terminalOpen, terminalResize, terminalWrite, type TerminalEvent } from "../lib/bridge";
 import { describeError } from "../lib/errors";
 import { isTauri } from "../lib/format";
-import { usePresence } from "../lib/presence";
+import { motionReduced, usePresence } from "../lib/presence";
 import { activeWorkspace, useAppStore } from "../lib/store";
 
 const css = (name: string) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 const readTheme = () => ({ background: css("--surface") || undefined, foreground: css("--ink") || undefined, cursor: css("--ink") || undefined, selectionBackground: css("--active") || undefined });
-const reducedMotion = () => typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 /**
  * The integrated terminal: the user's own shell in the folder the open thread
@@ -24,11 +23,12 @@ export function TerminalPane() {
   const preview = useAppStore((state) => state.preview);
   const theme = useAppStore((state) => state.theme);
   const accentColor = useAppStore((state) => state.accentColor);
+  const reduceMotion = useAppStore((state) => state.reduceMotion);
   useAppStore((state) => state.shortcutOverrides);
   const grantId = useAppStore((state) => activeWorkspace(state)?.grantId ?? null);
   const folder = useAppStore((state) => activeWorkspace(state)?.path ?? "");
-  // The pane grows in and shrinks out through the .reveal convention instead of
-  // snapping the thread column; the shell still dies the moment `open` drops.
+  // The side panel slides in and out like the Changes dock; the shell still
+  // dies the moment `open` drops rather than living through the exit animation.
   const pane = usePresence(open);
   const host = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -43,6 +43,10 @@ export function TerminalPane() {
   useEffect(() => {
     if (termRef.current) termRef.current.options.theme = readTheme();
   }, [theme, accentColor]);
+
+  useEffect(() => {
+    if (termRef.current) termRef.current.options.cursorBlink = !motionReduced();
+  }, [reduceMotion]);
 
   useEffect(() => {
     if (!open || blocked || !grantId || !host.current) return;
@@ -63,7 +67,7 @@ export function TerminalPane() {
         const [{ Terminal }, { FitAddon }] = await Promise.all([import("@xterm/xterm"), import("@xterm/addon-fit"), import("@xterm/xterm/css/xterm.css")]);
         if (disposed) return;
         term = new Terminal({
-          cursorBlink: !reducedMotion(),
+          cursorBlink: !motionReduced(),
           fontFamily: css("--font-mono") || "ui-monospace, Menlo, monospace",
           fontSize: 12,
           scrollback: 5000,
@@ -122,21 +126,14 @@ export function TerminalPane() {
   }, [open, blocked, grantId, sessionSeq]);
 
   if (!pane.mounted) return null;
-  // .reveal is the codebase's grow/shrink convention (see Collapse): it animates
-  // the grid row around the pane while clipping to the shrinking box. The cell
-  // is a column flex so .terminal-pane's own `flex: 0 0 280px` still sets the height.
-  return <div className={pane.closing ? "reveal closing" : "reveal"} aria-hidden={pane.closing || undefined} inert={pane.closing}>
-    <div style={{ display: "flex", flexDirection: "column" }}>
-      <section className="terminal-pane" aria-label="Terminal">
-        <header className="terminal-head">
-          <span className="terminal-title">Terminal</span>
-          <span className="terminal-folder" title={folder}>{folder}</span>
-          {exited && !blocked ? <button type="button" className="ghost-btn small" onClick={() => setSessionSeq((seq) => seq + 1)}><RotateCcw size={12} aria-hidden="true" />Restart</button> : null}
-          <button type="button" className="icon-btn small" aria-label="Close terminal" data-tooltip-align="end" data-tooltip={`Close terminal  ${shortcutText("terminal")}`} onClick={() => setOpen(false)}><X size={14} /></button>
-        </header>
-        {blocked || status ? <p className="terminal-note" role="status">{blocked ?? status}</p> : null}
-        {blocked ? null : <div ref={host} className="terminal-host" />}
-      </section>
-    </div>
-  </div>;
+  return <aside className={`terminal-pane${pane.closing ? " closing" : ""}`} aria-label="Terminal" aria-hidden={pane.closing || undefined} inert={pane.closing}>
+    <header className="terminal-head">
+      <span className="terminal-title">Terminal</span>
+      <span className="terminal-folder" title={folder}>{folder}</span>
+      {exited && !blocked ? <button type="button" className="ghost-btn small" onClick={() => setSessionSeq((seq) => seq + 1)}><RotateCcw size={12} aria-hidden="true" />Restart</button> : null}
+      <button type="button" className="icon-btn small" aria-label="Close terminal" data-tooltip-align="end" data-tooltip={`Close terminal  ${shortcutText("terminal")}`} onClick={() => setOpen(false)}><X size={14} /></button>
+    </header>
+    {blocked || status ? <p className="terminal-note" role="status">{blocked ?? status}</p> : null}
+    {blocked ? null : <div ref={host} className="terminal-host" />}
+  </aside>;
 }

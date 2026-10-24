@@ -87,6 +87,15 @@ export class AcpAgentHost {
   async setOption(sessionId, option, value) { return { option, value, via: 'acp' }; }
 }`;
 
+const harnessStub = `
+export const HARNESS_ID = 'harness';
+export class HarnessHost {
+  constructor() { this.spec = { id: HARNESS_ID, name: 'Harness' }; }
+  ownsApproval(approvalId) { return approvalId.indexOf('h-') === 0; }
+  decideApproval() { return { decided: 'harness' }; }
+  setCredentials() {}
+}`;
+
 const agentsStub = `
 const SPECS = {
   muse: { id: 'muse', name: 'Muse', protocol: 'msp' },
@@ -108,7 +117,7 @@ export class LoginFlow {
   async start() { return { url: 'https://stub.invalid', code: 'STUB-CODE' }; }
   cancel() { return { cancelled: false }; }
 }`;
-const replacements = { './host.js': hostStub, './acp.js': acpStub, './agents.js': agentsStub, './login.js': loginStub };
+const replacements = { './host.js': hostStub, './acp.js': acpStub, './harness/host.js': harnessStub, './agents.js': agentsStub, './login.js': loginStub };
 const outfile = join(temporary, 'bridge.mjs');
 await build({
   entryPoints: [resolve('packages/glitter-bridge/src/index.ts')],
@@ -289,6 +298,8 @@ test('approvals route to the agent that owns them', async () => {
     await bridge.request('startHost', { agentId: 'opencode' });
     const acp = await bridge.request('decideApproval', { approvalId: 'acp-9', choiceId: 'c' });
     assert.deepEqual(acp.result, { decided: 'acp' });
+    const harness = await bridge.request('decideApproval', { approvalId: 'h-9', choiceId: 'allow-once' });
+    assert.deepEqual(harness.result, { decided: 'harness' }, 'Harness ownership survives native sessionId stripping');
     const muse = await bridge.request('decideApproval', { approvalId: 'muse-9', choiceId: 'c' });
     assert.deepEqual(muse.result, { decided: 'muse' });
   });

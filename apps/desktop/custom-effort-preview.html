@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /><title>Custom provider effort preview</title></head>
+  <body style="margin: 0">
+    <div id="root"></div>
+    <script type="module">
+      import { Composer } from "/src/components/Composer.tsx";
+      import { MOCK_AGENTS } from "/src/lib/mock.ts";
+      import { useAppStore } from "/src/lib/store.ts";
+
+      const catalog = [
+        { modelId: "custom-1/moonshotai/kimi-k3.1-pro", providerId: "custom-1", displayLabel: "MoonshotAI: Kimi K3.1 Pro", description: "ZenMux", contextLimit: 1048576, reasoningEfforts: ["low", "high", "max"], defaultReasoningEffort: "max", effortSource: "host", isDefault: true },
+        { modelId: "custom-1/openai/gpt-5.4", providerId: "custom-1", displayLabel: "GPT-5.4", description: "ZenMux", contextLimit: 400000, reasoningEfforts: ["minimal", "low", "medium", "high"], defaultReasoningEffort: "medium", effortSource: "host" },
+        { modelId: "custom-1/openai/gpt-4.1", providerId: "custom-1", displayLabel: "GPT-4.1", description: "ZenMux", contextLimit: 128000, reasoningEfforts: [], effortSource: "host" },
+      ];
+      const active = catalog[0];
+
+      useAppStore.setState({
+        preview: true,
+        starting: false,
+        submitting: false,
+        booting: false,
+        modelsLoading: false,
+        offline: false,
+        agents: MOCK_AGENTS,
+        workspaces: [{ id: "preview", path: "/Users/you/ZenMux", name: "ZenMux", grantId: "preview" }],
+        selectedWorkspaceId: "preview",
+        threads: [{ sessionId: "preview-custom", workspacePath: "/Users/you/ZenMux", title: "ZenMux custom endpoint", updatedAt: new Date().toISOString(), status: "idle", unread: false, items: [], opened: true, agentId: "harness", config: { agentId: "harness", modelId: "custom-1/moonshotai/kimi-k3.1-pro", providerId: "custom-1", effort: "max", approvalMode: "guarded", mode: "build" } }],
+        selectedSessionId: "preview-custom",
+        models: catalog.map((model) => ({ ...model, isActive: model.modelId === active.modelId })),
+        modelsAgentId: "harness",
+        providerStatus: [{ id: "custom-1", configured: true, keyHint: "••••test", baseUrl: "https://zenmux.ai/api/v1", name: "ZenMux", wire: "openai" }],
+      });
+      window.__customEffortComposer = Composer;
+      await import("/custom-effort-preview.ts");
+    </script>
+  </body>
+</html>

@@ -14,6 +14,8 @@ Meta's separately distributed CLI.
 |---|---|---|---|
 | Node.js runtime | 26.8.2 | MIT (OpenJS Foundation) | Staged as the `glitter-node` sidecar by `packages/glitter-bridge/scripts/stage-sidecar.mjs`; only `bin/node` is extracted from the official archive |
 | `@muse-code/sdk` | 1.3.0 | MIT — © Meta Platforms, Inc. and affiliates | Bundled into `glitter-bridge/dist/index.js` |
+| `playwright-core` | 1.64.1 | Apache-2.0 — © Microsoft Corporation | Browser automation, bundled into the bridge with its registry metadata; Chromium itself is installed separately, not redistributed by Glitter |
+| `chromium-bidi` | 12.1.0 | Apache-2.0 — © Google LLC and contributors | Playwright's browser-protocol dependency, bundled into the bridge |
 | `react`, `react-dom` | 19.x | MIT — © Meta Platforms, Inc. and affiliates | Compiled into the webview bundle |
 | `react-markdown` | 10.1.0 | MIT | Compiled into the webview bundle |
 | `remark-gfm` | 4.0.1 | MIT | Compiled into the webview bundle |

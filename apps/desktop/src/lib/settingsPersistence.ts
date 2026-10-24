@@ -1,8 +1,9 @@
 import { normalizeCustomCommands } from "./composerText";
 import { normalizeHiddenModels, normalizeHiddenProviders } from "./modelVisibility";
 import { normalizeShortcutOverrides } from "./shortcuts";
+import { normalizeUiFont } from "./fonts";
 import { normalizeTranslucency } from "./theme";
-import { AGENT_IDS, DARK_INTENSITIES, DEFAULT_ENABLED_AGENTS, DEFAULT_SETTINGS, EDITOR_CHOICES, THINKING_ORBS, type Settings } from "./types";
+import { AGENT_IDS, DARK_INTENSITIES, DEFAULT_ENABLED_AGENTS, DEFAULT_SETTINGS, EDITOR_CHOICES, SIDEBAR_DENSITIES, THINKING_ORBS, type Settings } from "./types";
 
 type SettingsStore = {
   get<T>(key: string): Promise<T | undefined>;
@@ -13,12 +14,13 @@ type Credentials = { get(): Promise<string | null>; set(value: string): Promise<
 const SAVED_KEY_MASK = "••••••••";
 
 export function settingsFields(settings: Settings): Settings {
-  const { museBin, museApiKey, museAuthMode, contributorMode, ephemeralSessions, disableWrite, disableShell, sandboxNetwork, theme, darkIntensity, accentColor, accentSidebar, sidebarTranslucency, thinkingOrb, defaultModel, defaultProviderId, defaultEffort, defaultApprovalMode, defaultAgentId, enabledAgents, acpUnisolatedConsent, hideAgentCapabilities, notifications, editor, customCommands, suggestionsEnabled, suggestionsAgentId, suggestionsModelId, shortcutOverrides, hiddenModels, hiddenProviders, workspaces } = settings;
-  return { museBin, museApiKey, museAuthMode: museAuthMode ?? DEFAULT_SETTINGS.museAuthMode, contributorMode: contributorMode === "on" || contributorMode === "off" ? contributorMode : undefined, ephemeralSessions: ephemeralSessions ?? false, disableWrite: disableWrite ?? false, disableShell: disableShell ?? false, sandboxNetwork: sandboxNetwork ?? "proxy-only", theme, darkIntensity: DARK_INTENSITIES.find((level) => level === darkIntensity) ?? "mid", accentColor, accentSidebar, sidebarTranslucency: normalizeTranslucency(sidebarTranslucency), thinkingOrb: THINKING_ORBS.find((style) => style === thinkingOrb) ?? "auto", defaultModel, defaultProviderId, defaultEffort, defaultApprovalMode, defaultAgentId, enabledAgents: { ...DEFAULT_ENABLED_AGENTS, ...enabledAgents }, acpUnisolatedConsent: acpUnisolatedConsent === true, hideAgentCapabilities: hideAgentCapabilities === true, notifications: notifications ?? true, editor: editor && EDITOR_CHOICES.includes(editor) ? editor : "default", customCommands: normalizeCustomCommands(customCommands), suggestionsEnabled: suggestionsEnabled === true, suggestionsAgentId: suggestionsAgentId && AGENT_IDS.includes(suggestionsAgentId) ? suggestionsAgentId : undefined, suggestionsModelId: typeof suggestionsModelId === "string" && suggestionsModelId.trim() ? suggestionsModelId.trim() : undefined, shortcutOverrides: normalizeShortcutOverrides(shortcutOverrides), hiddenModels: normalizeHiddenModels(hiddenModels), hiddenProviders: normalizeHiddenProviders(hiddenProviders), workspaces };
+  const { museBin, museApiKey, museAuthMode, contributorMode, ephemeralSessions, disableWrite, disableShell, sandboxNetwork, theme, uiFont, darkIntensity, accentColor, accentSidebar, sidebarTranslucency, sidebarDensity, reduceMotion, thinkingOrb, defaultModel, defaultProviderId, defaultEffort, defaultApprovalMode, defaultAgentId, enabledAgents, acpUnisolatedConsent, hideAgentCapabilities, notifications, editor, customCommands, suggestionsEnabled, suggestionsAgentId, suggestionsModelId, shortcutOverrides, hiddenModels, hiddenProviders, workspaces } = settings;
+  return { museBin, museApiKey, museAuthMode: museAuthMode ?? DEFAULT_SETTINGS.museAuthMode, contributorMode: contributorMode === "on" || contributorMode === "off" ? contributorMode : undefined, ephemeralSessions: ephemeralSessions ?? false, disableWrite: disableWrite ?? false, disableShell: disableShell ?? false, sandboxNetwork: sandboxNetwork ?? "proxy-only", theme, uiFont: normalizeUiFont(uiFont), darkIntensity: DARK_INTENSITIES.find((level) => level === darkIntensity) ?? "mid", accentColor, accentSidebar, sidebarTranslucency: normalizeTranslucency(sidebarTranslucency), sidebarDensity: SIDEBAR_DENSITIES.find((density) => density === sidebarDensity) ?? "standard", reduceMotion: reduceMotion === true, thinkingOrb: THINKING_ORBS.find((style) => style === thinkingOrb) ?? "auto", defaultModel, defaultProviderId, defaultEffort, defaultApprovalMode, defaultAgentId, enabledAgents: { ...DEFAULT_ENABLED_AGENTS, ...enabledAgents }, acpUnisolatedConsent: acpUnisolatedConsent === true, hideAgentCapabilities: hideAgentCapabilities === true, notifications: notifications ?? true, editor: editor && EDITOR_CHOICES.includes(editor) ? editor : "default", customCommands: normalizeCustomCommands(customCommands), suggestionsEnabled: suggestionsEnabled === true, suggestionsAgentId: suggestionsAgentId && AGENT_IDS.includes(suggestionsAgentId) ? suggestionsAgentId : undefined, suggestionsModelId: typeof suggestionsModelId === "string" && suggestionsModelId.trim() ? suggestionsModelId.trim() : undefined, shortcutOverrides: normalizeShortcutOverrides(shortcutOverrides), hiddenModels: normalizeHiddenModels(hiddenModels), hiddenProviders: normalizeHiddenProviders(hiddenProviders), workspaces };
 }
 
 export class SettingsPersistence {
   private key: string | undefined;
+  private unknownSettings: Record<string, unknown> = {};
   private queue: Promise<unknown> = Promise.resolve();
   constructor(private store: SettingsStore, private credentials: Credentials) {}
 
@@ -31,6 +33,7 @@ export class SettingsPersistence {
   load(): Promise<Settings> {
     return this.serialize(async () => {
       const saved = await this.store.get<Partial<Settings>>("settings") ?? {};
+      this.unknownSettings = Object.fromEntries(Object.entries(saved).filter(([key]) => !(key in DEFAULT_SETTINGS)));
       const secureKey = await this.credentials.get();
       const legacyKey = saved.museApiKey?.trim() ?? "";
       // Never delete the only persisted copy if the credential store is locked.
@@ -63,8 +66,8 @@ export class SettingsPersistence {
   }
 
   private async writePublicSettings(settings: Settings) {
-    const { museApiKey: _secret, ...publicSettings } = settings;
-    await this.store.set("settings", publicSettings);
+    const { museApiKey: _secret, ...knownSettings } = settings;
+    await this.store.set("settings", { ...this.unknownSettings, ...knownSettings });
     await this.store.save();
   }
 }

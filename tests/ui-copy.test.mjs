@@ -17,38 +17,33 @@ async function bundle(entry) {
 const types = await bundle('apps/desktop/src/lib/types.ts');
 const format = await bundle('apps/desktop/src/lib/format.ts');
 
-test('approval picker exposes every MSP mode with a label and description', () => {
-  assert.deepEqual([...types.APPROVAL_ORDER].sort(), ['allowAll', 'denyUnmatched', 'onRequest', 'promptUnmatched']);
-  assert.equal(new Set(types.APPROVAL_ORDER).size, types.APPROVAL_ORDER.length);
+test('approval picker exposes the three app modes with a short label and description', () => {
+  assert.deepEqual(types.APPROVAL_ORDER, ['onRequest', 'guarded', 'allowAll']);
   for (const mode of types.APPROVAL_ORDER) {
     assert.ok(types.APPROVAL_LABELS[mode]?.length > 0, `${mode} has a label`);
     assert.ok(types.APPROVAL_DESCRIPTIONS[mode]?.length > 0, `${mode} has a description`);
+    assert.ok(types.APPROVAL_DESCRIPTIONS[mode].length < 80, `${mode} stays one line`);
   }
 });
 
-test('permission labels match the Muse CLI picker exactly', () => {
-  const { guarded, ...cliLabels } = types.APPROVAL_LABELS;
-  assert.equal(guarded, 'Autonomous', 'the harness adds one mode of its own');
-  assert.deepEqual(cliLabels, {
+test('permission labels are the app modes, the same for every agent', () => {
+  assert.deepEqual(types.APPROVAL_LABELS, {
     denyUnmatched: 'Read only',
-    promptUnmatched: 'Ask me',
-    onRequest: 'Auto-review',
-    allowAll: 'Unrestricted',
+    promptUnmatched: 'Ask',
+    onRequest: 'Ask',
+    guarded: 'Auto',
+    allowAll: 'Full access',
   });
-  assert.deepEqual(types.APPROVAL_ORDER, ['denyUnmatched', 'promptUnmatched', 'onRequest', 'allowAll']);
-  assert.equal(types.APPROVAL_DESCRIPTIONS.denyUnmatched, 'Reads files only.');
-  assert.equal(types.APPROVAL_DESCRIPTIONS.promptUnmatched, 'Edits workspace and temporary files; requires approval for protected writes, new network targets, and other restricted actions.');
-  assert.equal(types.APPROVAL_DESCRIPTIONS.onRequest, 'Same access as Ask me; AI reviews eligible actions; trusted permission hooks may decide approval requests first.');
-  assert.equal(types.APPROVAL_DESCRIPTIONS.allowAll, 'No filesystem sandbox or approval prompts; local commands have direct network access; project trust is unchanged.');
-  assert.equal(types.APPROVAL_DESCRIPTIONS.guarded, 'Edits and ordinary commands run without asking. Risky or destructive commands still ask first.');
-});
-
-test('the harness offers Autonomous, and it never crosses to another agent', () => {
-  assert.deepEqual(types.HARNESS_APPROVAL_ORDER, ['denyUnmatched', 'promptUnmatched', 'onRequest', 'guarded', 'allowAll']);
+  assert.equal(types.APPROVAL_DESCRIPTIONS.onRequest, 'Edits run, commands ask.');
+  assert.equal(types.APPROVAL_DESCRIPTIONS.guarded, 'Risky commands still ask.');
+  assert.equal(types.APPROVAL_DESCRIPTIONS.allowAll, 'No approval prompts.');
   assert.equal(types.approvalModeForAgent('harness', 'guarded'), 'guarded');
-  assert.equal(types.approvalModeForAgent('muse', 'guarded'), 'onRequest', 'Muse falls back to the closest mode it knows');
-  assert.equal(types.approvalModeForAgent(undefined, 'guarded'), 'onRequest');
-  assert.equal(types.approvalModeForAgent('muse', 'allowAll'), 'allowAll');
+  assert.equal(types.approvalModeForAgent('muse', 'guarded'), 'guarded');
+  assert.equal(types.approvalModeForAgent('grok', 'guarded'), 'guarded');
+  assert.equal(types.approvalModeForAgent('opencode', 'onRequest'), 'onRequest');
+  assert.equal(types.approvalModeForAgent('muse', 'promptUnmatched'), 'onRequest', 'a saved Ask me is Ask');
+  assert.equal(types.approvalModeForAgent(undefined, 'allowAll'), 'allowAll');
+  assert.equal(types.approvalModeForAgent('harness', 'denyUnmatched'), 'denyUnmatched');
 });
 
 test('shortcut labels follow the platform and the metaKey||ctrlKey handler', () => {

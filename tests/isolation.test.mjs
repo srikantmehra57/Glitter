@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { build } from 'esbuild';
 import { mkdtemp } from 'node:fs/promises';
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -170,6 +170,57 @@ test('terminating an already-exited child settles immediately', async () => {
     new Promise((_, reject) => setTimeout(() => reject(new Error('terminateTree stayed pending')), 250)),
   ]);
   assert.equal(result.code, 0);
+});
+
+test('terminateTree kills stubborn descendants after the leader exits', async () => {
+  for (const alreadyExited of [false, true]) {
+    const work = mkdtempSync(join(tmpdir(), 'muse-tree-'));
+    const parentPath = join(work, 'parent.cjs');
+    const grandchildPath = join(work, 'grandchild.cjs');
+    const readyPath = join(work, 'ready');
+    const pidPath = join(work, 'pid');
+    const termPath = join(work, 'term');
+    writeFileSync(grandchildPath, `
+      const fs = require('fs');
+      process.on('SIGTERM', () => { fs.writeFileSync(${JSON.stringify(termPath)}, 'term'); });
+      fs.writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));
+      setInterval(() => {}, 1000);
+    `);
+    writeFileSync(parentPath, `
+      const fs = require('fs');
+      const { spawn } = require('child_process');
+      const child = spawn(process.execPath, [${JSON.stringify(grandchildPath)}], { stdio: 'ignore' });
+      process.on('SIGTERM', () => process.exit(0));
+      fs.writeFileSync(${JSON.stringify(readyPath)}, String(child.pid));
+      setInterval(() => {}, 1000);
+    `);
+    const child = spawn(process.execPath, [parentPath], { detached: true, stdio: ['pipe', 'ignore', 'ignore'] });
+    let grandchildPid;
+    try {
+      const waitFor = async (predicate, label, budget = 3000) => {
+        for (let waited = 0; waited < budget; waited += 25) {
+          if (predicate()) return;
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+        throw new Error(`Timed out waiting for ${label}`);
+      };
+      await waitFor(() => existsSync(readyPath) && existsSync(pidPath), 'fixture readiness');
+      grandchildPid = Number(readFileSync(pidPath, 'utf8'));
+      const alive = () => { try { process.kill(grandchildPid, 0); return true; } catch { return false; } };
+      if (alreadyExited) await new Promise((resolve) => { child.once('exit', resolve); child.kill('SIGTERM'); });
+      const result = await Promise.race([
+        terminateTree(child, 60),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('terminateTree stayed pending')), 2000)),
+      ]);
+      assert.equal(result.code, 0, `alreadyExited=${alreadyExited}`);
+      assert.equal(existsSync(termPath), true, 'the descendant received TERM but stayed alive');
+      await waitFor(() => !alive(), 'grandchild death after leader exit');
+    } finally {
+      try { process.kill(-child.pid, 'SIGKILL'); } catch { /* group already gone */ }
+      if (grandchildPid) { try { process.kill(grandchildPid, 'SIGKILL'); } catch { /* already gone */ } }
+      rmSync(work, { recursive: true, force: true });
+    }
+  }
 });
 
 test('a seatbelt profile parses and confines writes', () => {

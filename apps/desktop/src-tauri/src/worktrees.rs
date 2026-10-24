@@ -175,6 +175,9 @@ pub fn remove(repo: Option<&Path>, dir: &Path, force: bool) -> Result<Removed, S
     let branch = repo.and_then(|repo| registered_branch(repo, dir));
     if let Some(repo) = repo {
         if dir.exists() {
+            if !force && !run_git(dir, &["status", "--porcelain", "--ignored"])?.trim().is_empty() {
+                return Err("The worktree still has uncommitted or ignored files.".into());
+            }
             let target = dir.to_string_lossy().into_owned();
             let mut args = vec!["worktree", "remove"];
             if force {
@@ -396,6 +399,21 @@ mod tests {
         assert!(!err.is_empty());
         assert!(created.path.exists(), "a refused removal must leave the directory alone");
         assert_eq!(registered_branch(&repo, &created.path).as_deref(), Some(created.branch.as_str()), "a refused removal must stay registered");
+        remove(Some(&repo), &created.path, true).expect("cleanup");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn remove_preserves_ignored_files_without_force() {
+        let (root, repo, store) = fixture_repo("ignored-refusal");
+        let created = create(&repo, &store, None).expect("create");
+        std::fs::write(created.path.join(".gitignore"), ".env\n").unwrap();
+        std::fs::write(created.path.join(".env"), "LOCAL_SECRET=keep\n").unwrap();
+
+        let err = remove(Some(&repo), &created.path, false).unwrap_err();
+
+        assert!(err.contains("ignored files"), "unexpected: {err}");
+        assert_eq!(std::fs::read_to_string(created.path.join(".env")).unwrap(), "LOCAL_SECRET=keep\n");
         remove(Some(&repo), &created.path, true).expect("cleanup");
         std::fs::remove_dir_all(root).unwrap();
     }

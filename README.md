@@ -42,6 +42,13 @@ are no Windows or Linux versions. No signed build has been published yet; see [K
   decision, keeps a checklist it updates as it works, hands subtasks to
   subagents, and uses skills and MCP servers. Its threads stay on this Mac, and
   a key leaves it only in the request to the provider that issued it.
+- **A shared Browser for UI verification.** Harness can open a local dev server
+  or another http(s) page, inspect accessibility refs and console errors,
+  navigate, click, fill forms and capture screenshots it can see. The Browser
+  side panel shows the same fresh Chromium page and lets you navigate and take
+  control. It is separate from your normal browser profile, streams only while
+  visible, and closes with its workspace grant. Browser control asks per web
+  origin in Ask and Auto; inspection stays available in Plan mode.
 - **Providers, endpoints and models.** Thirteen providers are built in —
   Anthropic, OpenAI, Google Gemini, OpenRouter, Cline API, Kilo API, xAI,
   DeepSeek, Groq, Mistral, NVIDIA NIM, and Ollama and LM Studio on this Mac —
@@ -59,13 +66,12 @@ are no Windows or Linux versions. No signed build has been published yet; see [K
   command when opened. Streaming answers, plans, tool output, subagents,
   background tasks and goals all sit on that rail. A context compaction is a
   centred seam, the changed files form one review card, and the turn closes with
-  a single **Done** line: duration, output tokens, estimated cost and the model,
+  a single **Done** line: duration, input and output tokens, estimated cost and the model,
   with Undo and Fork beside it.
 - **Approvals.** Write and edit calls show a diff preview, each choice explains
   its scope, approvals expire after 10 minutes, and there are keyboard shortcuts
-  (`⌘Y`, `⌘⇧Y`, `⌘⌫`). Permission modes run Read only, Ask me, Auto-review,
-  Autonomous, Unrestricted: an agent CLI gets the three it can honour, and
-  Harness also offers Auto-review and Autonomous.
+  (`⌘Y`, `⌘⇧Y`, `⌘⌫`). Permission modes are Ask, Auto and Full access, the same
+  for every agent and model, decided by the app.
 - **Composer.** Model, reasoning-effort and permission pickers — models are
   reached through an icon rail of providers. `@` file mentions from a workspace
   file index, slash prompt macros, file and image attachments by picker or drag
@@ -106,6 +112,7 @@ are no Windows or Linux versions. No signed build has been published yet; see [K
 | Native shell | Rust, Tauri 2 (OS webview, no bundled Chromium) |
 | UI | React 19, TypeScript, Zustand, design tokens in CSS on a Tailwind v4 theme layer, lucide-react |
 | Agent bridge | Node (bundled runtime), `@muse-code/sdk` 1.3.0 for MSP, ACP over stdio |
+| Browser verification | Playwright 1.64 driving an installed, native-pinned Chromium; fresh incognito contexts and raster-only panel frames |
 | Built-in harness | HTTPS to Anthropic Messages and OpenAI-compatible Chat Completions; tools confined to the workspace and the seatbelt sandbox |
 | Storage | `glitter.json` for settings, the OS keychain for secrets and workspace grants, JSONL for harness threads |
 | Tests | `node:test`, Vitest + Testing Library, `cargo test` with Tauri's mock runtime |

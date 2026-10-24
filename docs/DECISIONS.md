@@ -168,11 +168,13 @@ must respect. Don't log routine changes here; they belong in git history and
   more than before: the strict CSP (no remote or inline script), text-only
   rendering of agent output, and the strict span adapter for highlighted code.
 - **Limits that still hold:** a terminal starts only in a folder with a live
-  grant, as the user's own shell with the user's environment (the API key is
-  in the keychain, not the environment). At most eight are open. Each write is
-  capped at 64 KB. Terminal ids are unguessable. A terminal ends, with the
-  process group it leads, when its pane closes, when its grant or worktree is
-  revoked, and when the app shuts down.
+  grant, as the user's own shell with the user's environment (the API key is in
+  the keychain, not the environment). At most eight are open. Each write is
+  capped at 64 KB. Input uses a per-session writer outside the global manager
+  lock, so a blocked PTY write cannot stop close, revocation or shutdown.
+  Terminal ids are unguessable. A terminal ends, with the process group it
+  leads, when its pane closes, when its grant or worktree is revoked, and when
+  the app shuts down.
 - **"Disable shell" turns it off.** The setting is a promise about the app, not
   only about the agent. The renderer hides the terminal when it is on, and the
   native side refuses `terminal_open` after a host start that carried
@@ -227,6 +229,10 @@ must respect. Don't log routine changes here; they belong in git history and
   inserts its text into the composer, where the user sees and can edit exactly
   what will be sent; nothing is expanded at send time and there is no second
   command format beside the CLI's skills.
+- **Forward compatibility:** Settings fields introduced by a newer build are
+  retained when an older build saves the document. Each commit is applied to
+  the live state before its first await, so overlapping changes persist their
+  union instead of replacing one another.
 
 ### Workspace tools read through grants, and network git runs as the user
 
@@ -290,9 +296,10 @@ must respect. Don't log routine changes here; they belong in git history and
   worktree table, not from files inside the worktree, which an agent can rewrite.
   A worktree goes with its last thread: forks share their source's worktree.
 - **Revoking the workspace:** Removing a workspace revokes its worktree grants
-  with it. Worktrees with nothing uncommitted are removed; ones that still hold
-  changes stay on disk for the user to recover with git, since removing a
-  workspace from the sidebar never asked to discard work.
+  with it. Worktrees with nothing uncommitted or ignored are removed; ones that
+  hold either stay on disk for the user to recover with git, since removing a
+  workspace from the sidebar never asked to discard work. Non-forced removal
+  checks `git status --ignored`, so an ignored `.env` counts as unsaved work.
 - **Listing:** The CLI files a worktree session under the worktree's root, so a
   workspace listing does not return it. The renderer keeps each thread's
   worktree record in session memory and lists each worktree through its own
@@ -447,8 +454,12 @@ must respect. Don't log routine changes here; they belong in git history and
   (`effortTiers`), since providers do not report it. Provider quirks stay in
   the shared wire rather than in a path per provider: NVIDIA NIM, for one,
   rejects request fields its schema does not list, so `stream_options` goes
-  only to providers known to accept it (`USAGE_IN_STREAM`), and its RFC 7807
-  error bodies are read by their `detail`.
+  only to providers known to accept it (`USAGE_IN_STREAM`) and to custom
+  OpenAI-compatible gateways. ZenMux omits `usage` unless that flag is set,
+  and without it the app can count only the reply. A gateway that rejects
+  the field is asked once more without it. NIM's RFC 7807 error bodies are
+  read by their `detail`. A muted delegated call adds its reported tokens
+  to every open ancestor, so the thread that started the work is billed.
 
 ### A tool result is three channels, and the model pages what does not fit
 
@@ -566,6 +577,12 @@ must respect. Don't log routine changes here; they belong in git history and
   - the binary is pinned by digest
   - it runs with a filtered environment and a confined working directory
   - it runs under an OS write sandbox where one is available
+- **Hardening (2026-10-24):** Detection and Settings resolve and hash ACP
+  binaries without executing them. First use or confirmation records the
+  identity pin before a version probe. Probes receive only base process
+  variables, never provider credentials, and version metadata updates only
+  while the pinned path and digest still match. Automatic ACP permission
+  answers select once-only choices, never an always grant.
 - **Reason:** These are third-party binaries running with the user's identity.
 - **Consequences:** Only Muse, OpenCode and Grok are marked verified. The others
   are labeled experimental in `packages/glitter-bridge/src/agents.ts`.
@@ -884,6 +901,21 @@ must respect. Don't log routine changes here; they belong in git history and
   `UserInputCard`: answers, "Let me explain" and "Decline to answer" map onto
   the same response shape Muse uses.
 
+### Steering is durable before its model-history boundary
+
+- **Date:** 2026-10-24
+- **Decision:** An accepted steer writes a pending `steer` record to the
+  Harness session log before its transcript item is shown. The next tool
+  boundary appends a `steerSettled` marker with the same item ids. On resume,
+  settled steers become ordinary user messages at that point in history;
+  unsettled ones are returned to the host and settled before the next turn.
+- **Why:** The transcript and model history must not diverge when a steer is
+  cancelled, replaced or abandoned before a tool result arrives. Persisting
+  only the transcript item loses the instruction; appending a user message
+  immediately would put it between a tool call and its result, which providers
+  cannot accept. The two record types preserve both orderings without a second
+  session store.
+
 ### Plan mode ends with a plan review
 
 - **Date:** 2026-10-21
@@ -946,14 +978,37 @@ must respect. Don't log routine changes here; they belong in git history and
   outright if it arrives anyway, and hydration clamps it to Ask me rather than
   keeping it as the default for new threads.
 
+### Permission modes belong to the app
+
+- **Date:** 2026-10-24
+- **Decision:** The composer offers three modes for every agent and model:
+  **Ask** (`onRequest`), **Auto** (`guarded`) and **Full access** (`allowAll`).
+  Descriptions are one line. A thread already on Read only (`denyUnmatched`)
+  keeps it until the user picks another mode. Full access is still not a saved
+  default. Auto may be. A saved Ask-me (`promptUnmatched`) loads as Ask.
+- **Why:** The menu had grown to five entries, with a different subset for
+  Muse, the built-in harness and each agent CLI, and the long lines were the
+  Muse CLI's own sentences. Other harnesses offer three. The permission is a
+  property of the app, so switching model or provider does not change it.
+- **Enforcement:** The built-in harness already decides with `decide`. An ACP
+  permission request is answered by the same rules (`acpPermissionDecision`):
+  edits and read-only commands run in Ask, ordinary commands run in Auto, a
+  risky command asks, and a blocked command is refused in every mode. Muse's
+  CLI has no Auto mode, so Ask and Auto are sent as its prompt mode and the
+  app answers the approvals that come back. A provider echo of its own mode
+  does not replace the mode the app stored.
+- **Consequences:** The old Auto-review and Ask-me rows are gone from the menu.
+  What an agent CLI does without asking is still outside the app's reach.
+
 ### MCP servers are user configuration, synced all or nothing
 
 - **Date:** 2026-10-22
 - **Decision:** The harness reads MCP servers from `.glitter/mcp.json` in the
   workspace and in the home folder, with the workspace winning a duplicate
   name. A sync connects and lists every server in the next generation before
-  swapping it in; one failure closes what it opened and keeps the previous
-  generation. Tools are `mcp__server__tool`, join the same registry and
+  swapping it in; one failure closes what it opened and retires the previous
+  generation for future turns, so changed configuration never keeps stale
+  authority. Tools are `mcp__server__tool`, join the same registry and
   ask-policy as built-in tools, and every call asks unless a thread grant names
   that tool or server, or the mode is Full access. MCP tools are deferred: a
   turn starts with `tool_search` and activates what it names.
@@ -967,7 +1022,9 @@ must respect. Don't log routine changes here; they belong in git history and
 - **Bounds:** Server names, env and header keys, argument counts, timeouts,
   tool counts, description sizes and result sizes are bounded. `NODE_OPTIONS`
   is refused, and a stdio server starts under `spawnIsolated` with its
-  configured env merged after the environment scrub.
+  configured env merged after the environment scrub. Every env and header value
+  is registered with the diagnostic redactor before startup; sync errors are
+  sanitized before they reach notices or `mcpStatus`.
 - **Consequences:** Extensions → MCP shows the harness's own generation for a
   harness thread and the CLI's servers for Muse; the two are not merged. A
   broken config is reported as a notice and does not fail the turn.
@@ -1069,9 +1126,18 @@ must respect. Don't log routine changes here; they belong in git history and
   off, shown as None and High and sent as `chat_template_kwargs` with both
   `thinking` and `enable_thinking`, since templates read one or the other.
   None is sent explicitly only where the wire has an off switch (`SENDS_NONE`);
-  elsewhere it leaves the provider's default.
-- **Why:** Providers do not report reasoning support in their model lists, and
-  a field a provider does not accept fails the call.
+  elsewhere it leaves the provider's default. Custom OpenAI-compatible
+  gateways such as ZenMux use Minimal through High. Kimi K3, including K3.1
+  Pro and Highspeed, and K2.8 are the exception: Moonshot publishes Low, High,
+  and Max, with Max as the default, and the model always reasons. Their
+  `capabilities.reasoning` catalog flag wins when present, including new model
+  families; the family matcher is the fallback when it is absent. The Kimi
+  list replaces both. That flag follows the catalog into request validation
+  so the picker and the wire agree.
+- **Why:** Most providers do not report reasoning support in their model lists,
+  and a field a provider does not accept fails the call. Where a custom gateway
+  does report it, use that signal rather than requiring every new model family
+  to be added to a regex.
 
 ### The request is fitted to the model's window before it is sent
 
@@ -1110,3 +1176,43 @@ must respect. Don't log routine changes here; they belong in git history and
   disagree with a real tokenizer in either direction; the ladder's markers
   make each retry strictly smaller, and the provider's own `usage` keeps the
   context chip honest.
+
+### One managed Chromium is shared by the agent and the Browser pane
+
+- **Date:** 2026-10-24
+- **Decision:** Add an in-app Browser for the built-in Harness, implemented by
+  one Playwright manager in the Node bridge rather than a Tauri child webview.
+  The agent and panel use the same fresh context and operation queue per
+  workspace or worktree root. The renderer sees JPEG frames and plain text,
+  never remote DOM, and forwards its pointer and keyboard input through that
+  queue. One page lives per root; downloads and service workers are disabled,
+  navigation is limited to http(s), and the user's normal browser profile is
+  never opened.
+- **Why:** Playwright supplies reliable locators, AI accessibility refs,
+  actionability, screenshots and a backpressured screencast. A native webview
+  would put hostile page content inside Glitter's window and require a second,
+  platform-specific automation implementation. Raster-only panel content also
+  keeps the strict renderer CSP and overlay behavior intact.
+- **Authorization:** The native shell chooses a compatible installed Chromium,
+  validates and digest-pins its executable, and supplies that identity to the
+  bridge. No renderer-provided executable, profile or CDP endpoint is accepted.
+  Browser verbs require a live workspace grant and revocation closes the
+  context. Production always enables Chromium's sandbox; only a direct test
+  process can explicitly opt into a development-sandbox fallback, never the
+  native app. The browser gets a filtered environment and closes with the
+  bridge.
+- **Permissions and privacy:** Snapshot, screenshot, console, scroll and wait
+  are inspection. Navigation and page-changing actions need an exact-origin
+  grant in Ask and Auto, with the origin checked again after the approval wait.
+  Full access skips prompts; Plan mode keeps inspection only. Screenshots are
+  explicit model-visible image results, not base64 in tool text or screencast
+  frames. Old images leave the request view with an omission note and image
+  bytes are not persisted in session JSONL. The panel tells the user that page
+  content and screenshots go to the selected model provider.
+- **Packaging and limits:** `playwright-metadata.mjs` embeds Playwright's package
+  and browser-registry metadata into the single verified bridge bundle, so no
+  runtime `node_modules` tree is needed. Chromium is installed separately and
+  is not redistributed by Glitter. This first version is Harness-only and has
+  one tab, no downloads, no arbitrary page-script tool and no Safari/WKWebView
+  verification claim. The mock browser preview remains a separate UI-only
+  development mode.

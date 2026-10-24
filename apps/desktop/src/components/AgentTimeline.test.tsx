@@ -74,6 +74,16 @@ describe("live status line", () => {
     expect(screen.getByText("npm test")).toBeInTheDocument();
     expect(screen.getByText("npm test").closest(".working-detail")).toHaveAttribute("aria-live", "off");
   });
+
+  it("keeps a streamed thought inside the working row until that row is opened", () => {
+    render(<WorkingIndicator label="Thinking" live={[
+      { id: "th", kind: "reasoning", status: "running", title: "Planning", detail: "Private chain\n\nShould stay inside the row.", item: item({ itemId: "th", kind: "reasoning", text: "Private chain" }) },
+    ]} />);
+    expect(screen.queryByText("Private chain")).toBeNull();
+    expect(screen.queryByText("Should stay inside the row.")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /^Thinking/ }));
+    expect(screen.getByText("Should stay inside the row.").closest(".thought")).not.toBeNull();
+  });
 });
 
 describe("message editing", () => {
@@ -115,7 +125,7 @@ describe("message editing", () => {
   });
 
   it("cancels inline editing without touching the composer or sending", async () => {
-    const rewind = vi.fn(async () => false); const send = vi.fn(async () => {});
+    const rewind = vi.fn(async () => false); const send = vi.fn(async () => true);
     seedStore({ rewindMessage: rewind, sendPrompt: send, composer: "Keep this draft" });
     mount(thread({ items: prompts() }));
     const user = userEvent.setup();
@@ -127,7 +137,7 @@ describe("message editing", () => {
   });
 
   it("shows a history-boundary error instead of appending a legacy message", async () => {
-    const send = vi.fn(async () => {}); seedStore({ sendPrompt: send });
+    const send = vi.fn(async () => true); seedStore({ sendPrompt: send });
     mount(thread({ items: [item({ itemId: "old", kind: "userMessage", text: "Historical prompt" })], historyExhausted: true }));
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Edit and rewind" }));
@@ -138,7 +148,7 @@ describe("message editing", () => {
   });
 
   it("keeps ACP editing as resend with the original attachments", async () => {
-    const send = vi.fn(async () => {}); const rewind = vi.fn(async () => false);
+    const send = vi.fn(async () => true); const rewind = vi.fn(async () => false);
     const images = [{ name: "a.png", mediaType: "image/png", base64Data: "aW1hZ2U=" }];
     const refs = [{ id: "r", kind: "file" as const, path: "a.ts" }];
     seedStore({ sendPrompt: send, rewindMessage: rewind });
@@ -180,18 +190,43 @@ describe("AgentTimeline", () => {
     expect(screen.getByText(/Found the race in the token refresh/)).toBeInTheDocument();
   });
 
-  it("wears its mark and name as its head on a Harness thread, never a paused orb", () => {
+  it("shows real message times beside above-opening, inward-aligned tooltips", () => {
+    const sentAt = "2026-10-25T00:47:00+05:30";
+    const answeredAt = "2026-10-25T00:49:00+05:30";
+    const label = (value: string) => new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+    mount(thread({
+      lastOutcome: "completed",
+      lastTurnId: "t1",
+      items: [
+        item({ itemId: "u1", kind: "userMessage", turnId: "t1", text: "Fix the tooltip", recordedAt: sentAt }),
+        item({ itemId: "m1", kind: "agentMessage", turnId: "t1", text: "Fixed.", recordedAt: answeredAt }),
+      ],
+    }));
+    const userMessage = screen.getByText("Fix the tooltip").closest(".msg.user") as HTMLElement;
+    const agentMessage = screen.getByText("Fixed.").closest(".msg.agent") as HTMLElement;
+    const sentTime = within(userMessage).getByText(label(sentAt));
+    expect(sentTime).toHaveAttribute("datetime", sentAt);
+    expect(sentTime).toHaveClass("msg-time");
+    expect(sentTime.closest(".msg-actions")).toBeNull();
+    expect(within(agentMessage).getByText(label(answeredAt))).toHaveAttribute("datetime", answeredAt);
+    expect(within(userMessage).getByRole("button", { name: "Copy message" })).toHaveAttribute("data-tooltip-side", "top");
+    expect(within(userMessage).getByRole("button", { name: "Copy message" })).toHaveAttribute("data-tooltip-align", "end");
+    expect(within(agentMessage).getByRole("button", { name: "Copy message" })).toHaveAttribute("data-tooltip-align", "start");
+  });
+
+  it("puts no provider mark on a turn, live or settled", () => {
     const items = [
       item({ itemId: "u1", kind: "userMessage", turnId: "t1", text: "go" }),
       item({ itemId: "m1", kind: "agentMessage", turnId: "t1", text: "Done." }),
     ];
-    for (const state of [{ status: "running" as const, activeTurnId: "t1" }, { status: "idle" as const, lastTurnId: "t1", lastOutcome: "completed" as const }]) {
-      const view = mount(thread({ agentId: "harness", items, ...state }));
-      const head = document.querySelector<HTMLElement>(".agent-message-head")!;
-      expect(within(head).getByTestId("agent-mark")).toBeInTheDocument();
-      expect(within(head).getByText("Harness")).toBeInTheDocument();
-      expect(within(head).queryByTestId("thinking-orb")).toBeNull();
-      view.unmount();
+    for (const agentId of ["harness", "opencode", "grok"] as const) {
+      for (const state of [{ status: "running" as const, activeTurnId: "t1" }, { status: "idle" as const, lastTurnId: "t1", lastOutcome: "completed" as const }]) {
+        const view = mount(thread({ agentId, items, ...state }));
+        expect(document.querySelector(".agent-message-head")).toBeNull();
+        expect(screen.queryByTestId("agent-mark")).toBeNull();
+        expect(screen.queryByTestId("thinking-orb")).toBeNull();
+        view.unmount();
+      }
     }
   });
 
@@ -246,6 +281,24 @@ describe("AgentTimeline", () => {
     expect(dialog?.body).toContain("nothing is restored");
   });
 
+  it("keeps Review after a completed answer without an edit or usage summary", async () => {
+    mount(thread({
+      lastOutcome: "completed",
+      lastTurnId: "t1",
+      items: [
+        item({ itemId: "u1", kind: "userMessage", turnId: "t1", text: "explain this" }),
+        item({ itemId: "m1", kind: "agentMessage", turnId: "t1", text: "Here is the explanation." }),
+      ],
+    }));
+    const done = screen.getByRole("region", { name: "Done" });
+    expect(screen.queryByRole("region", { name: "Changed files" })).toBeNull();
+    expect(within(done).queryByRole("button", { name: "Undo" })).toBeNull();
+    const user = userEvent.setup();
+    await user.click(within(done).getByRole("button", { name: "Review" }));
+    expect(useAppStore.getState().inspectorTab).toBe("changes");
+    expect(useAppStore.getState().dockOpen).toBe(true);
+  });
+
   it("does not offer a destructive fallback for historical turns without snapshots", () => {
     mount(thread({ items: [item({ tool: "edit_file", turnId: "t1", args: '{"path":"src/a.ts"}' })] }));
     expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
@@ -294,7 +347,7 @@ describe("AgentTimeline", () => {
     const view = mount(thread({ status: "running", activeTurnId: "t1", items }));
     expect(screen.getByText("Reading the guide first").closest(".trace-note")).not.toBeNull();
     expect(document.querySelector(".trace-head")).toBeNull();
-    expect(screen.getAllByTestId("agent-mark")).toHaveLength(1);
+    expect(screen.queryByTestId("agent-mark")).toBeNull();
     view.unmount();
     mount(thread({ lastTurnId: "t1", lastOutcome: "completed", items }));
     expect(screen.queryByText("Reading the guide first")).toBeNull();
@@ -305,7 +358,7 @@ describe("AgentTimeline", () => {
     expect(screen.getByText("Reading the guide first")).toBeInTheDocument();
   });
 
-  it("keeps only the newest note of a live turn open and folds a note the agent has moved past", () => {
+  it("keeps every note collapsed until it is opened, including the newest of a live turn", () => {
     const source = (items: TranscriptItem[]) => thread({ status: "running", activeTurnId: "t1", items });
     const first = [
       item({ itemId: "u1", kind: "userMessage", turnId: "t1", text: "Fix the flaky login test" }),
@@ -317,20 +370,20 @@ describe("AgentTimeline", () => {
     const note = (id: string) => document.querySelector(`[data-item="${id}"]`) as HTMLElement;
     const expanded = (id: string) => note(id)?.querySelector(".trace-note-head")?.getAttribute("aria-expanded");
     const view = mount(source(first));
-    expect(expanded("m1"), "a note the agent already worked past").toBe("false");
-    expect(expanded("m2"), "the note the agent wrote last").toBe("true");
-    // A folded note opens on request and stays open when the agent writes on.
-    fireEvent.click(within(note("m1")).getByRole("button"));
-    expect(expanded("m1")).toBe("true");
+    expect(expanded("m1")).toBe("false");
+    expect(expanded("m2"), "the newest note stays one line").toBe("false");
+    expect(screen.queryByText("It is in the refresh path.")).toBeNull();
+    fireEvent.click(within(note("m2")).getByRole("button"));
+    expect(expanded("m2")).toBe("true");
+    expect(screen.getByText("It is in the refresh path.")).toBeInTheDocument();
     const next = source([...first,
       item({ itemId: "m3", kind: "agentMessage", turnId: "t1", text: "Applying the fix" }),
       item({ itemId: "c3", tool: "edit_file", turnId: "t1", args: JSON.stringify({ path: "src/a.ts" }) }),
     ]);
     seedStore({ threads: [next], selectedSessionId: next.sessionId });
     view.rerender(<AgentTimeline thread={next} />);
-    expect(expanded("m2")).toBe("false");
-    expect(expanded("m3")).toBe("true");
-    expect(expanded("m1"), "a note the user opened").toBe("true");
+    expect(expanded("m3"), "a new note starts folded").toBe("false");
+    expect(expanded("m2"), "a note the reader opened").toBe("true");
   });
 
   it("labels an in-progress tool call as Running", () => {
@@ -371,7 +424,7 @@ describe("AgentTimeline", () => {
     expect(screen.getByText("npm test")).toBeInTheDocument();
   });
 
-  it("keeps a failed step visible in a group that opened for it", () => {
+  it("badges a failed group and keeps its output folded until opened", async () => {
     mount(thread({
       status: "running",
       activeTurnId: "t1",
@@ -383,8 +436,12 @@ describe("AgentTimeline", () => {
         item({ itemId: "x1", tool: "grep", turnId: "t1", status: "inProgress", args: JSON.stringify({ pattern: "later" }) }),
       ],
     }));
+    const head = screen.getByRole("button", { name: /Ran 2 tools/ });
     expect(screen.getByText("1 failure")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Ran 2 tools/ })).toHaveAttribute("aria-expanded", "true");
+    expect(head).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("npm test")).toBeNull();
+    await userEvent.setup().click(head);
+    expect(head).toHaveAttribute("aria-expanded", "true");
     expect(screen.getAllByText("npm test").length).toBeGreaterThan(0);
   });
 
@@ -419,7 +476,7 @@ describe("AgentTimeline", () => {
     await user.click(within(card).getByRole("button", { name: "Show 2 more files" }));
     expect(card.querySelectorAll(".change-row")).toHaveLength(5);
     expect(within(card).getByRole("button", { name: "Show fewer files" })).toHaveAttribute("aria-expanded", "true");
-    await user.click(within(card).getByRole("button", { name: /^Review/ }));
+    await user.click(within(screen.getByRole("region", { name: "Done" })).getByRole("button", { name: "Review" }));
     expect(useAppStore.getState().inspectorTab).toBe("changes");
     expect(useAppStore.getState().dockOpen).toBe(true);
   });
@@ -535,12 +592,58 @@ describe("timeline edit and thought previews", () => {
   it("keeps failed edits as errors without claiming an applied change", () => {
     mount(thread({ items: [item({ tool: "edit_file", status: "failed", args: JSON.stringify({ old_string: "old", new_string: "new" }), failureReason: "Not found" })] }));
     expect(screen.queryByLabelText("Edit preview")).toBeNull();
+    expect(screen.queryByText("Not found")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Edited/ }));
+    expect(screen.queryByLabelText("Edit preview")).toBeNull();
     expect(screen.getByText("Not found")).toBeInTheDocument();
   });
   it("shows the first thought line once when expanded", () => {
     mount(thread({ items: [item({ kind: "reasoning", text: "Unique opening line\n\nMore detail" })] }));
+    expect(screen.queryByText("More detail")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: /Thought\s*Unique opening line/ }));
     expect(screen.getAllByText("Unique opening line")).toHaveLength(1);
     expect(document.querySelector(".reasoning .step-summary")).toBeNull();
+    expect(screen.getByText("More detail").closest(".thought")).not.toBeNull();
+  });
+
+  it("keeps a live turn's thinking inside a closed group, under the answer", async () => {
+    mount(thread({
+      status: "running",
+      activeTurnId: "t1",
+      items: [
+        item({ itemId: "u1", kind: "userMessage", turnId: "t1", text: "go" }),
+        item({ itemId: "th1", kind: "reasoning", turnId: "t1", text: "I should read the login test\n\nThe race is in refresh." }),
+        item({ itemId: "r1", tool: "read_file", turnId: "t1", args: JSON.stringify({ path: "src/a.ts" }) }),
+        item({ itemId: "th2", kind: "reasoning", turnId: "t1", text: "The token refresh races the form." }),
+        item({ itemId: "m1", kind: "agentMessage", turnId: "t1", text: "Found the race in the token refresh." }),
+      ],
+    }));
+    const head = screen.getByRole("button", { name: /Ran 1 tool/ });
+    expect(head).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("The race is in refresh.")).toBeNull();
+    expect(screen.queryByText("The token refresh races the form.")).toBeNull();
+    expect(screen.getByText("Found the race in the token refresh.").closest(".msg.agent")).not.toBeNull();
+    await userEvent.setup().click(head);
+    expect(screen.getByRole("button", { name: /Thought\s*I should read the login test/ })).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("The race is in refresh.")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Thought\s*I should read the login test/ }));
+    expect(screen.getByText("The race is in refresh.").closest(".thought")).not.toBeNull();
+    expect(screen.getByText("Found the race in the token refresh.").closest(".msg.agent")).not.toBeNull();
+  });
+
+  it("leaves a settled turn's thinking as one line above the answer", () => {
+    mount(thread({
+      lastTurnId: "t1",
+      lastOutcome: "completed",
+      items: [
+        item({ itemId: "u1", kind: "userMessage", turnId: "t1", text: "go" }),
+        item({ itemId: "th1", kind: "reasoning", turnId: "t1", text: "First I will look.\n\nDetail that should stay hidden." }),
+        item({ itemId: "th2", kind: "reasoning", turnId: "t1", text: "Then I will edit." }),
+        item({ itemId: "m1", kind: "agentMessage", turnId: "t1", text: "All set." }),
+      ],
+    }));
+    expect(screen.getByRole("button", { name: /2 thoughts/ })).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("Detail that should stay hidden.")).toBeNull();
+    expect(screen.getByText("All set.").closest(".msg.agent")).not.toBeNull();
   });
 });

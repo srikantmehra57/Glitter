@@ -75,8 +75,8 @@ Per-item log (newest first):
   L2, L3 and L6.
 
 - **Phase 5 — D1 done.** The owner decided the trust question: the terminal is
-  built, and "Disable shell" turns it off. A Terminal pane sits below the
-  composer (⌘J, the header button, or the palette). `terminal.rs` runs the
+  built, and "Disable shell" turns it off. A Terminal side panel sits beside
+  the thread (⌘J, the header button, or the palette). `terminal.rs` runs the
   user's login shell on a PTY in the folder the open thread works in; output
   streams as events and keystrokes are written back. The shell ends when the
   pane closes, when the folder in view changes, when its grant or worktree is

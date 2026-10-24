@@ -904,7 +904,7 @@ test('confirm resolves with the answer and a second confirm cancels the first', 
 });
 
 test('hydrate clamps a persisted per-thread-only approval default', async () => {
-  for (const mode of ['allowAll', 'guarded']) {
+  for (const [mode, expected] of [['allowAll', 'onRequest'], ['promptUnmatched', 'onRequest'], ['guarded', 'guarded']]) {
     globalThis.persistedData = { settings: { defaultApprovalMode: mode } };
     const store = await frontendStore({
       '@tauri-apps/plugin-store': `export class LazyStore { async entries(){ return Object.entries(globalThis.persistedData ?? {}); } async get(key){ return globalThis.persistedData?.[key]; } async set(key, value){ globalThis.persistedData = { ...globalThis.persistedData, [key]: value }; } async save(){ throw new Error('the non-atomic plugin writer must not be used'); } }`,
@@ -912,7 +912,7 @@ test('hydrate clamps a persisted per-thread-only approval default', async () => 
       '@tauri-apps/plugin-notification': `export const isPermissionGranted=async()=>true;export const requestPermission=async()=>"granted";export const sendNotification=()=>{};`,
     }, true);
     await store.getState().hydrate();
-    assert.equal(store.getState().defaultApprovalMode, 'promptUnmatched', `${mode} is not a durable default`);
+    assert.equal(store.getState().defaultApprovalMode, expected, `${mode} hydrates to ${expected}`);
   }
 });
 
@@ -947,7 +947,7 @@ async function settingsComponent() {
     'zustand/react/shallow': 'export const useShallow=(selector)=>selector;',
     '../lib/store': 'export const useAppStore=()=>globalThis.componentState;useAppStore.getState=()=>globalThis.componentState;export const applyTheme=()=>{};export const hasWindowMaterial=()=>false;export const currentThread=()=>undefined;export const currentWorkspace=()=>undefined;export const preferredAgent=()=>"muse";',
     '../lib/bridge': 'export const openLogFolder=async()=>"/preview/logs/app.log";export const diagnosticsSnapshot=async()=>({os:"browser-preview",arch:"",logTail:[]});export const providerKeysGet=async(ids)=>ids.map((id)=>({id,configured:false,keyHint:null,baseUrl:null}));export const providerKeySet=async()=>[];export const openUrl=async()=>{};',
-    'lucide-react': 'const I=()=>null;export const Activity=I,Archive=I,ArchiveRestore=I,ArrowLeft=I,Bot=I,ChartNoAxesColumn=I,Check=I,ChevronDown=I,Command=I,Cpu=I,Eye=I,EyeOff=I,ExternalLink=I,FilePlus=I,FolderOpen=I,Info=I,KeyRound=I,LoaderCircle=I,Lock=I,MessagesSquare=I,Monitor=I,Moon=I,Palette=I,PanelLeft=I,Plug=I,Plus=I,Puzzle=I,RefreshCw=I,Search=I,Settings2=I,ShieldCheck=I,Sun=I,Trash2=I,TriangleAlert=I,X=I;',
+    'lucide-react': 'const I=()=>null;export const Activity=I,Archive=I,ArchiveRestore=I,ArrowLeft=I,Bot=I,ChartNoAxesColumn=I,Check=I,ChevronDown=I,Command=I,Cpu=I,Eye=I,EyeOff=I,ExternalLink=I,FilePlus=I,FolderOpen=I,Info=I,KeyRound=I,LoaderCircle=I,Lock=I,MessagesSquare=I,Minus=I,Monitor=I,Moon=I,Palette=I,PanelLeft=I,Plug=I,Plus=I,Puzzle=I,RefreshCw=I,Search=I,Settings2=I,ShieldAlert=I,ShieldCheck=I,Sun=I,Trash2=I,TriangleAlert=I,X=I;',
     './SelectMenu': 'export const SelectMenu=()=>null;',
     './AgentPicker': 'export const AgentMark=()=>null;export const ProviderMark=()=>null;export const ModelIcon=()=>null;',
     './ExtensionsView': 'export const ExtensionsView=()=>null;',
@@ -1283,16 +1283,13 @@ test('the modal guard covers non-native modal surfaces too', async () => {
   assert.doesNotMatch(app, /querySelector\("dialog\[open\]"\)/, 'no direct dialog-only probe may remain in the guard paths');
 });
 
-// Three tab groups declared `role="tab"` with no `aria-controls`, and their
-// panels were unlabelled: a screen-reader user heard three tabs with no way to
-// tell which one was showing, and the panel was an anonymous region.
-test('the changes dock tabs are wired to a labelled panel', async () => {
+// Changes is one review surface; Diff, Files, and Monitor no longer need four
+// peer tabs, but the current view still needs an accessible region name.
+test('the changes dock names its single review region', async () => {
   const { readFileSync } = await import('node:fs');
   const source = readFileSync('apps/desktop/src/components/ReviewDock.tsx', 'utf8');
-  assert.match(source, /aria-controls="dock-panel"/, 'every tab must name its panel');
-  assert.match(source, /role="tabpanel"[^>]*aria-labelledby=\{`dock-tab-\$\{s\.inspectorTab\}`\}/, 'the panel must be named by the selected tab');
-  // Each tab needs a stable id for that labelling to point at.
-  assert.match(source, /id=\{`dock-tab-\$\{tab\}`\}/);
+  assert.match(source, /id="dock-panel" role="region" aria-label=\{viewTitle\}/);
+  assert.doesNotMatch(source, /role="tablist" aria-label="Changes view"/);
 });
 
 // A menu that closed on Tab left focus on the document body, because the
