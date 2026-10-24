@@ -87,6 +87,7 @@ describe("usage ledger", () => {
   });
 
   it("updates cached input when it arrives after the turn, and keeps its trajectory", () => {
+    seedStore({ threads: [{ ...running(), turnStartCache: 100 }] });
     emit("sessionFacts", { sessionId: "h-session-1", usage: { promptTokens: 5_000, outputTokens: 700, cacheReadTokens: 100 } });
     emit("modelCall", { sessionId: "h-session-1", turnId: "t1", call: call() });
     emit("turnCompleted", completed);

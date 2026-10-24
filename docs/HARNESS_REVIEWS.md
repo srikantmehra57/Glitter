@@ -1,11 +1,16 @@
 # Harness reviews: four agent harnesses, and what our harness should take
 
-We reviewed four open-source agent harnesses against our own built-in harness
-(`packages/glitter-bridge/src/harness`, 1,469 lines). This is the index and the
-combined ranking.
+This is a **historical peer review**, preserved as evidence rather than current
+implementation status. The harness sizes, missing features and recommendations
+below describe the snapshots reviewed on 2026-10-21, before later permissions,
+MCP, skills, delegation and context work landed. Check the implementation before
+acting on any recommendation here.
 
-The ranked items are **sequenced into phases in
-[HARNESS_INTEGRATION_PLAN.md](HARNESS_INTEGRATION_PLAN.md)**.
+The current forward roadmap is
+[HARNESS_UPGRADE_PLAN.md](HARNESS_UPGRADE_PLAN.md); its phase numbers do not
+refer to the old integration plan. At the time of this review, our built-in
+harness (`packages/glitter-bridge/src/harness`) was 1,469 lines. This is the
+index and the original combined ranking.
 
 | Review | Harness | License | Agent core | Core size vs. ours |
 |---|---|---|---|---|

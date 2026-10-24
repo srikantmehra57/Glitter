@@ -22,11 +22,12 @@ export { runGuards } from ${JSON.stringify(resolve('packages/glitter-bridge/src/
 export { decide } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/permission/policy.ts'))};
 export { catalogPrompt, discoverSkills, parseFrontmatter } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/skills.ts'))};
 export { isTruncatedStop, repairHistory, classifyProviderFailure } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/wire.ts'))};
+export { clipRecency, contextBudget, estimateRequestTokens, fitHistory, headTail, outputReserve, skeleton } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/context.ts'))};
 export { effortTiers, resolveProvider } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/providers.ts'))};
 export { McpManager, readMcpServers, readMcpConfig, addMcpServer, removeMcpServer, mcpToolName } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/mcp.ts'))};
 `);
 await build({ entryPoints: [join(temporary, 'entry.ts')], bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'silent' });
-const { HarnessHost, SessionStore, BUILTIN_TOOLS, ExtensionRegistry, parseScript, isReadOnly, assessCommand, covers, scopesFor, runGuards, decide, catalogPrompt, discoverSkills, parseFrontmatter, confine, globRegex, runTool, scheduleToolCalls, encodeSegment, repairHistory, isTruncatedStop, retryBudgetOpen, effortTiers, resolveProvider, classifyProviderFailure, McpManager, readMcpServers, readMcpConfig, addMcpServer, removeMcpServer, mcpToolName } = await import(pathToFileURL(outfile).href);
+const { HarnessHost, SessionStore, BUILTIN_TOOLS, ExtensionRegistry, parseScript, isReadOnly, assessCommand, covers, scopesFor, runGuards, decide, catalogPrompt, discoverSkills, parseFrontmatter, confine, globRegex, runTool, scheduleToolCalls, encodeSegment, repairHistory, isTruncatedStop, retryBudgetOpen, effortTiers, resolveProvider, classifyProviderFailure, McpManager, readMcpServers, readMcpConfig, addMcpServer, removeMcpServer, mcpToolName, clipRecency, contextBudget, estimateRequestTokens, fitHistory, headTail, outputReserve, skeleton } = await import(pathToFileURL(outfile).href);
 
 const sse = (frames) => new Response(new ReadableStream({
   start(controller) {
@@ -89,15 +90,24 @@ const until = async (events, predicate, ms = 4000) => {
   return events.find(predicate);
 };
 
-test('providers need a key unless they are local, and custom endpoints use the URL saved with the key', () => {
+test('providers need a key unless they are local or a custom endpoint, which the credential describes', () => {
   assert.equal(resolveProvider('anthropic', {}), null);
   assert.equal(resolveProvider('anthropic', { anthropic: {} }), null, 'a key is required');
   assert.equal(resolveProvider('ollama', { ollama: {} })?.root, 'http://localhost:11434/v1', 'local servers need no key');
-  assert.equal(resolveProvider('custom', { custom: { key: 'k' } }), null, 'a custom endpoint needs its URL');
-  assert.equal(resolveProvider('custom', { custom: { key: 'k', baseUrl: 'https://llm.example/v1/' } })?.root, 'https://llm.example/v1');
+  const keyless = resolveProvider('custom-1', { 'custom-1': { name: 'Gateway', baseUrl: 'https://llm.example/v1' } });
+  assert.equal(keyless?.keyless, true, 'a custom endpoint without a key saved is still configured');
+  assert.equal(resolveProvider('custom-2', { 'custom-2': { key: 'k', name: 'Gateway' } }), null, 'a custom endpoint without an address is not');
+  const custom = resolveProvider('custom-1', { 'custom-1': { name: 'Gateway', wire: 'anthropic', baseUrl: 'https://llm.example/v1/' } });
+  assert.equal(custom?.root, 'https://llm.example/v1', 'the saved address is the root, trailing slash dropped');
+  assert.equal(custom?.wire, 'anthropic', 'the saved wire decides the protocol');
+  assert.equal(custom?.name, 'Gateway', 'the saved name is the provider name');
+  assert.equal(resolveProvider('custom-9', { 'custom-9': { key: 'k', name: 'vLLM', baseUrl: 'http://localhost:8000/v1' } })?.keyless, undefined, 'a keyed custom endpoint is not keyless');
+  assert.equal(resolveProvider('custom', { custom: { key: 'k', baseUrl: 'https://llm.example/v1' } }), null, 'the create sentinel never resolves');
+  assert.equal(resolveProvider('attacker', { attacker: { key: 'k', baseUrl: 'https://evil.example' } }), null, 'an arbitrary id is not a provider');
   assert.deepEqual(effortTiers('anthropic', 'claude-3-5-haiku-latest'), [], 'pre-3.7 Claude has no thinking');
   assert.ok(effortTiers('anthropic', 'claude-sonnet-4-5').includes('high'));
   assert.deepEqual(effortTiers('openai', 'gpt-4o'), []);
+  assert.deepEqual(effortTiers('custom-1', 'claude-sonnet-9'), [], 'a custom endpoint reports no effort tiers');
   assert.deepEqual(effortTiers('nvidia', 'openai/gpt-oss-120b'), ['low', 'medium', 'high'], 'NIM gpt-oss takes reasoning_effort');
   assert.deepEqual(effortTiers('nvidia', 'nvidia/nemotron-3.5-super'), ['none', 'high'], 'a NIM hybrid thinker is a switch');
   assert.deepEqual(effortTiers('nvidia', 'meta/llama-3.3-70b-instruct'), [], 'a plain NIM model has no effort');
@@ -561,6 +571,235 @@ test('a reply cut off by the output limit does not run its tool call', async () 
   assert.equal(isTruncatedStop('end_turn'), false);
 });
 
+test('the estimator counts system, tools and history conservatively', () => {
+  const system = { stable: 's'.repeat(400), volatile: 'v'.repeat(400) };
+  const tools = [{ name: 'read_file', description: 'Read a file.', parameters: { type: 'object' } }];
+  const messages = [{ role: 'user', content: [{ type: 'text', text: 'm'.repeat(400) }] }];
+  // 400+400 chars of system, 400 of message, ~40 of tool: 840 chars / 4, each ceil'd.
+  assert.equal(estimateRequestTokens({ system, messages: [], tools: [] }), 200);
+  assert.equal(estimateRequestTokens({ system, messages, tools: [] }), 300);
+  assert.ok(estimateRequestTokens({ system, messages, tools }) > 300, 'tool schemas count');
+  assert.ok(estimateRequestTokens({ system, messages: [{ role: 'user', content: [{ type: 'image', mediaType: 'image/png', data: 'x' }] }], tools: [] }) >= 1100, 'an image costs a flat estimate, not its bytes');
+});
+
+test('the budget keeps an output reserve, and a small window keeps a positive input', () => {
+  assert.deepEqual(contextBudget(200_000), { input: 180_000, output: 20_000 });
+  assert.deepEqual(outputReserve(200_000), 20_000);
+  assert.deepEqual(contextBudget(2_000), { input: 1_800, output: 200 });
+});
+
+test('fitHistory shortens the oldest results first, newest intact, and the ladder marks what it dropped', () => {
+  const big = 'x'.repeat(12_000);
+  const messages = [
+    { role: 'user', content: [{ type: 'text', text: 'do it' }] },
+    { role: 'assistant', text: '', toolCalls: [{ id: 'a', name: 'bash', input: { command: 'one' } }] },
+    { role: 'tool', results: [{ id: 'a', name: 'bash', output: big }] },
+    { role: 'assistant', text: '', toolCalls: [{ id: 'b', name: 'bash', input: { command: 'two' } }] },
+    { role: 'tool', results: [{ id: 'b', name: 'bash', output: big }] },
+  ];
+  // 6,000 tokens of results + ~30 of the rest. A budget that one head/tail satisfies trims only the oldest.
+  const one = fitHistory({ messages, budget: 4_200 });
+  assert.equal(one.trimmed, true);
+  assert.match(one.messages[2].results[0].output, /chars elided/, 'the oldest result is head+tail');
+  assert.equal(one.messages[4].results[0].output, big, 'the newest result stays verbatim');
+  assert.ok(one.tokens <= 4_200, `fits (${one.tokens})`);
+  // A budget head/tail cannot satisfy reaches the skeleton rung, which names the tool
+  // and the *original* size. The oldest result descends completely before the next is touched.
+  const none = fitHistory({ messages, budget: 1_500 });
+  assert.match(none.messages[2].results[0].output, /shortened to fit the context window/);
+  assert.match(none.messages[2].results[0].output, /Tool: bash/);
+  assert.match(none.messages[2].results[0].output, /Size: 12,000 chars/, 'the skeleton reports the original size');
+  assert.match(none.messages[4].results[0].output, /chars elided/, 'the newest result stays one rung up');
+  assert.ok(none.tokens <= 1_500, `fits (${none.tokens})`);
+  // Enough pressure skeletons everything.
+  const all = fitHistory({ messages, budget: 300 });
+  assert.match(all.messages[2].results[0].output, /shortened to fit/);
+  assert.match(all.messages[4].results[0].output, /shortened to fit/, 'extreme pressure reaches every result');
+  // A result that fits is returned as-is, and the input array is never mutated.
+  const roomy = fitHistory({ messages, budget: 100_000 });
+  assert.equal(roomy.trimmed, false);
+  assert.equal(messages[2].results[0].output, big, 'the canonical history is untouched');
+});
+
+test('clipRecency keeps the last 8 messages verbatim and shortens older output', () => {
+  const messages = [];
+  for (let i = 0; i < 10; i += 1) {
+    messages.push({ role: 'user', content: [{ type: 'text', text: `msg ${i}` }] });
+    messages.push({ role: 'tool', results: [{ id: `r${i}`, name: 'bash', output: 'y'.repeat(9_000) }] });
+  }
+  const clipped = clipRecency(messages);
+  assert.equal(clipped.length, messages.length);
+  // Messages 0..11 are outside the last-8 window; their tool results (odd indices) are clipped.
+  assert.match(clipped[1].results[0].output, /older output shortened/, 'the oldest tool result is clipped');
+  assert.ok(clipped[1].results[0].output.length < 9_000);
+  assert.equal(clipped[13].results[0].output.length, 9_000, 'a tool result inside the recency window is verbatim');
+  assert.equal(clipped[19].results[0].output.length, 9_000, 'the newest tool result is verbatim');
+});
+
+test('a window smaller than the history trims the request, and the transcript keeps the full text', async () => {
+  const root = await workspace();
+  const big = `line of output\n`.repeat(700); // ~10.5k chars, inline (under the spill budget)
+  await writeFile(join(root, 'big.txt'), big);
+  const tail = `TAIL-MARKER-${'z'.repeat(20)}`;
+  await writeFile(join(root, 'big.txt'), `${big}\n${tail}`);
+  let chatAttempts = 0;
+  const bodies = [];
+  const fetchImpl = async (url, init) => {
+    if (String(url).endsWith('/models?limit=1000')) {
+      return Response.json({ data: [{ id: 'claude-sonnet-9', context_length: 2_000 }] });
+    }
+    chatAttempts += 1;
+    const body = JSON.parse(init.body);
+    bodies.push(JSON.stringify(body.messages));
+    if (chatAttempts === 1) {
+      return sse([
+        { type: 'message_start', message: { usage: { input_tokens: 100 } } },
+        { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'tu_big', name: 'read_file' } },
+        { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"path":' } },
+        { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '"big.txt"}' } },
+        { type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 5 } },
+      ]);
+    }
+    return sse([
+      { type: 'message_start', message: { usage: { input_tokens: 100 } } },
+      { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'done' } },
+      { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 2 } },
+    ]);
+  };
+  const store = new SessionStore(await mkdtemp(join(temporary, 'store-')));
+  const { instance, events } = host(fetchImpl, store);
+  const { sessionId } = await instance.startSession({ workspaceRoot: root });
+  await instance.sendTurn({ sessionId, text: 'read big.txt' });
+  const done = await until(events, ({ event }) => event === 'turnCompleted');
+  assert.equal(done.payload.outcome.params.terminal, 'completed');
+  assert.equal(chatAttempts, 2);
+  // The provider request carried a ladder marker, not the raw 10k bytes.
+  assert.ok(!bodies[1].includes('TAIL-MARKER-'), 'the request view is shortened');
+  assert.ok(/chars elided|shortened to fit the context window/.test(bodies[1]), 'the request says what was dropped');
+  // The notice fires once for the session.
+  const notices = events.filter(({ event, payload }) => event === 'agentNotice' && /shortened/.test(String(payload.message)));
+  assert.equal(notices.length, 1);
+  // The transcript on disk keeps the full text; only the request view was shortened.
+  const { items } = await store.read(sessionId);
+  const persisted = JSON.stringify(items);
+  assert.ok(persisted.includes('TAIL-MARKER-'), 'the transcript keeps the full tool output');
+  assert.ok(persisted.includes('line of output'), 'the transcript keeps the head too');
+});
+
+test('an overflow is recovered by a tighter trim, and a second overflow fails the turn', async () => {
+  const root = await workspace();
+  const big = `out\n`.repeat(6_000); // ~24k chars; read_file returns it numbered, ~30k
+  await writeFile(join(root, 'big.txt'), big);
+  let chatAttempts = 0;
+  const bodies = [];
+  const fetchImpl = async (url, init) => {
+    if (String(url).endsWith('/models?limit=1000')) {
+      // A window the natural trim (head+tail) just fits, so only the reactive path goes deeper.
+      // The system prompt and tool schemas cost ~2.8k tokens, so the message budget at 6k
+      // is ~2.6k: the full ~30k-char result does not fit, head+tail does.
+      return Response.json({ data: [{ id: 'claude-sonnet-9', context_length: 6_000 }] });
+    }
+    chatAttempts += 1;
+    bodies.push(String(init.body));
+    if (chatAttempts === 1) {
+      // Ask for the read; the tool runs for real, and its result enters the history.
+      return sse([
+        { type: 'message_start', message: { usage: { input_tokens: 100 } } },
+        { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'tu_big', name: 'read_file' } },
+        { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"path":' } },
+        { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '"big.txt"}' } },
+        { type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 5 } },
+      ]);
+    }
+    if (chatAttempts === 2) {
+      // The request carrying the result was already trimmed to the window, but the
+      // provider (whose real tokenizer disagrees with our estimate) still rejects it.
+      return new Response(JSON.stringify({ error: { message: 'prompt is too long for the context window' } }), { status: 400 });
+    }
+    return sse([
+      { type: 'message_start', message: { usage: { input_tokens: 100 } } },
+      { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'recovered' } },
+      { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 2 } },
+    ]);
+  };
+  const { instance, events } = host(fetchImpl, new SessionStore(await mkdtemp(join(temporary, 'store-'))));
+  const { sessionId } = await instance.startSession({ workspaceRoot: root, modelId: 'anthropic/claude-sonnet-9' });
+  await instance.sendTurn({ sessionId, text: 'read big.txt' });
+  // Chat call 2: naturally trimmed, then rejected. Chat call 3: the tighter trim, which lands.
+  const done = await until(events, ({ event }) => event === 'turnCompleted');
+  assert.equal(done.payload.outcome.params.terminal, 'completed');
+  assert.equal(chatAttempts, 3);
+  assert.match(bodies[1], /chars elided/, 'the request carrying the result was trimmed to fit');
+  assert.match(bodies[2], /shortened to fit the context window/, 'the retry skeletons the oldest results');
+  assert.ok(bodies[2].length < bodies[1].length, 'the retry is strictly smaller');
+  // And a provider that keeps overflowing fails after the one tighter trim, with its words.
+  let again = 0;
+  const alwaysOverflow = async (url, init) => {
+    if (String(url).endsWith('/models?limit=1000')) return Response.json({ data: [{ id: 'claude-sonnet-9', context_length: 6_000 }] });
+    again += 1;
+    if (again === 1) {
+      return sse([
+        { type: 'message_start', message: { usage: { input_tokens: 100 } } },
+        { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'tu_big', name: 'read_file' } },
+        { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"path":"big.txt"}' } },
+        { type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 5 } },
+      ]);
+    }
+    return new Response(JSON.stringify({ error: { message: 'prompt is too long for the context window' } }), { status: 400 });
+  };
+  const second = host(alwaysOverflow, new SessionStore(await mkdtemp(join(temporary, 'store-'))));
+  const started = await second.instance.startSession({ workspaceRoot: root, modelId: 'anthropic/claude-sonnet-9' });
+  await second.instance.sendTurn({ sessionId: started.sessionId, text: 'read big.txt' });
+  const failed = await until(second.events, ({ event }) => event === 'turnCompleted', 4000);
+  assert.equal(failed.payload.outcome.params.terminal, 'failed');
+  assert.equal(again, 3, 'the tool request, the natural trim, the tighter trim, then the failure stands');
+  assert.match(failed.payload.outcome.params.error.message, /context window/);
+});
+
+test('an unknown window changes nothing: no trim, no notice', async () => {
+  const root = await workspace();
+  // Under read_file's 2,000-line cap, so the whole file reaches the request verbatim.
+  const big = `line\n`.repeat(1_500);
+  await writeFile(join(root, 'big.txt'), big);
+  let chatAttempts = 0;
+  const sent = [];
+  const fetchImpl = async (url, init) => {
+    if (String(url).endsWith('/models?limit=1000')) {
+      // A catalog row with no context_length, and a family the table does not know: the window is unknown.
+      return Response.json({ data: [{ id: 'claude-sonnet-9' }] });
+    }
+    chatAttempts += 1;
+    sent.push(String(init.body));
+    if (chatAttempts === 1) {
+      return sse([
+        { type: 'message_start', message: { usage: { input_tokens: 100 } } },
+        { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'tu_1', name: 'read_file' } },
+        { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"path":"big.txt"}' } },
+        { type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 5 } },
+      ]);
+    }
+    return sse([
+      { type: 'message_start', message: { usage: { input_tokens: 100 } } },
+      { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'done' } },
+      { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 2 } },
+    ]);
+  };
+  const { instance, events } = host(fetchImpl, new SessionStore(await mkdtemp(join(temporary, 'store-'))));
+  const { sessionId } = await instance.startSession({ workspaceRoot: root });
+  await instance.sendTurn({ sessionId, text: 'read big.txt' });
+  const done = await until(events, ({ event }) => event === 'turnCompleted');
+  assert.equal(done.payload.outcome.params.terminal, 'completed');
+  assert.equal(chatAttempts, 2);
+  assert.equal(events.some(({ event, payload }) => event === 'agentNotice' && /shortened/.test(String(payload.message))), false, 'no notice without a known window');
+  // The full output reached the provider verbatim: nothing was fitted. read_file numbers its lines.
+  const numbered = sent[1].match(/line/g) ?? [];
+  assert.ok(numbered.length >= 1_500, 'the raw tool result is in the request');
+  assert.equal(sent[1].includes('chars elided'), false, 'no ladder marker');
+});
+
 test('an ambiguous edit fails before the approval card', async () => {
   const root = await workspace();
   await writeFile(join(root, 'dup.txt'), 'a\na\n');
@@ -934,6 +1173,8 @@ test('provider failures use codes, and a context overflow is not retried', async
   assert.equal(classifyProviderFailure(400, 'prompt is too long for the context window'), 'CONTEXT_WINDOW_EXCEEDED');
   assert.equal(classifyProviderFailure(undefined, 'The provider accepted the request but sent nothing.'), 'EMPTY_RESPONSE');
   assert.equal(classifyProviderFailure(undefined, 'Could not reach Anthropic: refused'), 'TRANSPORT');
+  // An overflow gets one tighter trim and one retry, not an unbounded retry loop:
+  // a request that cannot fit fails after the retry, with the provider's words.
   const root = await workspace();
   let attempts = 0;
   const fetchImpl = async (url) => {
@@ -946,7 +1187,7 @@ test('provider failures use codes, and a context overflow is not retried', async
   await instance.sendTurn({ sessionId, text: 'hi' });
   const failed = await until(events, ({ event }) => event === 'turnCompleted', 4000);
   assert.equal(failed.payload.outcome.params.terminal, 'failed');
-  assert.equal(attempts, 1);
+  assert.equal(attempts, 1, 'a request that cannot shrink fails at once, not after pointless retries');
   assert.match(failed.payload.outcome.params.error.message, /context window/);
 });
 

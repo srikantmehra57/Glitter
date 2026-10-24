@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir, platform } from "node:os";
 import { approvalAlive, approvalExpiry, approvalExpiryMono, APPROVAL_TTL_MS, describeIsolation, osSandboxAvailable, type IsolationReport } from "../isolation.js";
+import { clipRecency, contextBudget, estimateRequestTokens, fitHistory } from "./context.js";
 import type { Grant, Subject } from "./permission/grants.js";
 import { runGuards } from "./permission/guards.js";
 import { decide, type ApprovalMode, type Verdict } from "./permission/policy.js";
@@ -15,7 +16,7 @@ import { ASK_USER_TOOL, EXIT_PLAN_TOOL, questionRequest, settlement, type Asked,
 import { discoverSkills, expandInvocation, skillsExtension } from "./skills.js";
 import { SessionStore, type DelegationPolicy, type SessionMeta } from "./store.js";
 import { BUILTIN_EXTENSION, canonicalize, executeTool, executionMode, prepareTool, repeatReminder, scheduleToolCalls, type PresentationMeta, type ToolKind } from "./tools.js";
-import { ProviderError, isTransientProviderError, isTruncatedStop, streamChat, truncatedToolResult, type AssistantMessage, type ChatMessage, type ContentPart, type SystemPrompt, type ToolCall, type ToolSchema } from "./wire.js";
+import { CONTEXT_WINDOW, ProviderError, isTransientProviderError, isTruncatedStop, streamChat, truncatedToolResult, type AssistantMessage, type ChatMessage, type ContentPart, type SystemPrompt, type ToolCall, type ToolSchema } from "./wire.js";
 
 /**
  * The built-in agent: the app's own harness, driving any provider the user has
@@ -62,9 +63,6 @@ export function retryBudgetOpen(elapsedMs: number, attempt: number, cap = RETRY_
 }
 const CATALOG_TTL_MS = 10 * 60 * 1000;
 const LIST_TIMEOUT_MS = 15_000;
-/** Older tool output beyond this is shortened before each call, to keep long threads in budget. */
-const OLD_OUTPUT_CHARS = 4_000;
-const RECENT_MESSAGES = 8;
 
 /** Known context windows for the default families; others report none. */
 function contextWindow(providerId: string, model: string, listed?: number | null): number | null {
@@ -159,6 +157,8 @@ type Live = {
   repeatCount: number;
   /** The questions the last turn ended with, until the user settles them. */
   question?: PendingQuestion;
+  /** The context-shortening notice has been shown for this session; say it once. */
+  contextNotified?: boolean;
 };
 
 /** One call's result. A call that asks the user also carries its questions and its transcript item. */
@@ -231,7 +231,8 @@ export class HarnessHost {
 
   private credentialKey() {
     const hash = createHash("sha256");
-    for (const [id, credential] of Object.entries(this.credentials).sort(([a], [b]) => a.localeCompare(b))) hash.update(`${id}\u0000${credential.key ?? ""}\u0000${credential.baseUrl ?? ""}\u0001`);
+    // Name and wire count too: a renamed or retyped custom endpoint changes the catalog.
+    for (const [id, credential] of Object.entries(this.credentials).sort(([a], [b]) => a.localeCompare(b))) hash.update(`${id}\u0000${credential.key ?? ""}\u0000${credential.baseUrl ?? ""}\u0000${credential.name ?? ""}\u0000${credential.wire ?? ""}\u0001`);
     return hash.digest("hex");
   }
 
@@ -832,11 +833,7 @@ export class HarnessHost {
 
   /** Long threads keep their recent tool output in full and shorten older output. */
   private history(live: Live): ChatMessage[] {
-    const keepFrom = Math.max(0, live.messages.length - RECENT_MESSAGES);
-    return live.messages.map((message, index) => {
-      if (index >= keepFrom || message.role !== "tool") return message;
-      return { role: "tool", results: message.results.map((result) => result.output.length > OLD_OUTPUT_CHARS ? { ...result, output: `${result.output.slice(0, OLD_OUTPUT_CHARS / 2)}\n… (older output shortened)` } : result) };
-    });
+    return clipRecency(live.messages);
   }
 
   /** Ask the user about one call. Thread choices come from the policy, narrowest first. */
@@ -943,7 +940,9 @@ export class HarnessHost {
         const { providerId, model } = splitModelId(modelId);
         const provider = resolveProvider(providerId, this.credentials);
         if (!provider) throw new ProviderError(`${providerSpec(providerId)?.name ?? providerId} has no key. Add it in Settings → Providers, or pick another model.`, undefined, "MISSING_CREDENTIAL");
-        const { message: reply, stopReason } = await this.callModel(live, provider, modelId, model, system, offered(), controller.signal);
+        // The listed window beats the family default, so the catalog is loaded before it is consulted.
+        const window = (await this.loadCatalog(false).catch(() => [])).find((row) => row.modelId === modelId)?.contextLimit ?? contextWindow(provider.id, model);
+        const { message: reply, stopReason } = await this.callModel(live, provider, modelId, model, system, offered(), controller.signal, window);
         live.messages.push(reply);
         await this.store.append(sessionId, [{ type: "message", message: reply }]);
         // A cut-off reply can carry valid JSON that is still an incomplete tool call. Do not run it.
@@ -1025,12 +1024,19 @@ export class HarnessHost {
   }
 
   /** One model call, streamed into reasoning and message items, with retries for transient failures. */
-  private async callModel(live: Live, provider: ResolvedProvider, modelId: string, model: string, system: SystemPrompt, tools: readonly ToolSchema[], signal: AbortSignal): Promise<{ message: AssistantMessage; stopReason: string }> {
+  private async callModel(live: Live, provider: ResolvedProvider, modelId: string, model: string, system: SystemPrompt, tools: readonly ToolSchema[], signal: AbortSignal, window: number | null): Promise<{ message: AssistantMessage; stopReason: string }> {
     let effort = live.meta.effort && (live.meta.effort !== "none" || SENDS_NONE.has(provider.id)) ? live.meta.effort : undefined;
     const tiers = effortTiers(provider.id, model) as string[];
     if (effort && !tiers.includes(effort)) effort = undefined;
     const startedAt = Date.now();
     const cap = this.limits.retryElapsedMs ?? RETRY_ELAPSED_MS;
+    // The window is only known for catalog and family-known models. Unknown means no fitting: current behaviour, unchanged.
+    const budget = window ? contextBudget(window) : null;
+    // System prompt and tool schemas never change within a call, so their cost is measured once.
+    const fixedTokens = budget ? estimateRequestTokens({ system, messages: [], tools }) : 0;
+    // The request view, re-fitted per attempt: a retry after an overflow fits the already-trimmed
+    // view again, so each attempt is strictly smaller than the one the provider rejected.
+    let view: ChatMessage[] | undefined;
     for (let attempt = 1; ; attempt += 1) {
       const streams: { reasoning?: { itemId: string; text: string }; text?: { itemId: string; text: string } } = {};
       // This call's own counts. Cache fields stay put when a later event omits them.
@@ -1042,8 +1048,19 @@ export class HarnessHost {
           if (open) this.emitItem(live, { itemId: open.itemId, kind: kind === "text" ? "agentMessage" : "reasoning", status: "completed", text: open.text, turnId: live.turnId }, true);
         }
       };
+      // Fit the request into the window before sending. Trimming is a request view:
+      // the transcript keeps full output, and the model is told what was shortened.
+      // `view` persists across attempts, so a retry after an overflow fits the
+      // already-trimmed view again — each attempt strictly smaller than the last.
+      view ??= this.history(live);
+      const fitted = budget ? fitHistory({ messages: view, budget: Math.max(1, budget.input - fixedTokens) }) : { messages: view, trimmed: false, tokens: 0 };
+      view = fitted.messages;
+      if (fitted.trimmed && !live.muted && !live.contextNotified) {
+        live.contextNotified = true;
+        this.emit("agentNotice", { sessionId: live.meta.sessionId, level: "info", message: "The thread's history was shortened to fit the model's context window; the full transcript keeps everything." });
+      }
       try {
-        for await (const event of streamChat({ provider, modelId, system, messages: this.history(live), tools, effort, signal, timeouts: { idleMs: this.limits.idleMs, firstEventMs: this.limits.firstEventMs }, fetchImpl: this.fetchImpl })) {
+        for await (const event of streamChat({ provider, modelId, system, messages: fitted.messages, tools, effort, signal, timeouts: { idleMs: this.limits.idleMs, firstEventMs: this.limits.firstEventMs }, fetchImpl: this.fetchImpl })) {
           if (event.type === "text" || event.type === "reasoning") {
             const kind = event.type;
             // A reply that switches from thinking to text closes the thinking item first.
@@ -1121,14 +1138,33 @@ export class HarnessHost {
           if (!live.muted) this.emit("agentNotice", { sessionId: live.meta.sessionId, level: "info", message: `${model} does not accept that effort level; continuing without it.` });
           continue;
         }
+        // An input overflow cannot be retried as-is: the bytes are the problem. The provider's
+        // real count is higher than our estimate (that is why it overflowed), so the refit is
+        // not budget-driven: every result that is not a skeleton yet becomes one, which is
+        // strictly smaller no matter what any tokenizer says. A view already at the bottom
+        // fails at once, which keeps the overflow code non-retryable in effect; ordinary
+        // transient errors keep their backoff and their budget.
+        const overflow = error instanceof ProviderError && (error.code === "CONTEXT_WINDOW_EXCEEDED" || (error.status === 400 && CONTEXT_WINDOW.test(message)));
+        if (overflow) {
+          const tighter = budget ? fitHistory({ messages: view, budget: 1 }) : null;
+          if (tighter?.trimmed) {
+            view = tighter.messages;
+            if (!live.muted) this.emit("agentNotice", { sessionId: live.meta.sessionId, level: "warning", message: `${message} Shortening the thread's history further and retrying.` });
+            continue;
+          }
+          throw error;
+        }
         const transient = error instanceof ProviderError ? isTransientProviderError(error) : true;
-        if (!transient || !retryBudgetOpen(Date.now() - startedAt, attempt, cap)) throw error;
-        const wait = Math.min(20_000, 1500 * 2 ** (attempt - 1));
-        if (!live.muted) this.emit("agentNotice", { sessionId: live.meta.sessionId, level: "warning", message: `${message} Retrying in ${Math.round(wait / 1000)}s (attempt ${attempt + 1} of ${RETRIES + 1}).` });
-        await new Promise((resolve, reject) => {
-          const timer = setTimeout(resolve, wait);
-          signal.addEventListener("abort", () => { clearTimeout(timer); reject(new Error("cancelled")); }, { once: true });
-        });
+        if (transient && retryBudgetOpen(Date.now() - startedAt, attempt, cap)) {
+          const wait = Math.min(20_000, 1500 * 2 ** (attempt - 1));
+          if (!live.muted) this.emit("agentNotice", { sessionId: live.meta.sessionId, level: "warning", message: `${message} Retrying in ${Math.round(wait / 1000)}s (attempt ${attempt + 1} of ${RETRIES + 1}).` });
+          await new Promise((resolve, reject) => {
+            const timer = setTimeout(resolve, wait);
+            signal.addEventListener("abort", () => { clearTimeout(timer); reject(new Error("cancelled")); }, { once: true });
+          });
+          continue;
+        }
+        throw error;
       }
     }
   }

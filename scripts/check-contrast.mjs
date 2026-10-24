@@ -49,15 +49,21 @@ function colors(values) {
   return { ...result, accentSoft: soft };
 }
 const darkTokens = declarations(':root');
+// The dark intensities layer their surface ladder over the same base tokens.
+const intensityTokens = (name) => ({ ...darkTokens, ...declarations(`html[data-theme="dark"][data-dark="${name}"]`) });
+const subtleTokens = intensityTokens('subtle');
+const blackTokens = intensityTokens('black');
 const lightTokens = { ...darkTokens, ...declarations('html[data-theme="light"]') };
-const themes = { dark: colors(darkTokens), light: colors(lightTokens) };
-const accents = { dark: {}, light: {} };
+const themes = { dark: colors(darkTokens), subtle: colors(subtleTokens), black: colors(blackTokens), light: colors(lightTokens) };
+const accents = { dark: {}, subtle: {}, black: {}, light: {} };
 for (const name of ['ember', 'mono', 'blue', 'violet', 'pink', 'orange', 'yellow', 'green', 'teal']) {
   // Monochrome inherits the theme's neutral controls; its selector only sets
   // the thinking/effort palette. Optional colors layer over those defaults.
   const accent = declarations(`html[data-accent="${name}"]`);
   const lightAccent = declarations(`html[data-theme="light"][data-accent="${name}"]`);
   accents.dark[name] = colors({ ...darkTokens, ...accent });
+  accents.subtle[name] = colors({ ...subtleTokens, ...accent });
+  accents.black[name] = colors({ ...blackTokens, ...accent });
   accents.light[name] = colors({ ...lightTokens, ...accent, ...lightAccent });
 }
 

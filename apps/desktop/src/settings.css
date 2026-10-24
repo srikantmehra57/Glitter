@@ -209,7 +209,7 @@ label.settings-callout { cursor: pointer; }
 /* ───────────────────────── Appearance ───────────────────────── */
 
 .theme-panel { display: flex; flex-direction: column; }
-.theme-choice-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 0 0 32px; }
+.theme-choice-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 0 0 12px; }
 .theme-choice {
   min-width: 0;
   display: flex;
@@ -235,6 +235,9 @@ label.settings-callout { cursor: pointer; }
 /* The previews use the themes' own shell, panel and rule colours (styles.css tokens). */
 .theme-preview { --preview-bg: #E6E6E6; --preview-panel: #F1F1F1; --preview-line: #D0D0D3; height: 92px; display: flex; overflow: hidden; border: 1px solid rgba(128, 128, 128, 0.2); border-radius: var(--r-sm); background: var(--preview-panel); }
 .theme-preview-dark { --preview-bg: #0A0A0B; --preview-panel: #121214; --preview-line: #303036; }
+/* The dark tile previews the chosen intensity (styles.css dark-intensity blocks). */
+.theme-preview-dark.theme-preview-dark-subtle { --preview-bg: #141417; --preview-panel: #1C1C20; --preview-line: #3A3A42; }
+.theme-preview-dark.theme-preview-dark-black { --preview-bg: #000000; --preview-panel: #0A0A0B; --preview-line: #26262C; }
 /* System splits the whole card, sidebar and panel alike, between the two themes. */
 .theme-preview-system { --preview-bg: transparent; --preview-panel: linear-gradient(110deg, #F1F1F1 50%, #121214 50%); --preview-line: #8A8A90; }
 .theme-preview-sidebar { width: 29%; display: flex; flex-direction: column; gap: 7px; padding: 14px 7px; background: var(--preview-bg); border-right: 1px solid rgba(128, 128, 128, 0.15); }
@@ -398,6 +401,8 @@ button.setting-row.sidebar-accent-option:focus-visible { outline-offset: -2px; }
 
 .settings-page-usage .settings-column { max-width: 960px; }
 .settings-section-head.is-usage { display: block; margin-bottom: 16px; padding-bottom: 0; border-bottom: 0; }
+.usage-page-head { display: flex; align-items: center; justify-content: space-between; gap: 10px 16px; flex-wrap: wrap; }
+.usage-page-actions { display: flex; align-items: center; gap: 8px; min-height: 30px; margin-left: auto; }
 .settings-section-head.is-usage .usage-page-title h3 { margin: 0; }
 .settings-dialog .usage-scroll { gap: 16px; }
 .settings-dialog .usage-details h2 { margin-bottom: 12px; }

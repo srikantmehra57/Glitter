@@ -8,7 +8,7 @@ import { isMacPlatform, isTauri } from "../lib/format";
 import { modelFor, VOCABULARY } from "../lib/effort";
 import { APP_VERSION } from "../lib/version";
 import { AgentMark, ModelIcon } from "./AgentPicker";
-import { AGENT_IDS, AGENT_LABELS, APPROVAL_DESCRIPTIONS, APPROVAL_LABELS, APPROVAL_ORDER, AUTH_MODE_DESCRIPTIONS, AUTH_MODE_LABELS, AUTH_MODE_ORDER, AUTH_SOURCE_LABELS, AUTH_SOURCE_SHORT, DEFAULT_ENABLED_AGENTS, EDITOR_CHOICES, EDITOR_LABELS, EFFORT_LABELS, THINKING_ORBS, agentEnabled, type CustomCommand, type EditorChoice, type AccentColor, type AgentId, type AgentInfo, type CliApprovalMode, type AuthMode, type CliUpdateOutcome, type CliUpdateStatus, type Detection, type HostPosture, type ReasoningEffort, type SandboxNetwork, type SettingsTab, type ThemeMode, type ThinkingOrbStyle, type Settings } from "../lib/types";
+import { AGENT_IDS, AGENT_LABELS, APPROVAL_DESCRIPTIONS, APPROVAL_LABELS, APPROVAL_ORDER, AUTH_MODE_DESCRIPTIONS, AUTH_MODE_LABELS, AUTH_MODE_ORDER, AUTH_SOURCE_LABELS, AUTH_SOURCE_SHORT, DARK_INTENSITIES, DEFAULT_ENABLED_AGENTS, EDITOR_CHOICES, EDITOR_LABELS, EFFORT_LABELS, THINKING_ORBS, agentEnabled, type CustomCommand, type EditorChoice, type AccentColor, type AgentId, type AgentInfo, type CliApprovalMode, type AuthMode, type CliUpdateOutcome, type CliUpdateStatus, type Detection, type HostPosture, type ReasoningEffort, type SandboxNetwork, type SettingsTab, type ThemeMode, type ThinkingOrbStyle, type DarkIntensity, type Settings } from "../lib/types";
 import { humanizeModelLabel, humanizeProvider, relativeTime, shortCliVersion, shortHash, shortcutLabel, worktreeRemovalNote } from "../lib/format";
 import { settingsFields } from "../lib/settingsPersistence";
 import { SETTINGS_NAV_GROUPS, SETTINGS_TAB_COPY, SETTINGS_TAB_LABELS, settingsTabsMatching } from "../lib/settingsNav";
@@ -67,6 +67,13 @@ const ORB_COPY: Record<ThinkingOrbStyle, { label: string; description: string }>
   shaping: { label: "Shaping", description: "An outline shifts between a circle, triangle and square." },
 };
 const ORB_OPTIONS: SelectMenuOption[] = THINKING_ORBS.map((value) => ({ value, ...ORB_COPY[value] }));
+
+const DARK_INTENSITY_COPY: Record<DarkIntensity, { label: string; description: string }> = {
+  subtle: { label: "Subtle", description: "Graphite — the softest dark." },
+  mid: { label: "Mid", description: "Smoke — Glitter's default dark." },
+  black: { label: "Pure black", description: "True black, at home on OLED." },
+};
+const DARK_INTENSITY_OPTIONS: SelectMenuOption[] = DARK_INTENSITIES.map((value) => ({ value, ...DARK_INTENSITY_COPY[value], ...(value === "mid" ? { tag: "Default" } : {}) }));
 
 function tabIcon(tab: SettingsTab) {
   const props = { size: 15, strokeWidth: 1.8, "aria-hidden": true } as const;
@@ -130,6 +137,9 @@ function TranslucencySlider({ id, value, disabled, onPreview, onCommit }: { id: 
   </div>;
 }
 
+/** The one-word surface name the Dark tile shows, following the chosen intensity. */
+const DARK_TILE_NAMES: Record<DarkIntensity, string> = { subtle: "Graphite", mid: "Smoke", black: "True black" };
+
 function ThemePanel({ draft, onChange }: { draft: Settings; onChange: (patch: Partial<Settings>) => void }) {
   // Only where the window has a material to show: elsewhere there is nothing behind the sidebar.
   const translucent = hasWindowMaterial();
@@ -139,20 +149,28 @@ function ThemePanel({ draft, onChange }: { draft: Settings; onChange: (patch: Pa
   const choices: Array<{ id: ThemeMode; label: string; description: string; icon: typeof Monitor }> = [
     { id: "system", label: "System", description: "Match your Mac", icon: Monitor },
     { id: "light", label: "Light", description: "Frost", icon: Sun },
-    { id: "dark", label: "Dark", description: "Smoke", icon: Moon },
+    { id: "dark", label: "Dark", description: DARK_TILE_NAMES[draft.darkIntensity], icon: Moon },
   ];
   return <div className="theme-panel">
     <section className="theme-section" aria-labelledby="interface-mode-title">
       <SectionHead id="interface-mode-title" title="Interface theme" help="Follow your system, or keep Glitter light or dark." />
       <div className="theme-choice-grid" role="radiogroup" aria-label="Interface mode">
         {choices.map(({ id, label, description, icon: Icon }) => <button key={id} type="button" role="radio" aria-checked={draft.theme === id} className={`theme-choice ${draft.theme === id ? "selected" : ""}`} onClick={() => onChange({ theme: id })}>
-          <span className={`theme-preview theme-preview-${id}`} aria-hidden="true"><span className="theme-preview-sidebar"><i /><i /><i /></span><span className="theme-preview-main"><i /><i /><span /><i /></span></span>
+          <span className={`theme-preview theme-preview-${id}${id === "dark" ? ` theme-preview-dark-${draft.darkIntensity}` : ""}`} aria-hidden="true"><span className="theme-preview-sidebar"><i /><i /><i /></span><span className="theme-preview-main"><i /><i /><span /><i /></span></span>
           <span className="theme-choice-label">
             <Icon size={14} strokeWidth={1.8} aria-hidden="true" />
             <span className="theme-choice-copy"><strong>{label}</strong><span>{description}</span></span>
             <span className="choice-check" aria-hidden="true"><Check size={11} strokeWidth={3} /></span>
           </span>
         </button>)}
+      </div>
+      <div className="settings-card">
+        <SettingRow label={<label htmlFor="dark-intensity">Dark intensity</label>} help="How deep the dark theme goes, whenever Glitter is dark.">
+          <SelectMenu id="dark-intensity" ariaLabel="Dark intensity" value={draft.darkIntensity} placeholder="Mid" options={DARK_INTENSITY_OPTIONS} onChange={(value) => {
+            const level = DARK_INTENSITIES.find((candidate) => candidate === value);
+            if (level) onChange({ darkIntensity: level });
+          }} />
+        </SettingRow>
       </div>
     </section>
 
@@ -411,6 +429,7 @@ export function SettingsModal() {
     disableShell: state.disableShell,
     sandboxNetwork: state.sandboxNetwork,
     theme: state.theme,
+    darkIntensity: state.darkIntensity,
     accentColor: state.accentColor,
     accentSidebar: state.accentSidebar,
     sidebarTranslucency: state.sidebarTranslucency,
@@ -476,6 +495,7 @@ export function SettingsModal() {
   const dialog = useRef<HTMLDialogElement>(null);
   const [connecting, setConnecting] = useState(false);
   const [notice, setNotice] = useState("");
+  const [usageActionsHost, setUsageActionsHost] = useState<HTMLDivElement | null>(null);
   const tab = s.settingsTab;
   // The category highlight moves at once; the page it opens renders a beat later,
   // so a click on a heavy page (Models, Usage) never holds up the frame that answers it.
@@ -728,9 +748,12 @@ export function SettingsModal() {
           <div key={page} className="settings-column settings-page">
             <header className={`settings-section-head${page === "Usage" ? " is-usage" : ""}`}>
               {page === "Usage" ? (
-                <div className="usage-page-title">
-                  <h3 id="settings-page-title">Usage stats</h3>
-                  <span className="usage-scope">App usage</span>
+                <div className="usage-page-head">
+                  <div className="usage-page-title">
+                    <h3 id="settings-page-title">Usage stats</h3>
+                    <span className="usage-scope">App usage</span>
+                  </div>
+                  <div className="usage-page-actions" ref={setUsageActionsHost} />
                 </div>
               ) : (
                 <>
@@ -900,7 +923,7 @@ export function SettingsModal() {
           <CustomCommandsCard commands={draft.customCommands ?? []} onChange={(customCommands) => edit({ customCommands })} />
           <ShortcutsPanel overrides={draft.shortcutOverrides ?? {}} onChange={(shortcutOverrides) => edit({ shortcutOverrides })} />
         </> : null}
-        {page === "Usage" ? <Suspense fallback={null}><UsageView embedded /></Suspense> : null}
+        {page === "Usage" ? <Suspense fallback={null}><UsageView embedded actionsHost={usageActionsHost} /></Suspense> : null}
         {page === "Diagnostics" ? <>
           <SectionHead title="This app" action={<span className="row diagnostics-actions">
             <button type="button" className="ghost-btn small" onClick={() => void copyDiagnostics()}>Copy diagnostics</button>

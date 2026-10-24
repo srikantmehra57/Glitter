@@ -961,14 +961,12 @@ function withLateUsage(thread: Thread): Thread {
   if (thread.status === "running" || !thread.turnStats || thread.turnStartOutput == null) return thread;
   const outputTokens = turnTokens(thread);
   const inputTokens = thread.turnStartPrompt == null ? undefined : turnPromptTokens(thread);
-  const cachedTokens = turnCacheTokens(thread);
-  // The ledger's input total includes the separately-reported cache, just as finishTurn's does.
-  const combinedInput = inputTokens == null ? undefined : inputTokens + cachedTokens;
+  const cachedTokens = thread.turnStartCache == null ? 0 : turnCacheTokens(thread);
   const outputChanged = !!outputTokens && outputTokens !== thread.turnStats.outputTokens;
-  const inputChanged = combinedInput != null && combinedInput !== thread.turnStats.inputTokens;
+  const inputChanged = inputTokens != null && inputTokens !== thread.turnStats.inputTokens;
   const cacheChanged = cachedTokens !== (thread.turnStats.cachedTokens ?? 0);
   if (!outputChanged && !inputChanged && !cacheChanged) return thread;
-  return { ...thread, turnStats: { ...thread.turnStats, ...(outputChanged && outputTokens ? { outputTokens, estimated: false } : {}), ...(inputChanged ? { inputTokens: combinedInput } : {}), cachedTokens: cachedTokens || undefined } };
+  return { ...thread, turnStats: { ...thread.turnStats, ...(outputChanged && outputTokens ? { outputTokens, estimated: false } : {}), ...(inputChanged ? { inputTokens } : {}), cachedTokens: cachedTokens || undefined } };
 }
 
 /** Error text the renderer keys on to offer a one-click folder re-open. */

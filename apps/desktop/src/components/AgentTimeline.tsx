@@ -1,11 +1,11 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { describeError } from "../lib/errors";
 import {
-  BellRing, Bot, Brain, Check, CircleDot, ChevronRight, CircleAlert, CircleSlash, Copy, Eye, FilePen, FileText, GitFork, Globe, Info, Layers, ListChecks,
+  BellRing, Bot, Brain, Check, CircleCheck, CircleDot, ChevronRight, CircleAlert, CircleSlash, Copy, Eye, FilePen, FileText, GitFork, Globe, Info, Layers, ListChecks,
   LoaderCircle, Maximize2, MessageCircle, Pencil, Pin, PinOff, Play, RotateCcw, Search, Send, SkipForward, SquareTerminal, Target, Undo2, Workflow, Wrench, X,
 } from "lucide-react";
 import { Orb } from "./Orb";
-import { ACTIVITY_KINDS, activitySummary, agentCounts, backgroundAgents, computeVirtualWindow, estimateRunHeight, groupAgentRuns, messageRewindBoundary, parseWorkflowMessage, relativeToWorkspace, runSummary, showTerminalReceipt, stabilizeRuns, type ActivityBucket, type AgentState, type AgentRun, type AgentStep, type AgentStepKind } from "../lib/agent";
+import { ACTIVITY_KINDS, activitySummary, activityTitle, agentCounts, backgroundAgents, computeVirtualWindow, estimateRunHeight, groupAgentRuns, messageRewindBoundary, parseWorkflowMessage, relativeToWorkspace, runSummary, showTerminalReceipt, stabilizeRuns, type AgentState, type AgentRun, type AgentStep, type AgentStepKind } from "../lib/agent";
 import { copyText, formatArgs, formatBytes, formatDuration, formatTokens, humanizeModelLabel, humanizeProvider, humanizeToolName, shortcutLabel, summarizeArgs } from "../lib/format";
 import { estimateCost, formatCost } from "../lib/cost";
 import { modelFor } from "../lib/effort";
@@ -46,6 +46,19 @@ function StepIcon({ kind }: { kind: AgentStepKind }) {
     case "other": return <CircleDot {...props} />;
     default: return <Wrench {...props} />;
   }
+}
+
+/** A square disclosure on the work column: the only permanent chrome a folded group gets. */
+function Disclosure({ open }: { open: boolean }) {
+  return <span className="disclosure" aria-hidden="true"><ChevronRight size={13} className={`caret ${open ? "open" : ""}`} /></span>;
+}
+
+/** The step's outcome, separate from what kind of work it was. */
+function StepStatus({ status }: { status: AgentStep["status"] }) {
+  if (status === "failed") return <CircleAlert size={14} aria-hidden="true" />;
+  if (status === "running") return <LoaderCircle size={13} className="spin" aria-hidden="true" />;
+  if (status === "cancelled" || status === "skipped") return <CircleSlash size={13} aria-hidden="true" />;
+  return <CircleCheck size={14} aria-hidden="true" />;
 }
 
 function seconds(ms?: number) {
@@ -195,14 +208,16 @@ function StepRowView({ step }: { step: AgentStep }) {
   const duration = seconds(step.durationMs);
   const preview = step.kind === "edit" && step.status === "completed" ? completedEditPreview(step.item) : null;
   const expandable = Boolean(body || preview);
+  const showGlyph = !["reasoning", "compaction", "reminder"].includes(step.kind);
   return (
     <li className={`step ${step.kind} ${step.status} ${open ? "open" : ""}`}>
       <span className="step-node" aria-hidden="true">
-        {failed ? <CircleAlert size={13} /> : <StepIcon kind={step.kind} />}
+        <StepStatus status={step.status} />
       </span>
       <div className="step-main">
         <button type="button" className="step-head" aria-expanded={expandable ? open : undefined} disabled={!expandable} onClick={() => { setToggled(true); setOpen(!open); }}>
           <span className={`step-verb ${running ? "shimmer" : ""}`}>{verb}</span>
+          {showGlyph ? <span className={`step-kind ${step.kind}`} aria-hidden="true"><StepIcon kind={step.kind} /></span> : null}
           {summary && !(step.kind === "reasoning" && open) ? <span className="step-summary" title={summary}>{summary}</span> : null}
           {toolArgs ? <span className="step-args" title={toolArgs}>{toolArgs}</span> : null}
           <span className="step-meta">
@@ -241,9 +256,6 @@ function StepRowView({ step }: { step: AgentStep }) {
 
 const StepRow = memo(StepRowView);
 
-/** The composition bar draws these buckets in this order; colours come from the chart series tokens. */
-const BAR_BUCKETS: ActivityBucket[] = ["thinking", "files", "commands", "other"];
-
 function ActivityGroupView({ steps, live }: { steps: AgentStep[]; live: boolean }) {
   const failed = steps.some((step) => step.status === "failed");
   const [open, setOpen] = useState(live || failed);
@@ -252,38 +264,33 @@ function ActivityGroupView({ steps, live }: { steps: AgentStep[]; live: boolean 
   useEffect(() => { if (live || failed) setOpen(true); }, [live, failed]);
   const summary = useMemo(() => activitySummary(steps), [steps]);
   const plural = (count: number, one: string) => `${count} ${one}${count === 1 ? "" : "s"}`;
-  const chips = [
-    summary.thoughts ? { icon: Brain, label: plural(summary.thoughts, "thought") } : null,
-    summary.edits ? { icon: FilePen, label: plural(summary.edits, "edit") } : null,
-    summary.files ? { icon: FileText, label: plural(summary.files, "file") } : null,
-    summary.commands ? { icon: SquareTerminal, label: plural(summary.commands, "command") } : null,
-  ].filter((chip): chip is { icon: typeof Brain; label: string } => chip != null);
   if (steps.length < 2) {
-    return <ol className="steps">{steps.map((step) => <StepRow key={step.id} step={step} />)}</ol>;
+    return <div className="activity-body single"><ol className="steps">{steps.map((step) => <StepRow key={step.id} step={step} />)}</ol></div>;
   }
-  // The same breakdown in words, for the tooltip and anyone hover-reading the row.
-  const breakdown = [
+  // The counts stay in the tooltip: the collapsed row itself says what ran, not its composition.
+  const facts = [
     plural(steps.length, "step"),
-    ...chips.map((chip) => chip.label),
+    summary.thoughts ? plural(summary.thoughts, "thought") : "",
+    summary.edits ? plural(summary.edits, "edit") : "",
+    summary.files ? plural(summary.files, "file") : "",
+    summary.commands ? plural(summary.commands, "command") : "",
     failed ? plural(summary.failures || 1, "failure") : "",
-    !live && summary.durationMs ? seconds(summary.durationMs) : "",
+    summary.durationMs ? seconds(summary.durationMs) : "",
   ].filter(Boolean).join(" · ");
   return (
     <div className={`activity-group ${open ? "open" : ""}${live ? " live" : ""}`}>
-      <button type="button" className={`group-head${live ? " live" : ""}${failed ? " failed" : ""}`} aria-expanded={open} title={breakdown} onClick={() => { setToggled(true); setOpen(!open); }}>
-        <span className="trace-node" aria-hidden="true"><ChevronRight size={12} className={`caret ${open ? "open" : ""}`} /></span>
+      <button type="button" className={`group-head${live ? " live" : ""}${failed ? " failed" : ""}`} aria-expanded={open} title={facts} onClick={() => { setToggled(true); setOpen(!open); }}>
+        <Disclosure open={open} />
+        <span className="group-title">{activityTitle(steps, live)}</span>
+        {failed ? <span className="group-fail">{plural(summary.failures || 1, "failure")}</span> : null}
         {live ? <span className="group-live-dot" aria-hidden="true" /> : null}
-        <span className="group-title">{plural(steps.length, "step")}</span>
-        <span className="group-bar" aria-hidden="true">
-          {BAR_BUCKETS.map((bucket) => summary.shares[bucket] ? <i key={bucket} className={bucket} style={{ flexGrow: summary.shares[bucket] }} /> : null)}
-        </span>
-        <span className="group-chips">
-          {failed ? <span className="group-chip fail"><CircleAlert size={11} aria-hidden="true" />{plural(summary.failures || 1, "failure")}</span> : null}
-          {chips.map(({ icon: Icon, label }) => <span key={label} className="group-chip"><Icon size={11} aria-hidden="true" />{label}</span>)}
-        </span>
-        {!live && summary.durationMs ? <span className="group-meta">{seconds(summary.durationMs)}</span> : null}
+        {summary.durationMs ? <span className="group-meta">{seconds(summary.durationMs)}</span> : null}
       </button>
-      <Collapse open={open} animate={toggled}>{() => <ol className="steps">{steps.map((step) => <StepRow key={step.id} step={step} />)}</ol>}</Collapse>
+      <Collapse open={open} animate={toggled}>{() => (
+        <div className="activity-body" tabIndex={0} aria-label="Work steps">
+          <ol className="steps">{steps.map((step) => <StepRow key={step.id} step={step} />)}</ol>
+        </div>
+      )}</Collapse>
     </div>
   );
 }
@@ -450,7 +457,7 @@ function UserMessageView({ step }: { step: AgentStep }) {
 
 const UserMessage = memo(UserMessageView);
 
-/** The agent's name, once at the top of its side of a turn, on the same column as the work rail below it. */
+/** The agent's face, once at the top of its side of a turn, on the same column as the work rail below it. */
 function AgentHeadView() {
   const agentId: AgentId = useAppStore((state) => currentThread(state)?.agentId ?? "muse");
   const agentName = useAppStore((state) => state.agents.find((agent) => agent.id === agentId)?.name ?? AGENT_LABELS[agentId]);
@@ -474,17 +481,63 @@ function AgentMessageView({ step, final, canRetry }: { step: AgentStep; final: b
 
 const AgentMessage = memo(AgentMessageView);
 
-/** A note the agent wrote between steps: narration of the work, so it sits on the rail in the quieter voice. */
-function AgentNoteView({ step }: { step: AgentStep }) {
+/**
+ * A note the agent wrote between steps: narration of the work, so it sits on the
+ * rail in the quieter voice. Only the newest note of a live turn stays open;
+ * once the agent moves past a note it folds to its first line, so past thinking
+ * never stacks into walls of prose.
+ */
+function AgentNoteView({ step, current }: { step: AgentStep; current: boolean }) {
+  const text = step.detail ?? "";
+  const summary = text.replace(/[#*_`>]/g, "").split("\n").map((line) => line.trim()).find(Boolean) ?? "";
+  const [open, setOpen] = useState(current);
+  // Only a note the agent moves past animates; one restored folded must not shift the scroll.
+  const [toggled, setToggled] = useState(false);
+  const wasCurrent = useRef(current);
+  useEffect(() => {
+    if (wasCurrent.current && !current) { setToggled(true); setOpen(false); }
+    wasCurrent.current = current;
+  }, [current]);
   return (
-    <div className="trace-note" data-item={step.id}>
-      <span className="trace-node" aria-hidden="true"><i /></span>
-      <div className="trace-note-body"><Markdown>{step.detail ?? ""}</Markdown></div>
+    <div className={`trace-note${open ? " open" : ""}`} data-item={step.id}>
+      <div className="trace-note-main">
+        <button
+          type="button"
+          className="trace-note-head"
+          aria-expanded={open}
+          aria-label={open ? "Fold note" : undefined}
+          title={open ? "Fold note" : summary}
+          onClick={() => { setToggled(true); setOpen(!open); }}
+        >
+          {open ? null : <span className="trace-note-summary">{summary}</span>}
+          <ChevronRight size={12} className={`caret ${open ? "open" : ""}`} aria-hidden="true" />
+        </button>
+        <Collapse open={open} animate={toggled}>{() => (
+          <div className="trace-note-body"><Markdown>{text}</Markdown></div>
+        )}</Collapse>
+      </div>
     </div>
   );
 }
 
 const AgentNote = memo(AgentNoteView);
+
+/** A seam in the transcript: older turns are no longer carried in full, so the work that follows starts fresh. */
+function ContextDivider({ step }: { step: AgentStep }) {
+  const failed = step.status === "failed";
+  const running = step.status === "running";
+  const label = failed ? "Context compaction failed" : running ? "Compacting context" : "Context compacted";
+  return (
+    <div className={`context-divider${failed ? " failed" : ""}${running ? " running" : ""}`} role="separator" aria-label={label} data-item={step.id} title={step.detail || undefined}>
+      <span className="context-line" aria-hidden="true" />
+      <span className="context-chip">
+        {running ? <LoaderCircle size={12} className="spin" aria-hidden="true" /> : <Layers size={12} aria-hidden="true" />}
+        {label}
+      </span>
+      <span className="context-line" aria-hidden="true" />
+    </div>
+  );
+}
 
 type TraceEntry = { node: ReactNode; loose?: boolean };
 
@@ -518,9 +571,9 @@ function Trace({ entries, steps, holds, foldable, run, isLast }: { entries: Trac
   return <>
     {foldable ? (
       <button type="button" className={`trace-head${summary.failures ? " failed" : ""}`} aria-expanded={open} data-holds={holds.join(" ")} onClick={() => { setToggled(true); setOpen(!open); }}>
-        <span className="trace-node" aria-hidden="true"><ChevronRight size={12} className={`caret ${open ? "open" : ""}`} /></span>
+        <Disclosure open={open} />
         <span className="trace-title">{duration ? `Worked for ${duration}` : plural(summary.steps, "step")}</span>
-        {summary.failures ? <span className="group-chip fail"><CircleAlert size={11} aria-hidden="true" />{plural(summary.failures, "failure")}</span> : null}
+        {summary.failures ? <span className="group-fail">{plural(summary.failures, "failure")}</span> : null}
         {chips.length ? <span className="trace-facts">{chips.join(" · ")}</span> : null}
       </button>
     ) : null}
@@ -572,7 +625,10 @@ function ReceiptView({ run, isLast }: { run: AgentRun; isLast: boolean }) {
   const grokReady = useAppStore((state) => state.agents.some((agent) => agent.id === "grok" && agent.found && agentEnabled(state, "grok")));
   const busy = useAppStore(selectThreadBusy);
   const openFileDiff = useAppStore((state) => state.openFileDiff);
+  const setInspectorTab = useAppStore((state) => state.setInspectorTab);
+  const setDockOpen = useAppStore((state) => state.setDockOpen);
   const forkThread = useAppStore((state) => state.forkThread);
+  const [filesOpen, setFilesOpen] = useState(false);
   const snapshot = useAppStore((state) => run.turnId ? currentThread(state)?.snapshots?.[run.turnId] : undefined);
   const snapshotPending = useAppStore((state) => currentThread(state)?.snapshotPending);
   const snapshotError = useAppStore((state) => currentThread(state)?.snapshotError?.turnId === run.turnId ? currentThread(state)?.snapshotError?.message : undefined);
@@ -623,7 +679,40 @@ function ReceiptView({ run, isLast }: { run: AgentRun; isLast: boolean }) {
             {cuttable && sessionId ? <button type="button" className="ghost-btn small" title="Fork the thread with history up to this turn" onClick={() => void forkThread(sessionId, run.turnId)}><GitFork size={12} aria-hidden="true" />Fork here</button> : null}
           </span>
         </div>
-        {fileCount ? <div className="receipt-files"><span className="receipt-change-count">Changed {fileCount} file{fileCount === 1 ? "" : "s"}</span>{changed.slice(0, 4).map((path) => <button key={path} type="button" className="attachment attachment-btn" title={`${path} — open diff`} onClick={() => openDiff(path)}><FilePen size={11} aria-hidden="true" />{path.split("/").pop()}</button>)}{changed.length > 4 ? <span className="muted">+{changed.length - 4} more</span> : null}</div> : null}
+        {fileCount ? (() => {
+          const files = filesOpen ? changed : changed.slice(0, 3);
+          const more = changed.length - files.length;
+          return (
+            <section className="changes-card" aria-label="Changed files">
+              <div className="changes-head">
+                <FilePen size={13} aria-hidden="true" />
+                <span className="changes-title">Changed {fileCount} file{fileCount === 1 ? "" : "s"}</span>
+                <button type="button" className="ghost-btn small changes-review" title="Open these changes in the Changes panel" onClick={() => { setInspectorTab("changes"); setDockOpen(true); }}>Review<ChevronRight size={11} aria-hidden="true" /></button>
+              </div>
+              <ul className="change-rows">
+                {files.map((path) => {
+                  const parts = path.split(/[\\/]/).filter(Boolean);
+                  const name = parts.pop() ?? path;
+                  return (
+                    <li key={path}>
+                      <button type="button" className="change-row" title={`${path} — open diff`} onClick={() => openDiff(path)}>
+                        <FilePen size={12} aria-hidden="true" />
+                        <span className="change-name">{name}</span>
+                        {parts.length ? <span className="change-dir">{parts.join("/")}</span> : null}
+                        <ChevronRight size={12} className="change-arrow" aria-hidden="true" />
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+              {changed.length > 3 ? (
+                <button type="button" className="changes-more" aria-expanded={filesOpen} onClick={() => setFilesOpen(!filesOpen)}>
+                  {filesOpen ? "Show fewer files" : `Show ${more} more file${more === 1 ? "" : "s"}`}
+                </button>
+              ) : null}
+            </section>
+          );
+        })() : null}
         {snapshotNote}
       </section>
     );
@@ -860,6 +949,8 @@ function RunViewView({ run, header, inline, isLast, onHeightChange }: { run: Age
   let buffer: AgentStep[] = [];
   let placed = false;
   const answerId = settledAnswerId(run.steps);
+  // The newest note is the agent's current thought; every older one is history and folds.
+  const liveNoteId = live ? [...run.steps].reverse().find((step) => step.kind === "message" && step.detail && step.id !== answerId)?.id : undefined;
   const push = (node: ReactNode, loose = false) => { if (answer) after.push(node); else entries.push({ node, loose }); };
   const flush = () => {
     if (!buffer.length) return;
@@ -876,6 +967,12 @@ function RunViewView({ run, header, inline, isLast, onHeightChange }: { run: Age
   };
   for (const step of run.steps) {
     if (hiddenStep(step)) { place(step); continue; }
+    if (step.kind === "compaction") {
+      flush();
+      push(<ContextDivider key={step.id} step={step} />);
+      place(step);
+      continue;
+    }
     if (ACTIVITY_KINDS.has(step.kind)) { buffer.push(step); place(step); continue; }
     flush();
     if (step.kind === "user") {
@@ -885,7 +982,7 @@ function RunViewView({ run, header, inline, isLast, onHeightChange }: { run: Age
     else if (step.kind === "workflow" || step.kind === "subagent") push(<AgentsCard key={step.id} step={step} />, true);
     else if (step.kind === "error") push(<div key={step.id} className="system-note" role="alert"><CircleAlert size={13} aria-hidden="true" /><span>{step.detail || "Something went wrong."}</span></div>, true);
     else if (step.detail && step.id === answerId) answer = <AgentMessage key={step.id} step={step} final={!live} canRetry={isLast} />;
-    else if (step.detail) { push(<AgentNote key={step.id} step={step} />); holds.push(step.id); }
+    else if (step.detail) { push(<AgentNote key={step.id} step={step} current={step.id === liveNoteId} />); holds.push(step.id); }
     place(step);
   }
   // While the run is live, the work since the last message belongs to the live status line
@@ -918,21 +1015,23 @@ export function WorkingIndicator({ label, paused, peak, meta, live, agentId = "m
   const thinkingOrb = useAppStore((state) => state.thinkingOrb ?? "auto");
   const [open, setOpen] = useState(false);
   const thought = live?.find((step) => step.kind === "reasoning" && step.status === "running");
-  const actions = live?.filter((step) => step !== thought) ?? [];
+  // A compaction is a seam in the trace above, never a step in the live list.
+  const actions = live?.filter((step) => step !== thought && step.kind !== "compaction") ?? [];
   // The newest running step names the current action; its icon keeps the status
   // line in the same visual language as the step rows it opens onto.
   const current = live ? [...live].reverse().find((step) => step.status === "running" && step.kind !== "reminder") : undefined;
   return (
     <div className={`working-wrap${closing ? " closing" : ""}`} aria-live="polite">
       <button type="button" className={`working ${peak ? "peak" : ""}`} aria-expanded={live ? open : undefined} disabled={!live} onClick={() => setOpen(!open)}>
-        {agentId === "muse" ? <Orb state={paused ? "breathing" : thinkingOrb !== "auto" ? thinkingOrb : peak ? "solving" : "working"} size={20} speed={peak && !paused ? 1.9 : 1} paused={paused} aria-label={agentName} /> : <span className={`working-agent ${paused ? "paused" : ""}`} aria-label={agentName}><ProductAgentMark id={agentId} size={20} /><i aria-hidden="true" /></span>}
+        {agentId === "muse" || agentId === "harness" ? <Orb state={paused ? "breathing" : thinkingOrb !== "auto" ? thinkingOrb : peak ? "solving" : "working"} size={20} speed={peak && !paused ? 1.9 : 1} paused={paused} aria-label={agentName} /> : <span className={`working-agent ${paused ? "paused" : ""}`} aria-label={agentName}><ProductAgentMark id={agentId} size={20} /><i aria-hidden="true" /></span>}
         {live ? <span className={`working-node${paused ? " paused" : ""}`} aria-hidden="true"><StepIcon kind={current?.kind ?? "reasoning"} /></span> : null}
         <span className={`working-label ${paused ? "" : "shimmer"}`} title={label}>{label}</span>
         {meta ? <span className="working-meta">{meta}</span> : null}
         {live ? <ChevronRight size={12} className={`caret ${open ? "open" : ""}`} aria-hidden="true" /> : null}
       </button>
       <Collapse open={open && Boolean(live)}>{() => (
-        <div className="working-detail">
+        // The wrapper announces the live status; the steps it opens onto must not be read as one update.
+        <div className="working-detail" aria-live="off">
           {actions.length ? <ol className="steps">{actions.map((step) => <StepRow key={step.id} step={step} />)}</ol> : null}
           {thought?.detail ? (
             <div className="thought live">

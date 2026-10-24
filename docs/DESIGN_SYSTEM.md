@@ -39,7 +39,8 @@ document should be corrected.
 | Local / Worktree | Where a thread works: the workspace folder, or its own checkout on a `glitter/` branch. Not “sandbox”, “copy” or “isolated mode” |
 | Stop | Cancel turn (button label: Stop) |
 | Provider | Where models come from, as the model picker and Settings → Models list them: a provider the built-in agent calls with your key (Anthropic, OpenRouter…), or an agent CLI (Muse, Cline CLI…). Not “source”, “lab” or “backend” |
-| Built-in agent | Glitter’s own agent (`harness` in code). In copy it is “the built-in agent”; the composer addresses it by its model (“Ask Claude Sonnet 5…”) |
+| Built-in agent | Glitter’s own agent (`harness` in code). In copy it is “the built-in agent”; the composer addresses it by its model (“Ask Claude Sonnet 5…”), and before one resolves by the connected provider’s name (“Ask Anthropic to…”) — never by the code name |
+| Custom endpoint | A provider the user adds in Settings → Providers: their own name for it, its API type (OpenAI-compatible or Anthropic), its address, and a key only when the endpoint needs one. Not “custom provider” in copy |
 | Allow in thread | An approval that reaches past this one call, for the rest of the thread. Its scope names what it covers (this exact command, a command prefix, one program, a file, a folder, the workspace). Not “session”, “rule” or “whitelist” |
 
 Copy: short, present tense, no “successfully been executed.”
@@ -61,6 +62,16 @@ this document; reference the token.
 with smoked glass — and `html[data-theme="light"]` overrides it with **Frost** —
 a matte light-grey canvas with frosted-white glass. New installations default to
 `system` (follows the OS); existing preferences remain intact.
+
+**Dark intensities.** The dark theme comes in three depths, set under
+Appearance → Interface theme → Dark intensity and carried on `html[data-dark]`:
+`subtle` (**Graphite** — the surface ladder lifted one rung), `mid` (**Smoke**,
+the default `:root` palette) and `black` (true black, for OLED). The intensity
+blocks select on `html[data-theme="dark"][data-dark=…]`, so a light interface
+never sees them; they move only the opaque surface ladder (`--bg`…`--surface-3`)
+and the glass fills — except subtle's red (`--danger`/`--diff-del`), which lifts
+with its surfaces to keep deleted-diff text at AA. The setting applies whenever
+the interface resolves to dark, including the dark half of `system`.
 
 | Token | Role |
 |---|---|
@@ -98,8 +109,8 @@ errors, and approval warnings retain their semantic status colors and labels.
 
 **Contrast is enforced.** `npm run check:contrast` reads the actual token blocks
 in `styles.css` and measures text/background, semantic, syntax, diff, and accent
-pairs in both themes and all eight accents against WCAG AA (4.5:1). It must not
-carry a second hardcoded color palette.
+pairs in both themes, all three dark intensities and all eight accents against
+WCAG AA (4.5:1). It must not carry a second hardcoded color palette.
 
 ---
 
@@ -147,7 +158,7 @@ display headings on the welcome stage.
 
 Scale: 2, 4, 6, 8, 10, 12, 16, 20, 24, 32.
 
-- Sidebar row padding: 6×8
+- Sidebar rows: 28px (30px for New thread, Settings and the attention row); an 8px inset, a 15px icon column and an 8px gap
 - Conversation column: `min(860px, 100% - 40px)`
 - Inspector width: 360 default, user-resizable from 300 up to the smaller of 60% of the window or the space that leaves the thread 336
 - Title bar height: 52 (the window controls sit on its centre line; 50 in compact browser windows)
@@ -162,8 +173,8 @@ literal pixel values.
 | Token | Value | Continuous | Use |
 |---|---|---|---|
 | `--r-sm` | 6px | 8px | Menu and option items, progress tracks, rename inputs |
-| `--r-md` | 8px | 11px | Inputs, cards in the transcript, code blocks |
-| `--r-pill` | 8px | 11px | Single-line controls and rows: buttons, chips, icon buttons, sidebar and file rows, picker and menu triggers |
+| `--r-md` | 8px | 11px | Inputs, cards in the transcript, code blocks, sidebar rows (workspace header, threads) |
+| `--r-pill` | 8px | 11px | Single-line controls and rows: buttons, chips, icon buttons, file rows, picker and menu triggers |
 | `--r-lg` | 10px | 14px | Cards, popovers, dialogs |
 | `--r-xl` | 12px | 16px | The composer, the command palette, the settings dialog |
 
@@ -252,6 +263,13 @@ not literal milliseconds:
 - **Layout.** The sidebar column and the Changes pane animate their width; the
   transcript gives way instead of jumping.
 - **Arrivals.** New blocks in the live turn rise in with `rise-in`.
+- **Live work.** A live group tints its disclosure square with the accent and
+  carries a pulsing accent dot beside the title. A step that flips to
+  completed settles with a one-shot pop (`settle`) — in live contexts only (a
+  running run, the working dropdown), so history restored by scrolling never
+  replays it.
+- **Completion.** The freshest turn's receipt lands with a one-shot `check-pop`
+  on its check; older receipts restored by scrolling stay still.
 - **Exits.** Whatever animates in also animates out, faster than it came:
   sections shrink with `.reveal.closing`, popovers use `pop-out` over
   `--dur-1`, dialogs `dialog-out` and the Changes pane `dock-out` over
@@ -275,11 +293,99 @@ Do not animate decorative blobs.
 
 ### Thread row
 
-Shows title, relative time, status dot. Running is a success pulse (disabled if reduced motion). Unread is accent, never the same as running. Hover reveals pin. Context menu: Rename, Pin, Archive.
+One line, 28px tall, on the sidebar grid (below): the status sits in the icon
+column under the workspace's folder — attention, then a running spinner
+(disabled if reduced motion), failed, unread — and the column is held when a
+row has none, so every title starts on the same line as the workspace names.
+Then the title, rolling to its tail on hover when clipped, and at its end the
+pin, the agent mark when the thread belongs to another agent, the worktree
+branch chip, the change-count pill and the relative time; a running thread has
+no time, and its title takes the slot. Unread is ink weight 500 on the title,
+never the same as running. Hover swaps the time for the ⋯ menu: Rename, Pin,
+Archive and Delete, plus Fork and Export on Muse threads.
+
+Uncommitted change counts render as one small mono pill on `--fog` — `+N` in
+the diff-add colour, `−N` in diff-del — that gives up its width before the row
+can clip (and hides entirely in a very narrow sidebar). A derived title drops
+attachment markers (`[Image #1]`, `[Screenshot]`) so it starts at real words;
+a message that was only attachments is untitled.
+
+### Agent turn
+
+The agent's side of a turn reads top to bottom as **who → what it did → what
+it says**, and each layer has its own voice so nothing looks like anything
+else:
+
+1. **Head.** The agent's mark and name, once per turn — never repeated
+   on each message, and the same for every agent including built-in Harness.
+   The thinking orb belongs to the live status line: a settled turn never
+   wears a paused one.
+2. **Work.** Everything the agent did before its answer, on the content
+   column: activity groups, step rows, and the *notes* it writes between
+   steps. Work never hangs from the agent's mark; the only rail is inside an
+   open group, where it drops from the disclosure through its steps. A note is
+   narration, not the answer: plain prose in the quieter voice, no bead. The
+   newest note of a live turn is open, in `--text-md` `--secondary` prose; a
+   note the agent has worked past folds to its first line in `--text-md`
+   `--tertiary`, with a caret, and opens on click. Cards (subagents,
+   workflows), errors and an inline plan sit on the content column and never
+   fold away. A context compaction is a seam, not a step: a centred chip
+   between two hairlines, **Context compacted**, with the same treatment in
+   danger when it failed.
+3. **Answer.** The message the turn settles on — its last, with no work after
+   it — in 14px `--ink` prose, with Copy and Retry once the turn ends. While a
+   turn runs, its trailing message is shown as the answer; if the agent then
+   calls a tool, that message becomes a note.
+
+While the turn runs, its work stays open, though each note folds as soon as
+the agent moves past it; a note the user opened stays open. When it settles on
+an answer, the work folds (animated, in view only) to one line above the
+answer — **Worked for 3m 21s** (the turn's time, or the summed step time
+marked `~`), then steps, edits, files and commands in `--text-sm` `--tertiary`,
+and the failure count in danger when a step failed. A turn with a single line
+of work, or with no answer (failed, stopped), stays open. Find in thread opens
+a fold that holds the match.
+
+Everything shares one grid: a 22px node column and content from 32px
+(`--indent`). The agent mark sits on the node column; the answer, notes, work
+rows, the Done line and the receipt's card start on the content column.
+Inside a group, a 22px square disclosure starts there, and the rail through
+the open steps falls from its centre.
 
 ### Agent step / tool card
 
-One line by default: icon, verb, path or command, status, duration. Expand for output/error. Routine completed reads/searches start collapsed. Failures start expanded.
+One line by default and deliberately quiet: an outcome node (check, spinner,
+alert), the verb in `--text-sm` `--tertiary`, an 18px tinted glyph for the
+kind of work (files, commands, search, web, tools — from the chart series
+tokens), then the path or command in mono `--text-sm` `--secondary`, with
+duration and exit last. Expand for output/error. Routine completed
+reads/searches start collapsed. Failures start expanded, with a danger node.
+A thought's one-line summary is italic `--tertiary`, so reasoning never reads
+as output.
+
+### Activity summary
+
+A run's collapsed activity row is one quiet line, not a dashboard: a 22px
+square disclosure (border, `--surface-2`) on the content column, then what
+ran — **Ran 4 tools** when the group was only tools, **3 steps** when it mixed
+thinking and work — a danger failure count, a pulsing accent dot while live,
+and the total duration. There is no composition bar and no chip row: the
+counts stay in the row's tooltip, and the steps themselves are the detail.
+The whole row is the disclosure. Opening it draws the rail down through the
+steps, in a focusable pane capped at `min(360px, 42vh)` so long output scrolls
+rather than pushing the answer away. The title comes from `activityTitle` and
+the counts from `activitySummary` in `lib/agent.ts`, never from guesswork.
+
+### Live status line
+
+The working row (the orb on Muse and built-in Harness threads, the agent
+mark for the CLIs) carries a 20px node with the current action's step icon —
+the same node language as the step rows it opens onto — tinted
+`--accent-soft` while running and neutral while paused. Its dropdown lists
+the live steps as the same step rows, then the streamed thought under a quiet
+"Thinking" header, with the group's own rail through the steps. It borrows the
+run's 22px node grid, and a compaction is omitted there: that seam is already
+marked in the trace above.
 
 ### Plan
 
@@ -296,7 +402,14 @@ surface and the same effort control: no level is singled out.
 
 The toolbar is one row that reads left to right: what to add (attach, mention),
 how to run it (model and reasoning, permissions), then status and action
-(context meter, Send). The selectors are one family of 28px borderless
+(context meter, Send). The context meter opens a card. The title is Context
+window, and the figure beside it is used/window and that share. When cache
+reads and writes add up to the used count, the bar splits into Prompt, Cached
+and Cache write, and the card shows the average cache hit rate. Estimated cost
+stays when the model has a price. Today lists the models used on this Mac
+today, each with its share of that total. Compact stays on a Muse thread that
+can compact. The Muse subscription meter lives on the Usage page while Muse
+is enabled. The selectors are one family of 28px borderless
 controls (`.picker-trigger`, and `.select-trigger` inside `.composer-foot`)
 that fill a capsule on hover; short 16px hairlines separate model, effort and
 permissions, as one separates attach and mention from them. The model control
@@ -346,25 +459,31 @@ the foot says how many are hidden
 and links to Manage models and Manage providers. One click on a row picks it
 and closes.
 
-**Select menus** (`SelectMenu`: permissions, effort, every select in
-Settings) share one anatomy. The popover has a 6px inset; the heading and every
-row share a 10px inner gutter, so the heading lines up with the icon column. A
-row is an 18px icon column, the label (`--text-md`, 20px line), and a 16px
-check column kept on every row — so the right edge lines up whichever row is
-chosen. A row with a description is "rich": 8px vertical padding, icon, label
-and check on the label's line, the description (`--text-sm`, `--tertiary`)
-wrapping under the label in full — never cut off or clamped. Hover takes
-`--hover`; the chosen row keeps `--active` and an `--accent-text` check. The
-menu measures its height at its final width and sizes to its content up to
+**Select menus** (`SelectMenu`: permissions, mode, effort, every select in
+Settings) share one anatomy. The popover has a 6px inset. A row is a grid: a
+20px icon column when the row has an icon, the label (`--text-md`, weight 500,
+20px line), and a 16px check column kept on every row — so both edges line up
+whichever row is chosen. The heading shares the label's left edge. When rows
+have icons it clears the icon column and the 10px gap; when they don't, it
+shares the row's 10px gutter. A row with a description is "rich": 8px vertical
+padding, the icon and the check locked to the label's line, the description
+(`--text-sm`, `--tertiary`) wrapping under the label in full — never cut off
+or clamped — and 4px between those rows. Hover takes `--hover`. The chosen row
+is the same raised tile as a model row (`--raised`, `--shadow-sm`,
+`--raised-edge`) with an `--accent-text` check. A danger row uses `--warning`
+on its icon and label at the same weight as the others, so it stays in the
+column; it does not take a warning wash. The menu measures its height,
+including its border, at its final width and sizes to its content up to
 `--select-max-height`, so a short menu never scrolls or clips its last row.
 
 Reasoning effort (`EffortPicker`) is the shared select menu: the chip names
 the level, and the menu lists the model's levels from least to most, each with
-a line on what it trades and the model's own default tagged Default. One click
-picks a level and closes; the left and right arrows on the closed chip step it
-without opening anything. No level gets its own colour, bars or effect. A pick
-stays drawn while it applies, and a rejected pick returns to the session's
-applied value. The model and effort commands open these two controls.
+its dial and the model's own default tagged Default. Levels are not described.
+One click picks a level and closes; the left and right arrows on the closed
+chip step it without opening anything. No level gets its own colour, bars or
+effect. A pick stays drawn while it applies, and a rejected pick returns to
+the session's applied value. The model and effort commands open these two
+controls.
 
 In the model list a check trails the selected capsule row, a Zap marks the
 base row while its fast variant is selected, and price sits right of the name,
@@ -372,11 +491,25 @@ so rows compare at a glance.
 
 ### Completion
 
-Completed turns use a compact strip separated from the reply by a fine rule:
-Done, duration, output tokens and estimated cost share a row with Undo and Fork.
-File changes and snapshot notices sit underneath. Usage stays attached to the
-matching latest turn; estimates retain their `~` or `≈` marks. Failed, stopped
-and interrupted turns retain their explicit state and recovery controls.
+A completed turn closes with one quiet line under the reply, with no rule or
+box, starting on the content column: a small success check leading **Done**,
+then the turn's facts in `--text-sm` `--tertiary`, dot-separated — duration,
+output tokens, estimated cost, and the model last with a 12px mark — and Undo
+and Fork here as quiet buttons at the end. Undo appears only when a saved file state lets it run; the strip never
+explains why it is absent. Only an Undo or Reapply that failed adds a line. An
+undone turn reads **Undone** in place of Done, and its button offers Reapply.
+Usage stays attached to the matching latest turn; estimates retain their `~`
+or `≈` marks. A host that reports no per-turn usage still reported its step
+times: the summed time, marked `~`, fills the metrics row rather than leaving
+it empty. Failed, stopped and interrupted turns retain their explicit state
+and recovery controls.
+
+Changed files sit on the content column as one review card: **Changed 3
+files** with a **Review** action that opens the Changes pane, then up to three
+file rows — basename in mono `--ink`, directory in `--text-xs` `--tertiary`,
+an arrow at the end — each opening its diff. **Show 2 more files** reveals the
+rest; **Show fewer files** folds them back. The card reports paths and a
+count, never invented line statistics.
 
 ### Settings
 
@@ -410,22 +543,59 @@ and the navigation, search and the command palette all read those names.
   failed. A search field at the top searches every provider; a provider with
   more than ten models has its own search inside its card. Long lists fold
   after eight rows.
-- **Providers**: API keys for the built-in agent.
+- **Providers**: API keys for the built-in agent. Custom endpoints are added
+  with **Add a custom endpoint** (a full-width quiet row at the foot of the
+  card): the form asks for a name, the API type (OpenAI-compatible — Chat
+  Completions, or Anthropic — Messages), the address, and a key that may stay
+  empty when the endpoint needs none. The keychain mints each endpoint's id;
+  the app shows only the user's own name, and the endpoint's mark is its
+  name's initials on the custom tile. Any number can coexist, each as its own
+  row and its own provider in the model picker; changing an endpoint's address
+  asks for its key again, so a saved key is never sent to a new server.
 - **Agents**: the default agent, the built-in agent, the agent CLIs, and the
   Muse connection (credential, API key, binary, Contributor mode) while Muse is
   shown. There is no Account page: Muse is one agent among others.
 - **Permissions**: approvals for new threads, then the Muse host sandbox.
 - Muse-only content (the subscription meter, the CLI updater, Muse diagnostics)
   appears only while Muse is shown, and after the app's own content.
+- **Usage**: the heading reads **Usage stats**, with an **App usage** pill beside
+  it and no sentence or hairline. The column is 960px so the year of activity
+  fits; every other page stays 760px. A stat strip leads with total tokens
+  (the larger value), then the peak day, the longest turn, and the current and
+  longest streaks — each an icon, value and label, left-aligned, hairlines
+  between. The activity map is one year of days, month labels above the grid
+  and a Less/More level legend under its right edge; its heading names the
+  busiest day in the year. Daily, Weekly and Cumulative change what a cell
+  means, and the grid stays the same year. Last 7 days and Last 30 days filter
+  only the daily trend, from the trend card's own head. A donut shows each
+  model's share. Provider, trajectory, agent, tool
+  and insight cards follow in the same card chrome. The Muse subscription meter
+  is last, and only while Muse is shown. The map uses chart series 1, so it
+  stays a data colour when the accent changes. Model lines and the donut take
+  the series palette in size order. Refresh and Clear history sit at the top
+  right of the page, level with the heading: Refresh recomputes the local
+  charts at once and forces a new Muse subscription reading when Muse is
+  enabled, with a spinner while that read runs. The page advances its clock
+  and refreshes that reading once a minute. A day in the activity map and a
+  model in the trend legend answer a hover at once with a tooltip — the day's
+  date and tokens, or the model's full id and the tokens it drew — instead of
+  waiting on a native title. On first paint the year settles in one
+  left-to-right sweep, the trend lines draw themselves in once, the donut
+  fades up, the stat values count up and the provider share grows from
+  nothing; a range or grain change repaints colour without replaying the
+  motion.
 
 **Motion.** The category highlight moves on the click; the page renders a beat
 later (`useDeferredValue`) and fades up 4px over `--dur-2`, transform and
 opacity only. Cards below the fold use `content-visibility: auto`. The app view
 steps back through `html[data-settings]`, never an app-wide `:has()`.
 
-**Layout.** One centred column (`.settings-column`, 760px) on every page. The
-page head is the title (`--text-3xl`) and one sentence, over a hairline. A
-section is a heading (`.settings-card-heading`, `--text-md` 600) with one line
+**Layout.** One centred column (`.settings-column`, 760px) on every page except
+Usage, which is 960px. The page head is the title (`--text-3xl`) and one
+sentence, over a hairline. Usage drops the sentence and the hairline, puts
+an App usage pill beside the title, and puts its Refresh and Clear history
+actions at the right of the same row.
+A section is a heading (`.settings-card-heading`, `--text-md` 600) with one line
 of help, then a card; 32px between sections.
 
 - A setting is a row in a card (`.setting-row`): name and one line of help on
@@ -595,15 +765,38 @@ carries no accent colour.
 
 The sidebar has no fill, blur or edge of its own: it sits on the shell, so the
 accent tint and the window's translucency reach it. The main pane is opaque and
-takes neither. The sidebar is the session list. Under the title bar it offers
-New thread, a search field, and a filter for all threads, live ones, or ones
-that need you, then the workspaces and their threads. Each workspace row starts
-a thread in that workspace. The foot is a row of icons — Settings, then Usage,
-whose card opens upward — under a hairline, with a CLI update, offline, sign-in
-and a missing agent each getting a row above it while they last. The Muse subscription meter appears in the Usage card only
-while the Muse agent is enabled. The list scrolls vertically only —
-never sideways — and a thread name that does not fit rolls to its tail on
-hover instead of leaving a scrollbar.
+takes neither. The sidebar is the session list, and every row in it sits on one
+grid: an 8px inset, a 15px icon column and an 8px gap, so New thread, workspace
+names, thread titles and Settings start on one line, and every icon, folder and
+status dot shares one column.
+
+From the top: **New thread** (its shortcut shown), the search field behind the
+title-bar icon, and — only while an approval or a question waits in any
+workspace — one warm **N threads need you** row that opens each waiting thread
+in turn, as the attention shortcut does. Then a **Workspaces** label carrying
+Archived threads (while there are any) and Open workspace (+).
+
+Under it, one group per workspace, in the store's sidebar order: a folder row,
+then its threads. The folder in view opens on its own and is set in ink at
+weight 600; any other opens from its caret and stays open beside it. The folder
+mark turns into the caret under the pointer. A closed folder flags its work on
+its row — the attention dot, else a running spinner. On hover a folder row
+offers New thread and a ⋯ menu: Show in Finder (Open folder elsewhere), Open in
+the editor chosen in Settings, Copy path, Trust workspace… while untrusted, and
+**Remove from sidebar** — never a bare remove button on the row. A folder that
+lost its access grant says so under its row and offers to choose it again.
+Lists never reshuffle as threads start and stop; the order is the one the
+thread shortcuts walk. A list longer than ten folds after eight behind **Show N
+more**, keeping the open thread and anything waiting or running in place. A
+search opens every folder with a match, for that search only, and drops the
+rest.
+
+The foot sits under a hairline: a CLI update, offline, sign-in and a missing
+agent each get a row while they last, then **Settings** as a labelled row with
+today's usage at its end — a bar-chart mark and the day's tokens on this Mac —
+which opens the Usage page directly, with no popup in between. The list scrolls vertically only — never
+sideways — and a thread name that does not fit rolls to its tail on hover
+instead of leaving a scrollbar.
 
 The welcome state sits on the main panel itself. A new thread's empty state is
 one centred column: a short heading, the workspace name and branch in a quiet

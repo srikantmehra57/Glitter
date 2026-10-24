@@ -12,6 +12,105 @@ licence terms.
 
 ### Added
 
+- **Dark mode comes in three depths.** Appearance → Interface theme gains a
+  **Dark intensity** picker — Subtle (Graphite, the surface ladder lifted one
+  rung), Mid (Smoke, the previous and default look) and Pure black (true black,
+  at home on OLED). It applies whenever the interface is dark, including the
+  dark half of System, and the Dark choice tile previews the chosen depth.
+- **Custom endpoints are named, typed and unlimited.** Settings → Providers
+  gains **Add a custom endpoint**: it asks for a name, whether the API is
+  OpenAI-compatible (Chat Completions) or Anthropic (Messages), the address,
+  and a key that may stay empty for a server that needs none. Any number of
+  them can be added, each with its own row (edit, replace, remove), its own
+  mark made from its initials, and its own models in the picker under its own
+  name. The native keychain mints each endpoint's id, and a pre-rename
+  install's single saved endpoint is carried over as "Custom endpoint".
+- The composer never calls the built-in agent by its code name: before a model
+  resolves, its placeholder names the connected provider ("Ask Anthropic to…",
+  or a custom endpoint by the name you gave it), and with nothing connected it
+  says "the built-in agent".
+
+### Changed
+
+- **The agent's notes fold as it moves on.** Only the newest note of a running
+  turn stays open; once the agent works past one, it folds to a single quiet
+  line that opens on click, so a long turn no longer stacks every thought into
+  a wall of prose.
+- **The sidebar is rebuilt around projects.** Each workspace is a folder row
+  with its threads under it; the folder in view opens on its own, others open
+  from their caret and stay open beside it, and a closed folder flags a thread
+  that needs you or is still running. Every row sits on one grid, so icons,
+  folders and status dots share a column and every name and title starts on
+  one line. Thread lists keep their order instead of reshuffling into
+  sections, and a list longer than ten folds after eight behind **Show N
+  more**, keeping the open thread and live work in place. While an approval
+  or a question waits anywhere, one **N threads need you** row under New
+  thread opens each in turn. A workspace's ⋯ menu holds Show in Finder, Open
+  in your editor, Copy path, Trust workspace… and Remove from sidebar, which
+  is no longer a bare button beside New thread. The dashed Open workspace row
+  and the Threads · {workspace} label are gone: Open workspace and Archived
+  threads sit on the Workspaces label. The foot is a labelled **Settings** row
+  with today's tokens at its end; clicking them opens the Usage page directly
+  instead of a small Today card. Thread rows drop the agent mark into their
+  trailing meta, and a running thread's title takes the empty time slot. A
+  search spans every workspace and opens each folder with a match for that
+  search only. Derived titles drop attachment markers such as "[Image #1]" so
+  they start at real words.
+- **A finished turn closes with one quiet line**: it starts on the content
+  column with a success check leading Done, sits level with the changed-files
+  card below it, then time, tokens, cost and the model, dot-separated in one
+  tone, with Undo and Fork here at the end. The rule above it, the divider after
+  Done and the clock icon are gone.
+  The strip no longer explains why Undo is missing ("Undo is unavailable: a
+  workspace file exceeds 2 MiB") — Undo shows when it can run, and only a
+  failed Undo or Reapply gets a line. An undone turn reads **Undone**.
+- A finished turn whose agent reports no per-turn usage shows the **summed step
+  time, marked ~**, in its Done strip instead of an empty metrics row.
+- The **Usage page** reads at a glance: the stat strip leads with total tokens
+  beside iconed stats for the peak day, longest turn and streaks; the year map
+  carries its month labels above the grid, a Less/More level legend, and a
+  heading that names the busiest day; and the trend's Last 7 / Last 30 days
+  control lives in the trend card's head instead of a floating row between
+  cards.
+- **The Usage page answers on hover and keeps its actions at the top.** A day
+  in the activity map shows its date and tokens the moment the pointer lands,
+  and each trend legend entry names the full model and the tokens behind it,
+  both replacing the native title's delay. Refresh and Clear history move from
+  the foot of the page to the top right, level with the heading.
+- **A turn's work reads as a quiet rail, not a dashboard.** A collapsed group
+  is one line on the answer's content column: a square disclosure, **Ran 4
+  tools** (or **3 steps** when it mixed thinking and work), the failure count
+  in danger, and the total duration. Opening it drops a rail through the
+  steps; each row leads with its outcome, verb, a small tinted glyph for the
+  kind of work, and the path or command itself, and long output scrolls inside
+  the group instead of pushing the answer away. The composition bar and chip
+  row are gone. A context compaction is a centred **Context compacted** seam,
+  not a step.
+- **A finished turn's changed files form a review card** on the content
+  column: **Changed 3 files** with a **Review** action that opens the Changes
+  pane, then up to three file rows with their directories; **Show 2 more
+  files** reveals the rest and each row opens its diff. The card reports paths
+  and a count, never invented line statistics.
+- The live status line carries the **current action's icon** in a node that
+  matches the step rows it opens onto, accent-tinted while running and neutral
+  while paused, and the streamed thought in its dropdown is framed under a
+  quiet "Thinking" header. Its dropdown borrows the same 22px node grid, and a
+  **Context compacted** seam is not repeated there as a step.
+- On a built-in Harness thread, the turn's head wears the **Harness mark and
+  name** like every other agent. The thinking orb is reserved for the live
+  status line, so a settled turn never wears a paused orb.
+
+### Added
+
+- Usage motion, disabled under reduced motion: the year of activity cells
+  settles in one left-to-right sweep on first paint, the trend lines draw
+  themselves in, the donut fades up, the stat values count up and the provider
+  share grows from nothing — changing range or grain repaints colour without
+  replaying the motion.
+- Live motion, all disabled under reduced motion: a live group's disclosure
+  tints with the accent and a dot pulses beside its title, a step settling done
+  pops once (history restored by scrolling never replays it), and the freshest
+  turn's receipt lands with a one-shot check pop.
 - Settings → Models has a **model library**: every provider's models, each with
   a switch that keeps it in or out of the composer's model picker, so a
   provider with hundreds of models can show the two you use. A model a thread is
@@ -123,10 +222,14 @@ licence terms.
 
 ### Changed
 
-- Select menus — permissions, reasoning effort and the selects in Settings —
-  are redesigned: even padding on both sides, the check in a column of its
-  own, descriptions that wrap in full, and a height that fits every row
-  instead of cutting off the last one.
+- OpenCode’s model list is the Zen catalog, not the handful of models its
+  session offers. Models the OpenCode workspace has turned off stay out.
+- Select menus — permissions, agent mode, reasoning effort and the selects in
+  Settings — share one row: the heading lines up with the labels, the icon and
+  the check sit on the label's line, and the chosen row is the same raised
+  tile as a model row. A menu sizes to its content, border included, so the
+  last row keeps its padding. Reasoning effort lists the level and its dial
+  only; it no longer describes what each level trades.
 - **Settings is a full-window page.** It takes the place of the app view, with
   its categories on the sidebar's surface and Back beside the window controls.
   The pages are regrouped and renamed — AI (Models, Providers, Agents),
@@ -238,6 +341,10 @@ licence terms.
   in-app tooltips, which hide once clicked.
 
 ### Fixed
+
+- In windows narrower than 1200px the sidebar's resize handle took the content
+  width and lay over the thread list, catching hovers and clicks meant for
+  threads. It keeps its own strip at the sidebar's edge again.
 
 - Changing permissions on a built-in agent thread failed in the desktop app
   with "Settings unchanged": the native check refused the agent the request

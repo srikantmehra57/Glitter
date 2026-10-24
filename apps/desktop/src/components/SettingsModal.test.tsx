@@ -31,6 +31,17 @@ describe("settings navigation", () => {
     expect(screen.getByRole("button", { name: "Usage" })).toHaveAttribute("aria-current", "page");
   });
 
+  it("puts the usage actions beside the page heading, not at the foot", async () => {
+    seedStore({ settingsTab: "Usage" });
+    render(<SettingsModal />);
+    const refreshUsage = await screen.findByRole("button", { name: "Refresh usage" });
+    const clearHistory = screen.getByRole("button", { name: "Clear history" });
+    expect(refreshUsage.parentElement).toHaveClass("usage-page-actions");
+    expect(clearHistory.parentElement).toHaveClass("usage-page-actions");
+    expect(refreshUsage.closest(".settings-section-head")).not.toBeNull();
+    expect(refreshUsage.closest(".usage-scroll")).toBeNull();
+  });
+
   it("remembers the last tab after closing and remounting, with explicit links taking precedence", () => {
     const view = render(<SettingsModal />);
     fireEvent.click(screen.getByRole("button", { name: "About" }));

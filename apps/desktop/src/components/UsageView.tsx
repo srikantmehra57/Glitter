@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useState, type CSSProperties, type ComponentType } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ComponentType } from "react";
+import { createPortal } from "react-dom";
 import { Clock3, Coins, FilePenLine, FileText, Flame, LoaderCircle, ChevronRight, Mountain, RefreshCw, RotateCcw, Search, Terminal, Trash2, Wrench, Zap } from "lucide-react";
 import { useAppStore } from "../lib/store";
+import { motionReduced } from "../lib/presence";
 import { formatDuration, formatResetIn, humanizeStopReason, relativeTime, usageWindowLabel, windowPercent } from "../lib/format";
 import { mockUsageLedger } from "../lib/mock";
 import { PROVIDERS, customProviders } from "../lib/providers";
@@ -57,6 +59,63 @@ function foldModels(groups: UsageGroup[], limit = COLOR_SLOTS): UsageGroup[] {
     estimatedTurns: sum.estimatedTurns + group.estimatedTurns,
   }), { id: "other", inputTokens: 0, cachedTokens: 0, outputTokens: 0, turns: 0, estimatedTurns: 0 });
   return [...groups.slice(0, limit), other];
+}
+
+/** A stat that counts to its value when the page opens, so the numbers arrive with the charts. */
+function Count({ value, format = formatCount }: { value: number; format?: (value: number) => string }) {
+  const [shown, setShown] = useState(() => (motionReduced() ? value : 0));
+  const latest = useRef(shown);
+  latest.current = shown;
+  useEffect(() => {
+    if (motionReduced() || latest.current === value) { setShown(value); return; }
+    const from = latest.current;
+    const started = performance.now();
+    let frame = 0;
+    const tick = (at: number) => {
+      const progress = Math.min(1, (at - started) / 650);
+      setShown(Math.round(from + (value - from) * (1 - (1 - progress) ** 3)));
+      if (progress < 1) frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+  }, [value]);
+  return <>{format(shown)}</>;
+}
+
+type UsageTip = { text: string; x: number; y: number; below: boolean };
+
+/** Hover detail for the activity map and the trend legend: instant, placed by its target. */
+function useUsageTip() {
+  const [tip, setTip] = useState<UsageTip | null>(null);
+  const open = tip !== null;
+  useEffect(() => {
+    if (!open) return;
+    const hide = () => setTip(null);
+    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") hide(); };
+    window.addEventListener("scroll", hide, true);
+    window.addEventListener("blur", hide);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("scroll", hide, true);
+      window.removeEventListener("blur", hide);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+  return {
+    tip,
+    show: (target: Element, text: string) => {
+      const rect = target.getBoundingClientRect();
+      const below = rect.top < 56;
+      const margin = Math.min(120, window.innerWidth / 2);
+      setTip({
+        text,
+        x: Math.min(Math.max(rect.left + rect.width / 2, margin), window.innerWidth - margin),
+        y: below ? rect.bottom : rect.top,
+        below,
+      });
+    },
+    hide: () => setTip(null),
+  };
 }
 
 function PlanUsage({ now }: { now: number }) {
@@ -245,24 +304,24 @@ function TokenTrendChart({ dates, series }: { dates: Date[]; series: Array<{ id:
   );
 }
 
-function ModelDonut({ segments, totalLabel }: { segments: Array<{ id: string; label: string; slot: number; tokens: number }>; totalLabel: string }) {
+function ModelDonut({ segments, total, approx }: { segments: Array<{ id: string; label: string; slot: number; tokens: number }>; total: number; approx: string }) {
   const size = 160;
   const stroke = 26;
   const center = size / 2;
   const radius = (size - stroke) / 2 - 1;
   const circumference = 2 * Math.PI * radius;
   const drawn = segments.filter((segment) => segment.tokens > 0);
-  const total = drawn.reduce((sum, segment) => sum + segment.tokens, 0);
+  const drawnTotal = drawn.reduce((sum, segment) => sum + segment.tokens, 0);
   const gap = drawn.length > 1 ? Math.min(6, circumference * 0.012) : 0;
   let cursor = 0;
-  const label = drawn.length ? drawn.map((segment) => `${segment.label} ${Math.round((segment.tokens / total) * 100)}%`).join(", ") : "No model usage";
+  const label = drawn.length ? drawn.map((segment) => `${segment.label} ${Math.round((segment.tokens / drawnTotal) * 100)}%`).join(", ") : "No model usage";
   return (
     <div className="usage-donut">
       <svg viewBox={`0 0 ${size} ${size}`} role="img" aria-label={label} focusable="false">
         <g aria-hidden="true">
           <circle className="usage-donut-track" cx={center} cy={center} r={radius} strokeWidth={stroke} />
           {drawn.map((segment) => {
-            const length = total ? (segment.tokens / total) * circumference : 0;
+            const length = drawnTotal ? (segment.tokens / drawnTotal) * circumference : 0;
             const dash = Math.max(0, length - gap);
             const offset = cursor;
             cursor += length;
@@ -284,14 +343,14 @@ function ModelDonut({ segments, totalLabel }: { segments: Array<{ id: string; la
         </g>
       </svg>
       <div className="usage-donut-center">
-        <strong>{totalLabel}</strong>
+        <strong>{approx}<Count value={total} /></strong>
         <span>tokens</span>
       </div>
     </div>
   );
 }
 
-export function UsageView({ embedded = false }: { embedded?: boolean } = {}) {
+export function UsageView({ embedded = false, actionsHost }: { embedded?: boolean; actionsHost?: HTMLElement | null } = {}) {
   const stored = useAppStore((state) => state.usageLedger);
   const preview = useAppStore((state) => state.preview);
   // The plan meter is Meta's subscription. It stays off unless Muse itself is on,
@@ -301,6 +360,7 @@ export function UsageView({ embedded = false }: { embedded?: boolean } = {}) {
   const clearUsageHistory = useAppStore((state) => state.clearUsageHistory);
   const refreshSubscriptionUsage = useAppStore((state) => state.refreshSubscriptionUsage);
   const subscriptionLoading = useAppStore((state) => state.subscriptionUsageLoading);
+  const { tip, show: showTip, hide: hideTip } = useUsageTip();
   const [grain, setGrain] = useState<ActivityGrain>("daily");
   const [range, setRange] = useState<RangeDays>(7);
   const [refreshing, setRefreshing] = useState(false);
@@ -383,7 +443,7 @@ export function UsageView({ embedded = false }: { embedded?: boolean } = {}) {
   };
 
   const refresh = (
-    <button type="button" className="secondary" disabled={refreshing || subscriptionLoading} onClick={() => void refreshPage()}>
+    <button type="button" className="secondary" aria-label="Refresh usage" disabled={refreshing || subscriptionLoading} onClick={() => void refreshPage()}>
       <RefreshCw size={14} className={refreshing || subscriptionLoading ? "spin" : undefined} aria-hidden="true" />
       {refreshing || subscriptionLoading ? "Refreshing…" : "Refresh"}
     </button>
@@ -402,6 +462,7 @@ export function UsageView({ embedded = false }: { embedded?: boolean } = {}) {
 
   return (
     <Shell {...shellProps}>
+      {embedded && actionsHost ? createPortal(<>{refresh}{clear}</>, actionsHost) : null}
       {embedded ? null : (
         <header className="topbar usage-topbar" data-tauri-drag-region>
           <div className="usage-page-title">
@@ -415,26 +476,27 @@ export function UsageView({ embedded = false }: { embedded?: boolean } = {}) {
       )}
 
       <div className="usage-scroll">
+        {embedded && actionsHost === undefined ? <div className="usage-head-actions">{refresh}{clear}</div> : null}
         <section className="usage-summary" aria-label="Usage summary">
           <div className="lead">
             <Coins size={15} aria-hidden="true" />
-            <div><strong>{approx}{formatCount(total)}</strong><span>Total tokens</span></div>
+            <div><strong>{approx}<Count value={total} /></strong><span>Total tokens</span></div>
           </div>
           <div>
             <Zap size={15} aria-hidden="true" />
-            <div><strong>{formatCount(peak)}</strong><span>Peak day</span></div>
+            <div><strong><Count value={peak} /></strong><span>Peak day</span></div>
           </div>
           <div>
             <Clock3 size={15} aria-hidden="true" />
-            <div><strong aria-label={longest ? formatDuration(longest) : "0 minutes"}>{formatSpan(longest)}</strong><span>Longest turn</span></div>
+            <div><strong aria-label={longest ? formatDuration(longest) : "0 minutes"}><Count value={longest} format={formatSpan} /></strong><span>Longest turn</span></div>
           </div>
           <div>
             <Flame size={15} aria-hidden="true" />
-            <div><strong aria-label={plural(streaks.current, "day")}>{plural(streaks.current, "day")}</strong><span>Current streak</span></div>
+            <div><strong aria-label={plural(streaks.current, "day")}><Count value={streaks.current} format={(count) => plural(count, "day")} /></strong><span>Current streak</span></div>
           </div>
           <div>
             <Mountain size={15} aria-hidden="true" />
-            <div><strong aria-label={plural(streaks.longest, "day")}>{plural(streaks.longest, "day")}</strong><span>Longest streak</span></div>
+            <div><strong aria-label={plural(streaks.longest, "day")}><Count value={streaks.longest} format={(count) => plural(count, "day")} /></strong><span>Longest streak</span></div>
           </div>
         </section>
 
@@ -453,8 +515,18 @@ export function UsageView({ embedded = false }: { embedded?: boolean } = {}) {
           <div className="activity-labels" style={mapStyle} aria-hidden="true">
             {activity.labels.map((label) => <span key={`${label.text}-${label.column}`} style={{ gridColumn: label.column }}>{label.text}</span>)}
           </div>
-          <div className="activity-map" style={mapStyle} role="grid" aria-label={`${grainLabel} token activity`}>
-            {activity.cells.map((entry, index) => <span key={entry.key} role="gridcell" data-level={entry.level} aria-label={entry.label} title={entry.label} style={{ "--i": index } as CSSProperties} />)}
+          <div
+            className="activity-map"
+            style={mapStyle}
+            role="grid"
+            aria-label={`${grainLabel} token activity`}
+            onPointerOver={(event) => {
+              const cell = event.target instanceof Element ? event.target.closest("[role=gridcell]") : null;
+              if (cell && event.currentTarget.contains(cell)) showTip(cell, cell.getAttribute("aria-label") ?? "");
+            }}
+            onPointerLeave={hideTip}
+          >
+            {activity.cells.map((entry, index) => <span key={entry.key} role="gridcell" data-level={entry.level} aria-label={entry.label} style={{ "--i": index } as CSSProperties} />)}
           </div>
           <div className="activity-legend" aria-hidden="true">
             <span>Less</span>
@@ -473,10 +545,15 @@ export function UsageView({ embedded = false }: { embedded?: boolean } = {}) {
             </div>
           </div>
           {trendSeries.length ? (
-            <ul className="usage-legend-models">
-              {trendSeries.map((series) => (
-                <li key={series.id}><i className="usage-dot" data-slot={series.slot} aria-hidden="true" />{series.label}</li>
-              ))}
+            <ul className="usage-legend-models" onPointerLeave={hideTip}>
+              {trendSeries.map((series) => {
+                const seriesTokens = series.values.reduce((sum, value) => sum + value, 0);
+                return (
+                  <li key={series.id} onPointerEnter={(event) => showTip(event.currentTarget, `${series.id === "other" ? "Other models" : series.id} · ${formatCount(seriesTokens)} tokens`)}>
+                    <i className="usage-dot" data-slot={series.slot} aria-hidden="true" />{series.label}
+                  </li>
+                );
+              })}
             </ul>
           ) : <p className="usage-empty">{slices.length ? "No tokens in this range." : "Trends appear after your first turn."}</p>}
           <TokenTrendChart dates={trend.dates} series={trendSeries} />
@@ -487,7 +564,8 @@ export function UsageView({ embedded = false }: { embedded?: boolean } = {}) {
           {models.length ? (
             <div className="usage-model-body">
               <ModelDonut
-                totalLabel={`${modelApprox}${formatCount(modelTotal)}`}
+                total={modelTotal}
+                approx={modelApprox}
                 segments={models.map((group) => ({ id: group.id, label: modelLabel(group.id), slot: group.id === "other" ? 0 : (modelSlots.get(group.id) ?? 0), tokens: tokensOf(group) }))}
               />
               <ol className="usage-model-list">
@@ -553,8 +631,8 @@ export function UsageView({ embedded = false }: { embedded?: boolean } = {}) {
           <Clock3 size={12} aria-hidden />
           <span>Counted as each turn finishes, from the tokens each agent reports, and kept on this Mac.{estimated ? ` ≈ marks ${plural(estimated, "turn")} whose agent reported no counts; those are estimated from the reply.` : ""}</span>
         </p>
-        {embedded ? <div className="usage-footer">{refresh}{clear}</div> : null}
       </div>
+      {tip ? <div className={`usage-tip${tip.below ? " below" : ""}`} role="tooltip" style={{ left: tip.x, top: tip.y }}>{tip.text}</div> : null}
     </Shell>
   );
 }

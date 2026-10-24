@@ -9,13 +9,38 @@ import { pathToFileURL } from 'node:url';
 const temporary = await mkdtemp(join(tmpdir(), 'muse-acp-'));
 const outfile = join(temporary, 'acp.mjs');
 await build({ entryPoints: [resolve('packages/glitter-bridge/src/acp.ts')], bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'silent' });
-const { AcpAgentHost, fatalProviderError, zenFreeModel, fallbackOpencodeModel, modelIdsFromError, modelOption, applyClineFree, fetchClineFreeIds } = await import(pathToFileURL(outfile).href);
+const { AcpAgentHost, fatalProviderError, zenFreeModel, fallbackOpencodeModel, modelIdsFromError, modelOption, applyClineFree, fetchClineFreeIds, opencodeModelsFromCatalog, disabledOpencodeModelIds, mergeOpencodeModels } = await import(pathToFileURL(outfile).href);
 
 test('rate limits and disabled models are fatal provider errors', () => {
   assert.equal(fatalProviderError('mimo-v2.5-free: Rate limit exceeded. Please try again later.'), true);
   assert.equal(fatalProviderError('Model access is disabled'), true);
   assert.equal(fatalProviderError('Upstream request failed: Insufficient account funds'), true);
   assert.equal(fatalProviderError('timeout waiting for stream'), false);
+});
+
+test('the OpenCode catalog keeps every Zen model the workspace has not turned off', () => {
+  const disabled = disabledOpencodeModelIds({ providers: { opencode: { models: { 'big-pickle': { disabled: true }, 'gpt-6-astra': { name: 'kept' } } } } });
+  assert.deepEqual([...disabled], ['big-pickle']);
+  const catalog = opencodeModelsFromCatalog({
+    opencode: { models: {
+      'gpt-6-astra': { name: 'GPT-6 Astra', cost: { input: 10, output: 50 }, limit: { context: 1050000 }, reasoning_options: [{ type: 'effort', values: ['low', 'high'] }] },
+      'deepseek-v4.1-flash-free': { name: 'DeepSeek V4.1 Flash Free', cost: { input: 0, output: 0 }, limit: { context: 200000 } },
+      'big-pickle': { name: 'Big Pickle', cost: { input: 0, output: 0 } },
+    } },
+  }, disabled);
+  assert.deepEqual(catalog.map((model) => model.modelId), ['opencode/gpt-6-astra', 'opencode/deepseek-v4.1-flash-free']);
+  assert.equal(catalog[0].displayLabel, 'GPT-6 Astra');
+  assert.equal(catalog[0].contextLimit, 1050000);
+  assert.deepEqual(catalog[0].reasoningEfforts, ['low', 'high']);
+  assert.equal(catalog[1].description, 'Free');
+  const merged = mergeOpencodeModels([
+    { modelId: 'opencode/gpt-6-astra', isActive: true, reasoningEfforts: ['high'] },
+    { modelId: 'opencode/only-session', displayLabel: 'Only session' },
+  ], catalog);
+  assert.equal(merged.find((model) => model.modelId === 'opencode/gpt-6-astra').isActive, true);
+  assert.deepEqual(merged.find((model) => model.modelId === 'opencode/gpt-6-astra').reasoningEfforts, ['high']);
+  assert.equal(merged.at(-1).modelId, 'opencode/only-session');
+  assert.deepEqual(mergeOpencodeModels([{ modelId: 'zen/a' }], []).map((model) => model.modelId), ['zen/a']);
 });
 
 test('OpenCode Free Zen models fall back to Big Pickle instead of another gated Free row', () => {

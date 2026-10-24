@@ -1,5 +1,9 @@
 # Harness integration plan
 
+**Superseded on 2026-10-24. The current forward roadmap is
+[HARNESS_UPGRADE_PLAN.md](HARNESS_UPGRADE_PLAN.md). This document is a historical
+record of the earlier implementation sequence, not current work.**
+
 A phased plan to bring the built-in harness (`packages/glitter-bridge/src/harness`)
 up to what the four reviewed harnesses do, and to close the gap between the
 harness and the rest of the app.
@@ -51,7 +55,7 @@ it.
 
 - [x] Four harness reviews (`docs/*HARNESS_REVIEW.md`)
 - [x] Four-way comparison and ranking (`docs/HARNESS_REVIEWS.md`)
-- [x] This plan (`docs/HARNESS_INTEGRATION_PLAN.md`)
+- [x] This plan (then `docs/HARNESS_INTEGRATION_PLAN.md`; now retired)
 - [x] Confirm Phase 1's eight items against the current tree — the harness has
       uncommitted work in flight (`harness/host.ts`, `harness/store.ts`,
       `UsageView.tsx`, `usageLedger.ts`, `store.ts`)
@@ -527,6 +531,54 @@ worth it if long, tool-heavy turns are a real complaint.
 
 ---
 
+## Phase 9 — Context budget
+
+**Status: done** (2026-10-23, with the design note
+[harness-context-budget.md](harness-context-budget.md) and the DECISIONS entry
+"The request is fitted to the model's window before it is sent"). The harness
+had no context management: a thread past the model's window died on a
+non-retryable `CONTEXT_WINDOW_EXCEEDED`. Phase 9 fits the request before every
+model call and recovers reactively.
+
+- [x] 9.1 `harness/context.ts`: a conservative token estimator (≈4 chars/token
+      over exactly what the wire sends, images at a flat 1,100), the budget
+      split (`contextBudget`: output reserve `min(32k, 10%)`, input = the rest),
+      and `clipRecency` — the old 8-message/4k-char clip, moved here so the
+      clip and the ladder share one code path.
+- [x] 9.2 `fitHistory` fits the clipped view into the message budget by walking
+      tool results oldest first, one rung per result per pass: full → head 3k +
+      tail 1k (marked) → skeleton (tool, first line, original size). A result
+      already carrying a marker continues from that rung, so a retry is
+      strictly smaller than the request before it.
+- [x] 9.3 `callModel` fits before every attempt; the fitted view persists across
+      attempts within a call. The transcript is untouched — trimming is a
+      request view, and the model is told what was shortened. One
+      `agentNotice` per session.
+- [x] 9.4 Reactive recovery: an overflow (the code, or a 400 whose prose
+      matches) refits the sent view with the ladder forced to its bottom rung
+      — not budget-driven, because the provider's count is the one that
+      overflowed — and retries once, inside the ordinary retry budget. A view
+      that cannot shrink fails at once, which keeps the overflow code
+      non-retryable in effect.
+- [x] 9.5 The window resolution now awaits the catalog, so a session started on
+      an explicit model uses that model's *listed* window, not the family
+      default.
+
+**Goal.** A thread longer than the model's window keeps working; the user
+loses nothing, and the model always knows what was dropped.
+
+**Tests.** `tests/harness.test.mjs`: the estimator, the budget split, the
+ladder (oldest descends fully before the next is touched; the skeleton reports
+the original size), the recency clip, the end-to-end fit through the host
+(transcript keeps the full text), the reactive recovery (natural trim → 400 →
+forced skeleton → lands), the fail-fast when nothing can shrink, and the
+unknown-window no-op.
+
+**Exit.** A 2,000-token window completes a turn whose history would not fit;
+the request body carries the ladder's markers; the persisted transcript does not.
+
+---
+
 ## Sequencing at a glance
 
 ```
@@ -547,6 +599,8 @@ worth it if long, tool-heavy turns are a real complaint.
 7  Subagents ────────────────── needs 3, 4
    │
 8  Codemode (optional) ──────── needs 2, 4
+   │
+9  Context budget ───────────── needs 1.6; design note harness-context-budget.md
 ```
 
 **Phases 1–4 are the whole of the urgent work.** After Phase 4 the harness

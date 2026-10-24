@@ -178,6 +178,7 @@ const storeReplacements = {
     export const acpConsentGet=async()=>globalThis.testInvoke ? globalThis.testInvoke('acp_isolation_consent_get') : false;
     export const acpConsentSet=async(consented)=>{ if (globalThis.testInvoke) return globalThis.testInvoke('acp_isolation_consent_set',{consented}); };
     export const openLogFolder=async()=>globalThis.testInvoke ? globalThis.testInvoke('open_log_folder') : '/preview/logs/app.log';
+    export const providerKeysGet=async(ids)=>ids.map((id)=>({id,configured:false,keyHint:null,baseUrl:null}));
     export const persistStoreDocument=async(...args)=>globalThis.persistStoreDocument?.(...args);
     export const repairStoreDocument=async()=>globalThis.storeRepair ?? {status:'ok'};
     export const bridge=(...args)=>globalThis.storeBridge(...args);
@@ -946,7 +947,7 @@ async function settingsComponent() {
     'zustand/react/shallow': 'export const useShallow=(selector)=>selector;',
     '../lib/store': 'export const useAppStore=()=>globalThis.componentState;useAppStore.getState=()=>globalThis.componentState;export const applyTheme=()=>{};export const hasWindowMaterial=()=>false;export const currentThread=()=>undefined;export const currentWorkspace=()=>undefined;export const preferredAgent=()=>"muse";',
     '../lib/bridge': 'export const openLogFolder=async()=>"/preview/logs/app.log";export const diagnosticsSnapshot=async()=>({os:"browser-preview",arch:"",logTail:[]});export const providerKeysGet=async(ids)=>ids.map((id)=>({id,configured:false,keyHint:null,baseUrl:null}));export const providerKeySet=async()=>[];export const openUrl=async()=>{};',
-    'lucide-react': 'const I=()=>null;export const Activity=I,Archive=I,ArchiveRestore=I,ArrowLeft=I,Bot=I,ChartNoAxesColumn=I,Check=I,ChevronDown=I,Command=I,Cpu=I,Eye=I,EyeOff=I,ExternalLink=I,FilePlus=I,FolderOpen=I,Info=I,KeyRound=I,LoaderCircle=I,Lock=I,MessagesSquare=I,Monitor=I,Moon=I,Palette=I,PanelLeft=I,Plug=I,Puzzle=I,RefreshCw=I,Search=I,Settings2=I,ShieldCheck=I,Sun=I,Trash2=I,TriangleAlert=I,X=I;',
+    'lucide-react': 'const I=()=>null;export const Activity=I,Archive=I,ArchiveRestore=I,ArrowLeft=I,Bot=I,ChartNoAxesColumn=I,Check=I,ChevronDown=I,Command=I,Cpu=I,Eye=I,EyeOff=I,ExternalLink=I,FilePlus=I,FolderOpen=I,Info=I,KeyRound=I,LoaderCircle=I,Lock=I,MessagesSquare=I,Monitor=I,Moon=I,Palette=I,PanelLeft=I,Plug=I,Plus=I,Puzzle=I,RefreshCw=I,Search=I,Settings2=I,ShieldCheck=I,Sun=I,Trash2=I,TriangleAlert=I,X=I;',
     './SelectMenu': 'export const SelectMenu=()=>null;',
     './AgentPicker': 'export const AgentMark=()=>null;export const ProviderMark=()=>null;export const ModelIcon=()=>null;',
     './ExtensionsView': 'export const ExtensionsView=()=>null;',

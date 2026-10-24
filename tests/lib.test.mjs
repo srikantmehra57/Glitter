@@ -17,7 +17,7 @@ async function bundle(entry) {
 const { groupAgentRuns, classifyTool, messageRewindBoundary } = await bundle('apps/desktop/src/lib/agent.ts');
 const { parseUnifiedDiff, dropHunk, unquoteDiffPath, wordChanges, splitDiffLines, reviewTarget } = await bundle('apps/desktop/src/lib/diff.ts');
 const { normalizeDockWidth, dockWidthBounds, clampDockWidth, sidebarWidthFor, sidebarWidthBounds, normalizeSidebarWidth } = await bundle('apps/desktop/src/lib/reviewLayout.ts');
-const { composePrompt, shortHash, threadStatusLines, worktreeRemovalNote } = await bundle('apps/desktop/src/lib/format.ts');
+const { composePrompt, shortHash, threadStatusLines, worktreeRemovalNote, titleFromText } = await bundle('apps/desktop/src/lib/format.ts');
 const { classifyError, describeError, authRequired, isGrantError } = await bundle('apps/desktop/src/lib/errors.ts');
 const { SessionMemoryPersistence, normalizeMemory, normalizeDraft, persistableDrafts, rememberPrompt, SESSION_MEMORY_VERSION } = await bundle('apps/desktop/src/lib/sessionMemory.ts');
 const { resolveMuseBin } = await bundle('packages/glitter-bridge/src/detect.ts');
@@ -339,21 +339,27 @@ test('OpenCode is off by default and can be toggled in persisted settings', () =
   assert.equal(settingsFields({ ...DEFAULT_SETTINGS, contributorMode: 'auto' }).contributorMode, undefined);
   assert.equal(DEFAULT_SETTINGS.accentColor, 'ember');
   assert.equal(DEFAULT_SETTINGS.accentSidebar, false);
-  const themed = settingsFields({ ...DEFAULT_SETTINGS, accentColor: 'green', accentSidebar: true });
+  assert.equal(DEFAULT_SETTINGS.darkIntensity, 'mid');
+  const themed = settingsFields({ ...DEFAULT_SETTINGS, accentColor: 'green', accentSidebar: true, darkIntensity: 'black' });
   assert.equal(themed.accentColor, 'green');
   assert.equal(themed.accentSidebar, true);
+  assert.equal(themed.darkIntensity, 'black');
+  assert.equal(settingsFields({ ...DEFAULT_SETTINGS, darkIntensity: 'nope' }).darkIntensity, 'mid');
 });
 
 test('the theme engine resolves appearance settings to root attributes and the shell opacity', () => {
-  const base = { theme: 'system', accentColor: 'ember', accentSidebar: false, sidebarTranslucency: 50 };
+  const base = { theme: 'system', darkIntensity: 'mid', accentColor: 'ember', accentSidebar: false, sidebarTranslucency: 50 };
   const desktop = { prefersDark: true, windowMaterial: true, reducedTransparency: false };
   const resolved = resolveTheme(base, desktop);
-  assert.deepEqual(resolved.attributes, { theme: 'dark', accent: 'ember', sidebarAccent: 'false', translucent: 'true' });
+  assert.deepEqual(resolved.attributes, { theme: 'dark', dark: 'mid', accent: 'ember', sidebarAccent: 'false', translucent: 'true' });
   assert.equal(resolved.properties['--shell-opacity'], '0.56');
   // The native window follows the setting, not the resolved scheme: `system` hands the choice back to the OS.
   assert.equal(resolved.windowAppearance, 'system');
   assert.equal(resolveTheme({ ...base, theme: 'light' }, desktop).attributes.theme, 'light');
   assert.equal(resolveTheme({ ...base, theme: 'light' }, desktop).windowAppearance, 'light');
+  // The dark-intensity attribute rides along in light mode too; the token blocks scope themselves to data-theme="dark".
+  assert.equal(resolveTheme({ ...base, theme: 'light', darkIntensity: 'black' }, desktop).attributes.dark, 'black');
+  assert.equal(resolveTheme({ ...base, darkIntensity: 'subtle' }, desktop).attributes.dark, 'subtle');
   assert.equal(resolveTheme({ ...base, accentSidebar: true, accentColor: 'teal' }, desktop).attributes.sidebarAccent, 'true');
   // Solid by choice, with nothing behind the page, or when the OS asks for it: the shell stays opaque.
   for (const [settings, environment] of [
@@ -1044,4 +1050,12 @@ test('a remembered Account page opens Agents, where the Muse connection moved', 
   assert.equal(normalizeMemory({ settingsTab: 'Account' }).settingsTab, 'Agents');
   assert.equal(normalizeMemory({ settingsTab: 'Theme' }).settingsTab, 'Theme');
   assert.equal(normalizeMemory({ settingsTab: 'Gone' }).settingsTab, 'Models');
+});
+
+test('a derived thread title drops attachment markers and keeps the words', () => {
+  assert.equal(titleFromText('[Image #1] [Image #2] redesign these two screens'), 'redesign these two screens');
+  assert.equal(titleFromText('[Screenshot] before, [image 3] after'), 'before, after');
+  assert.equal(titleFromText('  Plain    title   '), 'Plain title');
+  assert.equal(titleFromText('[Image #1] [Image #2]'), 'Untitled thread');
+  assert.equal(titleFromText('x'.repeat(60)), `${'x'.repeat(48)}…`);
 });

@@ -15,7 +15,7 @@ vi.mock("./Markdown", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./Markdown")>();
   return { Markdown: (props: Parameters<typeof actual.Markdown>[0]) => { marks.count += 1; return <actual.Markdown {...props} />; } };
 });
-vi.mock("./Orb", () => ({ Orb: ({ state, paused }: { state: string; paused?: boolean }) => <span data-testid="thinking-orb" data-state={state} data-paused={paused} /> }));
+vi.mock("./Orb", () => ({ Orb: ({ state, paused, "aria-label": label }: { state: string; paused?: boolean; "aria-label"?: string }) => <span data-testid="thinking-orb" data-state={state} data-paused={paused} data-label={label} /> }));
 
 describe("thinking orb preference", () => {
   beforeEach(resetStore);
@@ -30,6 +30,8 @@ describe("thinking orb preference", () => {
     view.rerender(<WorkingIndicator label="Waiting for approval" paused />);
     expect(screen.getByTestId("thinking-orb")).toHaveAttribute("data-state", "breathing");
     expect(screen.getByTestId("thinking-orb")).toHaveAttribute("data-paused", "true");
+    view.rerender(<WorkingIndicator label="Thinking" agentId="harness" />);
+    expect(screen.getByTestId("thinking-orb")).toBeInTheDocument();
     view.rerender(<WorkingIndicator label="Thinking" agentId="opencode" />);
     expect(screen.queryByTestId("thinking-orb")).toBeNull();
     expect(screen.getByTestId("agent-mark")).toBeInTheDocument();
@@ -58,6 +60,21 @@ function mount(t: Thread) {
   seedStore({ threads: [t], selectedSessionId: t.sessionId });
   return render(<AgentTimeline thread={t} />);
 }
+
+describe("live status line", () => {
+  beforeEach(resetStore);
+
+  it("uses the work rows for live steps and never repeats a compaction as one", () => {
+    render(<WorkingIndicator label="Working" live={[
+      { id: "c1", kind: "compaction", status: "completed", title: "Compaction", detail: "Context compacted", item: item({ itemId: "c1", kind: "compaction" }) },
+      { id: "s1", kind: "command", status: "running", title: "Command", command: "npm test", item: item({ itemId: "s1", status: "inProgress", tool: "bash", commandText: "npm test", args: '{"command":"npm test"}' }) },
+    ]} />);
+    fireEvent.click(screen.getByRole("button", { name: /^Working/ }));
+    expect(screen.queryByText("Compacted context")).toBeNull();
+    expect(screen.getByText("npm test")).toBeInTheDocument();
+    expect(screen.getByText("npm test").closest(".working-detail")).toHaveAttribute("aria-live", "off");
+  });
+});
 
 describe("message editing", () => {
   beforeEach(() => {
@@ -161,6 +178,21 @@ describe("AgentTimeline", () => {
     }));
     expect(screen.getByText("Fix the flaky login test")).toBeInTheDocument();
     expect(screen.getByText(/Found the race in the token refresh/)).toBeInTheDocument();
+  });
+
+  it("wears its mark and name as its head on a Harness thread, never a paused orb", () => {
+    const items = [
+      item({ itemId: "u1", kind: "userMessage", turnId: "t1", text: "go" }),
+      item({ itemId: "m1", kind: "agentMessage", turnId: "t1", text: "Done." }),
+    ];
+    for (const state of [{ status: "running" as const, activeTurnId: "t1" }, { status: "idle" as const, lastTurnId: "t1", lastOutcome: "completed" as const }]) {
+      const view = mount(thread({ agentId: "harness", items, ...state }));
+      const head = document.querySelector<HTMLElement>(".agent-message-head")!;
+      expect(within(head).getByTestId("agent-mark")).toBeInTheDocument();
+      expect(within(head).getByText("Harness")).toBeInTheDocument();
+      expect(within(head).queryByTestId("thinking-orb")).toBeNull();
+      view.unmount();
+    }
   });
 
   it("stops the plan's spinner once the turn has stopped", () => {
@@ -273,6 +305,34 @@ describe("AgentTimeline", () => {
     expect(screen.getByText("Reading the guide first")).toBeInTheDocument();
   });
 
+  it("keeps only the newest note of a live turn open and folds a note the agent has moved past", () => {
+    const source = (items: TranscriptItem[]) => thread({ status: "running", activeTurnId: "t1", items });
+    const first = [
+      item({ itemId: "u1", kind: "userMessage", turnId: "t1", text: "Fix the flaky login test" }),
+      item({ itemId: "m1", kind: "agentMessage", turnId: "t1", text: "Reading the guide first" }),
+      item({ itemId: "c1", tool: "read_file", turnId: "t1", args: "{}" }),
+      item({ itemId: "m2", kind: "agentMessage", turnId: "t1", text: "Found the race\n\nIt is in the refresh path." }),
+      item({ itemId: "c2", tool: "read_file", turnId: "t1", args: "{}" }),
+    ];
+    const note = (id: string) => document.querySelector(`[data-item="${id}"]`) as HTMLElement;
+    const expanded = (id: string) => note(id)?.querySelector(".trace-note-head")?.getAttribute("aria-expanded");
+    const view = mount(source(first));
+    expect(expanded("m1"), "a note the agent already worked past").toBe("false");
+    expect(expanded("m2"), "the note the agent wrote last").toBe("true");
+    // A folded note opens on request and stays open when the agent writes on.
+    fireEvent.click(within(note("m1")).getByRole("button"));
+    expect(expanded("m1")).toBe("true");
+    const next = source([...first,
+      item({ itemId: "m3", kind: "agentMessage", turnId: "t1", text: "Applying the fix" }),
+      item({ itemId: "c3", tool: "edit_file", turnId: "t1", args: JSON.stringify({ path: "src/a.ts" }) }),
+    ]);
+    seedStore({ threads: [next], selectedSessionId: next.sessionId });
+    view.rerender(<AgentTimeline thread={next} />);
+    expect(expanded("m2")).toBe("false");
+    expect(expanded("m3")).toBe("true");
+    expect(expanded("m1"), "a note the user opened").toBe("true");
+  });
+
   it("labels an in-progress tool call as Running", () => {
     // The live turn's trailing steps fold into the status line, so the
     // in-progress run must be followed by a newer run to render its StepRow.
@@ -288,6 +348,80 @@ describe("AgentTimeline", () => {
     }));
     expect(screen.getAllByText("Running").length).toBeGreaterThan(0);
     expect(screen.getByText("npm test")).toBeInTheDocument();
+  });
+
+  it("summarizes a tool group at rest and opens it in place", async () => {
+    mount(thread({
+      status: "running",
+      activeTurnId: "t1",
+      items: [
+        item({ itemId: "u1", kind: "userMessage", turnId: "t1", text: "go" }),
+        item({ itemId: "r1", tool: "read_file", turnId: "t1", args: JSON.stringify({ path: "src/a.ts" }) }),
+        item({ itemId: "c1", tool: "bash", turnId: "t1", commandText: "npm test" }),
+        item({ itemId: "m1", kind: "agentMessage", turnId: "t1", text: "On it." }),
+        item({ itemId: "x1", tool: "grep", turnId: "t1", status: "inProgress", args: JSON.stringify({ pattern: "later" }) }),
+      ],
+    }));
+    const head = screen.getByRole("button", { name: /Ran 2 tools/ });
+    expect(head).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("src/a.ts")).toBeNull();
+    await userEvent.setup().click(head);
+    expect(head).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("src/a.ts")).toBeInTheDocument();
+    expect(screen.getByText("npm test")).toBeInTheDocument();
+  });
+
+  it("keeps a failed step visible in a group that opened for it", () => {
+    mount(thread({
+      status: "running",
+      activeTurnId: "t1",
+      items: [
+        item({ itemId: "u1", kind: "userMessage", turnId: "t1", text: "go" }),
+        item({ itemId: "r1", tool: "read_file", turnId: "t1", args: JSON.stringify({ path: "src/a.ts" }) }),
+        item({ itemId: "c1", tool: "bash", turnId: "t1", commandText: "npm test", failureReason: "exit 1" }),
+        item({ itemId: "m1", kind: "agentMessage", turnId: "t1", text: "The test failed." }),
+        item({ itemId: "x1", tool: "grep", turnId: "t1", status: "inProgress", args: JSON.stringify({ pattern: "later" }) }),
+      ],
+    }));
+    expect(screen.getByText("1 failure")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Ran 2 tools/ })).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getAllByText("npm test").length).toBeGreaterThan(0);
+  });
+
+  it("marks a context compaction as a seam, not a step in the work list", () => {
+    mount(thread({
+      lastOutcome: "completed",
+      lastTurnId: "t1",
+      items: [
+        item({ itemId: "u1", kind: "userMessage", turnId: "t1", text: "first" }),
+        item({ itemId: "k1", kind: "compaction", turnId: "t1", reason: "Older turns were summarised" }),
+        item({ itemId: "a1", kind: "agentMessage", turnId: "t1", text: "Carrying on." }),
+      ],
+    }));
+    expect(screen.getByRole("separator", { name: "Context compacted" })).toBeInTheDocument();
+    expect(screen.queryByText("Compacted context")).toBeNull();
+  });
+
+  it("reviews a turn's changed files in a card, with the rest on request", async () => {
+    mount(thread({
+      snapshots: { t1: { snapshotId: "snap-1", sessionId: "s1", turnId: "t1", state: "ready", files: ["src/a.ts", "src/lib/b.ts", "test/c.ts", "docs/d.md", "e.txt"], reason: null, createdAt: 1 } },
+      lastOutcome: "completed",
+      lastTurnId: "t1",
+      items: [
+        item({ itemId: "u1", kind: "userMessage", turnId: "t1", text: "change five files" }),
+        item({ itemId: "a1", kind: "agentMessage", turnId: "t1", text: "All five are updated." }),
+      ],
+    }));
+    const card = screen.getByRole("region", { name: "Changed files" });
+    expect(within(card).getByText("Changed 5 files")).toBeInTheDocument();
+    expect(card.querySelectorAll(".change-row")).toHaveLength(3);
+    const user = userEvent.setup();
+    await user.click(within(card).getByRole("button", { name: "Show 2 more files" }));
+    expect(card.querySelectorAll(".change-row")).toHaveLength(5);
+    expect(within(card).getByRole("button", { name: "Show fewer files" })).toHaveAttribute("aria-expanded", "true");
+    await user.click(within(card).getByRole("button", { name: /^Review/ }));
+    expect(useAppStore.getState().inspectorTab).toBe("changes");
+    expect(useAppStore.getState().dockOpen).toBe(true);
   });
 
   it("a streamed token re-renders only the message being written, not the settled thread", () => {

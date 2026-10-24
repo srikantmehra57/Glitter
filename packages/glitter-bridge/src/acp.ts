@@ -3,7 +3,7 @@ import { LineFrames, encodeFrame } from "./framing.js";
 import { execFile, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { closeSync, openSync, readSync } from "node:fs";
-import { readdir, stat } from "node:fs/promises";
+import { readFile, readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { AgentSpec } from "./agents.js";
@@ -535,7 +535,9 @@ export class AcpAgentHost {
     await this.start();
     const session = sessionId ? this.sessions.get(sessionId) : undefined;
     const fromSession = session ? this.modelsFromConfig(session.config) : [];
-    const catalog = fromSession.length && this.spec.id !== "grok" && !refresh
+    // OpenCode's session option is the few models its inference endpoint names.
+    // The Zen catalog is wider, so a thread must not replace it with that short list.
+    const catalog = fromSession.length && this.spec.id !== "grok" && this.spec.id !== "opencode" && !refresh
       ? this.catalog ?? [] : await this.loadCatalog(refresh);
     if (!fromSession.length) {
       // A draft: no session yet. The probe tells it the agent's modes and,
@@ -553,6 +555,14 @@ export class AcpAgentHost {
         const current = selected.get(model.modelId);
         return { ...model, ...current, isActive: current?.isActive === true };
       })), source: "session" };
+    }
+    // OpenCode keeps the Zen catalog and only borrows the session row's active flag.
+    if (this.spec.id === "opencode" && catalog.length) {
+      const selected = new Map(fromSession.map((model) => [model.modelId, model]));
+      return { models: await this.present(catalog.map((model) => {
+        const current = selected.get(model.modelId);
+        return current ? { ...model, ...current, isActive: current.isActive === true, ...(current.reasoningEfforts?.length ? {} : model.reasoningEfforts?.length ? { reasoningEfforts: model.reasoningEfforts, effortSource: model.effortSource } : {}) } : { ...model, isActive: false };
+      })), source: "catalog", ...(this.catalogModes?.modes.length ? this.catalogModes : {}) };
     }
     // Session options are authoritative for availability; the catalog adds metadata.
     const byId = new Map(catalog.map((model) => [model.modelId, model]));
@@ -623,10 +633,12 @@ export class AcpAgentHost {
     if (this.catalogLoading) return this.catalogLoading;
     const conn = this.requireConn();
     const initialized = this.modelsFromState(asRecord(this.init._meta).modelState);
-    if (initialized.length && !refresh) return this.catalog = initialized;
+    if (initialized.length && !refresh && this.spec.id !== "opencode") return this.catalog = initialized;
+    if (initialized.length && !refresh && this.spec.id === "opencode") return this.catalog = mergeOpencodeModels(initialized, await liveOpencodeCatalog());
     // OpenCode v2 exposes models through ACP session config; its `models`
     // command is interactive and no longer accepts v1's `--verbose` flag.
     // Query the confined temporary directory, without a prompt or a UI thread.
+    const zen = this.spec.id === "opencode" ? liveOpencodeCatalog() : Promise.resolve([]);
     const run = (async () => {
       let probeId: string | undefined;
       try {
@@ -636,7 +648,8 @@ export class AcpAgentHost {
         const config = this.modelsFromConfig(probeConfig);
         const detailed = this.modelsFromState(result.models ?? asRecord(result._meta).modelState);
         const byId = new Map(detailed.map((model) => [model.modelId, model]));
-        const models = config.length ? config.map((model) => ({ ...byId.get(model.modelId), ...model })) : detailed;
+        const probed = config.length ? config.map((model) => ({ ...byId.get(model.modelId), ...model })) : detailed;
+        const models = mergeOpencodeModels(probed, await zen);
         if (this.conn === conn) {
           this.catalog = models;
           const mode = probeConfig.find((item) => item.category === "mode");
@@ -654,8 +667,11 @@ export class AcpAgentHost {
       } catch (error) {
         // Keep the old CLI fallback only for agents without session discovery.
         // Authentication and transport failures must remain visible to the user.
-        if (!(error instanceof RpcError && error.code === -32601)) throw new Error(this.explain(error));
-        const models = initialized.length ? initialized : this.spec.id === "opencode" ? await opencodeCatalog(this.bin) : [];
+        if (!(error instanceof RpcError && error.code === -32601)) {
+          void zen.catch(() => {});
+          throw new Error(this.explain(error));
+        }
+        const models = initialized.length ? initialized : this.spec.id === "opencode" ? mergeOpencodeModels(await opencodeCatalog(this.bin), await zen) : [];
         if (this.conn === conn) this.catalog = models;
         return models;
       } finally {
@@ -1349,10 +1365,129 @@ async function readOpencodeErrors(cursor: { file: string; offset: number }, sess
   return found;
 }
 
+const MODELS_DEV_URL = "https://models.dev/api.json";
+const OPENCODE_CONFIG_URL = "https://opencode.ai/console/api/v2/config";
+const OPENCODE_CATALOG_TTL_MS = 10 * 60 * 1000;
+let opencodeCatalogCache: { at: number; models: AcpModel[] } | null = null;
+
 /**
- * `opencode models --verbose`: the catalog with prices, limits, and effort
- * variants. Runs off the event loop (`execFile`) so a slow CLI start cannot
- * stall every other agent's streams.
+ * Models.dev's OpenCode provider, minus models the signed-in workspace has
+ * turned off. OpenCode's own `models` command and its ACP session option only
+ * name the handful its inference endpoint currently returns.
+ */
+export function opencodeModelsFromCatalog(body: unknown, disabled: ReadonlySet<string> = new Set()): AcpModel[] {
+  const root = asRecord(body);
+  const provider = asRecord(root.opencode).models ? asRecord(root.opencode) : asRecord(asRecord(root.providers).opencode);
+  const models = asRecord(provider.models);
+  const rows: AcpModel[] = [];
+  for (const [id, raw] of Object.entries(models)) {
+    if (!id || disabled.has(id)) continue;
+    const row = asRecord(raw);
+    const cost = asRecord(row.cost);
+    const limit = asRecord(row.limit);
+    const input = typeof cost.input === "number" ? cost.input : undefined;
+    const output = typeof cost.output === "number" ? cost.output : undefined;
+    const free = /-free$|:free$/i.test(id) || (input === 0 && output === 0);
+    const efforts = reasoningTiers(row.reasoning_options);
+    rows.push({
+      modelId: `opencode/${id}`,
+      displayLabel: str(row.name) ?? id,
+      providerId: "opencode",
+      description: free ? "Free" : null,
+      contextLimit: typeof limit.context === "number" ? limit.context : null,
+      cost: input != null ? { input: String(input), output: String(output ?? 0), currency: "USD" } : null,
+      ...(efforts.length ? { reasoningEfforts: efforts, effortSource: "host" as const } : { reasoningEfforts: [] }),
+    });
+  }
+  return rows;
+}
+
+/** Workspace denylist from `GET /console/api/v2/config`. Ids are the bare model id, without `opencode/`. */
+export function disabledOpencodeModelIds(body: unknown): Set<string> {
+  const models = asRecord(asRecord(asRecord(asRecord(body).providers).opencode).models);
+  const disabled = new Set<string>();
+  for (const [id, meta] of Object.entries(models)) if (asRecord(meta).disabled === true) disabled.add(id);
+  return disabled;
+}
+
+/** The session's rows win where they know more (the active model, its efforts). Catalog rows fill in the rest. */
+export function mergeOpencodeModels(session: AcpModel[], catalog: AcpModel[]): AcpModel[] {
+  if (!catalog.length) return session;
+  const byId = new Map(session.map((model) => [model.modelId, model]));
+  const seen = new Set<string>();
+  const merged = catalog.map((model) => {
+    seen.add(model.modelId);
+    const current = byId.get(model.modelId);
+    if (!current) return model;
+    return {
+      ...model,
+      ...current,
+      displayLabel: current.displayLabel || model.displayLabel,
+      description: current.description ?? model.description,
+      contextLimit: current.contextLimit ?? model.contextLimit,
+      cost: current.cost ?? model.cost,
+      reasoningEfforts: current.reasoningEfforts?.length ? current.reasoningEfforts : model.reasoningEfforts,
+      effortSource: current.reasoningEfforts?.length ? current.effortSource ?? model.effortSource : model.effortSource,
+      defaultReasoningEffort: current.defaultReasoningEffort ?? model.defaultReasoningEffort,
+    };
+  });
+  for (const model of session) if (!seen.has(model.modelId)) merged.push(model);
+  return merged;
+}
+
+function reasoningTiers(raw: unknown): string[] {
+  const options = Array.isArray(raw) ? raw : [];
+  const values = options.flatMap((option) => {
+    const row = asRecord(option);
+    return row.type === "effort" && Array.isArray(row.values) ? row.values : [];
+  });
+  const tiers = values.map((value) => tierOf(String(value))).filter((tier): tier is string => Boolean(tier));
+  return TIERS.filter((tier) => tiers.includes(tier));
+}
+
+/** The node test runner keeps the agent's own fixture list; a live app reads the Zen catalog. */
+function liveOpencodeCatalog(): Promise<AcpModel[]> {
+  if (process.env.NODE_TEST_CONTEXT) return Promise.resolve([]);
+  return opencodeZenCatalog();
+}
+
+async function opencodeZenCatalog(): Promise<AcpModel[]> {
+  if (opencodeCatalogCache && Date.now() - opencodeCatalogCache.at < OPENCODE_CATALOG_TTL_MS) return opencodeCatalogCache.models;
+  const headers = { Accept: "application/json", "User-Agent": "Mozilla/5.0 (compatible; Glitter)" };
+  try {
+    const response = await fetch(MODELS_DEV_URL, { headers, signal: AbortSignal.timeout(20000) });
+    if (!response.ok) return opencodeCatalogCache?.models ?? [];
+    const disabled = await disabledOpencodeIds(headers);
+    const models = opencodeModelsFromCatalog(await response.json(), disabled);
+    if (models.length) opencodeCatalogCache = { at: Date.now(), models };
+    return models;
+  } catch {
+    return opencodeCatalogCache?.models ?? [];
+  }
+}
+
+async function disabledOpencodeIds(headers: Record<string, string>): Promise<Set<string>> {
+  let key = "";
+  try {
+    const auth = JSON.parse(await readFile(join(homedir(), ".local", "share", "opencode", "auth.json"), "utf8")) as unknown;
+    key = str(asRecord(asRecord(auth).opencode).key) ?? "";
+  } catch {
+    return new Set();
+  }
+  if (!key) return new Set();
+  try {
+    const response = await fetch(OPENCODE_CONFIG_URL, { headers: { ...headers, Authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(15000) });
+    if (!response.ok) return new Set();
+    return disabledOpencodeModelIds(await response.json());
+  } catch {
+    return new Set();
+  }
+}
+
+/**
+ * `opencode models --verbose`: the v1 catalog. v2's command is interactive and
+ * no longer accepts the flag, so this is only the fallback when the agent has
+ * no session discovery. The live list is `opencodeZenCatalog`.
  */
 async function opencodeCatalog(bin: string): Promise<AcpModel[]> {
   let text = "";

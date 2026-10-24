@@ -1,5 +1,5 @@
-import { act, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { UsageView } from "./UsageView";
 import { useAppStore } from "../lib/store";
 import { resetStore, seedStore } from "../test/store";
@@ -173,15 +173,40 @@ describe("UsageView", () => {
     }
   });
 
+  it("redraws as soon as a finished turn changes the stored ledger", () => {
+    seed({ usageLedger: { version: 1, turns: [], days: [] } });
+    render(<UsageView embedded />);
+    expect(screen.getByRole("region", { name: "Usage summary" })).toHaveTextContent("Total tokens");
+    expect(screen.getByRole("img", { name: /No tokens in this range/ })).toBeInTheDocument();
+    act(() => { seedStore({ usageLedger: { version: 1, days: [], turns: [turn({ inputTokens: 1_200, outputTokens: 300 })] } }); });
+    expect(within(screen.getByRole("region", { name: "Usage summary" }).querySelector(".lead") as HTMLElement).getByText("1.5K")).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: /claude-sonnet-5 1.5K/ })).toBeInTheDocument();
+  });
+
   it("refreshes the visible page and forces a fresh subscription reading", async () => {
     seed({
       agents: [{ id: "muse", name: "Muse", protocol: "msp", found: true, path: "/bin/muse", version: "1.3.0", verified: true, signIn: "", authenticated: true }],
     });
     render(<UsageView embedded />);
     expect(refresh).toHaveBeenCalled();
-    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Refresh" })); });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Refresh usage" })); });
     expect(refresh).toHaveBeenCalledWith(true);
-    expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Refresh usage" })).toBeEnabled();
+  });
+
+  it("polls the subscription reading once a minute while the page is open", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      seed({ agents: [{ id: "muse", name: "Muse", protocol: "msp", found: true, path: "/bin/muse", version: "1.3.0", verified: true, signIn: "", authenticated: true }] });
+      render(<UsageView embedded />);
+      refresh.mockClear();
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+      expect(refresh).toHaveBeenCalledTimes(1);
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+      expect(refresh).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("clears the history after confirming", async () => {
@@ -225,5 +250,55 @@ describe("UsageView", () => {
     expect(card).toHaveTextContent("40%");
     expect(within(card).getByRole("alert")).toHaveTextContent("the host is not running");
     expect(refresh).toHaveBeenCalled();
+  });
+
+  it("answers a heatmap cell on hover at once, without a native title", () => {
+    seed();
+    render(<UsageView embedded />);
+    const grid = screen.getByRole("grid", { name: "Daily token activity" });
+    const cell = within(grid).getAllByRole("gridcell").find((node) => node.getAttribute("data-level") === "4") as HTMLElement;
+    expect(cell).not.toHaveAttribute("title");
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    fireEvent.pointerOver(cell);
+    expect(screen.getByRole("tooltip")).toHaveTextContent(cell.getAttribute("aria-label") ?? "");
+    fireEvent.pointerLeave(grid);
+    expect(screen.queryByRole("tooltip")).toBeNull();
+  });
+
+  it("names the full model behind each trend legend entry, with its tokens", () => {
+    seed();
+    render(<UsageView embedded />);
+    const trend = screen.getByRole("region", { name: "Token trend" });
+    const legend = trend.querySelector(".usage-legend-models") as HTMLElement;
+    const entry = within(legend).getByText("claude-sonnet-5").closest("li") as HTMLElement;
+    fireEvent.pointerEnter(entry);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("anthropic/claude-sonnet-5 · 7.5K tokens");
+    fireEvent.pointerLeave(legend);
+    expect(screen.queryByRole("tooltip")).toBeNull();
+  });
+
+  it("counts the stat strip up to its values when motion is allowed", async () => {
+    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: false }));
+    let at = 0;
+    const now = vi.spyOn(performance, "now").mockImplementation(() => at);
+    const raf = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback: FrameRequestCallback) => {
+      at += 100;
+      const stamp = at;
+      return window.setTimeout(() => callback(stamp), 0) as unknown as number;
+    });
+    try {
+      seed();
+      render(<UsageView embedded />);
+      const summary = screen.getByRole("region", { name: "Usage summary" });
+      const lead = () => summary.querySelector(".lead strong")?.textContent;
+      expect(lead()).toBe("≈0");
+      await vi.waitFor(() => expect(lead()).toBe("≈10K"));
+      expect(within(summary).getByText("0 m")).toBeInTheDocument();
+      expect(within(summary).getAllByText("1 day")).toHaveLength(2);
+    } finally {
+      raf.mockRestore();
+      now.mockRestore();
+      vi.unstubAllGlobals();
+    }
   });
 });

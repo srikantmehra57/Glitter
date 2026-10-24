@@ -416,6 +416,16 @@ export type ActivitySummary = {
   shares: Record<ActivityBucket, number>;
 };
 
+const TOOL_KINDS = new Set<AgentStepKind>(["read", "edit", "search", "command", "web", "tool"]);
+
+/** The collapsed group's words: what ran, in the fewest honest words. */
+export function activityTitle(steps: AgentStep[], live = false): string {
+  if (live) return "Running";
+  const tools = steps.filter((step) => TOOL_KINDS.has(step.kind)).length;
+  if (tools && tools === steps.length) return `Ran ${tools} tool${tools === 1 ? "" : "s"}`;
+  return `${steps.length} step${steps.length === 1 ? "" : "s"}`;
+}
+
 /** What a run's collapsed activity row says: counts of what happened, from the steps the host reported. */
 export function activitySummary(steps: AgentStep[]): ActivitySummary {
   const files = new Set<string>();

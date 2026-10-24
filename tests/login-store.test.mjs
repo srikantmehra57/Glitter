@@ -33,6 +33,7 @@ const storeReplacements = {
     export const acpConsentGet=async()=>globalThis.testInvoke ? globalThis.testInvoke('acp_isolation_consent_get') : false;
     export const acpConsentSet=async(consented)=>{ if (globalThis.testInvoke) return globalThis.testInvoke('acp_isolation_consent_set',{consented}); };
     export const openLogFolder=async()=>globalThis.testInvoke ? globalThis.testInvoke('open_log_folder') : '/preview/logs/app.log';
+    export const providerKeysGet=async(ids)=>ids.map((id)=>({id,configured:false,keyHint:null,baseUrl:null}));
     export const persistStoreDocument=async(...args)=>globalThis.persistStoreDocument?.(...args);
     export const repairStoreDocument=async()=>globalThis.storeRepair ?? {status:'ok'};
     export const bridge=(...args)=>globalThis.storeBridge(...args);

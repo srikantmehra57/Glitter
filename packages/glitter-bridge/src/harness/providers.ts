@@ -8,6 +8,10 @@
  * injects them into each harness request (`providerKeys`); a custom endpoint's
  * URL is stored with its key there, so a key can only ever be sent to the
  * address it was saved with.
+ *
+ * Custom endpoints are not in the static list: the native shell mints their
+ * ids (`custom-1`, `custom-2`…) and their name, wire and address travel with
+ * the credential, so any number of them can coexist.
  */
 
 export type Wire = "anthropic" | "openai";
@@ -16,7 +20,7 @@ export type ProviderSpec = {
   id: string;
   name: string;
   wire: Wire;
-  /** API root without a trailing slash. Empty for `custom`, whose URL is saved with its key. */
+  /** API root without a trailing slash. Custom endpoints take it from their saved credential. */
   baseUrl: string;
   /** Local servers answer without a key. */
   keyless?: boolean;
@@ -36,11 +40,15 @@ export const PROVIDERS: ProviderSpec[] = [
   { id: "nvidia", name: "NVIDIA NIM", wire: "openai", baseUrl: "https://integrate.api.nvidia.com/v1" },
   { id: "ollama", name: "Ollama", wire: "openai", baseUrl: "http://localhost:11434/v1", keyless: true },
   { id: "lmstudio", name: "LM Studio", wire: "openai", baseUrl: "http://localhost:1234/v1", keyless: true },
-  { id: "custom", name: "Custom endpoint", wire: "openai", baseUrl: "" },
 ];
 
+/** A minted custom-endpoint id, as the native keychain stores it. */
+export function isCustomProvider(id: string): boolean {
+  return /^custom-\d{1,4}$/.test(id);
+}
+
 /** What the native shell injects per configured provider. */
-export type ProviderCredential = { key?: string; baseUrl?: string };
+export type ProviderCredential = { key?: string; baseUrl?: string; name?: string; wire?: Wire };
 export type ProviderCredentials = Record<string, ProviderCredential>;
 
 export function providerSpec(id: string): ProviderSpec | undefined {
@@ -51,19 +59,29 @@ export function providerSpec(id: string): ProviderSpec | undefined {
 export type ResolvedProvider = ProviderSpec & { apiKey: string; root: string };
 
 export function resolveProvider(id: string, credentials: ProviderCredentials): ResolvedProvider | null {
-  const spec = providerSpec(id);
   const credential = credentials[id];
-  if (!spec || !credential) return null;
+  if (!credential) return null;
   const apiKey = credential.key?.trim() ?? "";
-  if (!apiKey && !spec.keyless) return null;
-  const root = (credential.baseUrl?.trim() || spec.baseUrl).replace(/\/+$/, "");
+  const spec = providerSpec(id);
+  if (spec) {
+    if (!apiKey && !spec.keyless) return null;
+    const root = (credential.baseUrl?.trim() || spec.baseUrl).replace(/\/+$/, "");
+    if (!root) return null;
+    return { ...spec, apiKey, root };
+  }
+  // A custom endpoint carries everything the static list would know about it.
+  if (!isCustomProvider(id)) return null;
+  const root = credential.baseUrl?.trim().replace(/\/+$/, "") ?? "";
   if (!root) return null;
-  return { ...spec, apiKey, root };
+  return { id, name: credential.name?.trim() || "Custom endpoint", wire: credential.wire === "anthropic" ? "anthropic" : "openai", baseUrl: root, ...(apiKey ? {} : { keyless: true }), apiKey, root };
 }
 
-/** Configured providers, in catalog order. */
+/** Configured providers, in catalog order: the static list, then custom endpoints by minted id. */
 export function configuredProviders(credentials: ProviderCredentials): ResolvedProvider[] {
-  return PROVIDERS.map((spec) => resolveProvider(spec.id, credentials)).filter((provider): provider is ResolvedProvider => Boolean(provider));
+  const custom = Object.keys(credentials).filter(isCustomProvider).sort((a, b) => Number(a.slice("custom-".length)) - Number(b.slice("custom-".length)));
+  return [...PROVIDERS.map((spec) => spec.id), ...custom]
+    .map((id) => resolveProvider(id, credentials))
+    .filter((provider): provider is ResolvedProvider => Boolean(provider));
 }
 
 /** `provider/model` ids: the provider is everything before the first slash. */

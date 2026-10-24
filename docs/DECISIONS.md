@@ -1072,3 +1072,41 @@ must respect. Don't log routine changes here; they belong in git history and
   elsewhere it leaves the provider's default.
 - **Why:** Providers do not report reasoning support in their model lists, and
   a field a provider does not accept fails the call.
+
+### The request is fitted to the model's window before it is sent
+
+- **Date:** 2026-10-23
+- **Decision:** A thread longer than the model's window no longer dies on a
+  non-retryable `CONTEXT_WINDOW_EXCEEDED`. Before every model call,
+  `harness/context.ts` estimates the request's tokens (≈4 chars/token over
+  exactly what the wire sends, images at a flat 1,100 — deliberately
+  conservative; providers remain the source of truth through `usage`) and,
+  when the window is known, fits the history into it: output reserve
+  `min(32k, 10%)`, the rest for input. Fitting shortens old tool results one
+  rung at a time — full → head 3k + tail 1k (marked) → skeleton (tool, first
+  line, original size) — a result descending fully before the next is touched,
+  oldest first, so the newest evidence stays verbatim longest. The recency clip
+  (last 8 messages verbatim, older output at 4k chars) moved from `host.ts` to
+  the same module as rung zero. Trimming is a request view: the persisted
+  transcript keeps full output, and every rung says what it is, so the model
+  knows the tail is not the whole output. An overflow the estimator missed is
+  recovered reactively: the sent view is refit with the ladder forced to its
+  bottom rung (not budget-driven — the provider's count is the one that
+  overflowed) and retried once inside the ordinary retry budget; a view that
+  cannot shrink fails at once, keeping the overflow code non-retryable in
+  effect. The window is resolved through the catalog, which the turn now loads
+  if needed, so a listed `context_length` beats the family default.
+- **Why:** The four reviewed harnesses all manage this (ZCode's context
+  builder, dsh's compaction and spill, MiniMax's compaction trigger); ours had
+  only the clip, and a long session was the one thing that broke the default
+  agent. Compaction and summarization are deliberately deferred: they need a
+  second model call and a summarizer plumbing this phase does not build.
+- **Consequences:** No new permission surface, bridge verb or renderer change
+  — the fit happens inside `callModel`, and the one visible effect is an
+  `agentNotice` (once per session) plus a warning on the reactive retry.
+  Oversized *single* results still spill to `.muse/tool-output` in `tools.ts`;
+  this phase fits the *accumulated* history and adds no spill path. Unknown
+  windows (no catalog row, unknown family) change nothing. The estimator can
+  disagree with a real tokenizer in either direction; the ladder's markers
+  make each retry strictly smaller, and the provider's own `usage` keeps the
+  context chip honest.

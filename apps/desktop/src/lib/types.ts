@@ -4,6 +4,9 @@ export type CliApprovalMode = Exclude<ApprovalMode, "guarded">;
 export type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 export type ThemeMode = "system" | "dark" | "light";
 export type AccentColor = "ember" | "mono" | "blue" | "violet" | "pink" | "orange" | "yellow" | "green" | "teal";
+/** How deep the dark theme goes; `mid` is the default Smoke palette. */
+export const DARK_INTENSITIES = ["subtle", "mid", "black"] as const;
+export type DarkIntensity = (typeof DARK_INTENSITIES)[number];
 export const THINKING_ORBS = ["auto", "working", "searching", "solving", "listening", "connecting", "weaving", "composing", "breathing", "shaping"] as const;
 export type ThinkingOrbStyle = (typeof THINKING_ORBS)[number];
 /** Which credential pays for a session: the Muse Code subscription sign-in, or a metered API key. */
@@ -638,6 +641,8 @@ export type Settings = {
   /** Sandbox network mode (`serve --sandbox-network`). */
   sandboxNetwork: SandboxNetwork;
   theme: ThemeMode;
+  /** How deep the dark theme is when the interface resolves to dark. */
+  darkIntensity: DarkIntensity;
   accentColor: AccentColor;
   accentSidebar: boolean;
   /** How see-through the sidebar is, 0 (solid) to 100. Only shows where the window has a material behind it. */
@@ -689,6 +694,7 @@ export const DEFAULT_SETTINGS: Settings = {
   disableShell: false,
   sandboxNetwork: "proxy-only",
   theme: "system",
+  darkIntensity: "mid",
   accentColor: "ember",
   accentSidebar: false,
   sidebarTranslucency: 50,

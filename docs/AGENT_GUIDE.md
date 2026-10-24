@@ -66,9 +66,10 @@ files (see the README's known limitations).
 | Harness delegation: the `task` tool, hidden child sessions, stamped depth and policy | `packages/glitter-bridge/src/harness/delegation.ts`; `delegate` and `readChildSession` in `harness/host.ts`; the app side is `openChild` in `store.ts` and the read-only branch in `AgentTimeline.tsx` |
 | The plan review that ends Plan mode | `EXIT_PLAN_TOOL` and `planSettlement` in `harness/questions.ts`; `PlanReviewCard.tsx`, picked in `UserInputCards.tsx` |
 | Harness questions (`ask_user`): the tool, the durable pending question, answers | `packages/glitter-bridge/src/harness/questions.ts`; `parkQuestion`, `settleQuestion` and `respondUserInput` in `harness/host.ts` |
-| The usage record, its bounds, and the per-call Trajectory | `apps/desktop/src/lib/usageLedger.ts` (stored shape, compaction, `MAX_TURN_CALLS`), `UsageView.tsx`; Harness calls arrive as `modelCall` events and land in the entry's `calls` |
+| The usage record, its bounds, the year map and trend, and the per-call Trajectory | `apps/desktop/src/lib/usageLedger.ts` (stored shape, compaction, `MAX_TURN_CALLS`), `lib/usageChart.ts` (year map, streaks, trend), `UsageView.tsx`; Harness calls arrive as `modelCall` events and land in the entry's `calls` |
 | A harness tool, prompt section or hook | an `Extension` registered on `ExtensionRegistry` (`harness/registry.ts`); built-in tools are `BUILTIN_TOOLS` in `harness/tools.ts` |
 | Provider keys (BYOK) | `credentials.rs` (`provider_key_set`, `provider_keys_get`), Settings → Providers (`ProvidersPanel.tsx`, `lib/providers.ts`) |
+| Custom endpoints (named, typed, unlimited) | the keychain mints ids in `credentials.rs` (`custom` is the create sentinel); the bridge resolves them in `harness/providers.ts` (`resolveProvider`); the app lists them from `providerStatus` in `store.ts` via `customProviders` in `lib/providers.ts` |
 | Settings pages: names, groups, the line under each title, search words | `lib/settingsNav.ts`, read by `SettingsModal.tsx` (a full-window page) and the command palette |
 | The model picker: providers, then models | `ModelPicker.tsx` (and `SourceRail` in `AgentPicker.tsx`); a model from another agent's provider goes through `chooseAgentModel` in `store.ts` |
 | Models switched off in the picker | `lib/modelVisibility.ts` (`hiddenModels` in Settings), the switches in `ModelLibrary.tsx` (Settings → Models) |
@@ -80,7 +81,7 @@ files (see the README's known limitations).
 | Node or DOM tests | `tests/*.test.mjs`, `apps/desktop/src/components/*.test.tsx` |
 | Release and verification scripts | `scripts/`, `packages/glitter-bridge/scripts/` |
 | Marketing site | `apps/website/` (independent of the app) |
-| Harness work in progress | [HARNESS_INTEGRATION_PLAN.md](HARNESS_INTEGRATION_PLAN.md) — phased plan; [HARNESS_REVIEWS.md](HARNESS_REVIEWS.md) — what the four reviewed harnesses do and why |
+| Harness work in progress | [HARNESS_UPGRADE_PLAN.md](HARNESS_UPGRADE_PLAN.md) — the current forward roadmap; [HARNESS_REVIEWS.md](HARNESS_REVIEWS.md) — dated peer reviews, not current implementation status |
 
 ## Rules to preserve
 

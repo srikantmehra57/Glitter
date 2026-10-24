@@ -45,7 +45,8 @@ export type ProviderFailureCode =
   | "STREAM_CLOSED"
   | "MALFORMED_RESPONSE";
 
-const CONTEXT_WINDOW = /context window|context length|maximum context|too many tokens|prompt is too long|exceeds the context|max(?:imum)? context|input is too long/i;
+/** A provider's 400 prose that means the input does not fit, even when the code says nothing. Exported so the host can retry an overflow reactively. */
+export const CONTEXT_WINDOW = /context window|context length|maximum context|too many tokens|prompt is too long|exceeds the context|max(?:imum)? context|input is too long/i;
 
 /** Map an HTTP status and a provider message onto one code. Status wins over prose except for a context-window overflow, which is never a retry. */
 export function classifyProviderFailure(status: number | undefined, message: string): ProviderFailureCode {

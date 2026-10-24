@@ -225,6 +225,7 @@ launch. Move `/Applications/Muse Code.app` to the Trash afterwards.
 ## Documentation
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): processes, trust boundary, data flow, module map
+- [docs/HARNESS_UPGRADE_PLAN.md](docs/HARNESS_UPGRADE_PLAN.md): the current forward roadmap for the built-in agent
 - [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md): setup, commands, testing, debugging, conventions
 - [docs/AGENT_GUIDE.md](docs/AGENT_GUIDE.md): rules and workflow for AI agents and new contributors
 - [docs/DECISIONS.md](docs/DECISIONS.md): architectural decision log

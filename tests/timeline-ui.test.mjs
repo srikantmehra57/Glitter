@@ -14,7 +14,7 @@ async function bundle(entry) {
   return import(pathToFileURL(outfile).href);
 }
 
-const { planAnchorFor, showTerminalReceipt, groupAgentRuns, hasVisibleReply, estimateTurnTokens, trailingWork, describeLive, stepFromItem: toStep, agentCounts, backgroundAgents, describeAgents, computeVirtualWindow, estimateRunHeight, stabilizeRuns, editedPaths } = await bundle('apps/desktop/src/lib/agent.ts');
+const { planAnchorFor, showTerminalReceipt, groupAgentRuns, hasVisibleReply, estimateTurnTokens, trailingWork, describeLive, stepFromItem: toStep, agentCounts, backgroundAgents, describeAgents, computeVirtualWindow, estimateRunHeight, stabilizeRuns, editedPaths, activitySummary, activityTitle } = await bundle('apps/desktop/src/lib/agent.ts');
 const { formatTokens, formatDuration, formatBytes } = await bundle('apps/desktop/src/lib/format.ts');
 
 const items = (...ids) => ids.map((itemId) => ({ itemId, kind: 'toolCall', status: 'completed' }));
@@ -146,6 +146,36 @@ test('live status says what the agent is doing', () => {
   assert.equal(describeLive([step({ kind: 'reasoning', text: '**Tracing the resume path**\nmore' })]), 'Tracing the resume path');
   assert.equal(describeLive([step({ kind: 'reasoning' })]), undefined);
   assert.equal(describeLive([{ ...step({ kind: 'toolCall', tool: 'bash', commandText: 'ls' }), status: 'completed' }]), undefined);
+});
+
+test('the activity summary counts what a run did, by kind', () => {
+  const steps = [
+    toStep({ itemId: 'r1', kind: 'reasoning', status: 'completed', text: 'hmm' }),
+    toStep({ itemId: 'r2', kind: 'reasoning', status: 'completed', text: 'hmm again' }),
+    toStep({ itemId: 'e1', kind: 'toolCall', status: 'completed', tool: 'edit_file', args: '{"path":"src/a.ts"}', durationMs: 1200 }),
+    toStep({ itemId: 'd1', kind: 'toolCall', status: 'completed', tool: 'read_file', args: '{"path":"src/a.ts"}', durationMs: 300 }),
+    toStep({ itemId: 'c1', kind: 'toolCall', status: 'completed', tool: 'bash', commandText: 'npm test', durationMs: 9000 }),
+    toStep({ itemId: 'g1', kind: 'toolCall', status: 'completed', tool: 'grep', args: '{"pattern":"foo"}' }),
+    toStep({ itemId: 'f1', kind: 'toolCall', status: 'completed', tool: 'bash', commandText: 'boom', failureReason: 'exit 1' }),
+  ];
+  const summary = activitySummary(steps);
+  assert.equal(summary.steps, 7);
+  assert.equal(summary.thoughts, 2);
+  assert.equal(summary.edits, 1);
+  assert.equal(summary.files, 1, 'the same path read and edited is one file');
+  assert.equal(summary.commands, 2);
+  assert.equal(summary.failures, 1);
+  assert.equal(summary.durationMs, 10500);
+  assert.deepEqual(summary.shares, { thinking: 2, files: 2, commands: 2, other: 1 });
+});
+
+test('a folded group says what ran in as few honest words as possible', () => {
+  const tool = (id) => toStep({ itemId: id, kind: 'toolCall', status: 'completed', tool: 'bash', commandText: 'npm test' });
+  const thought = toStep({ itemId: 'r', kind: 'reasoning', status: 'completed', text: 'hmm' });
+  assert.equal(activityTitle([tool('a')]), 'Ran 1 tool');
+  assert.equal(activityTitle([tool('a'), tool('b')]), 'Ran 2 tools');
+  assert.equal(activityTitle([tool('a'), thought]), '2 steps', 'a group with thoughts is steps, not tools');
+  assert.equal(activityTitle([tool('a'), tool('b')], true), 'Running');
 });
 
 test('workflow agents count from the host vocabulary, and a finished workflow has none running', () => {

@@ -155,7 +155,7 @@ test('the accent lights the shell\'s own glow layer', async () => {
 
 test('the sidebar never scrolls sideways; a clipped thread name rolls on hover', async () => {
   const css = await readFile(resolve('apps/desktop/src/styles.css'), 'utf8');
-  assert.match(rules(css, '.sidebar-tree'), /overflow-x:\s*hidden/);
+  assert.match(rules(css, '.thread-scroll'), /overflow-x:\s*hidden/);
   // The roll shifts the text by its hidden distance — the title box is the
   // inline-size container, the inner span's own width is the full name.
   assert.match(rules(css, '.thread .title'), /container-type:\s*inline-size/);
@@ -182,8 +182,12 @@ test('corners stay slight: rows and controls take the control radius, menu items
   for (const [token, px] of [['sm', 6], ['md', 8], ['pill', 8], ['lg', 10], ['xl', 12]]) {
     assert.match(root, new RegExp(`--r-${token}:\\s*${px}px;`), `--r-${token}`);
   }
-  for (const selector of ['.icon-btn', '.nav-row', '.workspace-row', '.thread', '.picker-trigger']) {
+  for (const selector of ['.icon-btn', '.nav-row', '.picker-trigger']) {
     assert.match(rules(css, selector), /border-radius:\s*var\(--r-pill\);/, `${selector} highlight radius`);
   }
   assert.match(rules(css, '.menu button, .select-option'), /border-radius:\s*var\(--r-sm\);/);
+  // Sidebar rows moved to the card radius when the tree became a header + list.
+  for (const selector of ['.workspace-row', '.thread']) {
+    assert.match(rules(css, selector), /border-radius:\s*var\(--r-md\);/, `${selector} row radius`);
+  }
 });
