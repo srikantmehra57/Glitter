@@ -12,6 +12,9 @@ licence terms.
 
 ### Fixed
 
+- **Image previews keep keyboard focus inside a native modal.** The close button
+  receives initial focus, Escape dismisses the preview, and closing returns focus
+  to the image that opened it.
 - **Allow once reaches the agent that owns the approval.** Harness decisions now
   route by live approval ownership after native validation strips `sessionId`,
   instead of falling through to Muse and leaving the tool call waiting.
@@ -70,6 +73,9 @@ licence terms.
 
 ### Changed
 
+- **macOS releases include a DMG and full third-party license texts.** CI now
+  verifies the downloaded application archive, including a native launch, and
+  the website's setup and platform guidance matches the built-in Harness.
 - **Settings is a precise, Cursor-style desktop page.** A fixed 240px category
   rail and opaque, neutral reading surface replace the sidebar-derived glass
   shell. Compact navigation, 22px page titles, transparent bordered cards,

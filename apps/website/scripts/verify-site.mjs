@@ -1,13 +1,14 @@
 // Headless visual pass over the site. Start `npm run preview -w @glitter/website` first.
 //   node apps/website/scripts/verify-site.mjs [outDir]
 import { chromium } from "playwright";
+import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
 
 const BASE = process.env.BASE ?? "http://127.0.0.1:4174";
 const OUT = process.argv[2] ?? "/tmp/glitter-site-shots";
 await mkdir(OUT, { recursive: true });
 
-const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH, args: (process.env.GPU_ARGS ?? "--use-angle=swiftshader --enable-unsafe-swiftshader").split(" ") });
+const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH, args: process.env.GPU_ARGS ? process.env.GPU_ARGS.split(" ") : [] });
 const errors = [];
 
 async function open({ width = 1440, height = 900, theme = "dark", accent = "blue" } = {}) {
@@ -19,7 +20,7 @@ async function open({ width = 1440, height = 900, theme = "dark", accent = "blue
   const page = await context.newPage();
   page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
   page.on("pageerror", (e) => errors.push(String(e)));
-  await page.goto(BASE, { waitUntil: "networkidle" });
+  await page.goto(BASE, { waitUntil: "domcontentloaded" });
   await page.waitForTimeout(6000);
   return { context, page };
 }
@@ -72,6 +73,20 @@ for (const [w, h, tag] of [[1440, 900, "1440"], [390, 844, "390"]]) {
   await context.close();
 }
 
+const { context, page } = await open();
+try {
+  const body = await page.locator("body").innerText();
+  assert.match(body, /Harness is built in\./, "Harness is presented as built in");
+  assert.match(body, /macOS 13\+/, "the supported OS is explicit");
+  assert.match(body, /View releases|Build from source/, "release and source actions remain available");
+  assert.doesNotMatch(body, /macOS and Windows/i, "unsupported platforms are not advertised");
+  assert.doesNotMatch(body, /Requires the `muse` CLI/i, "Muse is optional, not required");
+  const links = await page.locator("a[href]").evaluateAll((anchors) => anchors.map((anchor) => anchor.href));
+  assert.equal(links.some((href) => href.includes("/releases/download/")), false, "download CTAs must not point to a nonexistent release asset");
+} finally {
+  await context.close();
+}
+assert.equal(errors.length, 0, `browser console errors:\n${errors.join("\n")}`);
 console.log("console errors:", errors.length ? errors : "none");
 console.log(shots.join("\n"));
 await browser.close();

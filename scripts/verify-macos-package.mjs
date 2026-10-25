@@ -4,18 +4,51 @@ import assert from 'node:assert/strict';
 import { access, lstat, readFile } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { spawn } from 'node:child_process';
+import { spawn, execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { setTimeout as delay } from 'node:timers/promises';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const app = resolve(process.argv[2] ?? join(root, 'apps/desktop/src-tauri/target/release/bundle/macos/Glitter.app'));
+const exec = promisify(execFile);
+
+async function smokeLaunch(app) {
+  let pid = null;
+  const mainPid = async () => {
+    try {
+      const { stdout } = await exec('pgrep', ['-x', 'glitter']);
+      const value = Number(stdout.trim().split('\n')[0]);
+      return Number.isInteger(value) && value > 0 ? value : null;
+    } catch { return null; }
+  };
+  try {
+    const opener = spawn('open', ['-a', app], { stdio: 'ignore' });
+    await new Promise((resolve, reject) => {
+      opener.on('error', reject);
+      opener.on('exit', (code) => code === 0 ? resolve() : reject(new Error(`open exited with code ${code}`)));
+    });
+    for (let attempt = 0; attempt < 40 && !pid; attempt += 1) {
+      pid = await mainPid();
+      if (!pid) await delay(250);
+    }
+    if (!pid) throw new Error('The native app process did not appear');
+    console.log(`PASS: native app launched (pid ${pid}).`);
+  } finally {
+    if (pid) {
+      try { process.kill(pid, 'SIGTERM'); } catch { /* already exited */ }
+    }
+  }
+}
 const runtime = join(app, 'Contents/MacOS/glitter-node');
 const binary = join(app, 'Contents/MacOS/glitter');
 const script = join(app, 'Contents/Resources/glitter-bridge/index.js');
 await access(runtime, constants.X_OK);
 const digest = (data) => createHash('sha256').update(data).digest('hex');
 const scriptBytes = await readFile(script);
+const notices = await readFile(join(app, 'Contents/Resources/THIRD_PARTY_LICENSES.txt'), 'utf8');
+assert.ok(notices.includes('GLITTER THIRD-PARTY LICENSES') && notices.includes('@muse-code/sdk') && notices.includes('RUST PACKAGES'), 'Bundled third-party license texts are missing');
 assert.equal(digest(scriptBytes), digest(await readFile(join(root, 'packages/glitter-bridge/dist/index.js'))), 'Packaged bridge is stale');
 
 // Swap rejection, statically verifiable without launching the GUI:
@@ -71,4 +104,5 @@ await new Promise((resolve, reject) => {
   child.stdin.write('{"id":"package-smoke","method":"ping"}\n');
 });
 console.log('PASS: packaged runtime exists, bridge matches build, digest baked for swap rejection, sidecar is a real file, ping succeeds without ambient Node, EOF shuts down.');
-console.log('Not covered: native UI launch, real provider session, clean-host install, signing/notarization.');
+if (process.argv.includes('--launch')) await smokeLaunch(app);
+else console.log('Not covered: native UI launch, real provider session, clean-host install, signing/notarization.');

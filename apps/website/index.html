@@ -116,9 +116,9 @@
               approve commands and review changes in one window.
             </p>
             <div class="actions" data-reveal>
-              <a class="btn btn-primary magnetic" href="https://github.com/srikantmehra57/Glitter/releases/download/v0.1.0/Glitter_0.1.0_aarch64.dmg">
+              <a class="btn btn-primary magnetic" href="https://github.com/srikantmehra57/Glitter/releases">
                 <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M16.37 12.6c-.02-2.3 1.88-3.4 1.96-3.46-1.07-1.56-2.73-1.78-3.32-1.8-1.41-.14-2.76.83-3.47.83-.72 0-1.82-.81-3-.79-1.54.02-2.96.9-3.76 2.28-1.6 2.78-.41 6.9 1.15 9.16.76 1.1 1.67 2.34 2.86 2.3 1.15-.05 1.58-.74 2.97-.74s1.78.74 3 .72c1.24-.02 2.02-1.12 2.78-2.23.87-1.28 1.23-2.52 1.25-2.58-.03-.01-2.4-.92-2.42-3.69zM14.1 5.84c.63-.77 1.06-1.83.94-2.89-.91.04-2.01.61-2.66 1.37-.58.67-1.1 1.76-.96 2.8 1.01.08 2.05-.51 2.68-1.28z"/></svg>
-                Download for macOS
+                View releases
               </a>
               <a class="btn btn-ghost magnetic" href="https://github.com/srikantmehra57/Glitter" target="_blank" rel="noreferrer">View on GitHub <span aria-hidden="true">↗</span></a>
             </div>
@@ -154,7 +154,7 @@
         <div class="hero-foot">
           <dl class="facts" data-reveal>
             <div><dt>Built with</dt><dd>Tauri 2</dd></div>
-            <div><dt>Runs on</dt><dd>macOS and Windows</dd></div>
+            <div><dt>Runs on</dt><dd>macOS 13+ (Apple silicon)</dd></div>
             <div><dt>License</dt><dd>MIT</dd></div>
           </dl>
         </div>
@@ -305,7 +305,7 @@
           <li><h3>Custom slash commands</h3><p>Save your own prompts in Settings. They appear in the slash menu after skills.</p></li>
           <li><h3>Markdown export</h3><p>Export a thread as a readable transcript, share-safe or raw. JSON export is still there.</p></li>
           <li><h3>Estimated cost</h3><p>The context meter shows the thread's estimated spend next to its token counts.</p></li>
-          <li><h3>Secure API keys</h3><p>Keys are stored in Keychain on macOS, Credential Manager on Windows and Secret Service on Linux.</p></li>
+          <li><h3>Secure API keys</h3><p>Keys are stored in the macOS Keychain and are sent only to the provider you choose.</p></li>
         </ul>
       </section>
 
@@ -313,7 +313,7 @@
       <section class="agents" id="agents" data-scene="5 0 -0.05 1.05 0.3 0.3" aria-labelledby="agents-title">
         <header class="sec-head">
           <h2 id="agents-title" class="sec-title" data-split>Use your own agent</h2>
-          <p class="lede center" data-reveal>Muse is the default. The app also works with other coding agent CLIs installed on your computer, using your own accounts.</p>
+          <p class="lede center" data-reveal>Harness is built in. Muse and other coding agent CLIs work alongside it, using your own accounts.</p>
         </header>
 
         <div class="orbit" data-reveal>
@@ -496,7 +496,7 @@
         <div class="steps">
           <article class="card step" data-reveal>
             <p class="step-num" aria-hidden="true">01</p>
-            <h3>Install the Muse CLI</h3>
+            <h3>Connect a model provider</h3>
             <div class="seg seg-sm" role="group" aria-label="Installation platform" id="platform-seg">
               <span class="seg-thumb" aria-hidden="true"></span>
               <button type="button" data-platform="posix" aria-pressed="true">macOS / Linux</button>
@@ -511,7 +511,7 @@
               </div>
             </div>
             <p class="copy-status mono" id="copy-status" role="status"></p>
-            <p class="note">Then run <code>muse</code> and type <code>/login</code>, or set <code>META_API_KEY</code>.</p>
+            <p class="note">Harness needs a provider API key or a local model server such as Ollama or LM Studio—no agent CLI required. To use Muse instead, install its CLI with this command, then run <code>muse</code> and type <code>/login</code>, or set <code>META_API_KEY</code>.</p>
           </article>
 
           <article class="card step" data-reveal>
@@ -519,16 +519,16 @@
             <h3>Download the app</h3>
             <p class="note">Beta for Apple silicon Macs. It isn't notarized yet, so the first time, right-click the app and choose Open.</p>
             <div class="actions">
-              <a class="btn btn-primary magnetic" href="https://github.com/srikantmehra57/Glitter/releases/download/v0.1.0/Glitter_0.1.0_aarch64.dmg">Download for macOS <span aria-hidden="true">↓</span></a>
+              <a class="btn btn-primary magnetic" href="https://github.com/srikantmehra57/Glitter/releases">View releases <span aria-hidden="true">↓</span></a>
               <a class="btn btn-ghost magnetic" href="https://github.com/srikantmehra57/Glitter#develop" target="_blank" rel="noreferrer">Build from source <span aria-hidden="true">↗</span></a>
             </div>
-            <p class="req mono">Requires the <code>muse</code> CLI and git. Building from source needs Node 24 and Rust.</p>
+            <p class="req mono">Requires macOS 13+ and git. Harness needs a provider key or local model server; the Muse CLI is optional. Building from source needs Node 24 and Rust.</p>
           </article>
         </div>
 
         <div class="finale">
           <h2 class="finale-title" data-split>Free and <em class="grad">open source</em></h2>
-          <a class="btn btn-primary btn-lg magnetic" href="https://github.com/srikantmehra57/Glitter/releases/download/v0.1.0/Glitter_0.1.0_aarch64.dmg">Download for macOS <span aria-hidden="true">↓</span></a>
+          <a class="btn btn-primary btn-lg magnetic" href="https://github.com/srikantmehra57/Glitter">Build from source <span aria-hidden="true">↓</span></a>
         </div>
       </section>
     </main>

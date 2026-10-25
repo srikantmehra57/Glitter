@@ -1,5 +1,6 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
+import { useModalDialog } from "../lib/dialogFocus";
 import { usePresence, useRetained } from "../lib/presence";
 import { useAppStore } from "../lib/store";
 
@@ -10,6 +11,11 @@ export function ImageViewer() {
   const { mounted, closing } = usePresence(Boolean(open));
   const closeViewer = useAppStore((state) => state.closeViewer);
   const stepViewer = useAppStore((state) => state.stepViewer);
+  const dialog = useRef<HTMLDialogElement>(null);
+  useModalDialog(Boolean(open), dialog);
+  useEffect(() => {
+    if (open) dialog.current?.querySelector<HTMLButtonElement>(".viewer-close")?.focus();
+  }, [open]);
   useEffect(() => {
     if (!open || open.images.length < 2) return;
     const onKey = (event: KeyboardEvent) => {
@@ -19,27 +25,19 @@ export function ImageViewer() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [open, stepViewer]);
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        closeViewer();
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, closeViewer]);
   if (!mounted || !viewer) return null;
   const current = viewer.images[viewer.index];
   if (!current) return null;
   const multiple = viewer.images.length > 1;
   return (
-    <div
+    <dialog
+      ref={dialog}
       className={`viewer-overlay${closing ? " closing" : ""}`}
-      role="dialog"
       aria-modal="true"
       aria-label={current.name || "Image preview"}
+      aria-hidden={!open}
+      onCancel={(event) => { event.preventDefault(); closeViewer(); }}
+      onClose={closeViewer}
       onMouseDown={(event) => { if (event.target === event.currentTarget) closeViewer(); }}
     >
       <figure className="viewer-frame">
@@ -55,7 +53,7 @@ export function ImageViewer() {
           <button type="button" className="viewer-nav next" aria-label="Next image" onClick={() => stepViewer(1)}><ChevronRight size={20} aria-hidden="true" /></button>
         </>
       ) : null}
-      <button type="button" className="viewer-close" aria-label="Close preview" autoFocus onClick={closeViewer}><X size={16} aria-hidden="true" /></button>
-    </div>
+      <button type="button" className="viewer-close" aria-label="Close preview" onClick={closeViewer}><X size={16} aria-hidden="true" /></button>
+    </dialog>
   );
 }

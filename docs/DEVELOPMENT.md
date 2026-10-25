@@ -5,7 +5,7 @@
 | Tool | Version | Needed for |
 |---|---|---|
 | Node.js + npm | 24 (CI uses 24; floor is `^22.22.2 \|\| ^24.15.0 \|\| >=26` — vitest 5/jsdom 30) | Everything |
-| Rust (stable) | 1.77.2 or newer | Native shell, `npm run dev`, `npm run build`, native tests |
+| Rust (stable) | 1.90 or newer | Native shell, `npm run dev`, `npm run build`, native tests |
 | Git | any recent | Changes dock, file index |
 | `muse` CLI | current | Live sessions only. The browser preview and every automated test run without it. |
 | Chromium | Playwright 1.64 registry revision, or a system Chrome/Chromium/Edge channel | The real Browser panel. Not needed for the default test suite; `npx playwright install chromium` installs the matching browser. |

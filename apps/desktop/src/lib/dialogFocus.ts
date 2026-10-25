@@ -1,4 +1,4 @@
-import { useEffect, type RefObject } from "react";
+import { useEffect, useRef, type RefObject } from "react";
 import { EXIT_MS, motionReduced } from "./presence";
 
 /**
@@ -166,13 +166,15 @@ export function afterDialogRestore(fn: () => void) {
  * or chords keep mutating state behind a non-native modal.
  */
 export function modalOpen() {
-  return Boolean(document.querySelector('dialog[open], [aria-modal="true"]'));
+  return Boolean(document.querySelector('dialog[open]:not([aria-hidden="true"]), [aria-modal="true"]:not([aria-hidden="true"])'));
 }
 
 export function useModalDialog(open: boolean, ref: RefObject<HTMLDialogElement | null>) {
+  const lastNode = useRef<HTMLDialogElement | null>(null);
   useEffect(() => {
-    const node = ref.current;
+    const node = ref.current ?? lastNode.current;
     if (!node) return;
+    lastNode.current = node;
     if (open) {
       node.removeAttribute("data-closing");
       if (node.open) return;
@@ -196,7 +198,10 @@ export function useModalDialog(open: boolean, ref: RefObject<HTMLDialogElement |
  * Returns the cleanup for the caller's effect.
  */
 export function closeDialog(node: HTMLDialogElement): (() => void) | undefined {
-  if (!node.open) return undefined;
+  if (!node.open) {
+    restoreDialogFocus();
+    return undefined;
+  }
   // The app already knows about this close. Its `close` event must not reach the
   // dialog's own handler, which would dismiss a dialog reopened in the meantime.
   node.addEventListener("close", (event) => event.stopImmediatePropagation(), { capture: true, once: true });

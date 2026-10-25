@@ -36,8 +36,8 @@ npm run build:website  # emits apps/website/dist
 - **Themes**: a compact product preview. Its dark/light switch and nine accent swatches (Ember,
   Monochrome and the seven colors) restyle only the screenshot; the site keeps its own theme and the
   Ember accent.
-- **Get started**: the CLI install command per platform (copy button), downloads, a closing
-  call to action.
+- **Get started**: provider setup, an optional Muse CLI install command (copy button),
+  release/source links and a closing call to action.
 
 ## The scene
 

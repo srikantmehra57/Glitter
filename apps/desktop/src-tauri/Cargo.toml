@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Glitter, a desktop coding-agent app with its own agent harness"
 authors = ["Glitter contributors"]
 edition = "2021"
-rust-version = "1.77.2"
+rust-version = "1.90"
 
 [lib]
 name = "glitter_lib"

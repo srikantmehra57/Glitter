@@ -1,8 +1,9 @@
 # Third-party notices
 
 Glitter redistributes third-party code. The license texts below are
-summarized for attribution; the authoritative full texts ship with each
-dependency (`node_modules/<pkg>/LICENSE`) and, for the Node runtime, at
+summarized for attribution. Full texts are generated from the lockfiles into
+`apps/desktop/src-tauri/resources/THIRD_PARTY_LICENSES.txt` and bundled with
+each application. The Node runtime's license is at
 <https://github.com/nodejs/node/blob/main/LICENSE>.
 
 This product is not affiliated with or endorsed by Meta. "Muse Code" refers to
@@ -20,17 +21,17 @@ Meta's separately distributed CLI.
 | `react-markdown` | 10.1.0 | MIT | Compiled into the webview bundle |
 | `remark-gfm` | 4.0.1 | MIT | Compiled into the webview bundle |
 | `zustand` | 5.x | MIT — © 2019 Paul Henschel | Compiled into the webview bundle |
-| `@tauri-apps/api` | 2.11.1 | Apache-2.0 OR MIT | IPC and event bindings for the native shell; compiled into the webview bundle |
-| `@tauri-apps/plugin-store` | 2.4.5 | MIT OR Apache-2.0 | Persists settings, drafts, and session memory (`glitter.json`); compiled into the webview bundle |
-| `@tauri-apps/plugin-notification` | 2.4.0 | MIT OR Apache-2.0 | Turn and approval notifications through the OS; compiled into the webview bundle |
-| `lucide-react` | 0.544.0 | ISC — © Cole Bemis and contributors | Icons compiled into the webview bundle |
-| `thinking-orbs` | 0.3.1 | MIT — © 2026 Jakub Antalik | Compiled into the webview bundle |
+| `@tauri-apps/api` | 2.12.3 | Apache-2.0 OR MIT | IPC and event bindings for the native shell; compiled into the webview bundle |
+| `@tauri-apps/plugin-store` | 2.5.0 | MIT OR Apache-2.0 | Persists settings, drafts, and session memory (`glitter.json`); compiled into the webview bundle |
+| `@tauri-apps/plugin-notification` | 2.6.0 | MIT OR Apache-2.0 | Turn and approval notifications through the OS; compiled into the webview bundle |
+| `lucide-react` | 1.61.0 | ISC — © Cole Bemis and contributors | Icons compiled into the webview bundle |
+| `thinking-orbs` | 0.3.2 | MIT — © 2026 Jakub Antalik | Compiled into the webview bundle |
 | `highlight.js` | 11.12.0 | BSD-3-Clause — © 2006 Ivan Sagalaev | Lazy core + grammar chunks compiled into the webview bundle |
 | `@xterm/xterm` | 6.0.0 | MIT — © The xterm.js authors | Terminal renderer; a lazy chunk in the webview bundle, loaded when a terminal is first opened |
 | `@xterm/addon-fit` | 0.11.0 | MIT — © The xterm.js authors | Sizes the terminal to its pane; loaded with it |
 | `portable-pty` | 0.9.0 | MIT — © Wez Furlong | Rust crate compiled into the native shell; opens the PTY behind the terminal pane |
-| `tauri-plugin-single-instance` | 2.4.1 | Apache-2.0 OR MIT | Rust crate compiled into the native shell; focuses the existing app when opened again |
-| `esbuild` | 0.25.12 | MIT — © 2020 Evan Wallace | Build tool only; not redistributed at runtime |
+| `tauri-plugin-single-instance` | 2.5.3 | Apache-2.0 OR MIT | Rust crate compiled into the native shell; focuses the existing app when opened again |
+| `esbuild` | 0.28.2 | MIT — © 2020 Evan Wallace | Build tool only; not redistributed at runtime |
 
 Agent and model identity marks (`apps/desktop/public/agents/*.svg`,
 `apps/desktop/public/brands/*.svg`, and the bundled copies) are trademarks of
@@ -43,8 +44,8 @@ No endorsement is implied.
 
 | Component | Version | License |
 |---|---|---|
-| `three` | 0.180.0 | MIT — © three.js authors (marketing site) |
-| `playwright` | 1.63.0 | Apache-2.0 (screenshot capture) |
+| `three` | 0.186.1 | MIT — © three.js authors (marketing site) |
+| `playwright` | 1.64.1 | Apache-2.0 (screenshot capture) |
 | `sharp` | 0.35.5 | Apache-2.0 (image optimization) |
 | `vite`, `vitest`, `typescript`, `tailwindcss`, `jsdom`, `@testing-library/*`, `@tauri-apps/cli` | various | MIT / Apache-2.0 / BSD |
 | `openpgp` | 6.3.2 | LGPL-3.0-or-later | Build-time check of the Node `SHASUMS256.txt.asc` signature. Not bundled into the app or the bridge. |
