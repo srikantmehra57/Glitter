@@ -502,7 +502,7 @@ export type WorktreeRemoval = { branch?: string | null; branchKept: boolean };
 export type GitBranch = { name: string; current: boolean; upstream?: string };
 /** The current branch's pull request as `gh` reports it. `unavailable` says why there can be none here. */
 export type PullRequest = { unavailable?: string; url?: string; number?: number; state?: string; checks?: "passing" | "failing" | "pending" | "none" };
-export type DockTab = "changes" | "diff" | "files" | "activity";
+export type DockTab = "changes" | "diff" | "files" | "activity" | "environment";
 /** One file as the read-only viewer shows it. `content` is absent when `skipped` says why. */
 export type WorkspaceFile = { path: string; content?: string; size: number; truncated: boolean; skipped?: string };
 export type SnapshotRestore = { snapshot: TurnSnapshot; conflicts: string[] };

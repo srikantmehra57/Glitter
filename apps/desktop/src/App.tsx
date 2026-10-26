@@ -55,7 +55,10 @@ function runShortcut(id: ShortcutId) {
     case "shortcuts": state.setSettingsOpen(true, "Shortcuts"); break;
     case "open-workspace": void state.chooseProject(); break;
     case "toggle-sidebar": state.setSidebarCollapsed(!state.sidebarCollapsed); break;
-    case "toggle-changes": state.setDockOpen(!state.dockOpen); break;
+    case "toggle-changes":
+      if (!state.dockOpen && (state.inspectorTab === "activity" || state.inspectorTab === "environment")) state.setInspectorTab("changes");
+      state.setDockOpen(!state.dockOpen);
+      break;
     case "terminal": state.setTerminalOpen(!state.terminalOpen); break;
     case "zoom-in": state.zoomBy(1); break;
     case "zoom-out": state.zoomBy(-1); break;

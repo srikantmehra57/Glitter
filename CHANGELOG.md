@@ -31,6 +31,11 @@ licence terms.
 
 ### Added
 
+- **The inspector gains an Environment view.** Collapsible cards bring the local
+  workspace, reported context usage, real MCP connectors, saved tool outputs and
+  the current local Browser server into one place. Output rows open in Files,
+  connector management opens Extensions, and unavailable remote control is
+  labelled Local only rather than given a non-functional switch.
 - **Thread menus expose support and path actions.** Mark threads unread or read,
   open their worktree in Finder, copy its path or session ID, and open the app
   config or a pre-filled GitHub issue draft. Harness threads also copy their

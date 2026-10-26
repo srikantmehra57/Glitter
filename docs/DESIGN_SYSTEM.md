@@ -782,9 +782,20 @@ It is a real pane beside the transcript, not an overlay: a left-edge separator r
 four-tab strip. The 44px header names the current view in `--text-md` `--ink`,
 with a plain `--text-xs` file count and compact diff totals rather than a count
 pill. Diff is a detail state with **Back to changes**, not a peer destination.
-Files and Monitor live in the icon-only **More views** menu and also offer Back
-to changes. Each view names its region. Refresh belongs only to Changes and
-Diff; Expand and Close remain available everywhere.
+Files, Environment and Monitor live in the icon-only **More views** menu and also
+offer Back to changes. Each view names its region. Refresh belongs only to
+Changes and Diff; Expand and Close remain available everywhere.
+
+**Environment.** A compact stack of transparent, bordered, collapsible cards
+shows the local computer and workspace, Context, Connectors, Outputs and Servers.
+Context uses the agent's reported used/window tokens and a small accent meter,
+with exact totals in its disclosure. Connectors lists the current agent's real
+MCP configuration and opens Settings → Extensions for management. Outputs
+deduplicates saved tool artifacts and opens them in Files. Servers lists only the
+shared Browser's current loopback URL and opens that page in Browser; a remote
+web page is not a local server. Empty states name the source that will populate
+them. Remote Control is a **Local only** status, never a switch, until the app has
+a real remote-control capability.
 
 **Scope and diff.** The scope selector sits on Changes and Diff. Choosing Last
 turn, Staged, Unstaged, or Branch opens that scoped diff directly; a changed
@@ -799,9 +810,9 @@ Push, and Create pull request live in the icon-only **Git actions** menu with
 their existing disabled states and confirmations. File rows are 32px and one
 line: basename, a truncating directory, per-file +/- counts, stage checkbox,
 and hover/focus discard. The repetitive Modified label moves into the tooltip;
-added, deleted, untracked, and other meaningful states remain visible. Files
-and Monitor use the same quiet hierarchy: small section headings, 28–32px rows,
-no count pills, status glow, or unnecessary container fill.
+added, deleted, untracked, and other meaningful states remain visible. Files,
+Environment and Monitor use the same quiet hierarchy: small section headings,
+28–32px rows, no count pills, status glow, or unnecessary container fill.
 
 The Diff detail renders structured rows — an old/new line-number gutter (full `--ink`, never the faint tertiary on tinted rows), a sign column, then code — with changed-word marks at `--diff-add`/`--diff-del` alpha .18 over the .11 row tint. A Unified/Split preference only takes effect when the pane's rendered width reaches 640px (measured, not the saved value); long lines scroll horizontally rather than wrapping. The same row renderer backs edit-approval previews, without numbers when the source positions are unknown.
 

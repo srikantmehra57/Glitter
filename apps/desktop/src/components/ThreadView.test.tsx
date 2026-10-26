@@ -162,7 +162,7 @@ describe("thread layout", () => {
     expect(setOpen).toHaveBeenLastCalledWith(true);
   });
 
-  it("the Changes toggle lands on a changes/diff tab, not Monitor", () => {
+  it("the Changes toggle lands on a changes/diff tab, not Monitor or Environment", () => {
     const setOpen = vi.fn();
     const setTab = vi.fn();
     // Monitor was the open inspector: switching to Changes must leave it.
@@ -172,6 +172,12 @@ describe("thread layout", () => {
     expect(setTab).toHaveBeenCalledWith("changes");
     expect(setOpen).toHaveBeenCalledWith(true);
     unmount();
+    setTab.mockClear();
+    seedStore({ dockOpen: false, inspectorTab: "environment" });
+    const environment = render(<ThreadView />);
+    fireEvent.click(within(screen.getByRole("group", { name: "Thread or Changes view" })).getByRole("button", { name: "Changes" }));
+    expect(setTab).toHaveBeenCalledWith("changes");
+    environment.unmount();
     // Diff stays Diff when it was the open inspector.
     setTab.mockClear();
     seedStore({ dockOpen: false, inspectorTab: "diff" });

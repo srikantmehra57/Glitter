@@ -263,8 +263,8 @@ export function ThreadView() {
       {branch ? <BranchMenu branch={branch} worktree={Boolean(thread?.worktree)} locked={thread?.status === "running"} /> : null}
       {workspace ? <button className="icon-btn topbar-action" aria-label="Toggle browser" aria-pressed={browserOpen} data-tooltip="Browser" onClick={() => setBrowserOpen(!browserOpen)}><Globe2 size={15} /><span>Browser</span></button> : null}
       {workspace ? <button className="icon-btn topbar-action" aria-label="Toggle terminal" aria-pressed={terminalOpen} data-tooltip={`Terminal  ${shortcutText("terminal")}`} onClick={() => setTerminalOpen(!terminalOpen)}><SquareTerminal size={15} /><span>Terminal</span></button> : null}
-      {/* One button for the side pane. Its tabs (Changes, Diff, Files, Monitor)
-          choose the view; a second title-bar button for Monitor duplicated them. */}
+      {/* One button for the side pane. Its views (Changes, Diff, Environment,
+          Files, Monitor) share the same title-bar destination. */}
       <button className="icon-btn topbar-action" aria-label="Toggle changes" aria-pressed={s.dockOpen} data-tooltip={`Changes  ${shortcutText("toggle-changes")}`} data-tooltip-align="end" onClick={() => {
         if (s.dockOpen) s.setDockOpen(false);
         else { s.setInspectorTab("changes"); s.setDockOpen(true); }
@@ -273,7 +273,7 @@ export function ThreadView() {
           thread is still one tap away without losing the composer. */}
       {!browserOpen ? <div className="review-toggle segmented" role="group" aria-label="Thread or Changes view">
         <button aria-pressed={!s.dockOpen} onClick={() => s.setDockOpen(false)}>Thread</button>
-        <button aria-pressed={s.dockOpen} onClick={() => { if (s.inspectorTab === "activity") s.setInspectorTab("changes"); s.setDockOpen(true); }}>Changes</button>
+        <button aria-pressed={s.dockOpen} onClick={() => { if (s.inspectorTab === "activity" || s.inspectorTab === "environment") s.setInspectorTab("changes"); s.setDockOpen(true); }}>Changes</button>
       </div> : null}
     </header>
     <main id="main-content" tabIndex={-1} className={`main ${s.dockOpen ? "" : "solo"}${s.dockExpanded && s.dockOpen ? " dock-focused" : ""}`}>

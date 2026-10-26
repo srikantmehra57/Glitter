@@ -82,6 +82,7 @@ const inspectItems: TranscriptItem[] = [
     durationMs: 2100,
     visibleOutput: "28 tests passed",
     truncated: true,
+    presentation: { kind: "terminal", truncated: true, artifactPath: "output/test-results.txt" },
     outputRef: { id: "mock-ref-1", kind: "tool_output", uri: "mock:tool-output", availability: "available", byteLen: 2048, mediaType: "text/plain" },
   },
   {

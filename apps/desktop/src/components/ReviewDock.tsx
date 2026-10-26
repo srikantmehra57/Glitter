@@ -16,11 +16,13 @@ import { usePresence } from "../lib/presence";
 import { activeWorkspace, currentThread, currentWorkspace, inWorktree, useAppStore } from "../lib/store";
 import { REVIEW_SCOPES, type GitFile, type ReviewScope } from "../lib/types";
 import { TaskMonitor } from "./TaskMonitor";
+import { EnvironmentPanel } from "./EnvironmentPanel";
 import { SelectMenu, type SelectMenuOption } from "./SelectMenu";
 
 const NO_PATHS: string[] = [];
 const NO_COMMENTS: LineComment[] = [];
 const MORE_VIEW_OPTIONS: SelectMenuOption[] = [
+  { value: "environment", label: "Environment", description: "Workspace, context, outputs and servers" },
   { value: "files", label: "Files", description: "Browse workspace files" },
   { value: "activity", label: "Monitor", description: "Goals, tasks and subagents" },
 ];
@@ -122,9 +124,10 @@ export function ReviewDock() {
   useEffect(() => { if (s.commitDraft) setCommitMessage(s.commitDraft.text); }, [s.commitDraft?.seq]);
   const [baseDraft, setBaseDraft] = useState(s.reviewBase);
   const scoped = s.inspectorTab === "diff" && s.reviewScope !== "all";
+  const reviewView = s.inspectorTab === "changes" || s.inspectorTab === "diff";
   const diffData = scoped ? s.review?.key === s.reviewKey ? s.review.data : null : s.git;
   const reviewLoading = scoped && s.reviewLoading === s.reviewKey;
-  const visibleError = error || (scoped ? s.reviewError?.key === s.reviewKey ? s.reviewError.message : null : s.gitError);
+  const visibleError = error || (reviewView ? scoped ? s.reviewError?.key === s.reviewKey ? s.reviewError.message : null : s.gitError : null);
   const parsed = useMemo(() => diffData?.diff ? parseUnifiedDiff(diffData.diff) : { files: [], truncated: false }, [diffData?.diff]);
   const autoOpen = parsed.files[0]?.path ?? null;
   const visible = s.diffTabs ?? (scoped ? diffData?.files.map((file) => file.path) ?? [] : autoOpen ? [autoOpen] : []);
@@ -401,8 +404,7 @@ export function ReviewDock() {
   };
   const stagedCount = (s.git?.files ?? []).filter((file) => file.status[0] !== " " && file.status[0] !== "?").length;
   const unstagedPaths = (s.git?.files ?? []).filter((file) => file.status === "??" || (file.status[1] ?? " ") !== " ").map((file) => file.path);
-  const viewTitle = s.inspectorTab === "activity" ? "Monitor" : s.inspectorTab === "files" ? "Files" : "Changes";
-  const reviewView = s.inspectorTab === "changes" || s.inspectorTab === "diff";
+  const viewTitle = s.inspectorTab === "activity" ? "Monitor" : s.inspectorTab === "environment" ? "Environment" : s.inspectorTab === "files" ? "Files" : "Changes";
   const remoteOptions: SelectMenuOption[] = [];
   if (stagedCount && s.git?.branch) remoteOptions.push({ value: "commit-push", label: "Commit and push", description: "Commit staged files, then push this branch", disabled: !commitMessage.trim() || Boolean(busy), icon: <Check size={12} /> });
   if (s.git?.branch) {
@@ -430,7 +432,7 @@ export function ReviewDock() {
       className="dock-resize"
       role="separator"
       aria-orientation="vertical"
-      aria-label="Resize Changes pane"
+      aria-label={`Resize ${viewTitle} pane`}
       aria-valuemin={bounds.min}
       aria-valuemax={bounds.max}
       aria-valuenow={width}
@@ -445,14 +447,14 @@ export function ReviewDock() {
         {s.inspectorTab === "changes" && fileCount ? <span className="dock-count">{fileCount}</span> : null}
       </div>
       {reviewView && statFiles.length ? <span className="dock-stat"><span className={`add${added ? "" : " zero"}`}>+{added}</span><span className={`del${removed ? "" : " zero"}`}>−{removed}</span></span> : <span className="grow" />}
-      <SelectMenu id="dock-more" className="action-menu dock-more" ariaLabel="More views" value="" placeholder="" options={MORE_VIEW_OPTIONS} onChange={(value) => { if (value === "files" || value === "activity") s.setInspectorTab(value); }} icon={<Ellipsis size={15} />} />
+      <SelectMenu id="dock-more" className="action-menu dock-more" ariaLabel="More views" value="" placeholder="" options={MORE_VIEW_OPTIONS} onChange={(value) => { if (value === "files" || value === "activity" || value === "environment") s.setInspectorTab(value); }} icon={<Ellipsis size={15} />} />
       <button className="icon-btn small" aria-label={s.dockExpanded ? "Restore split view" : `Expand ${viewTitle.toLowerCase()}`} aria-pressed={s.dockExpanded} data-tooltip-align="end" data-tooltip={s.dockExpanded ? "Restore split view" : `Expand ${viewTitle.toLowerCase()}`} onClick={() => s.setDockExpanded(!s.dockExpanded)}>{s.dockExpanded ? <Minimize2 size={13} /> : <Maximize2 size={13} />}</button>
       {reviewView ? <button className="icon-btn small" aria-label="Refresh changes" data-tooltip-align="end" data-tooltip="Refresh" disabled={!workspace || s.gitLoading || reviewLoading} onClick={() => { if (scoped) void s.refreshReview(); else void s.refreshGit(); }}><RefreshCw size={13} className={s.gitLoading || reviewLoading ? "spin" : ""} /></button> : null}
-      <button className="icon-btn small" aria-label="Close changes" data-tooltip-align="end" data-tooltip={`Close  ${shortcutText("toggle-changes")}`} onClick={() => s.setDockOpen(false)}><X size={14} /></button>
+      <button className="icon-btn small" aria-label={`Close ${viewTitle.toLowerCase()}`} data-tooltip-align="end" data-tooltip={`Close  ${shortcutText("toggle-changes")}`} onClick={() => s.setDockOpen(false)}><X size={14} /></button>
     </div>
-    {s.gitLoading && <p className="review-note">Refreshing changes…</p>}
+    {reviewView && s.gitLoading ? <p className="review-note">Refreshing changes…</p> : null}
     {visibleError && <div className="banner" role="alert"><span>{visibleError}</span><button className="ghost-btn small" onClick={() => { setError(null); if (scoped) void s.refreshReview(); else void s.refreshGit(); }}>Retry</button></div>}
-    {s.inspectorTab === "files" ? null : !workspace ? <p className="review-note">Open a workspace to review changes.</p> : !scoped && !s.git && !s.gitLoading && !s.gitError ? <p className="review-note">Loading changes…</p> : null}
+    {reviewView && (!workspace ? <p className="review-note">Open a workspace to review changes.</p> : !scoped && !s.git && !s.gitLoading && !s.gitError ? <p className="review-note">Loading changes…</p> : null)}
     <div id="dock-panel" role="region" aria-label={viewTitle}>
     {reviewView ? <>
       <div className="review-controls">
@@ -465,7 +467,7 @@ export function ReviewDock() {
       </form> : null}
       {s.inspectorTab === "diff" && scoped ? <p className="review-note review-scope-note">{s.reviewNotice ?? (s.reviewScope === "lastTurn" ? "Saved changes during the last finished run, including shell or other app edits made during that run." : s.reviewScope === "branch" ? `Committed changes since the common ancestor with ${s.reviewBase}.` : s.reviewScope === "staged" ? "Changes staged for the next commit." : "Edits not yet staged, including new files.")}</p> : null}
     </> : null}
-    {s.inspectorTab === "files" ? <FilesPanel workspace={workspace} /> : s.inspectorTab === "activity" ? <TaskMonitor /> : s.git?.repository === false && !scoped ? <div className="nonrepo">
+    {s.inspectorTab === "files" ? <FilesPanel workspace={workspace} /> : s.inspectorTab === "activity" ? <TaskMonitor /> : s.inspectorTab === "environment" ? <EnvironmentPanel /> : s.git?.repository === false && !scoped ? <div className="nonrepo">
       <p className="review-note">Changes needs git to review edits in {workspace?.name ?? "this workspace"}.</p>
       <button className="primary nonrepo-init" disabled={busy === "init" || s.gitLoading} onClick={() => void initRepo()}>
         {busy === "init" || s.gitLoading ? "Initializing…" : "Initialize repository"}
