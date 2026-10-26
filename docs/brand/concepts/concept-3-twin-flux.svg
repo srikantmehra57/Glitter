@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <!-- Concept 3: Twin Flux — Orbital Resonance Pair cradling a Diamond Core -->
+  <defs>
+    <linearGradient id="flux-alpha" x1="12" y1="10" x2="34" y2="54" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="20%" stop-color="#FFE07D"/>
+      <stop offset="55%" stop-color="#FF9E1A"/>
+      <stop offset="100%" stop-color="#D95C00"/>
+    </linearGradient>
+    <linearGradient id="flux-beta" x1="52" y1="54" x2="30" y2="10" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#D95C00"/>
+      <stop offset="45%" stop-color="#FF9E1A"/>
+      <stop offset="80%" stop-color="#FFE07D"/>
+      <stop offset="100%" stop-color="#FFFFFF"/>
+    </linearGradient>
+    <radialGradient id="flux-glow" cx="32" cy="32" r="22" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#F5A313" stop-opacity="0.35"/>
+      <stop offset="100%" stop-color="#F5A313" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Ambient Glow -->
+  <circle cx="32" cy="32" r="22" fill="url(#flux-glow)"/>
+
+  <!-- Alpha Flow Arc (Human Vision & Prompting) -->
+  <path d="M 32 8 C 17 8 8 19 8 33 C 8 44 15 52.5 25.5 54.5 C 27 54.5 27.5 53 27 51.5 C 25.5 47 23 42 22 37 C 20.5 30 22 22 28 17.5 C 31 15 35 14.5 39 15.5 C 40.5 15.5 41.5 14.5 41.5 13 C 41.5 10 37 8 32 8 Z" fill="url(#flux-alpha)"/>
+
+  <!-- Beta Flow Arc (Autonomous Execution & Agent Harness) -->
+  <path d="M 32 56 C 47 56 56 45 56 31 C 56 20 49 11.5 38.5 9.5 C 37 9.5 36.5 11 37 12.5 C 38.5 17 41 22 42 27 C 43.5 34 42 42 36 46.5 C 33 49 29 49.5 25 48.5 C 23.5 48.5 22.5 49.5 22.5 51 C 22.5 54 27 56 32 56 Z" fill="url(#flux-beta)"/>
+
+  <!-- Crisp Precision Rim Sheen -->
+  <path d="M 32 8 C 17 8 8 19 8 33 C 8 38 10 43 13 47" stroke="#FFFFFF" stroke-width="1.75" stroke-linecap="round" opacity="0.85"/>
+  <path d="M 32 56 C 47 56 56 45 56 31 C 56 26 54 21 51 17" stroke="#FFFFFF" stroke-width="1.75" stroke-linecap="round" opacity="0.85"/>
+
+  <!-- Center Suspended Prismatic Diamond Core -->
+  <polygon points="32,17 37,32 32,47 27,32" fill="#FFFFFF"/>
+  <polygon points="17,32 32,37 47,32 32,27" fill="#FFFFFF" opacity="0.95"/>
+  <polygon points="32,22 35,32 32,42 29,32" fill="#FFF9E0"/>
+  <circle cx="32" cy="32" r="3" fill="#FFFFFF"/>
+</svg>

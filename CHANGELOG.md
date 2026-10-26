@@ -83,6 +83,9 @@ licence terms.
 
 ### Changed
 
+- **Glitter's identity uses the Obsidian Monolith artwork.** The new faceted
+  mark, source concepts and regenerated native icons replace the previous
+  geometric G and spark across the app and website.
 - **macOS releases include a DMG and full third-party license texts.** CI now
   verifies the downloaded application archive, including a native launch, and
   the website's setup and platform guidance matches the built-in Harness.

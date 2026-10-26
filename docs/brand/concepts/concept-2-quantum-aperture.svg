@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <!-- Concept 2: Quantum Aperture — Chiral 3-Blade Folding Optical Lens -->
+  <defs>
+    <linearGradient id="blade-1" x1="28" y1="8" x2="56" y2="40" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="25%" stop-color="#FFDA73"/>
+      <stop offset="65%" stop-color="#F5A313"/>
+      <stop offset="100%" stop-color="#D95C00"/>
+    </linearGradient>
+    <linearGradient id="blade-2" x1="56" y1="36" x2="16" y2="58" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FFBD38"/>
+      <stop offset="50%" stop-color="#E8730C"/>
+      <stop offset="100%" stop-color="#993800"/>
+    </linearGradient>
+    <linearGradient id="blade-3" x1="12" y1="52" x2="36" y2="16" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#E8730C"/>
+      <stop offset="60%" stop-color="#FFA826"/>
+      <stop offset="100%" stop-color="#FFEBB0"/>
+    </linearGradient>
+    <radialGradient id="aperture-glow" cx="32" cy="32" r="20" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FFB326" stop-opacity="0.4"/>
+      <stop offset="100%" stop-color="#FFB326" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Ambient Glow -->
+  <circle cx="32" cy="32" r="20" fill="url(#aperture-glow)"/>
+
+  <!-- Blade 1: Top-Right Glass Ribbon -->
+  <path d="M 32 8 C 45 8 56 19 56 32 C 56 37 54.5 41 52 44.5 C 47.5 38 39.5 33.5 32 33.5 C 32 24.5 32 16 32 8 Z" fill="url(#blade-1)"/>
+
+  <!-- Blade 2: Bottom-Right to Left Glass Ribbon -->
+  <path d="M 52 44.5 C 45.5 54 35 58 23 57 C 18.5 56.5 14.5 54.5 11.5 51 C 18 47.5 24.5 40.5 28.5 34 C 36.5 38 44 41.5 52 44.5 Z" fill="url(#blade-2)"/>
+
+  <!-- Blade 3: Left to Top Glass Ribbon -->
+  <path d="M 11.5 51 C 5 43.5 5.5 30.5 11.5 20.5 C 14.5 16 18 13 22.5 11 C 23.5 19 27.5 26.5 32 33.5 C 24 36.5 17 43 11.5 51 Z" fill="url(#blade-3)"/>
+
+  <!-- Specular Outer Edge Accents -->
+  <path d="M 32 8 C 45 8 56 19 56 32" stroke="#FFFFFF" stroke-width="1.75" stroke-linecap="round" opacity="0.85"/>
+  <path d="M 52 44.5 C 45.5 54 35 58 23 57" stroke="#FFFFFF" stroke-width="1.25" stroke-linecap="round" opacity="0.4"/>
+  <path d="M 11.5 51 C 5 43.5 5.5 30.5 11.5 20.5" stroke="#FFFFFF" stroke-width="1.5" stroke-linecap="round" opacity="0.6"/>
+
+  <!-- Central Incandescent Core (Tri-Star Nexus) -->
+  <polygon points="32,22 35.5,32 32,42 28.5,32" fill="#FFFFFF"/>
+  <polygon points="22,32 32,35.5 42,32 32,28.5" fill="#FFFFFF" opacity="0.95"/>
+  <circle cx="32" cy="32" r="3.5" fill="#FFFFFF"/>
+  <circle cx="32" cy="32" r="1.5" fill="#FFFBE6"/>
+</svg>

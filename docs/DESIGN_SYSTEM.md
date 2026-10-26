@@ -886,17 +886,17 @@ Centered, 420px, search field + command rows with shortcut glyphs. Arrow keys + 
 
 ## Brand
 
-The identity combines the Glitter mark — a geometric G around a four-pointed
-faceted spark — with frosted glass surfaces, system sans typography, and a warm
-ember accent. `docs/brand/glitter-mark.svg` is the editable source: a radius-20
-G contour stroked at 8px with rounded caps, whose horizontal spur meets a
-four-faceted diamond spark centred at (31, 32). The G takes one ember gradient
-plus an overhead white sheen; the spark's upper facets are lit and its lower
-facets fall to deep ember. Use it at 16–36px beside “Glitter”; it reads on both
+The identity combines the Glitter mark — The Obsidian Monolith, a precision-chamfered
+dark titanium and smoky obsidian crystal slab bisected by an incandescent molten
+golden plasma fissure — with frosted glass surfaces, system sans typography, and
+a warm ember accent (#FF6A00 → #FFA500 → #FFE082). `docs/brand/glitter-mark.svg` is
+the editable source: faceted chamfered wings flanking a hairline vertical plasma
+core with a hyper-concentrated central spark node and ambient plasma caustics.
+Use it at 16–36px beside “Glitter”; it reads with razor-sharp contrast on both
 light and dark UI without theme switching, and scales to the 1024px icon tile.
-App icons embed the mark on a frosted-grey tile (light) or a graphite tile
-(dark); the running Mac Dock icon follows the OS appearance, independently of
-an explicit interface theme selection.
+App icons embed the mark on a frosted silver tile (light) or space-black brushed
+titanium tile (dark); the running Mac Dock icon features the dark titanium monolith
+tile with diamond-cut specular rim highlights.
 Footer/About: **Not affiliated with Meta.** No Meta wordmark.
 
 

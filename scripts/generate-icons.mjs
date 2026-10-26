@@ -27,21 +27,25 @@ function markContent(suffix) {
 }
 
 for (const [mode, from, to, edge] of [
-  // Frosted grey tile with a white inner edge.
-  ['light', '#F2F2F2', '#DADADA', '0.65'],
-  // Graphite tile with a subtle white inner edge.
-  ['dark', '#2C2C30', '#18181A', '0.14'],
+  // Frosted silver/platinum tile with subtle rim highlight.
+  ['light', '#F8F8FA', '#DCDCE2', '0.7'],
+  // Space-black brushed titanium tile with subtle rim highlight.
+  ['dark', '#24242C', '#121216', '0.22'],
 ]) {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
   <defs>
     <linearGradient id="tile-${mode}" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="${from}"/>
-      <stop offset="1" stop-color="${to}"/>
+      <stop offset="100%" stop-color="${to}"/>
+    </linearGradient>
+    <linearGradient id="rim-${mode}" x1="0" y1="0" x2="0" y2="64" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="${edge}"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0.04"/>
     </linearGradient>
   </defs>
   <rect x="0" y="0" width="64" height="64" rx="14" fill="url(#tile-${mode})"/>
-  <rect x="0.5" y="0.5" width="63" height="63" rx="13.5" fill="none" stroke="#FFFFFF" stroke-opacity="${edge}" stroke-width="1"/>
-  <g transform="translate(9 9) scale(0.75)">${markContent(mode)}</g>
+  <rect x="0.5" y="0.5" width="63" height="63" rx="13.5" fill="none" stroke="url(#rim-${mode})" stroke-width="1"/>
+  <g transform="translate(8 8) scale(0.75)">${markContent(mode)}</g>
 </svg>
 `;
   await writeFile(join(brand, `glitter-icon-${mode}.svg`), svg);
@@ -51,4 +55,4 @@ for (const [mode, from, to, edge] of [
 // Run the installed CLI through Node directly rather than through a shell shim.
 const require = createRequire(import.meta.url);
 const cli = join(dirname(require.resolve('@tauri-apps/cli/package.json')), 'tauri.js');
-execFileSync(process.execPath, [cli, 'icon', join(brand, 'glitter-icon-light.svg'), '--output', icons], { cwd: root, stdio: 'inherit' });
+execFileSync(process.execPath, [cli, 'icon', join(brand, 'glitter-icon-dark.svg'), '--output', icons], { cwd: root, stdio: 'inherit' });

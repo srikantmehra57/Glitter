@@ -7,22 +7,26 @@ only; their copy is not product copy.
 
 ## Mark and wordmark
 
-`glitter-mark.svg` is the editable source of the Glitter mark: the Prismatic
-Spark Core, fusing a geometric letter G with an illuminated four-pointed diamond
-spark (the Glitter Stella). Geometry (viewBox 64):
+`glitter-mark.svg` is the editable source of the Glitter mark: The Obsidian Monolith,
+a standalone, non-alphabetical geometric emblem inspired by precision luxury hardware
+(Teenage Engineering meets Apple Pro industrial design). Geometry (viewBox 64):
 
-- Continuous geometric G contour: radius 20 arc centered at (32, 32) sweeping
-  from (46, 18) clockwise through the base to (52, 32), turning into a horizontal
-  spur ending at x 34. Authored with 8px stroke width and rounded caps.
-- Four-pointed faceted diamond spark: centered at (31, 32), top/bottom vertices
-  at y 16.5 and y 47.5, horizontal span from x 16.5 to x 43.5 meeting the G's spur.
-  Four directional facets capture overhead specular illumination and warm ember
-  depth.
-- One shared `userSpaceOnUse` ember gradient (#E8730C → #F5A313 → #FFD24A) plus
-  an overhead white specular sheen (~35% opacity falling off at 45%).
+- Left Monolith Slab (faceted titanium/obsidian): Chamfered prism wing spanning
+  (14, 18) to (28, 57), rendered in deep space-titanium and obsidian gradients
+  (#5A5A66 → #363640 → #202026 → #141418) with specular rim chamfer highlights.
+- Right Monolith Slab (faceted smoky obsidian): Symmetrical chamfered wing spanning
+  (36, 7) to (50, 46) in warm smoky obsidian tones (#463E36 → #2D2520 → #140F0D)
+  catching amber edge bounce light.
+- Fissure Chamfer Lips: Recessed bevels flanking the central fissure that catch
+  molten incandescent reflections (#FFA826 → #FF7A00 → #D94800).
+- Central Molten Plasma Fissure: A vertical hairline laser channel glowing from
+  pure white to blazing golden amber (#FFF8E7 → #FFD680 → #FFA019 → #FF6A00),
+  anchored by a central concentrated spark node at (32, 32).
+- Ambient Plasma Radiance: 26px radial caustic glow (#FF9E1A at 45% falling off to
+  transparent) delivering rich optical presence across light and dark surfaces.
 
-The mark reads at 16–36px in the interface beside “Glitter” (17px, weight
-600, -0.03em tracking) and scales up to 1024px for macOS dock and App Store tiles.
+The mark reads cleanly at 16–36px in the interface beside “Glitter” (17px,
+weight 600, -0.03em tracking) and scales up to 1024px for macOS dock and App Store tiles.
 Avoid decorative glyph substitutes.
 
 ## Icon generation
@@ -32,13 +36,12 @@ copies the mark to `apps/desktop/public/spark.svg` and
 `apps/website/public/spark.svg`, then embeds the mark's inner SVG (with unique
 gradient ids) at 0.75 scale on a rounded `rx=14` tile:
 
-- `glitter-icon-light.svg` — frosted grey tile (#F2F2F2 → #DADADA, white inner edge)
-- `glitter-icon-dark.svg` — graphite tile (#2C2C30 → #18181A, subtle inner edge)
+- `glitter-icon-light.svg` — frosted silver tile (#F8F8FA → #DCDCE2, specular rim highlight)
+- `glitter-icon-dark.svg` — space-black brushed titanium tile (#24242C → #121216, specular rim highlight)
 
 It writes 1024px `glitter-light.png` / `glitter-dark.png` into
 `apps/desktop/src-tauri/icons/` and regenerates all native icon formats with
-`tauri icon`. The running Mac Dock icon follows OS appearance independently of
-the app's theme.
+`tauri icon` using the dark titanium tile for macOS Dock.
 
 ## EmberTiles artwork
 

@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <!-- Concept 1: Prismatic Stella — 8-Point Faceted Optical Crystal Star -->
+  <defs>
+    <linearGradient id="stella-amber" x1="8" y1="8" x2="56" y2="56" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FFD65C"/>
+      <stop offset="50%" stop-color="#F5A313"/>
+      <stop offset="100%" stop-color="#E8730C"/>
+    </linearGradient>
+    <linearGradient id="stella-sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.95"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0.25"/>
+    </linearGradient>
+    <linearGradient id="stella-shade" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#E8730C"/>
+      <stop offset="100%" stop-color="#8C3100"/>
+    </linearGradient>
+    <radialGradient id="stella-glow" cx="32" cy="32" r="24" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#F5A313" stop-opacity="0.35"/>
+      <stop offset="100%" stop-color="#F5A313" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Ambient Glow -->
+  <circle cx="32" cy="32" r="22" fill="url(#stella-glow)"/>
+
+  <!-- Diagonal Sub-Ray Facets -->
+  <path d="M 32 32 L 20 20 L 26 32 L 20 44 Z" fill="url(#stella-shade)" opacity="0.8"/>
+  <path d="M 32 32 L 44 20 L 38 32 L 44 44 Z" fill="url(#stella-shade)" opacity="0.8"/>
+  <path d="M 32 32 L 20 20 L 32 26 L 44 20 Z" fill="url(#stella-sheen)" opacity="0.6"/>
+  <path d="M 32 32 L 20 44 L 32 38 L 44 44 Z" fill="url(#stella-shade)" opacity="0.95"/>
+
+  <!-- Primary Cardinal Rhombus Facets -->
+  <!-- Top-Left Facet (Direct Specular Keylight) -->
+  <path d="M 32 6 L 32 32 L 18 24 Z" fill="url(#stella-sheen)" opacity="0.95"/>
+  <!-- Top-Right Facet (Warm Reflection) -->
+  <path d="M 32 6 L 46 24 L 32 32 Z" fill="url(#stella-amber)"/>
+  <!-- Bottom-Right Facet (Deep Refraction) -->
+  <path d="M 32 32 L 46 40 L 32 58 Z" fill="url(#stella-shade)"/>
+  <!-- Bottom-Left Facet (Ember Core Shadow) -->
+  <path d="M 18 40 L 32 32 L 32 58 Z" fill="#B34400"/>
+
+  <!-- Horizontal Axis Wings -->
+  <path d="M 6 32 L 32 32 L 18 24 Z" fill="url(#stella-sheen)" opacity="0.85"/>
+  <path d="M 6 32 L 18 40 L 32 32 Z" fill="url(#stella-amber)" opacity="0.9"/>
+  <path d="M 32 32 L 58 32 L 46 24 Z" fill="url(#stella-amber)"/>
+  <path d="M 32 32 L 46 40 L 58 32 Z" fill="url(#stella-shade)"/>
+
+  <!-- Hyper-Luminous Diamond Center Core -->
+  <polygon points="32,20 37,32 32,44 27,32" fill="#FFFFFF"/>
+  <polygon points="32,23 35.5,32 32,41 28.5,32" fill="#FFFBE8"/>
+  <circle cx="32" cy="32" r="2" fill="#FFFFFF"/>
+</svg>
