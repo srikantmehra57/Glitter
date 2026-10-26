@@ -164,6 +164,32 @@ describe("settings navigation", () => {
     expect(screen.getByRole("button", { name: "Refresh default models" })).toBeEnabled();
   });
 
+  it("keeps Harness provider setup errors specific and skips unconsented CLI catalogs", async () => {
+    const detail = "Harness has no model provider yet. Add an API key in Settings → Providers.";
+    const peekModelCatalog = vi.fn(async () => []);
+    seedStore({
+      settingsTab: "Models",
+      defaultAgentId: "harness",
+      acpUnisolatedConsent: false,
+      enabledAgents: { harness: true, grok: true },
+      agents: [
+        { id: "harness", name: "Harness", protocol: "native", found: true, path: null, version: null, verified: true, signIn: "", authenticated: true },
+        { id: "grok", name: "Grok", protocol: "acp", found: true, path: "/bin/grok", version: "1", verified: true, signIn: "" },
+      ],
+      loadModelCatalog: vi.fn(async () => { throw new Error(detail); }),
+      peekModelCatalog,
+    });
+    render(<SettingsModal />);
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(`Could not load Harness models: ${detail}`);
+    expect(alert).not.toHaveTextContent("Muse needs a sign-in");
+    expect(alert).not.toHaveTextContent("Nothing was sent");
+    await vi.waitFor(() => expect(peekModelCatalog).toHaveBeenCalledWith("harness"));
+    expect(peekModelCatalog).not.toHaveBeenCalledWith("grok");
+    expect(screen.queryByText("Grok")).toBeNull();
+  });
+
   it("saves the default reasoning effort at once without a restart", async () => {
     seedStore({ settingsTab: "Models", defaultEffort: "high" });
     render(<SettingsModal />);

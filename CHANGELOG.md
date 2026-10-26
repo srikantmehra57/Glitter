@@ -15,6 +15,12 @@ licence terms.
 - **Image previews keep keyboard focus inside a native modal.** The close button
   receives initial focus, Escape dismisses the preview, and closing returns focus
   to the image that opened it.
+- **Connected providers load their models.** Harness reads the native credential
+  payload rather than treating the whole bridge request as the credential map,
+  so built-in and custom providers reach model discovery and the composer.
+- **Models reports the right setup problem.** Harness provider guidance no longer
+  turns into a Muse sign-in and draft warning, and third-party catalogs stay out
+  of the model library until isolation consent is active.
 - **Allow once reaches the agent that owns the approval.** Harness decisions now
   route by live approval ownership after native validation strips `sessionId`,
   instead of falling through to Muse and leaving the tool call waiting.

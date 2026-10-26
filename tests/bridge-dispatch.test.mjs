@@ -90,10 +90,11 @@ export class AcpAgentHost {
 const harnessStub = `
 export const HARNESS_ID = 'harness';
 export class HarnessHost {
-  constructor() { this.spec = { id: HARNESS_ID, name: 'Harness' }; }
+  constructor() { this.spec = { id: HARNESS_ID, name: 'Harness' }; this.registry = { register() {} }; }
   ownsApproval(approvalId) { return approvalId.indexOf('h-') === 0; }
   decideApproval() { return { decided: 'harness' }; }
-  setCredentials() {}
+  setCredentials(credentials) { this.credentials = credentials; }
+  listModels() { return { models: Object.keys(this.credentials ?? {}).sort() }; }
 }`;
 
 const agentsStub = `
@@ -117,7 +118,11 @@ export class LoginFlow {
   async start() { return { url: 'https://stub.invalid', code: 'STUB-CODE' }; }
   cancel() { return { cancelled: false }; }
 }`;
-const replacements = { './host.js': hostStub, './acp.js': acpStub, './harness/host.js': harnessStub, './agents.js': agentsStub, './login.js': loginStub };
+const browserStub = `
+export class BrowserManager {}
+export function browserExtension() { return { id: 'browser', tools: [] }; }
+`;
+const replacements = { './host.js': hostStub, './acp.js': acpStub, './harness/host.js': harnessStub, './agents.js': agentsStub, './login.js': loginStub, './browser.js': browserStub };
 const outfile = join(temporary, 'bridge.mjs');
 await build({
   entryPoints: [resolve('packages/glitter-bridge/src/index.ts')],
@@ -256,6 +261,21 @@ test('requests default to the Muse host', async () => {
     assert.deepEqual((await bridge.request('usage', {})).result, { usage: 'muse-usage' });
     assert.deepEqual((await bridge.request('listModels', {})).result, { models: 'muse-models' });
     assert.deepEqual((await bridge.request('stopHost', {})).result, { stopped: 'muse' });
+  });
+});
+
+test('Harness reads providers from the native credential payload', async () => {
+  await withBridge(async (bridge) => {
+    const response = await bridge.request('listModels', {
+      agentId: 'harness',
+      providerKeys: {
+        kilo: { key: 'CANARY-KILO-KEY' },
+        nvidia: { key: 'CANARY-NVIDIA-KEY' },
+        'custom-1': { key: 'CANARY-CUSTOM-KEY', baseUrl: 'https://zenmux.ai/api/v1', name: 'ZenMux', wire: 'openai' },
+      },
+    });
+    assert.equal(response.ok, true, response.error);
+    assert.deepEqual(response.result.models, ['custom-1', 'kilo', 'nvidia']);
   });
 });
 

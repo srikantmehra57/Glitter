@@ -36,7 +36,7 @@ describe("WorkLocation", () => {
     expect(screen.getByRole("option", { name: /Worktree/ })).toBeDisabled();
     expect(screen.getByText("Needs a Git repository")).toBeInTheDocument();
     view.unmount();
-    seedStore({ drafts: { "project:w": { text: "", images: [], config: { agentId: "opencode" } } }, enabledAgents: { opencode: true }, agents: [{ id: "opencode", name: "OpenCode", protocol: "acp", found: true, path: "/bin/opencode", version: "1", verified: true, signIn: "" }] });
+    seedStore({ drafts: { "project:w": { text: "", images: [], config: { agentId: "opencode" } } }, enabledAgents: { opencode: true }, acpUnisolatedConsent: true, agents: [{ id: "opencode", name: "OpenCode", protocol: "acp", found: true, path: "/bin/opencode", version: "1", verified: true, signIn: "" }] });
     const other = render(<WorkLocation />);
     expect(screen.queryByRole("button", { name: "Where this thread works" })).toBeNull();
     other.unmount();

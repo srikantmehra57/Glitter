@@ -439,7 +439,7 @@ async function dispatch(method: string, params: Record<string, unknown>) {
   const agentId = agentOf(params);
   if (agentId === HARNESS_ID) {
     await ensureBrowser();
-    harness.setCredentials(nativeProviderCredentials(params));
+    harness.setCredentials(nativeProviderCredentials(params.providerKeys));
     if (params.harnessMcpTrust !== undefined && params.harnessMcpTrust !== null) {
       const authorization = params.harnessMcpTrust as import("./harness/mcp.js").McpAuthorization;
       const next = { workspaceTrusted: authorization.workspaceTrusted === true, ...(typeof authorization.configurationDigest === "string" ? { configurationDigest: authorization.configurationDigest } : {}), ...(typeof authorization.homeConfigurationDigest === "string" ? { homeConfigurationDigest: authorization.homeConfigurationDigest } : {}) };

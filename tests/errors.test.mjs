@@ -28,6 +28,12 @@ test('classifyError routes auth failures to settings', () => {
   assert.match(classified.lost, /draft is kept/i);
 });
 
+test('classifyError recognizes Muse credential failures without claiming provider setup errors', () => {
+  assert.equal(classifyError(new Error('No Muse API key was found. Paste one above and try again.')).code, 'auth');
+  const detail = 'Harness has no model provider yet. Add an API key in Settings → Providers.';
+  assert.equal(describeError('Could not load Harness models', new Error(detail)), `Could not load Harness models: ${detail}`);
+});
+
 test('classifyError routes a missing CLI to settings', () => {
   const classified = classifyError(new Error('Could not find the Muse CLI'));
   assert.equal(classified.code, 'cli');

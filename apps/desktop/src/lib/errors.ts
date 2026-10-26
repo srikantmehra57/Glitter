@@ -8,7 +8,7 @@ export type ClassifiedError = {
   lost: string;
 };
 
-const AUTH = /authrequired|not logged in|api key|\/login/i;
+const AUTH = /authrequired|not logged in|\/login|\bmuse\b.*\b(?:api key|credential)\b|\b(?:api key|credential)\b.*\bmuse\b/i;
 const MISSING = /could not find the muse cli|muse cli was not found|cli not/i;
 const CLOSED = /connection closed|host is not running|bridge/i;
 const TIMEOUT = /timed out/i;

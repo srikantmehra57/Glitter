@@ -89,7 +89,10 @@ export const DEFAULT_ENABLED_AGENTS: Record<AgentId, boolean> = {
   goose: false,
   cline: false,
 };
-export function agentEnabled(settings: { enabledAgents?: Partial<Record<AgentId, boolean>> }, id: AgentId): boolean {
+export function agentEnabled(settings: { enabledAgents?: Partial<Record<AgentId, boolean>>; acpUnisolatedConsent?: boolean }, id: AgentId): boolean {
+  // Native consent also overrides stale per-agent choices; callers without
+  // consent state retain the per-agent preference behavior.
+  if (id !== "harness" && id !== "muse" && settings.acpUnisolatedConsent === false) return false;
   return settings.enabledAgents?.[id] ?? DEFAULT_ENABLED_AGENTS[id];
 }
 

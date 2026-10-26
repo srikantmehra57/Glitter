@@ -328,6 +328,10 @@ test('OpenCode is off by default and can be toggled in persisted settings', () =
   assert.equal(agentEnabled({}, 'opencode'), false);
   assert.equal(agentEnabled({}, 'grok'), false);
   assert.equal(agentEnabled({ enabledAgents: { opencode: true } }, 'opencode'), true);
+  assert.equal(agentEnabled({ enabledAgents: { opencode: true }, acpUnisolatedConsent: false }, 'opencode'), false);
+  assert.equal(agentEnabled({ enabledAgents: { opencode: true }, acpUnisolatedConsent: true }, 'opencode'), true);
+  assert.equal(agentEnabled({ enabledAgents: { muse: true }, acpUnisolatedConsent: false }, 'muse'), true);
+  assert.equal(agentEnabled({ enabledAgents: { harness: true }, acpUnisolatedConsent: false }, 'harness'), true);
   const saved = settingsFields({ ...DEFAULT_SETTINGS, enabledAgents: { grok: false } });
   assert.equal(saved.enabledAgents.opencode, false);
   assert.equal(saved.enabledAgents.grok, false);
