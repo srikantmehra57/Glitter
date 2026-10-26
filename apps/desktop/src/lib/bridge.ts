@@ -7,7 +7,7 @@ import { MOCK_FILES, MOCK_GIT, MOCK_MODELS, MOCK_THREADS, mockGitReview, mockThr
 import type { ProviderStatus } from "./providers";
 export type { ProviderStatus } from "./providers";
 import type { DiagnosticsSnapshot, EditorChoice, SupportPaths, ThemeMode, BrowserControlResult, BrowserFrame, BrowserStateEvent } from "./types";
-import type { AgentId, AgentIdentity, AgentSessionConfig, ApprovalRequest, CatalogEntry, CatalogInstallResult, CatalogList, CatalogRemoveResult, CliUpdateOutcome, CliUpdateStatus, ContextUsage, Detection, DroppedFile, EnterpriseStatus, GitBranch, GoalState, HarnessMcpConfig, HarnessMcpConfigServer, HarnessMcpScope, HarnessMcpServerInput, ModelCall, PlanItem, PullRequest, GitReview, GitReviewRequest, GitSnapshot, SessionConfig, SessionMetadata, SnapshotRestore, ThreadWorktree, TokenUsage, TranscriptItem, TurnSnapshot, UserInputRequest, WorkspaceFile, WorktreeRemoval, PluginDetail, PluginEntry, SkillDetail, SkillEntry } from "./types";
+import type { AgentId, AgentIdentity, AgentSessionConfig, ApprovalRequest, CatalogEntry, CatalogInstallResult, CatalogList, CatalogRemoveResult, CliUpdateOutcome, CliUpdateStatus, ContextUsage, Detection, DroppedFile, EnterpriseStatus, GitBranch, GoalState, HarnessMcpConfig, HarnessMcpConfigServer, HarnessMcpReview, HarnessMcpScope, HarnessMcpServerInput, ModelCall, PlanItem, PullRequest, GitReview, GitReviewRequest, GitSnapshot, SessionConfig, SessionMetadata, SnapshotRestore, ThreadWorktree, TokenUsage, TranscriptItem, TurnSnapshot, UserInputRequest, WorkspaceFile, WorktreeRemoval, PluginDetail, PluginEntry, SkillDetail, SkillEntry } from "./types";
 
 /**
  * The payload each bridge event carries, declared once here instead of being
@@ -171,6 +171,17 @@ let previewMcpConfig: HarnessMcpConfig = {
     { name: "preview-search", source: "home", transport: "http", url: "https://mcp.example.dev/search", args: 0, envKeys: [], headerKeys: ["Authorization"] },
   ],
   error: null,
+};
+let previewMcpConsent: { trusted: boolean; configurationDigest?: string } = { trusted: false };
+const previewMcpDigest = () => `preview:${previewMcpConfig.servers.map((server) => `${server.source}:${server.name}:${server.transport}:${server.command ?? server.url ?? ""}:${server.args}:${server.envKeys.join(",")}:${server.headerKeys.join(",")}`).join("|")}`;
+const previewMcpReview = (): HarnessMcpReview => {
+  const configurationDigest = previewMcpDigest();
+  return {
+    trusted: previewMcpConsent.trusted,
+    current: previewMcpConsent.configurationDigest === configurationDigest,
+    hasWorkspaceConfig: previewMcpConfig.servers.some((server) => server.source === "workspace"),
+    configurationDigest,
+  };
 };
 
 /** Preview store state lives in memory, so install and remove round-trip without the desktop shell. */
@@ -769,6 +780,22 @@ export async function saveOutputText(fileName: string, content: string, base64: 
     return fileName;
   }
   return invoke<string | null>("save_output_text", { fileName, content, base64 });
+}
+
+/** Native MCP review never returns config values; its digest binds approval to what was reviewed. */
+export async function reviewMcp(grantId: string): Promise<HarnessMcpReview> {
+  if (!isTauri()) return previewMcpReview();
+  return invoke<HarnessMcpReview>("review_mcp", { grantId });
+}
+
+export async function consentMcp(grantId: string, approve: boolean, expectedDigest?: string): Promise<void> {
+  if (!isTauri()) {
+    const configurationDigest = previewMcpDigest();
+    if (approve && expectedDigest !== configurationDigest) throw new Error("The MCP configuration changed. Review it again before approving.");
+    previewMcpConsent = { trusted: approve, ...(approve ? { configurationDigest } : {}) };
+    return;
+  }
+  await invoke<void>("consent_mcp", { grantId, approve, expectedDigest: expectedDigest ?? null });
 }
 
 export async function mcpLogin(server: string, museBin?: string): Promise<void> {

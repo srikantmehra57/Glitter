@@ -634,10 +634,10 @@ export class HarnessHost {
     return this.mcp.status(options.sessionId);
   }
 
-  /** The effective server rows for the Extensions screen, including ones the parser refused. Secret values are never returned. */
+  /** Redacted rows stay visible for consent review while startup is denied; values never cross into the renderer. */
   async mcpConfig(options: { sessionId: string }) {
     const live = this.requireLive(options.sessionId);
-    return readMcpConfig(live.meta.workspaceRoot, this.homeDir, this.mcpAuthorization(live).workspaceTrusted);
+    return readMcpConfig(live.meta.workspaceRoot, this.homeDir);
   }
 
   private mcpAuthorization(live: Live) {

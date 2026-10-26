@@ -76,9 +76,9 @@ async function workspace() {
   return root;
 }
 
-function host(fetchImpl, store, limits) {
+function host(fetchImpl, store, limits, authorization) {
   const events = [];
-  const instance = new HarnessHost((event, payload) => events.push({ event, payload }), store, fetchImpl, limits);
+  const instance = new HarnessHost((event, payload) => events.push({ event, payload }), store, fetchImpl, limits, authorization);
   instance.setCredentials({ anthropic: { key: 'sk-ant-test-key' } });
   return { instance, events };
 }
@@ -2102,6 +2102,45 @@ test('the host manages MCP servers in the thread workspace and never returns the
     await assert.rejects(instance.addMcpServer({ sessionId, scope: 'workspace', server: { name: 'docs', transport: 'stdio', command: process.execPath } }), /already defines/);
     assert.deepEqual((await instance.removeMcpServer({ sessionId, scope: 'workspace', name: 'docs' })).servers, []);
     assert.deepEqual(JSON.parse(await readFile(join(root, '.glitter', 'mcp.json'), 'utf8')).mcpServers, {});
+  } finally {
+    await instance.stop();
+  }
+});
+
+test('MCP review stays visible while untrusted startup and stale consent fail closed', async () => {
+  const root = await workspace();
+  const home = await mkdtemp(join(temporary, 'home-'));
+  await mkdir(join(root, '.glitter'));
+  const marker = join(root, 'mcp-started.txt');
+  const server = join(root, 'mcp-echo-server.mjs');
+  await writeFile(server, `import { writeFileSync } from 'node:fs';\nwriteFileSync(${JSON.stringify(marker)}, 'started');\n${MCP_ECHO_SERVER}`);
+  const config = (args) => JSON.stringify({ mcpServers: { echo: { command: process.execPath, args, env: { TOKEN: 'review-secret' } } } });
+  await writeFile(join(root, '.glitter', 'mcp.json'), config([server]));
+  let consent = { workspaceTrusted: false };
+  const { instance } = host(anthropicStub([]).fetchImpl, new SessionStore(await mkdtemp(join(temporary, 'store-'))), { homeDir: home }, () => consent);
+  try {
+    const { sessionId } = await instance.startSession({ workspaceRoot: root, mcpAuthorization: consent });
+    const review = await instance.mcpConfig({ sessionId });
+    assert.deepEqual(review.servers.map((row) => `${row.name}:${row.source}`), ['echo:workspace']);
+    assert.doesNotMatch(JSON.stringify(review), /review-secret/);
+    assert.deepEqual((await instance.mcpStatus({ sessionId })).servers, []);
+    assert.equal(await stat(marker).catch(() => null), null, 'review and refresh do not execute the untrusted command');
+
+    consent = await authorization(root, home);
+    const ready = await instance.mcpStatus({ sessionId, refresh: true });
+    assert.equal(ready.servers.find((row) => row.name === 'echo')?.tools, 1);
+    assert.ok(await stat(marker), 'the exact approved configuration starts');
+
+    await rm(marker);
+    await writeFile(join(root, '.glitter', 'mcp.json'), config([server, '--changed']));
+    const changed = await instance.mcpStatus({ sessionId, refresh: true });
+    const skipped = changed.servers.find((row) => row.name === 'echo');
+    assert.equal(skipped?.skipped, true);
+    assert.match(skipped?.reason ?? '', /not been trusted and approved/);
+    assert.equal(await stat(marker).catch(() => null), null, 'a changed configuration cannot reuse the old approval');
+
+    consent = { workspaceTrusted: false };
+    assert.deepEqual((await instance.mcpStatus({ sessionId, refresh: true })).servers, []);
   } finally {
     await instance.stop();
   }

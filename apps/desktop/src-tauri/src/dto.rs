@@ -852,7 +852,7 @@ fn check_browser_control(method: &str, parsed: &BrowserControlParams) -> Result<
         return Err(format!("Invalid {method} parameters: x and y must be supplied together."));
     }
     match parsed.action {
-        BrowserAction::Navigate if parsed.url.as_deref().map_or(true, |url| url.trim().is_empty()) => return Err(format!("Invalid {method} parameters: navigate requires url.")),
+        BrowserAction::Navigate if parsed.url.as_deref().is_none_or(|url| url.trim().is_empty()) => return Err(format!("Invalid {method} parameters: navigate requires url.")),
         BrowserAction::Click if parsed.r#ref.is_none() && parsed.selector.is_none() && (parsed.x.is_none() || parsed.y.is_none()) => return Err(format!("Invalid {method} parameters: click requires ref, selector, or coordinates.")),
         BrowserAction::Type if parsed.text.is_none() => return Err(format!("Invalid {method} parameters: type requires text.")),
         BrowserAction::Key if parsed.key.is_none() => return Err(format!("Invalid {method} parameters: key is required.")),

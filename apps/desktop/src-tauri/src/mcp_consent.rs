@@ -32,7 +32,7 @@ impl WorkspaceSecurity {
             .and_then(|raw| serde_json::from_str::<HashMap<String, Permission>>(&raw).ok())
             .unwrap_or_default().into_iter().filter_map(|(root, permission)| {
                 let root = PathBuf::from(root).canonicalize().ok()?;
-                let valid = permission.configuration.as_ref().map_or(true, |digest| digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit()));
+                let valid = permission.configuration.as_ref().is_none_or(|digest| digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit()));
                 valid.then_some((root.to_string_lossy().into_owned(), permission))
             }).collect();
         Self { records: Mutex::new(records), path: Mutex::new(path.to_path_buf()) }
@@ -135,6 +135,7 @@ pub struct McpReview {
     trusted: bool,
     current: bool,
     has_workspace_config: bool,
+    configuration_digest: String,
 }
 
 /// Read permission state only. MCP config summaries come through the Harness's
@@ -147,15 +148,19 @@ pub fn review_mcp(state: tauri::State<'_, AppState>, grant_id: String) -> Result
     let home = read_config(&home)?;
     let fingerprint = fingerprint(&root, &workspace, &home);
     let permission = state.workspace_security.records.lock().map_err(|err| err.to_string())?.get(&root.to_string_lossy().into_owned()).cloned().unwrap_or_default();
-    Ok(McpReview { trusted: permission.trusted, current: permission.configuration.as_deref() == Some(fingerprint.as_str()), has_workspace_config: !workspace.is_empty() })
+    Ok(McpReview { trusted: permission.trusted, current: permission.configuration.as_deref() == Some(fingerprint.as_str()), has_workspace_config: !workspace.is_empty(), configuration_digest: fingerprint })
 }
 
 #[tauri::command]
-pub fn consent_mcp(state: tauri::State<'_, AppState>, grant_id: String, approve: bool) -> Result<(), String> {
+pub fn consent_mcp(state: tauri::State<'_, AppState>, grant_id: String, approve: bool, expected_digest: Option<String>) -> Result<(), String> {
     let (root, home) = config_roots(&state, &grant_id)?;
     let (root, workspace) = config(&root)?;
     let home = read_config(&home)?;
-    let permission = Permission { trusted: approve, configuration: approve.then(|| fingerprint(&root, &workspace, &home)) };
+    let fingerprint = fingerprint(&root, &workspace, &home);
+    if approve && expected_digest.as_deref() != Some(fingerprint.as_str()) {
+        return Err("The MCP configuration changed. Review it again before approving.".into());
+    }
+    let permission = Permission { trusted: approve, configuration: approve.then_some(fingerprint) };
     state.workspace_security.set(&root, permission)
 }
 
@@ -219,16 +224,24 @@ mod tests {
         app.manage(state);
         let secret = "renderer-must-not-see-this";
         fs::write(root.join(".glitter/mcp.json"), format!("{{\"mcpServers\":{{\"docs\":{{\"env\":{{\"TOKEN\":\"{secret}\"}}}}}}}}")).unwrap();
-        let review = serde_json::to_value(review_mcp(app.state::<AppState>(), grant.clone()).unwrap()).unwrap();
+        let reviewed = review_mcp(app.state::<AppState>(), grant.clone()).unwrap();
+        let digest = reviewed.configuration_digest.clone();
+        let review = serde_json::to_value(reviewed).unwrap();
         assert_eq!(review["current"], false);
         assert_eq!(review["hasWorkspaceConfig"], true);
+        assert_eq!(review["configurationDigest"].as_str().unwrap().len(), 64);
         assert!(!review.to_string().contains(secret));
-        consent_mcp(app.state::<AppState>(), grant.clone(), true).unwrap();
+        consent_mcp(app.state::<AppState>(), grant.clone(), true, Some(digest.clone())).unwrap();
         let persisted = fs::read_to_string(&data).unwrap();
         assert!(!persisted.contains(secret));
         assert!(review_mcp(app.state::<AppState>(), grant.clone()).unwrap().current);
         fs::write(root.join(".glitter/mcp.json"), b"{\"mcpServers\":{\"other\":{}}}").unwrap();
-        assert!(!review_mcp(app.state::<AppState>(), grant).unwrap().current);
+        let error = consent_mcp(app.state::<AppState>(), grant.clone(), true, Some(digest)).unwrap_err();
+        assert!(error.contains("configuration changed"));
+        assert!(!review_mcp(app.state::<AppState>(), grant.clone()).unwrap().current);
+        consent_mcp(app.state::<AppState>(), grant.clone(), false, None).unwrap();
+        let revoked = review_mcp(app.state::<AppState>(), grant).unwrap();
+        assert!(!revoked.trusted && !revoked.current);
         fs::remove_dir_all(root).ok();
     }
 
@@ -242,7 +255,8 @@ mod tests {
         crate::dto::strip_native_fields("sendTurn", &mut params);
         assert_eq!(params["harnessMcpTrust"]["workspaceTrusted"], false);
         assert_eq!(params["harnessMcpTrust"]["configurationDigest"], Value::Null);
-        consent_mcp(app.state::<AppState>(), grant.clone(), true).unwrap();
+        let reviewed = review_mcp(app.state::<AppState>(), grant.clone()).unwrap();
+        consent_mcp(app.state::<AppState>(), grant.clone(), true, Some(reviewed.configuration_digest)).unwrap();
         inject(app.state::<AppState>().inner(), &grant, &mut params).unwrap();
         crate::dto::strip_native_fields("sendTurn", &mut params);
         assert_eq!(params["harnessMcpTrust"]["workspaceTrusted"], true);

@@ -648,7 +648,7 @@ impl Snapshots {
         if event == "turnStarted" {
             if let Some(id) = self.active.get(session).cloned() {
                 if let Some(record) = self.records.get_mut(&id) {
-                    if record.info.turn_id.as_deref().map_or(true, |id| id == turn) {
+                    if record.info.turn_id.as_deref().is_none_or(|id| id == turn) {
                         record.info.turn_id = Some(turn.into());
                         let copy = record.clone();
                         let _ = self.save(&copy);
@@ -709,7 +709,7 @@ impl Snapshots {
             return Vec::new();
         }
         record.info.turn_id = Some(turn.into());
-        if binding.map_or(true, |(grant, root)| grant != record.grant || root != record.root) {
+        if binding.is_none_or(|(grant, root)| grant != record.grant || root != record.root) {
             record.info.state = "unavailable".into();
             record.info.reason = Some("Workspace access changed before capture finished.".into());
         }

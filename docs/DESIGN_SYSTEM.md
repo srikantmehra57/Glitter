@@ -621,6 +621,11 @@ and the navigation, search and the command palette all read those names.
 - **Agents**: the default agent, the built-in agent, the agent CLIs, and the
   Muse connection (credential, API key, binary, Contributor mode) while Muse is
   shown. There is no Account page: Muse is one agent among others.
+- **Extensions**: skills, MCP servers and plugins use the existing compact cards.
+  Harness MCP keeps redacted workspace rows visible while startup is denied. An
+  inline approval card lets the user approve the exact reviewed workspace/home
+  configuration, keep it disabled, or revoke approval. Changes invalidate the
+  old approval; secret values and raw argument text never enter the review.
 - **Appearance**: Interface theme, Display & accessibility (native interface
   zoom and Reduce interface motion), Font, Accent color, Sidebar (row density,
   translucency where supported, and tint), then Thinking orb. Density and motion

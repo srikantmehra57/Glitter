@@ -2,12 +2,12 @@ import { useEffect, useState, type FormEvent } from "react";
 import { describeError } from "../lib/errors";
 import { useShallow } from "zustand/react/shallow";
 import { Check, KeyRound, LogOut, Package, Plus, Puzzle, RefreshCw, Server, WandSparkles, X } from "lucide-react";
-import { mcpLogin, mcpLogout, pluginInspect, pluginReview, skillInspect, skillSet } from "../lib/bridge";
+import { consentMcp, mcpLogin, mcpLogout, pluginInspect, pluginReview, reviewMcp, skillInspect, skillSet } from "../lib/bridge";
 import { skillSelectorText, skillUseText } from "../lib/composerText";
 import { ExtensionThumb } from "./ExtensionThumb";
 import { mcpServerNameProblem, mcpServerSummary, parseMcpArguments, parseMcpKeyValues } from "../lib/mcpConfig";
-import { currentThread, currentWorkspace, supportsSkills, useAppStore } from "../lib/store";
-import { skillScopeArg, type HarnessMcpConfigServer, type HarnessMcpScope, type HarnessMcpServerInput, type PluginDetail, type SkillDetail, type SkillEntry, type SkillRow } from "../lib/types";
+import { activeWorkspace, currentThread, currentWorkspace, supportsSkills, useAppStore } from "../lib/store";
+import { skillScopeArg, type HarnessMcpConfigServer, type HarnessMcpReview, type HarnessMcpScope, type HarnessMcpServerInput, type PluginDetail, type SkillDetail, type SkillEntry, type SkillRow } from "../lib/types";
 import { ExtensionsStore } from "./ExtensionsStore";
 
 const selectorText = (row: SkillRow) => skillSelectorText(row.selector);
@@ -100,6 +100,11 @@ export function ExtensionsView({ onOpenThreads, embedded = false }: { onOpenThre
   const [mcpRowBusy, setMcpRowBusy] = useState<string | null>(null);
   const [mcpError, setMcpError] = useState<string | null>(null);
   const [mcpFormError, setMcpFormError] = useState<string | null>(null);
+  const [mcpApproval, setMcpApproval] = useState<HarnessMcpReview | null>(null);
+  const [mcpApprovalLoading, setMcpApprovalLoading] = useState(false);
+  const [mcpApprovalError, setMcpApprovalError] = useState<string | null>(null);
+  const [mcpApprovalVersion, setMcpApprovalVersion] = useState(0);
+  const [mcpConsentBusy, setMcpConsentBusy] = useState(false);
 
   useEffect(() => {
     if (!s.preview) void s.refreshMcpServers();
@@ -108,6 +113,10 @@ export function ExtensionsView({ onOpenThreads, embedded = false }: { onOpenThre
   }, [s.preview]);
 
   const harnessThread = thread?.agentId === "harness" ? thread : null;
+  const harnessSessionId = harnessThread?.sessionId ?? null;
+  const mcpGrantId = activeWorkspace(s)?.grantId ?? (s.preview ? "preview" : null);
+  const mcpApproved = Boolean(mcpApproval?.trusted && mcpApproval.current);
+  const mcpReviewReady = Boolean(s.harnessMcpConfig && !s.harnessMcpConfigLoading && !s.harnessMcpConfigError && !s.harnessMcpConfig.error);
   useEffect(() => {
     if (!harnessThread) return;
     void s.refreshHarnessMcp(harnessThread.sessionId);
@@ -115,15 +124,64 @@ export function ExtensionsView({ onOpenThreads, embedded = false }: { onOpenThre
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [harnessThread?.sessionId]);
 
+  useEffect(() => {
+    let cancelled = false;
+    setMcpApproval(null);
+    setMcpApprovalError(null);
+    if (!harnessSessionId || !mcpGrantId) {
+      setMcpApprovalLoading(false);
+      return;
+    }
+    setMcpApprovalLoading(true);
+    void reviewMcp(mcpGrantId).then((review) => {
+      if (!cancelled) setMcpApproval(review);
+    }).catch((error) => {
+      if (!cancelled) setMcpApprovalError(describeError("Could not review MCP startup approval", error));
+    }).finally(() => {
+      if (!cancelled) setMcpApprovalLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [harnessSessionId, mcpGrantId, mcpApprovalVersion]);
+
+  const changeMcpConsent = async (approve: boolean) => {
+    if (!harnessThread || !mcpGrantId || mcpConsentBusy) return;
+    const expectedDigest = mcpApproval?.configurationDigest;
+    if (approve && (!mcpReviewReady || !mcpApproval?.hasWorkspaceConfig || !expectedDigest)) return;
+    const sessionId = harnessThread.sessionId;
+    const grantId = mcpGrantId;
+    const owns = () => {
+      const current = useAppStore.getState();
+      const currentGrant = activeWorkspace(current)?.grantId ?? (current.preview ? "preview" : null);
+      return currentThread(current)?.sessionId === sessionId && currentGrant === grantId;
+    };
+    setMcpConsentBusy(true);
+    setMcpApprovalError(null);
+    try {
+      await consentMcp(grantId, approve, approve ? expectedDigest : undefined);
+      if (!owns()) return;
+      const review = await reviewMcp(grantId);
+      if (!owns()) return;
+      setMcpApproval(review);
+      await Promise.all([s.refreshHarnessMcp(sessionId, true), s.refreshHarnessMcpConfig(sessionId)]);
+    } catch (error) {
+      if (!owns()) return;
+      if (/configuration changed/i.test(String(error))) setMcpApprovalVersion((version) => version + 1);
+      else setMcpApprovalError(describeError("Could not update MCP startup approval", error));
+    } finally {
+      setMcpConsentBusy(false);
+    }
+  };
+
   const refreshHarnessMcp = (refresh: boolean) => {
     if (!harnessThread) return;
+    if (refresh) setMcpApprovalVersion((version) => version + 1);
     void s.refreshHarnessMcp(harnessThread.sessionId, refresh);
     void s.refreshHarnessMcpConfig(harnessThread.sessionId);
   };
 
   const submitMcpServer = async (event: FormEvent) => {
     event.preventDefault();
-    if (!harnessThread || mcpBusy) return;
+    if (!harnessThread || mcpBusy || mcpConsentBusy) return;
     const name = mcpName.trim();
     const problem = mcpServerNameProblem(name);
     if (problem) { setMcpFormError(problem); return; }
@@ -145,6 +203,7 @@ export function ExtensionsView({ onOpenThreads, embedded = false }: { onOpenThre
     setMcpBusy(true); setMcpFormError(null);
     try {
       await s.addHarnessMcpServer(harnessThread.sessionId, mcpScope, server);
+      setMcpApprovalVersion((version) => version + 1);
       setMcpName(""); setMcpCommand(""); setMcpArgs(""); setMcpUrl(""); setMcpEnv(""); setMcpHeaders("");
       setMcpFormOpen(false);
     } catch (error) {
@@ -155,12 +214,13 @@ export function ExtensionsView({ onOpenThreads, embedded = false }: { onOpenThre
   };
 
   const removeMcpServer = async (server: HarnessMcpConfigServer) => {
-    if (!harnessThread) return;
+    if (!harnessThread || mcpConsentBusy) return;
     const where = server.source === "workspace" ? "this workspace" : "your home folder";
     if (!(await s.confirm({ title: `Remove ${server.name}?`, body: `Its entry is removed from ${where}'s .glitter/mcp.json.`, confirmLabel: "Remove", danger: true }))) return;
     setMcpRowBusy(server.name); setMcpError(null);
     try {
       await s.removeHarnessMcpServer(harnessThread.sessionId, server.source, server.name);
+      setMcpApprovalVersion((version) => version + 1);
     } catch (error) {
       setMcpError(describeError("Could not remove the server", error));
     } finally {
@@ -391,6 +451,7 @@ export function ExtensionsView({ onOpenThreads, embedded = false }: { onOpenThre
                 type="button"
                 className="ghost-btn small"
                 aria-expanded={mcpFormOpen}
+                disabled={mcpConsentBusy}
                 onClick={() => { setMcpFormOpen(!mcpFormOpen); setMcpFormError(null); }}
               >
                 <Plus size={11} />{mcpFormOpen ? "Close form" : "Add server"}
@@ -398,7 +459,7 @@ export function ExtensionsView({ onOpenThreads, embedded = false }: { onOpenThre
               <button
                 type="button"
                 className="ghost-btn small"
-                disabled={harnessThread ? Boolean(s.harnessMcpLoading || s.harnessMcpConfigLoading) : s.mcpLoading}
+                disabled={harnessThread ? Boolean(s.harnessMcpLoading || s.harnessMcpConfigLoading || mcpConsentBusy) : s.mcpLoading}
                 onClick={() => { if (harnessThread) refreshHarnessMcp(true); else void s.refreshMcpServers(); }}
               >
                 <RefreshCw size={11} className={(harnessThread ? (s.harnessMcpLoading || s.harnessMcpConfigLoading) : s.mcpLoading) ? "spin" : ""} />{(harnessThread ? (s.harnessMcpLoading || s.harnessMcpConfigLoading) : s.mcpLoading) ? "Refreshing…" : "Refresh"}
@@ -406,7 +467,21 @@ export function ExtensionsView({ onOpenThreads, embedded = false }: { onOpenThre
             </span>
           </div>
           {harnessThread ? <>
-            <p className="permission-note">Servers come from .glitter/mcp.json: this workspace's file first, then your home folder. Their tools load on demand, and each call asks before it runs.</p>
+            <p className="permission-note">Servers come from .glitter/mcp.json: this workspace's file first, then your home folder. Workspace servers need startup approval, and tool calls still follow the thread's permissions.</p>
+            {mcpApprovalError ? <p className="permission-note" role="alert">{mcpApprovalError} <button type="button" className="ghost-btn small" onClick={() => setMcpApprovalVersion((version) => version + 1)}>Retry review</button></p> : null}
+            {mcpApprovalLoading && !mcpApproval ? <div className="extension-card mcp-consent"><span className="extension-copy"><span className="extension-name">Checking MCP startup approval…</span><span className="extension-meta">The redacted server configuration remains available below.</span></span></div> : null}
+            {mcpApproval?.hasWorkspaceConfig ? <div className="extension-card mcp-consent">
+              <span className="extension-copy">
+                <span className="extension-name">{mcpApproved ? "MCP startup approved" : mcpApproval.trusted ? "MCP configuration changed" : "MCP startup approval needed"}<span className={mcpApproved ? "picker-tag" : "picker-tag warm"}>{mcpApproved ? "Approved" : "Disabled"}</span></span>
+                <span className="extension-meta">{mcpApproved ? "This exact workspace and home configuration may start. Any change requires review again." : "Review the redacted rows below. Workspace servers stay off until you approve the exact workspace and home configuration shown now."}</span>
+              </span>
+              <span className="extension-actions">
+                {mcpApproved ? <button type="button" className="ghost-btn small" disabled={mcpConsentBusy || mcpApprovalLoading} onClick={() => void changeMcpConsent(false)}>{mcpConsentBusy ? "Revoking…" : "Revoke approval"}</button> : <>
+                  <button type="button" className="ghost-btn small" disabled={mcpConsentBusy || mcpApprovalLoading} onClick={() => void changeMcpConsent(false)}>Keep disabled</button>
+                  <button type="button" className="primary" disabled={mcpConsentBusy || mcpApprovalLoading || !mcpReviewReady || !mcpApproval.configurationDigest} onClick={() => void changeMcpConsent(true)}>{mcpConsentBusy ? "Applying…" : "Approve startup"}</button>
+                </>}
+              </span>
+            </div> : null}
             {s.harnessMcpError ? <p className="permission-note" role="alert">{s.harnessMcpError}</p> : null}
             {s.harnessMcpConfigError ? <p className="permission-note" role="alert">{s.harnessMcpConfigError}</p> : null}
             {s.harnessMcp?.error ? <p className="permission-note" role="alert">{s.harnessMcp.error}</p> : null}
@@ -462,7 +537,7 @@ export function ExtensionsView({ onOpenThreads, embedded = false }: { onOpenThre
               {mcpFormError ? <p className="permission-note" role="alert">{mcpFormError}</p> : null}
               <div className="mcp-form-actions">
                 <button type="button" className="ghost-btn small" disabled={mcpBusy} onClick={() => { setMcpFormOpen(false); setMcpFormError(null); }}>Cancel</button>
-                <button type="submit" className="primary" disabled={mcpBusy}>{mcpBusy ? "Adding…" : "Add server"}</button>
+                <button type="submit" className="primary" disabled={mcpBusy || mcpConsentBusy}>{mcpBusy ? "Adding…" : "Add server"}</button>
               </div>
             </form> : null}
             {s.harnessMcpConfig?.servers.length ? <ul className="extension-list">
@@ -477,7 +552,7 @@ export function ExtensionsView({ onOpenThreads, embedded = false }: { onOpenThre
                       {server.error ? <span className="extension-meta mcp-error">{server.error}</span> : null}
                     </span>
                     <span className="extension-actions">
-                      <button type="button" className="ghost-btn small" disabled={mcpRowBusy === server.name} title={`Remove ${server.name}`} onClick={() => void removeMcpServer(server)}>{mcpRowBusy === server.name ? "Removing…" : "Remove"}</button>
+                      <button type="button" className="ghost-btn small" disabled={mcpConsentBusy || mcpRowBusy === server.name} title={`Remove ${server.name}`} onClick={() => void removeMcpServer(server)}>{mcpRowBusy === server.name ? "Removing…" : "Remove"}</button>
                     </span>
                   </li>
                 );

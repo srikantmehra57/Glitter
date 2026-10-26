@@ -253,6 +253,8 @@ export type HarnessMcpConfigServer = {
   error?: string;
 };
 export type HarnessMcpConfig = { servers: HarnessMcpConfigServer[]; error: string | null };
+/** Native, digest-bound approval for the exact workspace and home MCP files reviewed in Extensions. */
+export type HarnessMcpReview = { trusted: boolean; current: boolean; hasWorkspaceConfig: boolean; configurationDigest: string };
 /** A server the app may add; env and header values are written once and never read back. */
 export type HarnessMcpServerInput = {
   name: string;

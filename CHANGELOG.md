@@ -15,6 +15,10 @@ licence terms.
 - **Image previews keep keyboard focus inside a native modal.** The close button
   receives initial focus, Escape dismisses the preview, and closing returns focus
   to the image that opened it.
+- **MCP startup consent can be reviewed and changed.** Settings → Extensions
+  shows redacted workspace configuration before approval, keeps it disabled or
+  revokes it, and binds approval to the reviewed digest. Changed files and stale
+  approvals fail closed instead of starting an unreviewed server.
 - **Connected providers load their models.** Harness reads the native credential
   payload rather than treating the whole bridge request as the credential map,
   so built-in and custom providers reach model discovery and the composer.

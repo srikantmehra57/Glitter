@@ -1198,6 +1198,8 @@ html[data-sidebar-resizing] .sidebar-rail { transition: none; }
 /* An empty list keeps the list's footprint, so a section reads the same full or empty. */
 .permission-note.extension-empty { padding: 14px 16px; border: 1px dashed var(--border-heavy); border-radius: var(--r-lg); text-align: center; }
 .import-preview { max-height: 220px; overflow: auto; margin: 8px 0 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface-2); color: var(--secondary); font-family: var(--font-mono); font-size: var(--text-xs); line-height: 1.5; white-space: pre-wrap; }
+.mcp-consent { margin: 0 0 12px; }
+.mcp-consent .extension-actions { flex: none; flex-wrap: wrap; justify-content: flex-end; }
 .mcp-form { margin: 12px 0 14px; padding: 14px; border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--surface-2); }
 .mcp-form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 0 12px; }
 .mcp-form .field { margin-bottom: 12px; }

@@ -3,7 +3,27 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { ExtensionsView } from "./ExtensionsView";
 import { useAppStore } from "../lib/store";
 import { resetStore, seedStore } from "../test/store";
-import type { HarnessMcpConfig, Thread } from "../lib/types";
+import type { HarnessMcpConfig, HarnessMcpReview, Thread } from "../lib/types";
+
+const native = vi.hoisted(() => ({ review: vi.fn(), consent: vi.fn() }));
+vi.mock("../lib/bridge", async (original) => ({
+  ...(await original<typeof import("../lib/bridge")>()),
+  reviewMcp: native.review,
+  consentMcp: native.consent,
+}));
+
+const review = (partial: Partial<HarnessMcpReview> = {}): HarnessMcpReview => ({
+  trusted: false,
+  current: false,
+  hasWorkspaceConfig: true,
+  configurationDigest: "digest-one",
+  ...partial,
+});
+
+const grantState = {
+  workspaces: [{ id: "workspace-1", path: "/repo", name: "Repo", grantId: "wg-workspace" }],
+  selectedWorkspaceId: "workspace-1",
+};
 
 const thread = (partial: Partial<Thread> = {}): Thread => ({
   sessionId: "s1",
@@ -60,7 +80,13 @@ describe("ExtensionsView skills", () => {
 });
 
 describe("ExtensionsView MCP servers", () => {
-  beforeEach(resetStore);
+  beforeEach(() => {
+    resetStore();
+    native.review.mockReset();
+    native.consent.mockReset();
+    native.review.mockResolvedValue(review());
+    native.consent.mockResolvedValue(undefined);
+  });
 
   const config: HarnessMcpConfig = {
     servers: [
@@ -87,6 +113,64 @@ describe("ExtensionsView MCP servers", () => {
     expect(within(section).getByText(/broken.command is required/)).toBeInTheDocument();
     expect(within(section).queryByText(/DOCS_TOKEN/)).toBeNull();
     expect(within(section).queryByText(/Authorization/)).toBeNull();
+  });
+
+  it("does not enable approval before the redacted configuration is readable", async () => {
+    mount({ agentId: "harness" }, { ...grantState, harnessMcpConfig: null, harnessMcpConfigLoading: "s1" });
+    const approve = await screen.findByRole("button", { name: "Approve startup" });
+    expect(approve).toBeDisabled();
+    seedStore({ harnessMcpConfig: config, harnessMcpConfigLoading: null });
+    await waitFor(() => expect(approve).toBeEnabled());
+  });
+
+  it("approves the exact reviewed digest with the thread worktree's grant", async () => {
+    const refresh = vi.fn(async () => {});
+    native.review.mockResolvedValueOnce(review()).mockResolvedValueOnce(review({ trusted: true, current: true }));
+    mount({ agentId: "harness", worktree: { grantId: "wg-tree", path: "/repo-tree", branch: "thread", base: "main", workspaceId: "workspace-1" } }, {
+      ...grantState,
+      harnessMcpConfig: config,
+      refreshHarnessMcp: refresh,
+    });
+    expect(await screen.findByText("MCP startup approval needed")).toBeInTheDocument();
+    expect(screen.getByText("docs")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Approve startup" }));
+    await waitFor(() => expect(native.consent).toHaveBeenCalledWith("wg-tree", true, "digest-one"));
+    expect(await screen.findByText("MCP startup approved")).toBeInTheDocument();
+    expect(refresh).toHaveBeenCalledWith("s1", true);
+  });
+
+  it("keeps startup disabled when the review is rejected", async () => {
+    mount({ agentId: "harness" }, { ...grantState, harnessMcpConfig: config });
+    fireEvent.click(await screen.findByRole("button", { name: "Keep disabled" }));
+    await waitFor(() => expect(native.consent).toHaveBeenCalledWith("wg-workspace", false, undefined));
+    expect(await screen.findByText("MCP startup approval needed")).toBeInTheDocument();
+  });
+
+  it("revokes an approved configuration without needing a digest", async () => {
+    native.review.mockResolvedValueOnce(review({ trusted: true, current: true })).mockResolvedValueOnce(review());
+    mount({ agentId: "harness" }, { ...grantState, harnessMcpConfig: config });
+    fireEvent.click(await screen.findByRole("button", { name: "Revoke approval" }));
+    await waitFor(() => expect(native.consent).toHaveBeenCalledWith("wg-workspace", false, undefined));
+    expect(await screen.findByText("MCP startup approval needed")).toBeInTheDocument();
+  });
+
+  it("reloads the review instead of refreshing tools after a stale-digest rejection", async () => {
+    const refresh = vi.fn(async () => {});
+    native.review.mockResolvedValueOnce(review()).mockResolvedValueOnce(review({ configurationDigest: "digest-two" }));
+    native.consent.mockRejectedValueOnce(new Error("The MCP configuration changed. Review it again before approving."));
+    mount({ agentId: "harness" }, { ...grantState, harnessMcpConfig: config, refreshHarnessMcp: refresh });
+    fireEvent.click(await screen.findByRole("button", { name: "Approve startup" }));
+    await waitFor(() => expect(native.review).toHaveBeenCalledTimes(2));
+    expect(refresh).not.toHaveBeenCalledWith("s1", true);
+    expect(await screen.findByText("MCP startup approval needed")).toBeInTheDocument();
+  });
+
+  it("does not ask for workspace approval when only home servers are configured", async () => {
+    native.review.mockResolvedValue(review({ trusted: true, current: true, hasWorkspaceConfig: false }));
+    mount({ agentId: "harness" }, { ...grantState, harnessMcpConfig: { servers: [config.servers[1]], error: null } });
+    await waitFor(() => expect(native.review).toHaveBeenCalledWith("wg-workspace"));
+    expect(screen.queryByRole("button", { name: "Approve startup" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Revoke approval" })).toBeNull();
   });
 
   it("adds a stdio server with parsed arguments and environment names", async () => {
