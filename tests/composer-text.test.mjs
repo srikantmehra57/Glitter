@@ -199,6 +199,8 @@ test('a drafted commit message yields its subject line without markdown dressing
   assert.equal(lib.commitSubjectFromReply('   \n'), '');
   assert.ok(lib.commitSubjectFromReply('x'.repeat(500)).length <= 200);
   assert.match(lib.COMMIT_DRAFT_PROMPT, /Reply with only the commit message/);
+  assert.match(lib.commitDraftPrompt(false), /only my staged changes/);
+  assert.match(lib.commitDraftPrompt(true), /staged and unstaged changes/);
 });
 
 test('custom commands sit between skills and macros, validate their names and place the caret at $ARGUMENTS', () => {

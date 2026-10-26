@@ -48,7 +48,7 @@ files (see the README's known limitations).
 | Per-turn file snapshots, retention, Undo and Reapply | `apps/desktop/src-tauri/src/snapshots.rs` |
 | Per-thread worktrees and their derived grants | `apps/desktop/src-tauri/src/worktrees.rs`, `git_worktree_*` in `lib.rs`, `threadScope` / `activeWorkspace` in `store.ts` |
 | The Files view and read-only viewer | `FilesPanel.tsx`, `lib/fileTree.ts`, native `read_workspace_file` in `lib.rs` |
-| Branches, push and pull requests | `BranchMenu.tsx`, `ReviewDock.tsx`, native `git_branches` / `git_switch` / `git_push` / `git_pull_request` in `lib.rs` |
+| Branches, commits, push, history and pull requests | `BranchMenu.tsx`, `CommitDialog.tsx`, `GitGraphPanel.tsx`, `ReviewDock.tsx`, native `git_branches` / `git_switch` / `git_commit` / `git_push` / `git_graph` / `git_pull_request` in `lib.rs` |
 | Diff line comments | `lib/lineComments.ts`, `DiffLines.tsx`, `sendLineComments` in `store.ts` |
 | The terminal pane | `TerminalPane.tsx`, native `terminal.rs` and `terminal_*` commands in `lib.rs` |
 | Shared browser control | `BrowserPane.tsx`, `lib/browser.ts`, `browser-types.ts` and `browser.ts` in the bridge, the Harness `browser` extension, `browserOpen` / `browserControl` / `browserClose` in `index.ts`, `dto.rs` and `BRIDGE_METHODS` |

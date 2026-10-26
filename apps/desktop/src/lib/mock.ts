@@ -1,5 +1,5 @@
 import type { AgentInfo, Model, ModelCall } from "./types";
-import type { GitReview, GitReviewRequest, GitSnapshot, Thread, ThreadWorktree, TranscriptItem, WorkspaceFile } from "./types";
+import type { GitGraph, GitReview, GitReviewRequest, GitSnapshot, Thread, ThreadWorktree, TranscriptItem, WorkspaceFile } from "./types";
 import { parseUnifiedDiff } from "./diff";
 import { dayKey, type UsageDay, type UsageLedger, type UsageTurn } from "./usageLedger";
 
@@ -279,6 +279,17 @@ export const MOCK_THREADS: Thread[] = [
 export function mockThreads(): Thread[] {
   return MOCK_THREADS.map((thread) => ({ ...thread, items: thread.items.map((item) => ({ ...item })) }));
 }
+
+export const MOCK_GIT_GRAPH: GitGraph = {
+  graph: `* 8f21c4a Add Environment inspector view (HEAD -> main)
+| * 42b90de Refresh review styling (origin/review-styling)
+|/
+* 8679625 Merge provider discovery fixes
+* 93649b4 Refresh Glitter brand artwork
+* e69e82f Fix provider discovery and consent-aware model setup
+`,
+  truncated: false,
+};
 
 export const MOCK_GIT: GitSnapshot = {
   repository: true,

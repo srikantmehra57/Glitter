@@ -51,6 +51,30 @@ it("keeps Changes primary and opens Environment, Files and Monitor from More vie
   expect(useAppStore.getState().inspectorTab).toBe("changes");
 });
 
+it("opens the shared commit dialog and a real Git Graph from Environment", async () => {
+  render(<ReviewDock />);
+  fireEvent.click(screen.getByRole("button", { name: "More views" }));
+  fireEvent.click(screen.getByRole("option", { name: /^Environment/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Commit or push" }));
+  expect(screen.getByRole("dialog", { name: "Commit or push" })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Close commit or push dialog" }));
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "Commit or push" })).toBeNull());
+
+  fireEvent.click(screen.getByRole("button", { name: "Git Graph" }));
+  expect(screen.getByRole("region", { name: "Git Graph" })).toBeInTheDocument();
+  expect(await screen.findByLabelText("Commit history graph")).toHaveTextContent("Add Environment inspector view");
+  expect(screen.getByRole("button", { name: "Refresh Git graph" })).toBeInTheDocument();
+});
+
+it("shows Git Graph failures in place and retries the owning scope", () => {
+  const refreshGitGraph = vi.fn(async () => {});
+  seedStore({ inspectorTab: "graph", gitGraphError: { key: "w\u0000g", message: "Could not load the Git graph: permission denied" }, refreshGitGraph });
+  render(<ReviewDock />);
+  expect(screen.getByRole("alert")).toHaveTextContent("permission denied");
+  fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+  expect(refreshGitGraph).toHaveBeenCalledTimes(1);
+});
+
 it("opens a scoped diff from Changes without a separate Diff destination", async () => {
   render(<ReviewDock />);
   fireEvent.click(screen.getByRole("button", { name: "Review scope" }));
@@ -65,7 +89,7 @@ it("opens a scoped diff from Changes without a separate Diff destination", async
 it("keeps local commit helpers visible and puts remote operations in Git actions", () => {
   render(<ReviewDock />);
   expect(screen.getByRole("button", { name: "Stage all" })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Draft message" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Commit or push" })).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Pull" })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Git actions" }));
   expect(screen.getByRole("option", { name: /Commit and push/ })).toBeInTheDocument();

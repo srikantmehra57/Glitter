@@ -10,15 +10,15 @@ import { buildSuggestionPrompt, cheapestModel, parseSuggestions, suggestionSigna
 import { stepZoom } from "./zoom";
 import { asLedger, compact, EMPTY_LEDGER, recordTurn, turnEntry, type UsageLedger } from "./usageLedger";
 import { persistableDrafts, rememberPrompt, NewerSessionMemoryError, SessionMemoryPersistence, SESSION_MEMORY_VERSION, type Draft, type SessionMemory, type ThreadMeta } from "./sessionMemory";
-import { acpConsentGet, acpConsentSet, agentIdentities, bridge, catalogInstall, catalogList, catalogRemove, cliLogout, confirmAgentBin, credentialGet, credentialSet, enterpriseStatus, gitCommit, gitDiscardAll, gitDiscardFiles, gitDiscardHunk, gitInit, gitReview, gitBranches, gitPull, gitPullRequest, gitPush, gitSnapshot, gitStage, gitSwitch, gitWorktreeCreate, gitWorktreeHandoff, gitWorktreeRemove, turnSnapshots, restoreTurnSnapshot, forgetTurnSnapshots, listWorkspaceFiles, MOCK_FILES, mockThreads, mockWorkspaceFile, mockWorktree, providerKeysGet, readWorkspaceFile, onBridgeEvent, onWindowCloseRequested, persistStoreDocument, pickFolder, pickPluginBundle, pickSkillSource, pluginInstall, pluginList, projectInit, readDroppedPaths, removeGrant, repairStoreDocument, setInterfaceZoom, setWindowAppearance, setMenuShortcuts, skillImport, skillInstall, skillList, skillUninstall, trustPreview, verifyGrants, type BridgeEventPayloads } from "./bridge";
-import { MOCK_AGENT_MODELS, MOCK_AGENTS, MOCK_GIT, MOCK_MODELS, mockGitReview } from "./mock";
+import { acpConsentGet, acpConsentSet, agentIdentities, bridge, catalogInstall, catalogList, catalogRemove, cliLogout, confirmAgentBin, credentialGet, credentialSet, enterpriseStatus, gitCommit, gitDiscardAll, gitDiscardFiles, gitDiscardHunk, gitGraph as readGitGraph, gitInit, gitReview, gitBranches, gitPull, gitPullRequest, gitPush, gitSnapshot, gitStage, gitSwitch, gitWorktreeCreate, gitWorktreeHandoff, gitWorktreeRemove, turnSnapshots, restoreTurnSnapshot, forgetTurnSnapshots, listWorkspaceFiles, MOCK_FILES, mockThreads, mockWorkspaceFile, mockWorktree, providerKeysGet, readWorkspaceFile, onBridgeEvent, onWindowCloseRequested, persistStoreDocument, pickFolder, pickPluginBundle, pickSkillSource, pluginInstall, pluginList, projectInit, readDroppedPaths, removeGrant, repairStoreDocument, setInterfaceZoom, setWindowAppearance, setMenuShortcuts, skillImport, skillInstall, skillList, skillUninstall, trustPreview, verifyGrants, type BridgeEventPayloads } from "./bridge";
+import { MOCK_AGENT_MODELS, MOCK_AGENTS, MOCK_GIT, MOCK_GIT_GRAPH, MOCK_MODELS, mockGitReview } from "./mock";
 import { PROVIDER_IDS, type ProviderStatus } from "./providers";
 import { clampTier, modelFor, tiersFor } from "./effort";
 import { dropHunk, parseUnifiedDiff, reviewTarget } from "./diff";
 import { MAX_DROP_FILES, MAX_IMAGE_BYTES, refPathForDrop } from "./drop";
 import { authRequired, describeError, isGrantError, timeoutUnknown } from "./errors";
 import { log } from "./logger";
-import { COMMIT_DRAFT_PROMPT, commitSubjectFromReply, parseShellEscape, parseSkillInvocation } from "./composerText";
+import { commitDraftPrompt, commitSubjectFromReply, parseShellEscape, parseSkillInvocation } from "./composerText";
 import { composePrompt, humanizeToolName, isMacPlatform, isTauri, nextAttentionThread, timeFilterCutoff, titleFromText, uid, untitledThreadTitle, workspaceName } from "./format";
 import { notify, shouldNotify } from "./notify";
 import { DOCK_DEFAULT_WIDTH, normalizeDockWidth, normalizeSidebarWidth } from "./reviewLayout";
@@ -36,6 +36,7 @@ import {
   type ApprovalRequest,
   type Detection,
   type GitSnapshot,
+  type GitGraph,
   type GitReview,
   type ReviewScope,
   type PlanItem,
@@ -106,6 +107,7 @@ async function readModelCatalog(agentId: AgentId, preview: boolean, sessionId?: 
 }
 let selectionVersion = 0;
 let gitVersion = 0;
+let gitGraphVersion = 0;
 let reviewVersion = 0;
 let modelVersion = 0;
 /** Coalesced Changes-pane refresh: one debounce timer, armed with the
@@ -189,7 +191,8 @@ async function runGitMutation(
   const applies = () => current()
     && selection === selectionVersion
     && gitWrites.get(key)?.latest === token;
-  useAppStore.setState({ gitLoading: true, gitError: null, review: null, reviewError: null });
+  ++gitGraphVersion;
+  useAppStore.setState({ gitLoading: true, gitError: null, review: null, reviewError: null, gitGraph: null, gitGraphLoading: null, gitGraphError: null });
   let applied = false;
   try {
     const git = await call();
@@ -448,6 +451,9 @@ type AppStore = Settings & {
   /** Workspaces whose session listing is in flight; the sidebar shows a loading note. */
   threadsLoading: string[];
   git: GitSnapshot | null;
+  gitGraph: { key: string; data: GitGraph } | null;
+  gitGraphLoading: string | null;
+  gitGraphError: { key: string; message: string } | null;
   reviewScope: ReviewScope;
   reviewBase: string;
   review: { key: string; data: GitReview } | null;
@@ -612,6 +618,7 @@ type AppStore = Settings & {
   reclaimApprovalFeedback: (sessionId: string, id: string) => void;
   respondUserInput: (sessionId: string, userInputId: string, response: UserInputResponse) => Promise<void>;
   refreshGit: () => Promise<void>;
+  refreshGitGraph: () => Promise<void>;
   /** Coalesce a Changes-pane refresh: armed sources (edit completions, window
    * focus) debounce into a single read instead of one per event. */
   scheduleGitRefresh: () => void;
@@ -621,7 +628,7 @@ type AppStore = Settings & {
   discardGitHunk: (path: string, hunk: number) => Promise<void>;
   discardAllGit: () => Promise<void>;
   stageGitFiles: (paths: string[], stage: boolean) => Promise<void>;
-  commitGit: (message: string) => Promise<void>;
+  commitGit: (message: string, includeUnstaged?: boolean) => Promise<void>;
   /** Diff line comments not yet sent, per thread (or per workspace draft). Saved with session memory. */
   lineComments: Record<string, LineComment[]>;
   addLineComment: (comment: Omit<LineComment, "id">) => void;
@@ -642,11 +649,11 @@ type AppStore = Settings & {
   pullRequest: PullRequest | null;
   pullRequestLoading: boolean;
   refreshPullRequest: (create?: boolean) => Promise<void>;
-  /** A commit subject drafted by the agent, for the commit box to pick up. */
-  commitDraft: { text: string; seq: number } | null;
+  /** A commit subject drafted by the agent, for the owning dialog to pick up. */
+  commitDraft: { text: string; seq: number; sessionId: string } | null;
   /** The thread whose running turn is drafting a commit message. */
   commitDrafting: string | null;
-  draftCommitMessage: () => Promise<void>;
+  draftCommitMessage: (includeUnstaged?: boolean) => Promise<void>;
   refreshSubscriptionUsage: (force?: boolean) => Promise<void>;
   /** Every finished turn's tokens, per agent, provider and model (see lib/usageLedger.ts). */
   usageLedger: UsageLedger;
@@ -1123,7 +1130,8 @@ function beginWorkspaceSelection(
   if (!workspace) return null;
   const version = ++selectionVersion;
   ++reviewVersion;
-  set({ ...switchDraft(get(), id, null), error: null, git: null, fileView: null, branches: null, pullRequest: null, reviewBase: "", review: null, reviewError: null, reviewLoading: null, diffTabs: null, diffActive: null, browserState: null, browserFrame: null, browserBusy: false, browserError: null });
+  ++gitGraphVersion;
+  set({ ...switchDraft(get(), id, null), error: null, git: null, gitGraph: null, gitGraphLoading: null, gitGraphError: null, fileView: null, branches: null, pullRequest: null, reviewBase: "", review: null, reviewError: null, reviewLoading: null, diffTabs: null, diffActive: null, browserState: null, browserFrame: null, browserBusy: false, browserError: null });
   void get().refreshGit();
   void get().refreshFileIndex(id);
   return { workspace, version };
@@ -1345,6 +1353,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
   offline: typeof navigator !== "undefined" ? navigator.onLine === false : false,
   showArchived: false,
   git: null,
+  gitGraph: null,
+  gitGraphLoading: null,
+  gitGraphError: null,
   reviewScope: "all",
   reviewBase: "",
   review: null,
@@ -2919,7 +2930,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     const scope = activeWorkspace(get())?.grantId;
     ++selectionVersion;
     ++reviewVersion;
-    set({ ...switchDraft(get(), workspace.id, sessionId), error: null, review: null, reviewError: null, reviewLoading: null, ...(workspaceChanged || get().reviewScope === "lastTurn" ? { diffTabs: null, diffActive: null } : {}), ...(workspaceChanged ? { git: null, gitError: null, reviewBase: "" } : {}), threads: get().threads.map((item) => item.sessionId === sessionId ? { ...item, unread: false } : item) });
+    set({ ...switchDraft(get(), workspace.id, sessionId), error: null, review: null, reviewError: null, reviewLoading: null, ...(workspaceChanged || get().reviewScope === "lastTurn" ? { diffTabs: null, diffActive: null } : {}), ...(workspaceChanged ? { git: null, gitError: null, gitGraph: null, gitGraphLoading: null, gitGraphError: null, reviewBase: "" } : {}), threads: get().threads.map((item) => item.sessionId === sessionId ? { ...item, unread: false } : item) });
     scheduleMemory(get);
     if (workspaceChanged) void get().refreshGit();
     else rescope(get, set, scope);
@@ -3513,21 +3524,22 @@ export const useAppStore = create<AppStore>((set, get) => ({
     // An explicit read supersedes anything the debounce armed — otherwise the
     // trailing timer would fire a second, identical read right behind this one.
     cancelScheduledGitRefresh();
-    if (get().preview) { set({ git: MOCK_GIT, gitError: null, gitLoading: false }); return; }
+    ++gitGraphVersion;
+    if (get().preview) { set({ git: MOCK_GIT, gitError: null, gitLoading: false, gitGraph: null, gitGraphLoading: null, gitGraphError: null }); return; }
     const version = ++gitVersion;
     const workspace = activeWorkspace(get());
-    if (!workspace) { set({ git: null, gitError: null, gitLoading: false }); return; }
-    if (!workspace.grantId && isTauri()) { set({ git: null, gitError: UNGRANTED_ERROR, gitLoading: false }); return; }
+    if (!workspace) { set({ git: null, gitError: null, gitLoading: false, gitGraph: null, gitGraphLoading: null, gitGraphError: null }); return; }
+    if (!workspace.grantId && isTauri()) { set({ git: null, gitError: UNGRANTED_ERROR, gitLoading: false, gitGraph: null, gitGraphLoading: null, gitGraphError: null }); return; }
     const grantId = workspace.grantId ?? null;
     // A read applies only while the workspace, grant and request version are
     // all still current — a grant re-issue or a newer call owns the answer.
     const owns = () => version === gitVersion
       && get().selectedWorkspaceId === workspace.id
       && (activeWorkspace(get())?.grantId ?? null) === grantId;
-    set({ gitLoading: true, gitError: null });
+    set({ gitLoading: true, gitError: null, gitGraphLoading: null });
     try {
       const git = await gitSnapshot(grantId ?? "preview");
-      if (owns()) set({ git });
+      if (owns()) set({ git, gitGraph: null, gitGraphError: null });
     } catch (error) {
       if (owns()) set({ git: null, gitError: describeError("Could not load the changes", error) });
     } finally {
@@ -3535,6 +3547,32 @@ export const useAppStore = create<AppStore>((set, get) => ({
       // An edit completed while this read was in flight: the snapshot it just
       // missed is owed another look once the debounce settles.
       firePendingGitRefresh();
+    }
+  },
+
+  refreshGitGraph: async () => {
+    const state = get();
+    const version = ++gitGraphVersion;
+    const selection = selectionVersion;
+    const workspace = activeWorkspace(state);
+    if (!workspace) { set({ gitGraph: null, gitGraphLoading: null, gitGraphError: null }); return; }
+    const grantId = workspace.grantId ?? null;
+    const key = `${workspace.id}\u0000${grantId ?? ""}`;
+    if (!grantId && isTauri() && !state.preview) {
+      set({ gitGraph: null, gitGraphLoading: null, gitGraphError: { key, message: UNGRANTED_ERROR } }); return;
+    }
+    const owns = () => version === gitGraphVersion
+      && selection === selectionVersion
+      && get().selectedWorkspaceId === workspace.id
+      && (activeWorkspace(get())?.grantId ?? null) === grantId;
+    set({ gitGraphLoading: key, gitGraphError: null });
+    try {
+      const data = state.preview ? MOCK_GIT_GRAPH : await readGitGraph(grantId ?? "preview");
+      if (owns()) set({ gitGraph: { key, data } });
+    } catch (error) {
+      if (owns()) set({ gitGraph: null, gitGraphError: { key, message: describeError("Could not load the Git graph", error) } });
+    } finally {
+      if (version === gitGraphVersion) set({ gitGraphLoading: null });
     }
   },
 
@@ -3615,16 +3653,17 @@ export const useAppStore = create<AppStore>((set, get) => ({
     await runGitMutation(workspace, selectionVersion, () => gitStage(workspace.grantId ?? "preview", paths, stage));
   },
 
-  commitGit: async (message) => {
+  commitGit: async (message, includeUnstaged = false) => {
     const state = get();
     const workspace = activeWorkspace(state);
     if (state.preview && state.git) {
-      const files = state.git.files.filter((file) => file.status[0] === " " || file.status[0] === "?");
-      set({ git: { ...state.git, files, dirty: files.length > 0 } });
+      const files = includeUnstaged ? [] : state.git.files.filter((file) => file.status[0] === " " || file.status[0] === "?");
+      ++gitGraphVersion;
+      set({ git: { ...state.git, files, dirty: files.length > 0 }, gitGraph: null, gitGraphLoading: null, gitGraphError: null });
       return;
     }
     if (!workspace || (!workspace.grantId && isTauri())) throw new Error(UNGRANTED_ERROR);
-    await runGitMutation(workspace, selectionVersion, () => gitCommit(workspace.grantId ?? "preview", message));
+    await runGitMutation(workspace, selectionVersion, () => gitCommit(workspace.grantId ?? "preview", message, includeUnstaged));
   },
 
   lineComments: {},
@@ -3743,12 +3782,12 @@ export const useAppStore = create<AppStore>((set, get) => ({
   },
   commitDraft: null,
   commitDrafting: null,
-  draftCommitMessage: async () => {
+  draftCommitMessage: async (includeUnstaged = false) => {
     const thread = currentThread(get());
     if (!thread) throw new Error("Open a thread first. The agent drafts the message in the thread.");
     if (thread.status === "running" || get().submitting) throw new Error("Wait for the running turn to finish, then draft the message.");
     if (get().composer.trim() || get().images.length || get().contextRefs.length) throw new Error("Send or clear your draft in the composer first, so it is not replaced.");
-    set({ composer: COMMIT_DRAFT_PROMPT, images: [], contextRefs: [], commitDrafting: thread.sessionId });
+    set({ composer: commitDraftPrompt(includeUnstaged), images: [], contextRefs: [], commitDrafting: thread.sessionId });
     await get().sendPrompt();
     // Nothing was sent (a lock, an error): no reply is coming to wait for.
     if (get().threads.find((item) => item.sessionId === thread.sessionId)?.status !== "running") set({ commitDrafting: null });
@@ -4625,6 +4664,7 @@ export function bindBridgeEvents() {
       const stopped = data.code === "interrupted" || data.code === "cancelled";
       if (!stopped) maybeNotify(data.sessionId, "Turn failed");
       update(data.sessionId, (thread) => ({ ...thread, ...finishTurn(thread, data.turnId), status: stopped ? "idle" : "error", error: stopped ? null : data.error ?? "Turn stream failed", retry: null, activeTurnId: null, pendingTurnKey: null, plan: stopped ? settlePlan(thread.plan, "cancelled") : settlePlan(thread.plan, "failed"), items: stopped ? settleItems(thread.items, "cancelled", true) : settleItems(thread.items, "failed"), pendingApproval: null, queuedApprovals: [], userInputs: [], userInputPending: undefined, cancelRequested: false, activity: undefined, lastTurnId: data.turnId, ...(stopped ? { lastOutcome: "cancelled" as const } : {}) }));
+      if (store.commitDrafting === data.sessionId) useAppStore.setState({ commitDrafting: null });
     }
     if (event === "gapError") {
       const data = payload as BridgeEventPayloads["gapError"];
@@ -4683,7 +4723,7 @@ export function bindBridgeEvents() {
       if (store.commitDrafting === data.sessionId) {
         const reply = cancelled || failed ? undefined : [...(store.threads.find((thread) => thread.sessionId === data.sessionId)?.items ?? [])].reverse().find((item) => item.kind === "agentMessage" && item.turnId === data.turnId)?.text;
         const text = commitSubjectFromReply(reply ?? "");
-        useAppStore.setState({ commitDrafting: null, ...(text ? { commitDraft: { text, seq: (store.commitDraft?.seq ?? 0) + 1 } } : {}) });
+        useAppStore.setState({ commitDrafting: null, ...(text ? { commitDraft: { text, seq: (store.commitDraft?.seq ?? 0) + 1, sessionId: data.sessionId } } : {}) });
       }
       if (!cancelled) maybeNotify(data.sessionId, failed || auth ? "Turn failed" : "Turn finished");
       update(data.sessionId, (thread) => thread.activeTurnId && thread.activeTurnId !== data.turnId ? { ...thread, items: settleTurnItems(thread.items, data.turnId, terminal), queuedTurns: (thread.queuedTurns ?? []).filter((entry) => entry.turnId !== data.turnId), ...(thread.retry?.turnId === data.turnId ? { retry: null } : {}), ...(data.viewCursor ? { resumeCursor: data.viewCursor } : {}) } : ({
@@ -4789,7 +4829,8 @@ function sharesActiveScope(state: Pick<AppStore, "workspaces" | "selectedWorkspa
 function rescope(get: () => AppStore, set: (patch: Partial<AppStore>) => void, from: string | null | undefined) {
   if ((activeWorkspace(get())?.grantId ?? null) === (from ?? null)) return;
   ++reviewVersion;
-  set({ git: null, gitError: null, reviewBase: "", review: null, reviewError: null, reviewLoading: null, diffTabs: null, diffActive: null, fileView: null, branches: null, pullRequest: null });
+  ++gitGraphVersion;
+  set({ git: null, gitError: null, gitGraph: null, gitGraphLoading: null, gitGraphError: null, reviewBase: "", review: null, reviewError: null, reviewLoading: null, diffTabs: null, diffActive: null, fileView: null, branches: null, pullRequest: null });
   void get().refreshGit();
   get().refreshFileIndex();
 }

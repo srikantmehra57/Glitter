@@ -2808,6 +2808,13 @@ button.branch:hover:not(:disabled) { background: var(--hover); color: var(--ink)
 .environment-error { margin: 0; padding: 8px; color: var(--danger); font-size: var(--text-sm); overflow-wrap: anywhere; }
 .environment-card-actions { display: flex; justify-content: flex-end; padding: 4px 6px 2px; }
 .environment-server-dot { width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--success); }
+.environment-diff { display: inline-flex; gap: 8px; flex: none; font-family: var(--font-mono); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
+.environment-git-divider { height: 1px; margin: 4px 6px 6px; background: var(--border); }
+
+.dock .git-graph-panel { flex: 1; min-height: 0; overflow: auto; padding: 12px; }
+.git-graph { margin: 0; padding: 8px 10px 16px; color: var(--secondary); font-family: var(--font-mono); font-size: var(--text-xs); line-height: 1.7; tab-size: 4; white-space: pre; }
+.dock-notice { margin: 8px 12px; }
+.commit-launch { justify-content: flex-end; }
 
 /* ───────────────────────── Overlays ───────────────────────── */
 
@@ -2937,6 +2944,35 @@ dialog[data-closing]:not([open]) {
 .settings-header .settings-close { flex: none; margin-top: -2px; }
 
 
+dialog.commit-dialog { width: min(560px, calc(100% - 32px)); padding: 0; overflow: auto; }
+.commit-dialog-form { display: flex; flex-direction: column; gap: 14px; padding: 20px; }
+.commit-dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.commit-dialog-head h2 { margin: 0; font-size: var(--text-xl); }
+.commit-dialog-head .icon-btn { margin: -6px -8px -6px 0; flex: none; }
+.commit-dialog-meta { display: flex; align-items: center; gap: 9px; min-width: 0; color: var(--tertiary); font-size: var(--text-md); }
+.commit-dialog-branch { min-width: 0; overflow: hidden; color: var(--secondary); text-overflow: ellipsis; white-space: nowrap; }
+.commit-dialog-meta .add, .commit-dialog-meta .del { flex: none; font-family: var(--font-mono); font-size: var(--text-sm); }
+.commit-dialog-message { width: 100%; min-height: 124px; max-height: 280px; resize: vertical; padding: 12px; border: 1px solid var(--border); border-radius: var(--r-md); outline: none; background: var(--well); color: var(--ink); font-size: var(--text-md); line-height: 1.55; transition: border-color var(--dur-1) var(--ease), box-shadow var(--dur-1) var(--ease); }
+.commit-dialog-message:focus { border-color: color-mix(in oklab, var(--accent) 70%, transparent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.commit-dialog-message::placeholder { color: var(--tertiary); }
+.commit-dialog-message:disabled { opacity: 0.65; }
+.commit-dialog-include { display: flex; align-items: center; gap: 8px; min-height: 28px; color: var(--secondary); font-size: var(--text-md); }
+.commit-dialog-include input { margin: 0; flex: none; }
+.commit-dialog .commit-dialog-status, .commit-dialog .commit-dialog-error { margin: -4px 0 0; font-size: var(--text-sm); line-height: 1.45; overflow-wrap: anywhere; }
+.commit-dialog .commit-dialog-status { color: var(--tertiary); }
+.commit-dialog .commit-dialog-error { color: var(--danger); }
+.commit-dialog-operations { display: flex; flex-direction: column; gap: 5px; padding-top: 8px; border-top: 1px solid var(--border); }
+.commit-dialog-operation { display: flex; align-items: center; min-width: 0; border-radius: var(--r-md); transition: background var(--dur-1) var(--ease); }
+.commit-dialog-operation:hover { background: var(--hover); }
+.commit-dialog-operation.selected { background: var(--active); }
+.commit-dialog-operation:not(.selected):has(input:disabled) { opacity: 0.55; }
+.commit-dialog-operation label { position: relative; display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; min-height: 44px; padding: 6px 12px; color: var(--secondary); font-size: var(--text-md); cursor: pointer; border-radius: inherit; }
+.commit-dialog-operation label:has(input:focus-visible) { outline: 2px solid var(--focus); outline-offset: -2px; }
+.commit-dialog-operation label input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.commit-dialog-operation label svg { flex: none; color: var(--tertiary); }
+.commit-dialog-operation label span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.commit-dialog-continue { flex: none; min-width: 88px; min-height: 32px; margin-right: 6px; padding: 0 12px; }
+
 .login-prompt { margin: 12px 0 0; padding: 12px 14px; border-radius: var(--r-md); background: var(--active); }
 .login-prompt p { margin: 0 0 8px; font-size: var(--text-md); color: var(--secondary); }
 .login-prompt p:last-child { margin-bottom: 0; }
@@ -2998,6 +3034,10 @@ dialog.palette { width: min(560px, calc(100% - 32px)); padding: 0; margin: auto;
   .review-layout.browser-docked .thread-main::after { flex-grow: 0; }
   .review-layout.browser-docked .browser-pane { order: 1; flex: 1; width: auto; animation: fade-in var(--dur-2) var(--ease); }
   .review-layout.browser-docked .browser-pane.closing { display: none; }
+}
+@media (min-width: 681px) and (max-width: 1000px) {
+  /* The sidebar's grab zone straddles the full-width pane's left edge; Back must start beyond it. */
+  .app:not(.sidebar-collapsed) .review-layout.docked .dock-back { margin-left: 20px; }
 }
 @media (max-width: 680px) {
   .app { --titlebar-height: 50px; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto var(--titlebar-height) minmax(0, 1fr); }

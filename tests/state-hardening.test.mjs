@@ -41,6 +41,7 @@ const storeReplacements = {
     export const bridge=(...args)=>globalThis.storeBridge(...args);
     export const gitReview=async(...args)=>globalThis.readReview?.(...args) ?? {files:[],diff:"",truncated:false};
     export const gitSnapshot=(grantId)=>globalThis.readGit(grantId);
+    export const gitGraph=async(...args)=>globalThis.readGitGraph?.(...args) ?? {graph:'',truncated:false};
     export const verifyGrants=async()=>[];export const removeGrant=async()=>{};
     export const onBridgeEvent=(handler)=>{globalThis.storeEvent=handler;return ()=>{}};
     export const onWindowCloseRequested=(handler)=>{globalThis.closeRequested=handler;return ()=>{if(globalThis.closeRequested===handler)globalThis.closeRequested=undefined}};
@@ -1501,6 +1502,22 @@ test('the file viewer reads through the folder in view and drops answers it no l
   assert.match(store.getState().fileView.error, /gone/);
 });
 
+test('Git graph reads apply only to the current workspace and grant', async () => {
+  const store = await frontendStore(); workspace(store);
+  const slow = deferred();
+  const calls = [];
+  globalThis.readGitGraph = (grant) => { calls.push(grant); return grant === 'g1' ? slow.promise : Promise.resolve({ graph: 'other history', truncated: false }); };
+  store.setState({ workspaces: [{ id: 'w', path: '/repo', grantId: 'g1' }, { id: 'other', path: '/other', grantId: 'g2' }] });
+  const first = store.getState().refreshGitGraph();
+  store.setState({ selectedWorkspaceId: 'other' });
+  await store.getState().refreshGitGraph();
+  assert.equal(store.getState().gitGraph.data.graph, 'other history');
+  slow.resolve({ graph: 'old history', truncated: false });
+  await first;
+  assert.equal(store.getState().gitGraph.data.graph, 'other history');
+  assert.deepEqual(calls, ['g1', 'g2']);
+});
+
 test('branch switches and pushes go through the folder in view, and a switch resets what depended on the branch', async () => {
   const store = await frontendStore(); workspace(store);
   globalThis.readGit = () => git([]);
@@ -1544,6 +1561,12 @@ test('drafting a commit message never replaces a composer draft and fills the bo
   globalThis.storeEvent('turnCompleted', { sessionId: 's1', turnId, outcome: { kind: 'completed', params: { terminal: 'completed' } } });
   assert.equal(store.getState().commitDrafting, null);
   assert.equal(store.getState().commitDraft.text, 'Fix flaky login test');
+  assert.equal(store.getState().commitDraft.sessionId, 's1');
+  await store.getState().draftCommitMessage(true);
+  assert.match(sent[1], /staged and unstaged changes/);
+  const failedTurn = store.getState().threads[0].activeTurnId;
+  globalThis.storeEvent('turnError', { sessionId: 's1', turnId: failedTurn, error: 'stream lost' });
+  assert.equal(store.getState().commitDrafting, null);
 });
 
 test('archiving the selected thread preserves its draft and the workspace draft', async () => {

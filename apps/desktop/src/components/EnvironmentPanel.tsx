@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
-import { ChevronDown, ChevronRight, FileText, Folder, Globe2, Laptop, MousePointer2, Plug, Server } from "lucide-react";
+import { ChevronDown, ChevronRight, FileText, Folder, GitCommitHorizontal, GitCompareArrows, GitGraph as GitGraphIcon, Globe2, Laptop, MousePointer2, Plug, Server } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { formatTokens } from "../lib/format";
 import { activeWorkspace, currentThread, useAppStore } from "../lib/store";
@@ -42,8 +42,8 @@ function localServer(state: BrowserState | null) {
   }
 }
 
-/** Workspace facts and agent-produced resources, separate from task activity in Monitor. */
-export function EnvironmentPanel() {
+/** Workspace facts, Git destinations and agent-produced resources. */
+export function EnvironmentPanel({ onCommitOrPush }: { onCommitOrPush: () => void }) {
   const s = useAppStore(useShallow((state) => ({
     workspaces: state.workspaces,
     selectedWorkspaceId: state.selectedWorkspaceId,
@@ -59,6 +59,7 @@ export function EnvironmentPanel() {
     harnessMcpError: state.harnessMcpError,
     harnessMcpConfigError: state.harnessMcpConfigError,
     browserState: state.browserState,
+    git: state.git,
     refreshMcpServers: state.refreshMcpServers,
     refreshHarnessMcp: state.refreshHarnessMcp,
     refreshHarnessMcpConfig: state.refreshHarnessMcpConfig,
@@ -107,9 +108,30 @@ export function EnvironmentPanel() {
     : agentId === "muse" ? s.mcpError : null;
   const connectorSummary = !agentId ? "No thread" : connectorsLoading && !connectors.length ? "Loading…" : connectorError ? "Needs attention" : connectors.length ? `${connectors.length} configured` : "None";
   const server = localServer(s.browserState);
+  const branch = s.git?.branch || thread?.hostBranch || "";
+  const gitFiles = s.git?.files ?? [];
+  const added = gitFiles.reduce((sum, file) => sum + file.added, 0);
+  const removed = gitFiles.reduce((sum, file) => sum + file.removed, 0);
+  const repository = Boolean(workspace && s.git && s.git.repository !== false);
 
   return <div className="environment-panel scroll" aria-label="Workspace environment">
-    <EnvironmentSection title="Environment" defaultOpen>{() => <>
+    <EnvironmentSection title="Environmental Information" summary={branch || undefined} defaultOpen>{() => <>
+      {workspace ? <button type="button" className="environment-row actionable" aria-label={`Changes, ${added} additions and ${removed} deletions`} onClick={() => s.setInspectorTab("changes")}>
+        <span className="environment-icon"><GitCompareArrows size={15} aria-hidden="true" /></span>
+        <span className="environment-primary">Changes</span>
+        <span className="environment-diff"><span className={`add${added ? "" : " zero"}`}>+{added}</span><span className={`del${removed ? "" : " zero"}`}>−{removed}</span></span>
+      </button> : null}
+      {repository ? <>
+        <button type="button" className="environment-row actionable" onClick={onCommitOrPush}>
+          <span className="environment-icon"><GitCommitHorizontal size={15} aria-hidden="true" /></span>
+          <span className="environment-primary">Commit or push</span>
+        </button>
+        <button type="button" className="environment-row actionable" onClick={() => s.setInspectorTab("graph")}>
+          <span className="environment-icon"><GitGraphIcon size={15} aria-hidden="true" /></span>
+          <span className="environment-primary">Git Graph</span>
+        </button>
+      </> : null}
+      {workspace ? <div className="environment-git-divider" /> : null}
       <div className="environment-row">
         <span className="environment-icon"><Laptop size={15} aria-hidden="true" /></span>
         <span className="environment-primary">This computer</span>

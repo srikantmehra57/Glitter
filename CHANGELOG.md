@@ -12,6 +12,9 @@ licence terms.
 
 ### Fixed
 
+- **Narrow Inspector Back controls stay clickable.** Between 681–1000px, the
+  sidebar resize grab zone no longer covers Back to changes in full-width
+  Environment, Git Graph, Files, Monitor or scoped-diff views.
 - **Image previews keep keyboard focus inside a native modal.** The close button
   receives initial focus, Escape dismisses the preview, and closing returns focus
   to the image that opened it.
@@ -36,6 +39,10 @@ licence terms.
   the current local Browser server into one place. Output rows open in Files,
   connector management opens Extensions, and unavailable remote control is
   labelled Local only rather than given a non-functional switch.
+- **Environment now handles Git workflows.** The branch and change totals link
+  to a shared Commit or push dialog with optional unstaged files and automatic
+  message drafting, and Git Graph shows bounded branch topology and history in
+  the inspector. Commit and push actions use the active workspace or worktree.
 - **Thread menus expose support and path actions.** Mark threads unread or read,
   open their worktree in Finder, copy its path or session ID, and open the app
   config or a pre-filled GitHub issue draft. Harness threads also copy their

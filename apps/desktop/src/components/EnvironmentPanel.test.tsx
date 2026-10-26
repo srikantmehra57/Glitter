@@ -6,6 +6,7 @@ import { useAppStore } from "../lib/store";
 
 const refreshHarnessMcp = vi.fn(async () => {});
 const refreshHarnessMcpConfig = vi.fn(async () => {});
+const onCommitOrPush = vi.fn();
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -39,7 +40,7 @@ beforeEach(() => {
 });
 
 it("shows workspace and context facts and manages real MCP connectors", async () => {
-  render(<EnvironmentPanel />);
+  render(<EnvironmentPanel onCommitOrPush={onCommitOrPush} />);
 
   expect(screen.getByText("This computer")).toBeInTheDocument();
   expect(screen.getByText("Portfolio")).toBeInTheDocument();
@@ -73,7 +74,7 @@ it("shows workspace and context facts and manages real MCP connectors", async ()
 it("opens deduplicated saved outputs and the current local Browser server", () => {
   const openFile = vi.fn(async () => {});
   seedStore({ openFile });
-  render(<EnvironmentPanel />);
+  render(<EnvironmentPanel onCommitOrPush={onCommitOrPush} />);
 
   expect(screen.getAllByText("resume.html")).toHaveLength(1);
   fireEvent.click(screen.getByRole("button", { name: "resume.html" }));
@@ -94,7 +95,7 @@ it("keeps empty and unavailable states honest", () => {
     harnessMcpConfig: null,
     browserState: { status: "ready", url: "https://example.com/", title: "Example", viewport: { width: 1100, height: 760 } },
   });
-  render(<EnvironmentPanel />);
+  render(<EnvironmentPanel onCommitOrPush={onCommitOrPush} />);
 
   expect(screen.getByRole("button", { name: /^Context/ })).toHaveTextContent("Not reported");
   expect(screen.getByRole("button", { name: /^Connectors/ })).toHaveTextContent("No thread");
@@ -102,4 +103,23 @@ it("keeps empty and unavailable states honest", () => {
   expect(screen.getByText("Local servers opened in Browser will appear here.")).toBeInTheDocument();
   expect(screen.queryByText("Example")).toBeNull();
   expect(screen.queryByRole("switch")).toBeNull();
+});
+
+it("opens Changes, the shared commit dialog, and Git Graph", () => {
+  seedStore({ git: {
+    repository: true,
+    branch: "feat/environment-inspector",
+    dirty: true,
+    diff: "",
+    files: [{ path: "src/App.tsx", status: " M", added: 447, removed: 54 }],
+  } });
+  render(<EnvironmentPanel onCommitOrPush={onCommitOrPush} />);
+
+  expect(screen.getByRole("button", { name: /Environmental Information/ })).toHaveTextContent("feat/environment-inspector");
+  fireEvent.click(screen.getByRole("button", { name: "Changes, 447 additions and 54 deletions" }));
+  expect(useAppStore.getState().inspectorTab).toBe("changes");
+  fireEvent.click(screen.getByRole("button", { name: "Commit or push" }));
+  expect(onCommitOrPush).toHaveBeenCalledTimes(1);
+  fireEvent.click(screen.getByRole("button", { name: "Git Graph" }));
+  expect(useAppStore.getState().inspectorTab).toBe("graph");
 });

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type * as React from "react";
 import { describeError } from "../lib/errors";
-import { Check, ChevronLeft, Copy, Download, Ellipsis, ExternalLink, GitPullRequest, Maximize2, Upload, Minimize2, RefreshCw, Sparkles, Undo2, X } from "lucide-react";
+import { Check, ChevronLeft, Copy, Download, Ellipsis, ExternalLink, GitPullRequest, Maximize2, Upload, Minimize2, RefreshCw, Undo2, X } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { parseUnifiedDiff, reviewTarget, type DiffLine, type FileDiff } from "../lib/diff";
 import { DiffLines } from "./DiffLines";
@@ -17,12 +17,15 @@ import { activeWorkspace, currentThread, currentWorkspace, inWorktree, useAppSto
 import { REVIEW_SCOPES, type GitFile, type ReviewScope } from "../lib/types";
 import { TaskMonitor } from "./TaskMonitor";
 import { EnvironmentPanel } from "./EnvironmentPanel";
+import { CommitDialog, type CommitOperation, type CommitDialogRequest } from "./CommitDialog";
+import { GitGraphPanel } from "./GitGraphPanel";
 import { SelectMenu, type SelectMenuOption } from "./SelectMenu";
 
 const NO_PATHS: string[] = [];
 const NO_COMMENTS: LineComment[] = [];
 const MORE_VIEW_OPTIONS: SelectMenuOption[] = [
-  { value: "environment", label: "Environment", description: "Workspace, context, outputs and servers" },
+  { value: "environment", label: "Environment", description: "Workspace, Git, context, outputs and servers" },
+  { value: "graph", label: "Git Graph", description: "Branch topology and commit history" },
   { value: "files", label: "Files", description: "Browse workspace files" },
   { value: "activity", label: "Monitor", description: "Goals, tasks and subagents" },
 ];
@@ -46,6 +49,7 @@ export function ReviewDock() {
     selectedSessionId: state.selectedSessionId,
     git: state.git,
     gitLoading: state.gitLoading,
+    gitGraphLoading: state.gitGraphLoading,
     gitError: state.gitError,
     reviewScope: state.reviewScope,
     reviewBase: state.reviewBase,
@@ -68,6 +72,7 @@ export function ReviewDock() {
     diffTabs: state.diffTabs,
     diffActive: state.diffActive,
     refreshGit: state.refreshGit,
+    refreshGitGraph: state.refreshGitGraph,
     openFileDiff: state.openFileDiff,
     closeFileDiff: state.closeFileDiff,
     setActiveDiff: state.setActiveDiff,
@@ -80,7 +85,6 @@ export function ReviewDock() {
     discardGitHunk: state.discardGitHunk,
     discardAllGit: state.discardAllGit,
     stageGitFiles: state.stageGitFiles,
-    commitGit: state.commitGit,
     lineComments: state.lineComments[state.selectedSessionId ? `thread:${state.selectedSessionId}` : `project:${state.selectedWorkspaceId}`] ?? NO_COMMENTS,
     addLineComment: state.addLineComment,
     removeLineComment: state.removeLineComment,
@@ -90,9 +94,6 @@ export function ReviewDock() {
     pullRequest: state.pullRequest,
     pullRequestLoading: state.pullRequestLoading,
     refreshPullRequest: state.refreshPullRequest,
-    commitDraft: state.commitDraft,
-    commitDrafting: state.commitDrafting,
-    draftCommitMessage: state.draftCommitMessage,
     confirm: state.confirm,
   }); }));
   // A worktree thread reviews its own checkout, not the workspace folder.
@@ -115,16 +116,16 @@ export function ReviewDock() {
   const [error, setError] = useState<string | null>(null);
   /** Which mutation is in flight, so its trigger disables against a double click. */
   const [busy, setBusy] = useState<string | null>(null);
-  const [commitMessage, setCommitMessage] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
+  const [commitRequest, setCommitRequest] = useState<CommitDialogRequest | null>(null);
+  const commitRequestId = useRef(0);
   // A pull rewrites files under the agent; it waits for the turn to end.
   const threadRunning = useAppStore((state) => currentThread(state)?.status === "running");
   const [commenting, setCommenting] = useState<(Omit<LineComment, "id">) | null>(null);
-  // A message the agent drafted lands in the commit box once, and stays editable.
-  useEffect(() => { if (s.commitDraft) setCommitMessage(s.commitDraft.text); }, [s.commitDraft?.seq]);
   const [baseDraft, setBaseDraft] = useState(s.reviewBase);
   const scoped = s.inspectorTab === "diff" && s.reviewScope !== "all";
   const reviewView = s.inspectorTab === "changes" || s.inspectorTab === "diff";
+  const graphView = s.inspectorTab === "graph";
   const diffData = scoped ? s.review?.key === s.reviewKey ? s.review.data : null : s.git;
   const reviewLoading = scoped && s.reviewLoading === s.reviewKey;
   const visibleError = error || (reviewView ? scoped ? s.reviewError?.key === s.reviewKey ? s.reviewError.message : null : s.gitError : null);
@@ -283,20 +284,11 @@ export function ReviewDock() {
     catch (cause) { setError(describeError(failure, cause)); return false; }
     finally { setBusy(null); }
   };
-  const push = async () => {
-    const branch = s.git?.branch;
-    if (!branch || busy) return;
-    if (!(await s.confirm({ title: `Push ${branch}?`, body: "This sends the branch's commits to its remote using your own git credentials.", confirmLabel: "Push" }))) return;
-    await run("push", "Could not push", async () => { const pushed = await s.pushBranch(); setNotice(`Pushed ${pushed.branch} to ${pushed.remote}.`); });
-  };
-  const commitAndPush = async () => {
-    const branch = s.git?.branch;
-    const text = commitMessage.trim();
-    if (!branch || !text || busy) return;
-    if (!(await s.confirm({ title: `Commit and push ${branch}?`, body: "This commits the staged files, then sends the branch's commits to its remote using your own git credentials.", confirmLabel: "Commit and push" }))) return;
-    if (!(await run("commit", "Could not commit the staged changes", () => s.commitGit(text)))) return;
-    setCommitMessage("");
-    await run("push", "Committed, but could not push", async () => { const pushed = await s.pushBranch(); setNotice(`Committed and pushed ${pushed.branch} to ${pushed.remote}.`); });
+  const openCommit = (operation?: CommitOperation) => {
+    setError(null);
+    setNotice(null);
+    commitRequestId.current += 1;
+    setCommitRequest({ id: commitRequestId.current, operation });
   };
   const createPullRequest = async () => {
     const branch = s.git?.branch;
@@ -402,20 +394,19 @@ export function ReviewDock() {
     </div>
     );
   };
-  const stagedCount = (s.git?.files ?? []).filter((file) => file.status[0] !== " " && file.status[0] !== "?").length;
   const unstagedPaths = (s.git?.files ?? []).filter((file) => file.status === "??" || (file.status[1] ?? " ") !== " ").map((file) => file.path);
-  const viewTitle = s.inspectorTab === "activity" ? "Monitor" : s.inspectorTab === "environment" ? "Environment" : s.inspectorTab === "files" ? "Files" : "Changes";
+  const viewTitle = s.inspectorTab === "activity" ? "Monitor" : s.inspectorTab === "environment" ? "Environment" : s.inspectorTab === "files" ? "Files" : s.inspectorTab === "graph" ? "Git Graph" : "Changes";
   const remoteOptions: SelectMenuOption[] = [];
-  if (stagedCount && s.git?.branch) remoteOptions.push({ value: "commit-push", label: "Commit and push", description: "Commit staged files, then push this branch", disabled: !commitMessage.trim() || Boolean(busy), icon: <Check size={12} /> });
+  if (fileCount && s.git?.branch) remoteOptions.push({ value: "commit-push", label: "Commit and push", description: "Choose changes and a message, then push this branch", disabled: Boolean(busy), icon: <Check size={12} /> });
   if (s.git?.branch) {
     remoteOptions.push({ value: "pull", label: busy === "pull" ? "Pulling…" : "Pull", description: threadRunning ? "Available when the running turn ends" : `Fast-forward ${s.git.branch} to its upstream`, disabled: Boolean(busy) || threadRunning, icon: <Download size={12} /> });
-    remoteOptions.push({ value: "push", label: busy === "push" ? "Pushing…" : "Push", description: `Push ${s.git.branch} with your git credentials`, disabled: Boolean(busy), icon: <Upload size={12} /> });
+    remoteOptions.push({ value: "push", label: "Push", description: `Push ${s.git.branch} with your git credentials`, disabled: Boolean(busy), icon: <Upload size={12} /> });
     if (!s.pullRequest?.url && !s.pullRequest?.unavailable) remoteOptions.push({ value: "pr", label: busy === "pr" ? "Creating…" : "Create pull request", description: "Push this branch and open a pull request", disabled: Boolean(busy) || s.pullRequestLoading, icon: <GitPullRequest size={12} /> });
   }
   const remoteAction = (value: string) => {
-    if (value === "commit-push") void commitAndPush();
+    if (value === "commit-push") openCommit("commit-push");
     else if (value === "pull") void run("pull", "Could not pull", async () => { await s.pullBranch(); setNotice(`Pulled ${s.git?.branch}.`); });
-    else if (value === "push") void push();
+    else if (value === "push") openCommit("push");
     else if (value === "pr") void createPullRequest();
   };
   // Session files always show (new files the agent created included); unrelated
@@ -447,13 +438,14 @@ export function ReviewDock() {
         {s.inspectorTab === "changes" && fileCount ? <span className="dock-count">{fileCount}</span> : null}
       </div>
       {reviewView && statFiles.length ? <span className="dock-stat"><span className={`add${added ? "" : " zero"}`}>+{added}</span><span className={`del${removed ? "" : " zero"}`}>−{removed}</span></span> : <span className="grow" />}
-      <SelectMenu id="dock-more" className="action-menu dock-more" ariaLabel="More views" value="" placeholder="" options={MORE_VIEW_OPTIONS} onChange={(value) => { if (value === "files" || value === "activity" || value === "environment") s.setInspectorTab(value); }} icon={<Ellipsis size={15} />} />
+      <SelectMenu id="dock-more" className="action-menu dock-more" ariaLabel="More views" value="" placeholder="" options={MORE_VIEW_OPTIONS} onChange={(value) => { if (value === "files" || value === "activity" || value === "environment" || value === "graph") s.setInspectorTab(value); }} icon={<Ellipsis size={15} />} />
       <button className="icon-btn small" aria-label={s.dockExpanded ? "Restore split view" : `Expand ${viewTitle.toLowerCase()}`} aria-pressed={s.dockExpanded} data-tooltip-align="end" data-tooltip={s.dockExpanded ? "Restore split view" : `Expand ${viewTitle.toLowerCase()}`} onClick={() => s.setDockExpanded(!s.dockExpanded)}>{s.dockExpanded ? <Minimize2 size={13} /> : <Maximize2 size={13} />}</button>
-      {reviewView ? <button className="icon-btn small" aria-label="Refresh changes" data-tooltip-align="end" data-tooltip="Refresh" disabled={!workspace || s.gitLoading || reviewLoading} onClick={() => { if (scoped) void s.refreshReview(); else void s.refreshGit(); }}><RefreshCw size={13} className={s.gitLoading || reviewLoading ? "spin" : ""} /></button> : null}
+      {reviewView || graphView ? <button className="icon-btn small" aria-label={graphView ? "Refresh Git graph" : "Refresh changes"} data-tooltip-align="end" data-tooltip="Refresh" disabled={!workspace || s.gitLoading || reviewLoading || Boolean(s.gitGraphLoading)} onClick={() => { if (graphView) void s.refreshGitGraph(); else if (scoped) void s.refreshReview(); else void s.refreshGit(); }}><RefreshCw size={13} className={s.gitLoading || reviewLoading || Boolean(s.gitGraphLoading) ? "spin" : ""} /></button> : null}
       <button className="icon-btn small" aria-label={`Close ${viewTitle.toLowerCase()}`} data-tooltip-align="end" data-tooltip={`Close  ${shortcutText("toggle-changes")}`} onClick={() => s.setDockOpen(false)}><X size={14} /></button>
     </div>
     {reviewView && s.gitLoading ? <p className="review-note">Refreshing changes…</p> : null}
     {visibleError && <div className="banner" role="alert"><span>{visibleError}</span><button className="ghost-btn small" onClick={() => { setError(null); if (scoped) void s.refreshReview(); else void s.refreshGit(); }}>Retry</button></div>}
+    {notice ? <p className="review-note dock-notice" role="status">{notice}</p> : null}
     {reviewView && (!workspace ? <p className="review-note">Open a workspace to review changes.</p> : !scoped && !s.git && !s.gitLoading && !s.gitError ? <p className="review-note">Loading changes…</p> : null)}
     <div id="dock-panel" role="region" aria-label={viewTitle}>
     {reviewView ? <>
@@ -467,27 +459,18 @@ export function ReviewDock() {
       </form> : null}
       {s.inspectorTab === "diff" && scoped ? <p className="review-note review-scope-note">{s.reviewNotice ?? (s.reviewScope === "lastTurn" ? "Saved changes during the last finished run, including shell or other app edits made during that run." : s.reviewScope === "branch" ? `Committed changes since the common ancestor with ${s.reviewBase}.` : s.reviewScope === "staged" ? "Changes staged for the next commit." : "Edits not yet staged, including new files.")}</p> : null}
     </> : null}
-    {s.inspectorTab === "files" ? <FilesPanel workspace={workspace} /> : s.inspectorTab === "activity" ? <TaskMonitor /> : s.inspectorTab === "environment" ? <EnvironmentPanel /> : s.git?.repository === false && !scoped ? <div className="nonrepo">
+    {s.inspectorTab === "files" ? <FilesPanel workspace={workspace} /> : s.inspectorTab === "activity" ? <TaskMonitor /> : s.inspectorTab === "environment" ? <EnvironmentPanel onCommitOrPush={() => openCommit()} /> : s.inspectorTab === "graph" ? <GitGraphPanel /> : s.git?.repository === false && !scoped ? <div className="nonrepo">
       <p className="review-note">Changes needs git to review edits in {workspace?.name ?? "this workspace"}.</p>
       <button className="primary nonrepo-init" disabled={busy === "init" || s.gitLoading} onClick={() => void initRepo()}>
         {busy === "init" || s.gitLoading ? "Initializing…" : "Initialize repository"}
       </button>
-    </div> : s.git && s.inspectorTab === "changes" ? <div className="scroll">      {fileCount ? <form className="commit-box" onSubmit={(event) => {
-        event.preventDefault();
-        if (!workspace || !granted() || !commitMessage.trim() || !stagedCount) return;
-        setError(null);
-        setBusy("commit");
-        void s.commitGit(commitMessage.trim()).then(() => setCommitMessage(""), (cause) => setError(describeError("Could not commit the staged changes", cause))).finally(() => setBusy(null));
-      }}>
-        <input aria-label="Commit message" placeholder={stagedCount ? `Commit ${stagedCount} staged file${stagedCount === 1 ? "" : "s"}` : "Stage files to commit"} value={commitMessage} maxLength={2000} onChange={(event) => setCommitMessage(event.target.value)} />
-        <button type="submit" className="primary commit-submit" disabled={!stagedCount || !commitMessage.trim() || Boolean(busy)} title={stagedCount ? "Commit staged changes" : "Stage files first"}><Check size={12} />Commit</button>
-      </form> : null}
+    </div> : s.git && s.inspectorTab === "changes" ? <div className="scroll">      {fileCount ? <div className="commit-box commit-launch">
+        <button type="button" className="primary commit-submit" disabled={Boolean(busy)} onClick={() => openCommit("commit")}><Check size={12} />Commit or push</button>
+      </div> : null}
       <div className="git-actions">
         {fileCount && unstagedPaths.length ? <button type="button" className="ghost-btn small" disabled={Boolean(busy)} onClick={() => void run("stage", "Could not stage the files", () => s.stageGitFiles(unstagedPaths, true))}>Stage all</button> : null}
-        {fileCount ? <button type="button" className="ghost-btn small" disabled={Boolean(busy) || Boolean(s.commitDrafting)} title="Ask the agent in this thread for a commit message" onClick={() => void run("draft", "Could not draft a message", s.draftCommitMessage)}><Sparkles size={12} />{s.commitDrafting ? "Drafting…" : "Draft message"}</button> : null}
         {remoteOptions.length ? <><span className="grow" /><SelectMenu id="git-actions" className="action-menu git-more" ariaLabel="Git actions" value="" placeholder="" options={remoteOptions} onChange={remoteAction} icon={<Ellipsis size={15} />} /></> : null}
       </div>
-      {notice ? <p className="review-note" role="status">{notice}</p> : null}
       {s.pullRequest?.unavailable ? <p className="review-note">{s.pullRequest.unavailable}</p> : null}
       {s.pullRequest?.url ? <p className="review-note pr-line">
         <GitPullRequest size={12} aria-hidden="true" />
@@ -566,5 +549,6 @@ export function ReviewDock() {
       </section> : null}
     </div> : null}
     </div>
+    <CommitDialog request={commitRequest} onClose={() => setCommitRequest(null)} onNotice={setNotice} />
   </aside>;
 }

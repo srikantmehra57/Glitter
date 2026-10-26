@@ -184,6 +184,7 @@ const storeReplacements = {
     export const bridge=(...args)=>globalThis.storeBridge(...args);
     export const gitReview=async(...args)=>globalThis.readReview?.(...args) ?? {files:[],diff:"",truncated:false};
     export const gitSnapshot=(grantId)=>globalThis.readGit(grantId);
+    export const gitGraph=async(...args)=>globalThis.readGitGraph?.(...args) ?? {graph:'',truncated:false};
     export const verifyGrants=async()=>[];export const removeGrant=async()=>{};
     export const onBridgeEvent=(handler)=>{globalThis.storeEvent=handler;return ()=>{}};
     export const onWindowCloseRequested=()=>()=>{};
@@ -291,7 +292,22 @@ test('staging and committing forward args and apply the fresh snapshot', async (
   await store.getState().stageGitFiles(['b.txt'], false);
   assert.deepEqual(globalThis.stageCalls, [['g1', ['a.txt'], true], ['g1', ['b.txt'], false]]);
   await store.getState().commitGit('ship it');
-  assert.deepEqual(globalThis.commitCalls, [['g1', 'ship it']]);
+  await store.getState().commitGit('ship everything', true);
+  assert.deepEqual(globalThis.commitCalls, [['g1', 'ship it', false], ['g1', 'ship everything', true]]);
+  assert.equal(store.getState().git.dirty, false);
+});
+test('preview commits preserve or remove exactly the selected file groups', async () => {
+  const store = await frontendStore();
+  const files = [
+    { path: 'staged.txt', status: 'M ', added: 1, removed: 0 },
+    { path: 'edited.txt', status: ' M', added: 1, removed: 0 },
+    { path: 'new.txt', status: '??', added: 1, removed: 0 },
+  ];
+  store.setState({ preview: true, git: { branch: 'main', dirty: true, files, diff: '', truncated: false } });
+  await store.getState().commitGit('staged only');
+  assert.deepEqual(store.getState().git.files.map((file) => file.path), ['edited.txt', 'new.txt']);
+  await store.getState().commitGit('include everything', true);
+  assert.deepEqual(store.getState().git.files, []);
   assert.equal(store.getState().git.dirty, false);
 });
 test('sign out removes credentials, closes sessions, and re-detects', async () => {
@@ -1249,7 +1265,7 @@ test('every modal surface is a native dialog that traps focus', async () => {
 // Settings from the sidebar gear was dropped onto <body> on close.
 test('modal surfaces share one focus-returning dialog hook', async () => {
   const { readFileSync } = await import('node:fs');
-  const modals = ['SettingsModal', 'OutputModal', 'SubagentModal', 'PreviewModal', 'InitModal', 'TrustModal'];
+  const modals = ['SettingsModal', 'OutputModal', 'SubagentModal', 'PreviewModal', 'InitModal', 'TrustModal', 'CommitDialog'];
   const offenders = [];
   for (const name of modals) {
     const source = readFileSync(`apps/desktop/src/components/${name}.tsx`, 'utf8');

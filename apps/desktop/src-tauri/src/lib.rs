@@ -209,6 +209,8 @@ const BRIDGE_METHODS: &[&str] = &[
 ];
 
 const DIFF_LIMIT: usize = 1_500_000;
+const GIT_GRAPH_COMMITS: usize = 200;
+const GIT_GRAPH_BYTES: usize = 512 * 1024;
 /// Bytes read from a workspace `AGENTS.md`; only an excerpt is ever shown.
 const RULES_PREVIEW_LIMIT: u64 = 64 * 1024;
 const APP_LOG_LIMIT: u64 = 2 * 1024 * 1024;
@@ -587,6 +589,13 @@ impl GitSnapshot {
             truncated: false,
         }
     }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct GitGraph {
+    pub graph: String,
+    pub truncated: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1509,6 +1518,45 @@ fn parse_porcelain_z(raw: &str) -> Vec<(String, String)> {
 async fn git_snapshot(state: State<'_, AppState>, grant_id: String) -> Result<GitSnapshot, String> {
     let cwd = grant_root(&state, &grant_id)?;
     blocking(move || git_snapshot_for(&cwd)).await
+}
+
+#[tauri::command]
+async fn git_graph(state: State<'_, AppState>, grant_id: String) -> Result<GitGraph, String> {
+    let cwd = grant_root(&state, &grant_id)?;
+    blocking(move || git_graph_at(&cwd)).await
+}
+
+/// The repository's own graph layout keeps merges and branch crossings correct
+/// without trusting a renderer-supplied revision or executing a shell command.
+fn git_graph_at(cwd: &Path) -> Result<GitGraph, String> {
+    match run_git_read(cwd, &["rev-parse", "--is-inside-work-tree"]) {
+        Ok(inside) if inside.trim() == "true" => {}
+        Ok(_) => return Err("Git Graph needs a Git working tree.".into()),
+        Err(err) if err.contains("not a git repository") => return Err("Git Graph needs a Git working tree.".into()),
+        Err(err) => return Err(err),
+    }
+    if run_git_read(cwd, &["rev-parse", "--verify", "--quiet", "HEAD"]).is_err() {
+        // An unborn branch has no history. Check status as well so a corrupt
+        // repository does not get misreported as an honest empty graph.
+        run_git_read(cwd, &["status", "--porcelain", "--untracked-files=no", "--", "."])?;
+        return Ok(GitGraph { graph: String::new(), truncated: false });
+    }
+    let history = run_git_read(cwd, &["rev-list", "--all", &format!("--max-count={}", GIT_GRAPH_COMMITS + 1), "--", "."])?;
+    let truncated = history.lines().count() > GIT_GRAPH_COMMITS;
+    let (graph, cut) = run_git_capped(cwd, &[
+        "log",
+        "--graph",
+        "--no-color",
+        "--no-show-signature",
+        "--decorate=short",
+        "--date-order",
+        &format!("--max-count={GIT_GRAPH_COMMITS}"),
+        "--format=%h %s%d",
+        "--all",
+        "--",
+        ".",
+    ], GIT_GRAPH_BYTES)?;
+    Ok(GitGraph { graph, truncated: truncated || cut })
 }
 
 #[tauri::command]
@@ -2848,10 +2896,11 @@ fn git_stage_at(cwd: &Path, grant_id: &str, paths: Vec<String>, stage: bool) -> 
     git_snapshot_for(&cwd)
 }
 
-/// Commit staged changes with a message. Identity/hook failures surface
-/// verbatim so the user can fix git config or hooks and retry.
+/// Commit staged changes with a message, optionally staging every non-ignored
+/// change inside the grant first. Staging and committing share one write lock;
+/// if a hook refuses the commit, newly staged files honestly remain staged.
 #[tauri::command]
-async fn git_commit(state: State<'_, AppState>, grant_id: String, message: String) -> Result<GitSnapshot, String> {
+async fn git_commit(state: State<'_, AppState>, grant_id: String, message: String, include_unstaged: Option<bool>) -> Result<GitSnapshot, String> {
     let trimmed = message.trim().to_string();
     if trimmed.is_empty() {
         return Err("Write a commit message first.".into());
@@ -2860,14 +2909,25 @@ async fn git_commit(state: State<'_, AppState>, grant_id: String, message: Strin
         return Err("Commit messages are limited to 2000 characters.".into());
     }
     let cwd = grant_root(&state, &grant_id)?;
+    let include_unstaged = include_unstaged.unwrap_or(false);
     // Commit hooks can run for a long time; they must not run on the UI thread.
     blocking(move || {
         let _write = git_write_lock();
-        run_git(&cwd, &["commit", "-m", trimmed.as_str()])?;
+        let snapshot = git_commit_at(&cwd, &trimmed, include_unstaged)?;
         native_log("info", "git.commit", &format!("git commit in grant {}", grant_tag(&grant_id)));
-        git_snapshot_for(&cwd)
+        Ok(snapshot)
     })
     .await
+}
+
+fn git_commit_at(cwd: &Path, message: &str, include_unstaged: bool) -> Result<GitSnapshot, String> {
+    if include_unstaged {
+        // Unlike `commit -a`, this includes new files. The literal cwd pathspec
+        // confines staging to the granted subtree and still honors .gitignore.
+        run_git(cwd, &["add", "--all", "--", "."])?;
+    }
+    run_git(cwd, &["commit", "-m", message])?;
+    git_snapshot_for(cwd)
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -5024,6 +5084,7 @@ pub fn run() {
                 agent_identities,
                 confirm_agent_bin,
                 git_snapshot,
+                git_graph,
                 git_review,
                 turn_snapshots,
                 turn_snapshot_restore,
@@ -6991,6 +7052,86 @@ while :; do sleep 1; done
         std::fs::write(dir.join("a.txt"), "local edit\n").expect("edit");
         assert!(git_switch_at(&dir, "feature/login", false).unwrap_err().contains("would be overwritten"));
         assert_eq!(std::fs::read_to_string(dir.join("a.txt")).expect("kept"), "local edit\n");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn git_commit_can_include_unstaged_and_new_files_without_leaving_the_grant() {
+        let (_state, _grant, dir) = fixture_repo("commit-include");
+        std::fs::write(dir.join(".gitignore"), "ignored.txt\n").unwrap();
+        std::fs::write(dir.join("tracked.txt"), "base\n").unwrap();
+        commit_all(&dir, "base");
+        std::fs::write(dir.join("staged.txt"), "staged\n").unwrap();
+        run_git(&dir, &["add", "staged.txt"]).unwrap();
+        std::fs::write(dir.join("tracked.txt"), "working\n").unwrap();
+        std::fs::write(dir.join("new.txt"), "new\n").unwrap();
+        std::fs::write(dir.join("ignored.txt"), "ignored\n").unwrap();
+
+        let staged = git_commit_at(&dir, "staged only", false).expect("staged commit");
+        assert!(staged.dirty);
+        assert!(staged.files.iter().any(|file| file.path == "tracked.txt" && file.status == " M"));
+        assert!(staged.files.iter().any(|file| file.path == "new.txt" && file.status == "??"));
+        assert!(!staged.files.iter().any(|file| file.path == "staged.txt" || file.path == "ignored.txt"));
+        assert_eq!(run_git(&dir, &["show", "HEAD:tracked.txt"]).unwrap(), "base\n");
+        assert_eq!(run_git(&dir, &["show", "HEAD:staged.txt"]).unwrap(), "staged\n");
+
+        let complete = git_commit_at(&dir, "include all\n\nWith a body.", true).expect("include unstaged");
+        assert!(!complete.dirty);
+        assert!(complete.files.is_empty());
+        assert_eq!(run_git(&dir, &["show", "HEAD:tracked.txt"]).unwrap(), "working\n");
+        assert_eq!(run_git(&dir, &["show", "HEAD:new.txt"]).unwrap(), "new\n");
+        assert_eq!(run_git(&dir, &["log", "-1", "--format=%B"]).unwrap().trim_end(), "include all\n\nWith a body.");
+        assert!(!run_git(&dir, &["ls-tree", "-r", "--name-only", "HEAD"]).unwrap().lines().any(|path| path == "ignored.txt"));
+
+        std::fs::create_dir_all(dir.join("scoped")).unwrap();
+        std::fs::write(dir.join("scoped/inside.txt"), "inside\n").unwrap();
+        std::fs::write(dir.join("outside-loose.txt"), "must stay unstaged\n").unwrap();
+        let scoped = git_commit_at(&dir.join("scoped"), "scoped only", true).expect("subfolder grant");
+        assert!(scoped.files.is_empty());
+        assert_eq!(run_git(&dir, &["show", "HEAD:scoped/inside.txt"]).unwrap(), "inside\n");
+        assert!(!run_git(&dir, &["ls-tree", "-r", "--name-only", "HEAD"]).unwrap().lines().any(|path| path == "outside-loose.txt"));
+        assert!(git_snapshot_for(&dir).unwrap().files.iter().any(|file| file.path == "outside-loose.txt" && file.status == "??"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn git_graph_is_scoped_bounded_and_handles_unborn_history() {
+        let (_state, _grant, dir) = fixture_repo("graph");
+        let empty = git_graph_at(&dir).expect("unborn graph");
+        assert!(empty.graph.is_empty());
+        assert!(!empty.truncated);
+        std::fs::create_dir_all(dir.join("allowed")).unwrap();
+        std::fs::create_dir_all(dir.join("outside")).unwrap();
+        std::fs::write(dir.join("allowed/base.txt"), "base\n").unwrap();
+        std::fs::write(dir.join("outside/secret.txt"), "secret\n").unwrap();
+        commit_all(&dir, "base allowed");
+        run_git(&dir, &["branch", "feature"]).unwrap();
+        let default_branch = run_git(&dir, &["symbolic-ref", "--short", "HEAD"]).unwrap().trim().to_string();
+        run_git(&dir, &["checkout", "-q", "feature"]).unwrap();
+        std::fs::write(dir.join("allowed/feature.txt"), "feature\n").unwrap();
+        commit_all(&dir, "allowed feature");
+        run_git(&dir, &["checkout", "-q", &default_branch]).unwrap();
+        std::fs::write(dir.join("outside/other.txt"), "other\n").unwrap();
+        commit_all(&dir, "outside secret");
+        run_git(&dir, &["merge", "--no-ff", "-m", "merge allowed", "feature"]).unwrap();
+
+        let root = git_graph_at(&dir).expect("root graph");
+        assert!(root.graph.contains("merge allowed"));
+        assert!(root.graph.contains("outside secret"));
+        assert!(root.graph.contains('|'));
+        let scoped = git_graph_at(&dir.join("allowed")).expect("scoped graph");
+        assert!(scoped.graph.contains("allowed feature"));
+        assert!(!scoped.graph.contains("outside secret"));
+        assert!(!scoped.graph.contains("secret.txt"));
+
+        for index in 0..=GIT_GRAPH_COMMITS {
+            std::fs::write(dir.join("history.txt"), format!("{index}\n")).unwrap();
+            run_git(&dir, &["add", "history.txt"]).unwrap();
+            run_git(&dir, &["commit", "-qm", &format!("history {index}")]).unwrap();
+        }
+        let capped = git_graph_at(&dir).expect("capped graph");
+        assert!(capped.truncated);
+        assert!(capped.graph.len() <= GIT_GRAPH_BYTES);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

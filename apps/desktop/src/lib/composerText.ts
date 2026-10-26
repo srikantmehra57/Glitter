@@ -248,8 +248,15 @@ export function reviewPrompt(scope: "all" | "lastTurn" | "staged" | "unstaged" |
   return `Review my uncommitted changes ${REVIEW_TAIL}`;
 }
 
-/** What "Draft message" asks the agent: the `/commit` macro, answered in a form the commit box can take. */
-export const COMMIT_DRAFT_PROMPT = `${SLASH_COMMANDS.find((command) => command.name === "commit")!.prompt} Reply with only the commit message, subject line first.`;
+/** The commit draft prompt covers exactly the changes the requested commit will include. */
+export function commitDraftPrompt(includeUnstaged: boolean): string {
+  const request = includeUnstaged
+    ? SLASH_COMMANDS.find((command) => command.name === "commit")!.prompt
+    : "Look at only my staged changes and draft a concise commit message for them. Do not include unrelated unstaged or new files.";
+  return `${request} Reply with only the commit message, subject line first.`;
+}
+
+export const COMMIT_DRAFT_PROMPT = commitDraftPrompt(true);
 
 /** The subject line of a drafted commit message: the first line of real text, without markdown dressing. */
 export function commitSubjectFromReply(reply: string): string {

@@ -3,11 +3,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { isTauri } from "./format";
 import { log } from "./logger";
-import { MOCK_FILES, MOCK_GIT, MOCK_MODELS, MOCK_THREADS, mockGitReview, mockThreads, mockWorkspaceFile, mockWorktree } from "./mock";
+import { MOCK_FILES, MOCK_GIT, MOCK_GIT_GRAPH, MOCK_MODELS, MOCK_THREADS, mockGitReview, mockThreads, mockWorkspaceFile, mockWorktree } from "./mock";
 import type { ProviderStatus } from "./providers";
 export type { ProviderStatus } from "./providers";
 import type { DiagnosticsSnapshot, EditorChoice, SupportPaths, ThemeMode, BrowserControlResult, BrowserFrame, BrowserStateEvent } from "./types";
-import type { AgentId, AgentIdentity, AgentSessionConfig, ApprovalRequest, CatalogEntry, CatalogInstallResult, CatalogList, CatalogRemoveResult, CliUpdateOutcome, CliUpdateStatus, ContextUsage, Detection, DroppedFile, EnterpriseStatus, GitBranch, GoalState, HarnessMcpConfig, HarnessMcpConfigServer, HarnessMcpReview, HarnessMcpScope, HarnessMcpServerInput, ModelCall, PlanItem, PullRequest, GitReview, GitReviewRequest, GitSnapshot, SessionConfig, SessionMetadata, SnapshotRestore, ThreadWorktree, TokenUsage, TranscriptItem, TurnSnapshot, UserInputRequest, WorkspaceFile, WorktreeRemoval, PluginDetail, PluginEntry, SkillDetail, SkillEntry } from "./types";
+import type { AgentId, AgentIdentity, AgentSessionConfig, ApprovalRequest, CatalogEntry, CatalogInstallResult, CatalogList, CatalogRemoveResult, CliUpdateOutcome, CliUpdateStatus, ContextUsage, Detection, DroppedFile, EnterpriseStatus, GitBranch, GitGraph, GoalState, HarnessMcpConfig, HarnessMcpConfigServer, HarnessMcpReview, HarnessMcpScope, HarnessMcpServerInput, ModelCall, PlanItem, PullRequest, GitReview, GitReviewRequest, GitSnapshot, SessionConfig, SessionMetadata, SnapshotRestore, ThreadWorktree, TokenUsage, TranscriptItem, TurnSnapshot, UserInputRequest, WorkspaceFile, WorktreeRemoval, PluginDetail, PluginEntry, SkillDetail, SkillEntry } from "./types";
 
 /**
  * The payload each bridge event carries, declared once here instead of being
@@ -380,6 +380,11 @@ export async function gitSnapshot(grantId: string): Promise<GitSnapshot> {
   return invoke<GitSnapshot>("git_snapshot", { grantId });
 }
 
+export async function gitGraph(grantId: string): Promise<GitGraph> {
+  if (!isTauri()) return MOCK_GIT_GRAPH;
+  return invoke<GitGraph>("git_graph", { grantId });
+}
+
 export async function gitReview(grantId: string, request: GitReviewRequest): Promise<GitReview> {
   if (!isTauri()) return mockGitReview(request);
   return invoke<GitReview>("git_review", { grantId, request });
@@ -425,10 +430,10 @@ export async function gitStage(grantId: string, paths: string[], stage: boolean)
   return invoke<GitSnapshot>("git_stage", { grantId, paths, stage });
 }
 
-/** Commit staged changes; returns a fresh snapshot. */
-export async function gitCommit(grantId: string, message: string): Promise<GitSnapshot> {
+/** Commit staged changes, optionally including every non-ignored unstaged/new file; returns a fresh snapshot. */
+export async function gitCommit(grantId: string, message: string, includeUnstaged = false): Promise<GitSnapshot> {
   if (!isTauri()) throw new Error("Committing needs the desktop app.");
-  return invoke<GitSnapshot>("git_commit", { grantId, message });
+  return invoke<GitSnapshot>("git_commit", { grantId, message, includeUnstaged });
 }
 
 /** Discard every uncommitted change (tracked restores, untracked removals, ignored kept). */

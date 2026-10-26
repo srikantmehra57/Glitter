@@ -260,7 +260,9 @@ must respect. Don't log routine changes here; they belong in git history and
   credential fails instead of hanging. Push targets the branch's upstream, or
   publishes to `origin` (or the only remote); it never force-pushes and never
   takes a remote or refspec from the renderer. A pull request link is passed
-  to the renderer only when it is http(s). The UI confirms before each push.
+  to the renderer only when it is http(s). The UI confirms before each push;
+  the shared dialog's explicit Push or Commit and push choice plus Continue is
+  that confirmation, while the pull-request flow keeps its confirmation.
 - **Pull** is fast-forward only (`git pull --ff-only --no-rebase`). A diverged
   branch or a conflicting local edit is refused with nothing changed; merging
   and rebasing stay with the user's git.
@@ -269,6 +271,27 @@ must respect. Don't log routine changes here; they belong in git history and
 - **Line comments** are renderer-only. They are kept per thread in session
   memory and sent through the normal send or steer path as text; there is no protocol
   field for them.
+
+### Commit inclusion and history stay inside the active grant
+
+- **Date:** 2026-10-26
+- **Commit:** `git_commit` remains staged-only by default. Its optional
+  include-unstaged flag runs `git add --all -- .` immediately before `git
+  commit`, under the same native write lock. This includes deletions and new
+  files, honors `.gitignore`, and cannot stage beyond the granted subtree. It
+  does not use `git commit -a`, which would omit new files. If a hook refuses
+  the commit, any newly staged files remain staged and the UI says so.
+- **Draft sequencing:** A blank message uses the ordinary agent turn and keeps
+  the composer-preservation rules. The result is bound to its originating
+  thread. Closing the dialog or changing the active grant cancels the pending
+  commit/push continuation; a successful commit followed by a failed push can
+  retry only the push.
+- **Graph:** `git_graph` accepts only a grant, never a revision or path from the
+  renderer. Git renders the topology itself across refs, scoped by `-- .` to the
+  grant. The command returns at most 200 commits and 512 KiB, handles an unborn
+  HEAD as empty, strips ambient repository overrides and does not modify the
+  index, refs or files. Graph responses are owned by the active selection and
+  grant and invalidated by fresh snapshots and mutations.
 
 ### A worktree thread gets a derived grant, not a wider one
 
