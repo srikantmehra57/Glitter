@@ -12,7 +12,8 @@ export type ContentPart = { type: "text"; text: string } | ImagePart;
 export type ToolCall = { id: string; name: string; input: Record<string, unknown>; started?: boolean };
 /** Anthropic thinking blocks must be sent back verbatim (with their signature) inside a tool loop. */
 export type ThinkingBlock = { text: string; signature?: string; redacted?: string };
-export type AssistantMessage = { role: "assistant"; text: string; thinking?: ThinkingBlock[]; toolCalls?: ToolCall[] };
+/** `modelId` is harness bookkeeping for cross-model routing; never sent to a provider. */
+export type AssistantMessage = { role: "assistant"; text: string; thinking?: ThinkingBlock[]; toolCalls?: ToolCall[]; modelId?: string };
 export type ToolResultMessage = { role: "tool"; results: Array<{ id: string; name: string; output: string; isError?: boolean; images?: ImagePart[] }> };
 export type ChatMessage = { role: "user"; content: ContentPart[] } | AssistantMessage | ToolResultMessage;
 export type ToolSchema = { name: string; description: string; parameters: Record<string, unknown> };
@@ -87,6 +88,8 @@ export type ChatRequest = {
   effort?: string;
   /** Catalog-reported reasoning support for custom OpenAI-compatible providers. */
   listedReasoning?: boolean;
+  /** The catalog's own effort list for this model, when it names one (OpenRouter does). */
+  listedEfforts?: readonly string[];
   signal?: AbortSignal;
   /** Tests shorten the watchdogs. Production uses the defaults. */
   timeouts?: StreamTimeouts;
@@ -315,7 +318,7 @@ export function anthropicMessages(messages: ChatMessage[]) {
 
 async function* streamAnthropic(request: ChatRequest): AsyncGenerator<StreamEvent> {
   const { model } = splitModelId(request.modelId);
-  const tiers = effortTiers(request.provider.id, model, "anthropic");
+  const tiers = effortTiers(request.provider.id, model, "anthropic", request.listedReasoning, request.listedEfforts);
   const tier = request.effort as Tier | undefined;
   const budget = tier && tier !== "none" && tiers.includes(tier) ? THINKING_BUDGET[tier] : undefined;
   const small = /claude-3-(?!7)/i.test(model);
@@ -434,9 +437,9 @@ export function openAiMessages(system: SystemPrompt, messages: ChatMessage[]) {
 }
 
 /** The request field that carries a reasoning effort, per provider. */
-function effortField(providerId: string, model: string, effort: string | undefined, wire: ResolvedProvider["wire"], listedReasoning?: boolean): Record<string, unknown> {
+function effortField(providerId: string, model: string, effort: string | undefined, wire: ResolvedProvider["wire"], listedReasoning?: boolean, listedEfforts?: readonly string[]): Record<string, unknown> {
   if (!effort) return {};
-  const tiers = effortTiers(providerId, model, wire, listedReasoning) as string[];
+  const tiers = effortTiers(providerId, model, wire, listedReasoning, listedEfforts) as string[];
   if (!tiers.includes(effort)) return {};
   // OpenRouter, and the Kilo gateway in front of it, take `reasoning.effort` (including "none").
   if (providerId === "openrouter" || providerId === "kilo") return { reasoning: { effort } };
@@ -466,7 +469,7 @@ async function* streamOpenAi(request: ChatRequest): AsyncGenerator<StreamEvent> 
     stream: true,
     ...(askUsage ? { stream_options: { include_usage: true } } : {}),
     ...(request.tools.length ? { tools: request.tools.map((tool) => ({ type: "function", function: { name: tool.name, description: tool.description, parameters: tool.parameters } })) } : {}),
-    ...effortField(providerId, model, request.effort, request.provider.wire, request.listedReasoning),
+    ...effortField(providerId, model, request.effort, request.provider.wire, request.listedReasoning, request.listedEfforts),
   };
   const headers: Record<string, string> = request.provider.apiKey ? { authorization: `Bearer ${request.provider.apiKey}` } : {};
   if (providerId === "openrouter") headers["x-title"] = "Glitter";

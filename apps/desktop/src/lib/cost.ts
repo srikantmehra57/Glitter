@@ -1,4 +1,4 @@
-import type { Model, TokenUsage } from "./types";
+import type { EstimatedCost, Model, ModelCall, TokenUsage } from "./types";
 
 /** Catalog `ModelCost` rows price tokens per one million (MSP wire schema). */
 const PER_MILLION = 1_000_000;
@@ -30,6 +30,38 @@ export function estimateCost(
   if (prompt > 0 && inputRate == null) return undefined;
   if (output > 0 && outputRate == null) return undefined;
   return (prompt / PER_MILLION) * (inputRate ?? 0) + (output / PER_MILLION) * (outputRate ?? 0);
+}
+
+/**
+ * Price every call leg whose catalog rate is known. Cached input is not
+ * silently charged at the full input rate: without a cached rate that leg is
+ * omitted and the result is explicitly partial. Multiple currencies stay
+ * separate when the ledger aggregates these estimates.
+ */
+export function estimateCallCost(
+  call: Pick<ModelCall, "inputTokens" | "cachedTokens" | "outputTokens">,
+  cost: Model["cost"],
+): EstimatedCost | undefined {
+  const { inputTokens, cachedTokens, outputTokens } = call;
+  if (![inputTokens, cachedTokens, outputTokens].every((value) => Number.isFinite(value) && value >= 0) || cachedTokens > inputTokens) return undefined;
+  if (!inputTokens && !outputTokens) return undefined;
+  const legs = [
+    { tokens: inputTokens - cachedTokens, rate: rate(cost?.input) },
+    { tokens: cachedTokens, rate: rate(cost?.cached) },
+    { tokens: outputTokens, rate: rate(cost?.output) },
+  ];
+  let amount = 0;
+  let priced = false;
+  let partial = false;
+  for (const leg of legs) {
+    if (!leg.tokens) continue;
+    if (leg.rate == null) { partial = true; continue; }
+    amount += (leg.tokens / PER_MILLION) * leg.rate;
+    priced = true;
+  }
+  if (!priced) return undefined;
+  const currency = cost?.currency?.trim() || "USD";
+  return { amount, currency, partial };
 }
 
 /**

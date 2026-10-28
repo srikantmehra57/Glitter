@@ -4,6 +4,7 @@ import { SettingsModal } from "./SettingsModal";
 import { resetStore, seedStore } from "../test/store";
 import { useAppStore } from "../lib/store";
 import { motionReduced } from "../lib/presence";
+import { ORCHESTRATOR_GOAL_COPY } from "../lib/orchestrator";
 import desktopPackage from "../../package.json";
 
 vi.mock("./Orb", () => ({ Orb: ({ state, size }: { state: string; size: number }) => <span data-testid={`orb-${size}`} data-state={state} /> }));
@@ -335,12 +336,13 @@ describe("settings navigation", () => {
     fireEvent.click(screen.getByRole("button", { name: "Font" }));
     const list = screen.getByRole("listbox", { name: "Font" });
     expect(within(list).getAllByRole("option")).toHaveLength(6);
-    const helvetica = within(list).getByRole("option", { name: /Helvetica/ });
-    expect(helvetica.style.fontFamily).toContain("Helvetica Neue");
-    fireEvent.click(helvetica);
-    await vi.waitFor(() => expect(useAppStore.getState().uiFont).toBe("helvetica"));
-    expect(document.documentElement.style.getPropertyValue("--font-sans")).toBe('"Helvetica Neue", Helvetica, Arial, sans-serif');
-    expect(screen.getByRole("button", { name: "Font" })).toHaveTextContent("Helvetica");
+    expect(within(list).queryByRole("option", { name: /New York/ })).toBeNull();
+    const inter = within(list).getByRole("option", { name: /Inter/ });
+    expect(inter.style.fontFamily).toContain("Inter Variable");
+    fireEvent.click(inter);
+    await vi.waitFor(() => expect(useAppStore.getState().uiFont).toBe("inter"));
+    expect(document.documentElement.style.getPropertyValue("--font-sans")).toBe('"Inter Variable", Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif');
+    expect(screen.getByRole("button", { name: "Font" })).toHaveTextContent("Inter");
   });
 
   it("finds Appearance when searching for a font", () => {
@@ -490,5 +492,130 @@ describe("settings navigation", () => {
     fireEvent.click(picker);
     fireEvent.click(within(screen.getByRole("listbox", { name: "Suggestion model" })).getByRole("option", { name: /Cheapest available/ }));
     await vi.waitFor(() => expect(useAppStore.getState().suggestionsModelId).toBeUndefined());
+  });
+
+  it("saves the Orchestrator toggle, goal and role models as they are chosen", async () => {
+    seedStore({ settingsTab: "Orchestrator", orchestratorEnabled: false, orchestratorGoal: "balanced", orchestratorModels: {} });
+    render(<SettingsModal />);
+    expect(screen.getByRole("region", { name: "Orchestrator" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Orchestrator" })).toHaveAttribute("aria-current", "page");
+    const toggle = screen.getByRole("switch", { name: "Use Orchestrator for new threads" });
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(toggle);
+    await vi.waitFor(() => expect(useAppStore.getState().orchestratorEnabled).toBe(true));
+
+    fireEvent.click(screen.getByRole("button", { name: "Orchestrator goal" }));
+    const goals = within(screen.getByRole("listbox", { name: "Orchestrator goal" }));
+    for (const { label, summary } of Object.values(ORCHESTRATOR_GOAL_COPY)) {
+      expect(within(goals.getByRole("option", { name: new RegExp(label) })).getByText(summary)).toBeVisible();
+    }
+    fireEvent.click(goals.getByRole("option", { name: /Optimize for output/ }));
+    await vi.waitFor(() => expect(useAppStore.getState().orchestratorGoal).toBe("output"));
+
+    const lead = screen.getByRole("button", { name: "Lead model" });
+    await vi.waitFor(() => expect(lead).toBeEnabled());
+    fireEvent.click(lead);
+    fireEvent.click(within(screen.getByRole("listbox", { name: "Lead model" })).getByRole("option", { name: /Claude Sonnet 5/ }));
+    await vi.waitFor(() => expect(useAppStore.getState().orchestratorModels).toEqual({ lead: { modelId: "anthropic/claude-sonnet-5", providerId: "anthropic" } }));
+    expect(screen.getByText("Changes save as you make them")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Save & restart connection" })).toBeNull();
+  });
+
+  it("asks for both required roles and discloses every provider that receives the prompt", async () => {
+    seedStore({ settingsTab: "Orchestrator", orchestratorEnabled: true, orchestratorModels: {} });
+    render(<SettingsModal />);
+    const lead = screen.getByRole("button", { name: "Lead model" });
+    const builder = screen.getByRole("button", { name: "Builder model" });
+    await vi.waitFor(() => expect(builder).toBeEnabled());
+    expect(screen.getByText(/Choose a Lead and a Builder/)).toBeInTheDocument();
+    expect(screen.getByText(/Assign role models to see which providers/)).toBeInTheDocument();
+
+    fireEvent.click(lead);
+    fireEvent.click(within(screen.getByRole("listbox", { name: "Lead model" })).getByRole("option", { name: /Claude Sonnet 5/ }));
+    fireEvent.click(builder);
+    fireEvent.click(within(screen.getByRole("listbox", { name: "Builder model" })).getByRole("option", { name: /Claude Haiku 4.5/ }));
+    await vi.waitFor(() => expect(screen.queryByText(/Choose a Lead and a Builder/)).toBeNull());
+    expect(screen.getByText(/Your prompts and code are sent to:/)).toHaveTextContent("Anthropic (Lead, Builder, Small-task, Router)");
+  });
+
+  it("lets Small-task and Router inherit their models from the role before them", async () => {
+    seedStore({
+      settingsTab: "Orchestrator",
+      orchestratorModels: {
+        builder: { modelId: "anthropic/claude-haiku-4-5", providerId: "anthropic" },
+        small: { modelId: "anthropic/claude-sonnet-5", providerId: "anthropic" },
+      },
+    });
+    render(<SettingsModal />);
+    const small = screen.getByRole("button", { name: "Small-task model" });
+    await vi.waitFor(() => expect(small).toBeEnabled());
+    expect(small).toHaveTextContent("Claude Sonnet 5");
+    fireEvent.click(small);
+    fireEvent.click(within(screen.getByRole("listbox", { name: "Small-task model" })).getByRole("option", { name: /Same as Builder/ }));
+    await vi.waitFor(() => expect(useAppStore.getState().orchestratorModels).toEqual({ builder: { modelId: "anthropic/claude-haiku-4-5", providerId: "anthropic" } }));
+
+    fireEvent.click(screen.getByText("Advanced"));
+    const router = screen.getByRole("button", { name: "Router model" });
+    expect(router).toHaveTextContent("Same as Small-task");
+    fireEvent.click(router);
+    fireEvent.click(within(screen.getByRole("listbox", { name: "Router model" })).getByRole("option", { name: /gpt-5.5/ }));
+    await vi.waitFor(() => expect(useAppStore.getState().orchestratorModels?.router).toEqual({ modelId: "openai/gpt-5.5", providerId: "openai" }));
+  });
+
+  it("checks an assigned role's model and shows the result under its picker", async () => {
+    const probe = vi.spyOn(useAppStore.getState(), "probeOrchestratorRole");
+    seedStore({
+      settingsTab: "Orchestrator",
+      orchestratorModels: { builder: { modelId: "anthropic/claude-haiku-4-5", providerId: "anthropic" } },
+    });
+    render(<SettingsModal />);
+    const row = screen.getByRole("button", { name: "Builder model" }).closest(".setting-row") as HTMLElement;
+    expect(await within(row).findByText("Ready", undefined, { timeout: 4000 })).toBeInTheDocument();
+    expect(probe).toHaveBeenCalledWith("builder", { modelId: "anthropic/claude-haiku-4-5", providerId: "anthropic" }, undefined);
+    // One assignment, one check: the page never re-runs a result it already holds.
+    expect(probe.mock.calls.filter(([role]) => role === "builder")).toHaveLength(1);
+    probe.mockRestore();
+  });
+
+  it("shows why a role's check failed and runs it again on demand", async () => {
+    seedStore({
+      settingsTab: "Orchestrator",
+      orchestratorModels: { builder: { modelId: "nvidia/moonshotai/kimi-k2.6", providerId: "nvidia" } },
+    });
+    render(<SettingsModal />);
+    const row = screen.getByRole("button", { name: "Builder model" }).closest(".setting-row") as HTMLElement;
+    expect(await within(row).findByText("Not supported", undefined, { timeout: 4000 })).toBeInTheDocument();
+    expect(within(row).getByText(/did not return the format/)).toBeInTheDocument();
+    fireEvent.click(within(row).getByRole("button", { name: "Check the Builder model" }));
+    expect(await within(row).findByText("Not supported", undefined, { timeout: 4000 })).toBeInTheDocument();
+  });
+
+  it("reuses the Builder's check for an inherited Small-task and gives the Router its own", async () => {
+    const probe = vi.spyOn(useAppStore.getState(), "probeOrchestratorRole");
+    seedStore({
+      settingsTab: "Orchestrator",
+      orchestratorModels: { builder: { modelId: "anthropic/claude-haiku-4-5", providerId: "anthropic" } },
+    });
+    render(<SettingsModal />);
+    const builderRow = screen.getByRole("button", { name: "Builder model" }).closest(".setting-row") as HTMLElement;
+    expect(await within(builderRow).findByText("Ready", undefined, { timeout: 4000 })).toBeInTheDocument();
+    const smallRow = screen.getByRole("button", { name: "Small-task model" }).closest(".setting-row") as HTMLElement;
+    expect(within(smallRow).getByText("Builder’s check")).toBeInTheDocument();
+    expect(within(smallRow).getByText("Ready")).toBeInTheDocument();
+    expect(probe.mock.calls.filter(([role]) => role === "small")).toHaveLength(0);
+
+    fireEvent.click(screen.getByText("Advanced"));
+    const routerRow = screen.getByRole("button", { name: "Router model" }).closest(".setting-row") as HTMLElement;
+    expect(await within(routerRow).findByText("Ready", undefined, { timeout: 4000 })).toBeInTheDocument();
+    expect(probe.mock.calls.filter(([role]) => role === "router")).toHaveLength(1);
+    probe.mockRestore();
+  });
+
+  it("sends an Orchestrator page with no connected providers to Providers", async () => {
+    seedStore({ settingsTab: "Orchestrator", loadModelCatalog: vi.fn(async () => []) });
+    render(<SettingsModal />);
+    expect(await screen.findByText("No providers connected")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Add a provider" }));
+    expect(useAppStore.getState().settingsTab).toBe("Providers");
   });
 });

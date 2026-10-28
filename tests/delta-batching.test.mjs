@@ -32,6 +32,7 @@ const storeReplacements = {
     export const bridge=(...args)=>globalThis.storeBridge(...args);
     export const gitReview=async(...args)=>globalThis.readReview?.(...args) ?? {files:[],diff:"",truncated:false};
     export const gitSnapshot=(grantId)=>globalThis.readGit(grantId);
+    export const gitGraph=async(...args)=>globalThis.readGitGraph?.(...args) ?? {graph:'',truncated:false};
     export const verifyGrants=async()=>[];export const removeGrant=async()=>{};
     export const onBridgeEvent=(handler)=>{globalThis.storeEvent=handler;return ()=>{}};
     export const onWindowCloseRequested=()=>()=>{};

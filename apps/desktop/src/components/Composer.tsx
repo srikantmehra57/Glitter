@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useId, useMemo, useRef, useState, type Re
 import { describeError } from "../lib/errors";
 import { useShallow } from "zustand/react/shallow";
 import { ArrowUp, AtSign, FileText, FileUp, GitBranch, Hammer, Lock, Paperclip, Play, RotateCcw, ShieldAlert, ShieldCheck, Square, Terminal, TriangleAlert, X } from "lucide-react";
-import { AGENT_LABELS, APPROVAL_DESCRIPTIONS, APPROVAL_LABELS, APPROVAL_ORDER, agentEnabled, approvalModeForAgent, type ApprovalMode, type ContextRef, type Thread, type TranscriptItem } from "../lib/types";
+import { AGENT_LABELS, APPROVAL_DESCRIPTIONS, APPROVAL_LABELS, APPROVAL_ORDER, agentEnabled, approvalModeForAgent, type ApprovalMode, type ContextRef, type OrchestratorGoal, type Thread, type TranscriptItem } from "../lib/types";
 import { defaultTier, isPeak, modelFor, tiersFor, withUnlistedModels } from "../lib/effort";
 import { contextComposition, formatShare, formatTokens, humanizeModelLabel, isTauri, uid } from "../lib/format";
 import { fuzzyScore } from "../lib/fuzzy";
@@ -12,8 +12,10 @@ import { runBuiltinCommand } from "../lib/commands";
 import { estimateCost, formatCost } from "../lib/cost";
 import { groupUsage, ledgerSlices } from "../lib/usageLedger";
 import { customProviders, providerName } from "../lib/providers";
+import { orchestratorFromSettings } from "../lib/orchestrator";
 import { ModelPicker, modelKey } from "./ModelPicker";
 import { EffortPicker } from "./EffortPicker";
+import { GoalPicker, type OrchestratorOverride } from "./GoalPicker";
 import { SelectMenu } from "./SelectMenu";
 import { availableBuiltins, collectCandidates, customCommandInsert, continuationForEnter, currentWord, filterSlashCommands, findUniqueCompletion, indentText, isStopWord, outdentText, parseShellEscape, slashQuery } from "../lib/composerText";
 import { MAX_DROP_FILES, isImageFile, refPathForDrop } from "../lib/drop";
@@ -88,6 +90,9 @@ function ComposerView({ above }: { above?: ReactNode }) {
     defaultProviderId: state.defaultProviderId,
     defaultApprovalMode: state.defaultApprovalMode,
     defaultEffort: state.defaultEffort,
+    orchestratorEnabled: state.orchestratorEnabled,
+    orchestratorGoal: state.orchestratorGoal,
+    orchestratorModels: state.orchestratorModels,
     agents: state.agents,
     detection: state.detection,
     models: state.models,
@@ -174,6 +179,22 @@ function ComposerView({ above }: { above?: ReactNode }) {
     [agentId, catalog, config.modelId, config.providerId, s.defaultModel, s.defaultProviderId],
   );
   const model = modelFor(models, config);
+  // Orchestrator applies to built-in agent threads. A live session's own block
+  // wins; a draft follows Settings until the model chip switches it either way.
+  const settingsOrchestrator = useMemo(
+    () => orchestratorFromSettings({ orchestratorGoal: s.orchestratorGoal, orchestratorModels: s.orchestratorModels }),
+    [s.orchestratorGoal, s.orchestratorModels],
+  );
+  const orchestrator = agentId !== "harness" ? null
+    : thread ? config.orchestrator ?? null
+    : config.orchestrator !== undefined ? config.orchestrator
+    : s.orchestratorEnabled ? settingsOrchestrator ?? null
+    : null;
+  const orchestratorOn = Boolean(orchestrator);
+  // The next message's requested shape; Auto lets the policy decide. A new
+  // thread or mode clears it, and a delivered message returns it to Auto.
+  const [override, setOverride] = useState<OrchestratorOverride>("auto");
+  useEffect(() => { setOverride("auto"); }, [s.selectedSessionId, agentId, orchestratorOn]);
   const customProviderList = useMemo(() => customProviders(s.providerStatus ?? []), [s.providerStatus]);
   // The built-in agent is addressed by its model, the way the picker shows it.
   // Before any model resolves, the connected provider names it; with none
@@ -462,6 +483,25 @@ function ComposerView({ above }: { above?: ReactNode }) {
 
   const statusText = s.offline ? "Offline — reconnect to send" : s.starting ? "Starting thread…" : thread?.opening ? "Opening thread…" : thread?.configPending ? "Applying thread settings…" : thread?.configNotice ?? null;
 
+  const setOrchestratorMode = (enabled: boolean) => {
+    if (!enabled) { void s.setSessionConfig({ orchestrator: null }); return; }
+    // Incomplete roles cannot route a turn: the model chip leads to Settings.
+    if (!settingsOrchestrator) { s.setSettingsOpen(true, "Orchestrator"); return; }
+    void s.setSessionConfig({ orchestrator: settingsOrchestrator });
+  };
+  const chooseGoal = (goal: OrchestratorGoal) => {
+    const current = orchestrator ?? settingsOrchestrator;
+    if (!current) return;
+    void s.setSessionConfig({ orchestrator: { ...current, goal } });
+  };
+  /** Send with the queued per-message shape, then return the control to Auto. */
+  const submit = async (options?: { disposition?: "queue" | "steer" | "replace" }) => {
+    // A steer joins the running turn, which keeps its route: hold the shape for the next message.
+    const shape = orchestratorOn && override !== "auto" && options?.disposition !== "steer" ? override : undefined;
+    const sent = await s.sendPrompt({ ...(options?.disposition ? { disposition: options.disposition } : {}), ...(shape ? { shape } : {}) });
+    if (sent && shape) setOverride("auto");
+  };
+
   return (
     <div className="composer-wrap">
       {above}
@@ -715,8 +755,8 @@ function ComposerView({ above }: { above?: ReactNode }) {
                     return;
                   }
                   event.preventDefault();
-                  if (!running && !busy) void s.sendPrompt();
-                  else if (busySend && !busy) void s.sendPrompt({ disposition });
+                  if (!running && !busy) void submit();
+                  else if (busySend && !busy) void submit({ disposition });
                 }
               }}
             />
@@ -797,9 +837,22 @@ function ComposerView({ above }: { above?: ReactNode }) {
               onShowCapabilities={agentId !== "muse" && agentId !== "harness" ? showCapabilities : undefined}
               onManageModels={() => s.setSettingsOpen(true, "Models")}
               onManageProviders={() => s.setSettingsOpen(true, "Providers")}
+              orchestrator={agentId === "harness" ? orchestrator : undefined}
+              orchestratorReady={Boolean(settingsOrchestrator)}
+              onOrchestratorChange={agentId === "harness" ? setOrchestratorMode : undefined}
+              onManageOrchestrator={() => s.setSettingsOpen(true, "Orchestrator")}
             />
-            {/* Effort is its own control, beside the model it applies to. */}
-            {model && tiers.length && fallbackTier && !(s.modelsLoading && s.modelsAgentId !== agentId) ? (
+            {/* Orchestrator replaces effort with its goal in the same footprint. */}
+            {orchestrator ? (
+              <GoalPicker
+                goal={orchestrator.goal}
+                override={override}
+                disabled={Boolean(pickerLocked)}
+                applying={Boolean(thread?.configPending)}
+                onGoal={chooseGoal}
+                onOverride={setOverride}
+              />
+            ) : model && tiers.length && fallbackTier && !(s.modelsLoading && s.modelsAgentId !== agentId) ? (
               <EffortPicker
                 key={`${agentId}:${modelValue ?? ""}`}
                 value={config.effort}
@@ -910,8 +963,8 @@ function ComposerView({ above }: { above?: ReactNode }) {
                 </div>
               </div>
             ) : null}
-            {running ? <>{busySend && !empty ? <button className="send" disabled={busy || s.offline} aria-label={sendTitle} title={sendTitle} onClick={() => void s.sendPrompt({ disposition })}><ArrowUp size={16} strokeWidth={2.4} /></button> : null}<button className="send stop" aria-label="Stop" title="Stop  Esc" disabled={thread?.cancelRequested} onClick={() => void s.stopTurn()}><Square size={11} fill="currentColor" /></button></>
-              : <button className={`send${settling && !empty && !s.offline ? " settling" : ""}`} disabled={empty || locked || s.offline} aria-label="Send" title={sendTitle} onClick={() => void s.sendPrompt()}><ArrowUp size={16} strokeWidth={2.4} /></button>}
+            {running ? <>{busySend && !empty ? <button className="send" disabled={busy || s.offline} aria-label={sendTitle} title={sendTitle} onClick={() => void submit({ disposition })}><ArrowUp size={16} strokeWidth={2.4} /></button> : null}<button className="send stop" aria-label="Stop" title="Stop  Esc" disabled={thread?.cancelRequested} onClick={() => void s.stopTurn()}><Square size={11} fill="currentColor" /></button></>
+              : <button className={`send${settling && !empty && !s.offline ? " settling" : ""}`} disabled={empty || locked || s.offline} aria-label="Send" title={sendTitle} onClick={() => void submit()}><ArrowUp size={16} strokeWidth={2.4} /></button>}
             </div>
           </div>
         </div>

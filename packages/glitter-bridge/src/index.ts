@@ -175,6 +175,14 @@ function skillParam(value: unknown): { selector: string; arguments?: string } | 
   return skill && typeof skill.selector === "string" ? { selector: skill.selector, ...(typeof skill.arguments === "string" ? { arguments: skill.arguments } : {}) } : undefined;
 }
 
+const ROUTE_SHAPES = ["direct-small", "direct-builder", "lead-guided", "lead-only"] as const;
+/** One message's requested shape, for a routed Harness turn. */
+function shapeParam(value: unknown): (typeof ROUTE_SHAPES)[number] | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || !(ROUTE_SHAPES as readonly string[]).includes(value)) throw new Error("A forced shape must be direct-small, direct-builder, lead-guided or lead-only.");
+  return value as (typeof ROUTE_SHAPES)[number];
+}
+
 /** The file an MCP server is written to: the workspace or the home folder. */
 function mcpScope(value: unknown): McpScope {
   if (value !== "workspace" && value !== "home") throw new Error("A server scope must be workspace or home.");
@@ -829,6 +837,7 @@ async function dispatchHarness(method: string, params: Record<string, unknown>) 
         effort: typeof params.reasoningEffort === "string" ? params.reasoningEffort : undefined,
         mode: typeof params.mode === "string" ? params.mode : undefined,
         approvalMode: typeof params.approvalMode === "string" ? params.approvalMode : undefined,
+        orchestrator: params.orchestrator,
         mcpAuthorization: harnessAuthorizations.get(""),
       }));
       harnessAuthorizations.delete("");
@@ -854,6 +863,7 @@ async function dispatchHarness(method: string, params: Record<string, unknown>) 
         images: Array.isArray(params.images) ? params.images : undefined,
         ifBusy: ifBusy as "queue" | "steer" | "replace" | undefined,
         skill: skillParam(params.skill),
+        forcedShape: shapeParam(params.forcedShape),
       });
     }
     case "steerTurn":
@@ -885,6 +895,8 @@ async function dispatchHarness(method: string, params: Record<string, unknown>) 
       return harness.decideApproval({ approvalId: String(params.approvalId ?? ""), choiceId: String(params.choiceId ?? "") });
     case "setModel":
       return harness.setModel({ sessionId, modelId: String(params.modelId ?? "") });
+    case "setOrchestrator":
+      return harness.setOrchestrator({ sessionId, orchestrator: params.orchestrator });
     case "setSessionOption":
       return harness.setOption(sessionId, String(params.option ?? ""), String(params.value ?? ""));
     case "setApprovalMode":
@@ -900,6 +912,13 @@ async function dispatchHarness(method: string, params: Record<string, unknown>) 
     }
     case "testModel":
       return harness.testModel({ modelId: String(params.modelId ?? "") });
+    case "orchestratorProbe":
+      return harness.orchestratorProbe({
+        role: String(params.role ?? ""),
+        providerId: String(params.providerId ?? ""),
+        modelId: String(params.modelId ?? ""),
+        refresh: params.refresh === true,
+      });
     case "closeSession": {
       const closed = await harness.closeSession({ sessionId });
       release(sessionId);

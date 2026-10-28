@@ -14,6 +14,7 @@ import { acpConsentGet, acpConsentSet, agentIdentities, bridge, catalogInstall, 
 import { MOCK_AGENT_MODELS, MOCK_AGENTS, MOCK_GIT, MOCK_GIT_GRAPH, MOCK_MODELS, mockGitReview } from "./mock";
 import { PROVIDER_IDS, type ProviderStatus } from "./providers";
 import { clampTier, modelFor, tiersFor } from "./effort";
+import { orchestratorStart } from "./orchestrator";
 import { dropHunk, parseUnifiedDiff, reviewTarget } from "./diff";
 import { MAX_DROP_FILES, MAX_IMAGE_BYTES, refPathForDrop } from "./drop";
 import { authRequired, describeError, isGrantError, timeoutUnknown } from "./errors";
@@ -50,7 +51,7 @@ import {
   type WorkspaceFile,
   type Workspace,
   type CliUpdateOutcome, type CliUpdateStatus, type ComposerImage, type ContextRef, type HostCompat, type HostInfo, type Model, type ModelTestResult, type SessionConfig, type SessionMetadata, type SessionOpening, type SessionPreview,
-  type UserInputResponse, type GoalState, type ContextUsage, type TokenUsage, type SubscriptionUsage, type SubagentResult, type Suggestion, type TrustPreview, type SkillRow, type McpServer, type HarnessMcpStatus, type HarnessMcpConfig, type HarnessMcpScope, type HarnessMcpServerInput, type CatalogEntry, type CatalogInstallResult, type CatalogRemoveResult, type PluginEntry, type SkillEntry, type HostPosture, type EnterpriseStatus, type SettingsTab, type BrowserControlInput, type BrowserControlResult, type BrowserFrame, type BrowserState, type BrowserStateEvent,
+  type UserInputResponse, type GoalState, type ContextUsage, type TokenUsage, type SubscriptionUsage, type SubagentResult, type Suggestion, type TrustPreview, type SkillRow, type McpServer, type HarnessMcpStatus, type HarnessMcpConfig, type HarnessMcpScope, type HarnessMcpServerInput, type CatalogEntry, type CatalogInstallResult, type CatalogRemoveResult, type PluginEntry, type SkillEntry, type HostPosture, type EnterpriseStatus, type SettingsTab, type BrowserControlInput, type BrowserControlResult, type BrowserFrame, type BrowserState, type BrowserStateEvent, type OrchestratorModel, type OrchestratorProbeResult, type OrchestratorRole, type OrchestratorShape,
 } from "./types";
 
 const persist = isTauri() ? new LazyStore("glitter.json", { autoSave: false, defaults: {} }) : null;
@@ -494,6 +495,8 @@ type AppStore = Settings & {
   peekModelCatalog: (agentId: AgentId) => Promise<Model[]>;
   /** One short request to a Harness model, timed. Settings → Models' Test. */
   testModel: (agentId: AgentId, model: Model) => Promise<ModelTestResult>;
+  /** One role's fixed capability check against the Harness model Settings assigned it. */
+  probeOrchestratorRole: (role: OrchestratorRole, model: OrchestratorModel, options?: { refresh?: boolean }) => Promise<OrchestratorProbeResult>;
   /** Pick a model from another agent's provider: switch the thread's agent, then its model. */
   chooseAgentModel: (agentId: AgentId, model: Model) => Promise<void>;
   setSessionConfig: (patch: Partial<SessionConfig>) => Promise<void>;
@@ -610,7 +613,7 @@ type AppStore = Settings & {
   switchThreadAgent: (agentId: AgentId) => Promise<void>;
   refreshTurnSnapshots: (sessionId: string) => Promise<void>;
   restoreSnapshot: (sessionId: string, turnId: string, options?: { confirmed?: boolean }) => Promise<boolean>;
-  sendPrompt: (options?: { resetTaskState?: boolean; disposition?: "queue" | "steer" | "replace" }) => Promise<boolean>;
+  sendPrompt: (options?: { resetTaskState?: boolean; disposition?: "queue" | "steer" | "replace"; shape?: OrchestratorShape }) => Promise<boolean>;
   stopTurn: () => Promise<void>;
   unqueueTurn: (turnId: string) => Promise<void>;
   decide: (approvalId: string, choiceId: string, feedback?: string) => Promise<void>;
@@ -1234,9 +1237,19 @@ async function applyThreadConfig(get: () => AppStore, set: (patch: Partial<AppSt
     update({ configPending: true, configNotice: undefined, error: null });
     try {
       let applied: AgentSessionConfig | undefined;
-      if (patch.modelId !== undefined) applied = (await bridge<{ agentConfig?: AgentSessionConfig }>("setModel", { agentId, sessionId, modelId: patch.modelId })).agentConfig;
-      if (patch.effort !== undefined) applied = (await bridge<{ agentConfig?: AgentSessionConfig }>("setSessionOption", { agentId, sessionId, option: "effort", value: patch.effort })).agentConfig ?? applied;
-      if (patch.mode !== undefined) applied = (await bridge<{ agentConfig?: AgentSessionConfig }>("setSessionOption", { agentId, sessionId, option: "mode", value: patch.mode })).agentConfig ?? applied;
+      // Enabling Orchestrator fixes the model and effort to its role settings,
+      // so the manual controls wait for the next switch back.
+      const enabling = patch.orchestrator != null;
+      if (patch.orchestrator !== undefined) applied = (await bridge<{ agentConfig?: AgentSessionConfig }>("setOrchestrator", { agentId, sessionId, orchestrator: patch.orchestrator })).agentConfig;
+      if (!enabling) {
+        if (patch.modelId !== undefined) {
+          // A manual model pick leaves Orchestrator first: role models are Settings.
+          if (thread.config?.orchestrator) await bridge("setOrchestrator", { agentId, sessionId, orchestrator: null });
+          applied = (await bridge<{ agentConfig?: AgentSessionConfig }>("setModel", { agentId, sessionId, modelId: patch.modelId })).agentConfig ?? applied;
+        }
+        if (patch.effort !== undefined) applied = (await bridge<{ agentConfig?: AgentSessionConfig }>("setSessionOption", { agentId, sessionId, option: "effort", value: patch.effort })).agentConfig ?? applied;
+        if (patch.mode !== undefined) applied = (await bridge<{ agentConfig?: AgentSessionConfig }>("setSessionOption", { agentId, sessionId, option: "mode", value: patch.mode })).agentConfig ?? applied;
+      }
       // The built-in agent enforces the app's permission modes itself; for an agent CLI the bridge answers its permission requests by the mode.
       if (patch.approvalMode !== undefined) patch = { ...patch, approvalMode: (await bridge<{ effectiveMode?: { mode: SessionConfig["approvalMode"] } }>("setApprovalMode", { agentId, sessionId, mode: approvalModeForAgent(agentId, patch.approvalMode) })).effectiveMode?.mode ?? approvalModeForAgent(agentId, patch.approvalMode) };
       const latest = get().threads.find((item) => item.sessionId === sessionId);
@@ -1775,6 +1788,12 @@ export const useAppStore = create<AppStore>((set, get) => ({
     return bridge<ModelTestResult>("testModel", { agentId, modelId: model.modelId }, { timeoutMs: 45_000 });
   },
 
+  probeOrchestratorRole: async (role, model, options) => {
+    const providerId = model.providerId ?? (model.modelId.includes("/") ? model.modelId.slice(0, model.modelId.indexOf("/")) : "");
+    if (!providerId) throw new Error(`${model.modelId} does not name a provider.`);
+    return bridge<OrchestratorProbeResult>("orchestratorProbe", { agentId: "harness", role, providerId, modelId: model.modelId, ...(options?.refresh ? { refresh: true } : {}) });
+  },
+
   chooseAgentModel: async (agentId, model) => {
     if (activeAgentId(get()) !== agentId) {
       await get().switchThreadAgent(agentId);
@@ -1864,6 +1883,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       const switching = patch.agentId && patch.agentId !== (previous.agentId ?? preferredAgent(state));
       // A new agent brings its own models and effort tiers; drop the old agent's picks.
       const next = switching ? { ...previous, agentId: patch.agentId, modelId: undefined, providerId: undefined, effort: undefined, mode: undefined } : fitEffort({ ...previous, ...patch }, state.models);
+      if (!switching && patch.modelId !== undefined && patch.orchestrator == null && activeAgentId(state) === "harness") next.orchestrator = null;
       next.approvalMode = approvalModeForAgent(next.agentId ?? preferredAgent(state), next.approvalMode);
       set({ drafts: { ...state.drafts, [key]: { text: state.composer, images: state.images, refs: state.contextRefs, config: next } } });
       // A new agent lists its own models; a newly picked third-party model is
@@ -3067,7 +3087,12 @@ export const useAppStore = create<AppStore>((set, get) => ({
         const ownModel = get().modelsAgentId === agentId && get().models.some((model) => model.modelId === config.modelId);
         const gated = agentId === "opencode" && /(?:^|[/:])[^/]*-free$/i.test(config.modelId ?? "");
         const mode = config.mode ?? get().agentModes[agentId]?.defaultMode;
-        const opened = await bridge<{ sessionId: string; agentConfig?: AgentSessionConfig }>("startSession", { agentId, grantId: workspace.grantId ?? undefined, modelId: ownModel && !gated ? config.modelId : undefined, reasoningEffort: config.effort, ...(mode ? { mode } : {}), ...(approvalMode ? { approvalMode } : {}) });
+        // Orchestrator replaces the manual model and effort for built-in threads.
+        // A draft switched in the composer carries its own answer; otherwise Settings decides.
+        const orchestrator = agentId === "harness"
+          ? config.orchestrator !== undefined ? config.orchestrator ?? undefined : orchestratorStart(get())
+          : undefined;
+        const opened = await bridge<{ sessionId: string; agentConfig?: AgentSessionConfig }>("startSession", { agentId, grantId: workspace.grantId ?? undefined, ...(orchestrator ? { orchestrator } : { modelId: ownModel && !gated ? config.modelId : undefined, reasoningEffort: config.effort }), ...(mode ? { mode } : {}), ...(approvalMode ? { approvalMode } : {}) });
         thread = { sessionId: opened.sessionId, agentId, workspacePath: workspace.path, title, order: Date.now(), updatedAt: new Date().toISOString(), status: "idle", unread: false, items: [], opened: true, config: { ...config, ...agentConfigPatch(opened.agentConfig), ...(approvalMode ? { approvalMode } : {}), agentId }, modes: opened.agentConfig?.modes };
       } else {
         if (!get().preview) await get().startHost();
@@ -3130,7 +3155,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
         const modes = agentId === "opencode" ? OPENCODE_MODES : undefined;
         next = { ...thread, agentId, opened: true, modes, config: { agentId, ...(approvalMode ? { approvalMode } : {}), ...(modes ? { mode: "build" } : {}) }, error: null, notice: null, status: "idle", configPending: false, pendingConfig: undefined, configNotice: `Now using ${nextName}` };
       } else if (agentId !== "muse") {
-        const opened = await bridge<{ sessionId: string; agentConfig?: AgentSessionConfig }>("startSession", { agentId, grantId: workspace.grantId ?? undefined, ...(approvalMode ? { approvalMode } : {}) });
+        const orchestrator = agentId === "harness" ? orchestratorStart(get()) : undefined;
+        const opened = await bridge<{ sessionId: string; agentConfig?: AgentSessionConfig }>("startSession", { agentId, grantId: workspace.grantId ?? undefined, ...(orchestrator ? { orchestrator } : {}), ...(approvalMode ? { approvalMode } : {}) });
         next = {
           ...thread,
           sessionId: opened.sessionId,
@@ -3313,7 +3339,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         : undefined;
       const skillPart = skill ? { selector: skill.selector, ...(invocation!.args ? { arguments: invocation!.args } : {}) } : undefined;
       if (busySend && thread) {
-        await sendBusyTurn(sessionId, options?.disposition ?? "queue", skillPart ? composePrompt("", refs) : payload, text, images, skillPart);
+        await sendBusyTurn(sessionId, options?.disposition ?? "queue", skillPart ? composePrompt("", refs) : payload, text, images, skillPart, thread.agentId, options?.shape);
         return true;
       }
       const previousOutcome = thread?.lastOutcome;
@@ -3335,7 +3361,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
             set({ threads: get().threads.map((item) => item.sessionId === id && item.status === "running" ? { ...applyItem(item, { itemId: uid(), kind: "agentMessage", status: "completed", turnId: userItem.turnId, recordedAt: new Date().toISOString(), text: "Preview response — connect the Muse CLI to work in a real workspace." }), status: "idle", lastTurnId: userItem.turnId, lastOutcome: "completed", activeTurnId: null, unread: get().selectedSessionId !== id, activity: undefined } : item) });
           }, 1600));
         } else {
-          const result = await bridge<{ turnId: string; deduped?: boolean }>("sendTurn", { agentId: thread?.agentId, sessionId, text: skillPart ? composePrompt("", refs) : payload, reasoningEffort: thread?.config?.effort ?? (thread?.agentId ? undefined : initial.defaultEffort), images: images.map(({ mediaType, base64Data }) => ({ mediaType, base64Data })), ...(keyed ? { clientTurnId: turnKey } : {}), ...(skillPart ? { skill: skillPart } : {}) });
+          const result = await bridge<{ turnId: string; deduped?: boolean }>("sendTurn", { agentId: thread?.agentId, sessionId, text: skillPart ? composePrompt("", refs) : payload, reasoningEffort: thread?.config?.effort ?? (thread?.agentId ? undefined : initial.defaultEffort), images: images.map(({ mediaType, base64Data }) => ({ mediaType, base64Data })), ...(keyed ? { clientTurnId: turnKey } : {}), ...(skillPart ? { skill: skillPart } : {}), ...(thread?.agentId === "harness" && options?.shape ? { forcedShape: options.shape } : {}) });
           const latest = get().threads.find((item) => item.sessionId === sessionId);
           if (latest?.status === "running" && latest.lastTurnId !== result.turnId) {
             set({ threads: get().threads.map((item) => item.sessionId === sessionId ? { ...item, activeTurnId: result.turnId, pendingTurnKey: null, notice: result.deduped ? { level: "info", message: "Resumed the pending turn instead of sending a duplicate." } : item.notice } : item) });
@@ -4144,7 +4170,7 @@ export function acceptsBusySend(agentId: string | undefined): boolean {
  * steer folds it into the running turn, replace interrupts and starts over.
  * Runs under sendPrompt's submitting guard; clears the draft on success.
  */
-async function sendBusyTurn(sessionId: string, disposition: "queue" | "steer" | "replace", payload: string, text: string, images: ComposerImage[], skill?: { selector: string; arguments?: string }) {
+async function sendBusyTurn(sessionId: string, disposition: "queue" | "steer" | "replace", payload: string, text: string, images: ComposerImage[], skill?: { selector: string; arguments?: string }, agentId?: AgentId, shape?: OrchestratorShape) {
   const state = useAppStore.getState();
   const thread = state.threads.find((item) => item.sessionId === sessionId);
   if (!thread) return;
@@ -4211,7 +4237,7 @@ async function sendBusyTurn(sessionId: string, disposition: "queue" | "steer" | 
       replaceItem = userItem;
       patch({ ...applyItem(thread, userItem), error: null, activeTurnId: null, cancelRequested: false, activity: "working", lastOutcome: undefined, turnStartedAt: Date.now(), turnStartOutput: thread.usage?.outputTokens ?? 0, turnStartPrompt: thread.usage?.promptTokens ?? 0, turnStartCache: cacheTokens(thread.usage), turnStats: undefined, tokenSpeed: undefined, turnCalls: [] });
     }
-    const result = await bridge<{ turnId: string; disposition?: string; deduped?: boolean }>("sendTurn", { sessionId, agentId: thread.agentId, text: payload, reasoningEffort: thread.config?.effort ?? state.defaultEffort, images: images.map(({ mediaType, base64Data }) => ({ mediaType, base64Data })), clientTurnId: turnKey, ifBusy: disposition, ...(skill ? { skill } : {}) });
+    const result = await bridge<{ turnId: string; disposition?: string; deduped?: boolean }>("sendTurn", { sessionId, agentId: thread.agentId, text: payload, reasoningEffort: thread.config?.effort ?? state.defaultEffort, images: images.map(({ mediaType, base64Data }) => ({ mediaType, base64Data })), clientTurnId: turnKey, ifBusy: disposition, ...(skill ? { skill } : {}), ...(agentId === "harness" && shape ? { forcedShape: shape } : {}) });
     const latest = useAppStore.getState().threads.find((item) => item.sessionId === sessionId);
     if (disposition === "replace" || result.disposition === "started") {
       // Running treatment: the fresh turn owns the thread now. A completion
@@ -4558,6 +4584,11 @@ export function bindBridgeEvents() {
       const data = payload as BridgeEventPayloads["modelCall"];
       // The turn's own calls, gathered until it finishes and the ledger counts them.
       update(data.sessionId, (thread) => ({ ...thread, turnCalls: [...(thread.turnCalls ?? []), data.call] }));
+    }
+    if (event === "route") {
+      const data = payload as BridgeEventPayloads["route"];
+      // Kept per turn, so each receipt can name the shape it ran even after later turns or a resume.
+      update(data.sessionId, (thread) => ({ ...thread, routes: { ...(thread.routes ?? {}), [data.turnId]: data.route } }));
     }
     if (event === "usageChanged") {
       const usage = asSubscriptionUsage(payload);
@@ -4910,7 +4941,13 @@ export function activeAgentId(state: Pick<AppStore, "threads" | "selectedSession
 
 function agentConfigPatch(config?: AgentSessionConfig): Partial<SessionConfig> {
   if (!config) return {};
-  return { ...(config.modelId ? { modelId: config.modelId, providerId: config.modelId.includes("/") ? config.modelId.split("/")[0] : undefined } : {}), ...(config.effort ? { effort: config.effort } : {}), ...(config.mode ? { mode: config.mode } : {}) };
+  return {
+    ...(config.modelId ? { modelId: config.modelId, providerId: config.modelId.includes("/") ? config.modelId.split("/")[0] : undefined } : {}),
+    ...(config.effort ? { effort: config.effort } : {}),
+    ...(config.mode ? { mode: config.mode } : {}),
+    // The built-in agent always reports it; an agent CLI never does.
+    ...("orchestrator" in config ? { orchestrator: config.orchestrator ?? null } : {}),
+  };
 }
 
 /** Keeps the effort inside the tiers the selected model supports. */

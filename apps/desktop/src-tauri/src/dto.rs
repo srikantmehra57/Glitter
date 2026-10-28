@@ -253,8 +253,40 @@ struct StartSessionParams {
     /// An ACP agent's mode (OpenCode's build or plan) chosen in the draft.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     mode: Option<String>,
+    /// Built-in agent only: the role models and goal this thread routes with.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    orchestrator: Option<StartSessionOrchestrator>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     client_request_id: Option<String>,
+}
+
+/// One role's model, as Settings stores it. Provider-prefixed model ids keep
+/// the bridge's `provider/model` invariant true before it parses them.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StartSessionOrchestratorModel {
+    model_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    provider_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StartSessionOrchestratorModels {
+    lead: StartSessionOrchestratorModel,
+    builder: StartSessionOrchestratorModel,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    small: Option<StartSessionOrchestratorModel>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    router: Option<StartSessionOrchestratorModel>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StartSessionOrchestrator {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    goal: Option<String>,
+    models: StartSessionOrchestratorModels,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -381,6 +413,18 @@ struct HarnessMcpServerDefinition {
 struct TestModelParams {
     agent_id: AgentId,
     model_id: String,
+}
+
+/// Settings → Orchestrator's role check: one probe against one Harness model.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct OrchestratorProbeParams {
+    agent_id: AgentId,
+    role: String,
+    provider_id: String,
+    model_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    refresh: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -553,6 +597,16 @@ enum BusyDisposition {
     Replace,
 }
 
+/// The shape one message asks for. Every routing floor still applies to it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum RouteShape {
+    DirectSmall,
+    DirectBuilder,
+    LeadGuided,
+    LeadOnly,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SendTurnParams {
@@ -571,6 +625,9 @@ struct SendTurnParams {
     if_busy: Option<BusyDisposition>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     skill: Option<SkillInvocation>,
+    /// Built-in agent only: this message's override from the goal popover.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    forced_shape: Option<RouteShape>,
 }
 
 /// A structured skill invocation: the host resolves the selector.
@@ -665,6 +722,18 @@ struct SetModelParams {
     model_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     provider_id: Option<String>,
+}
+
+/// Switch one live built-in session between manual models and Orchestrator.
+/// A null or absent block returns the session to manual models.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SetOrchestratorParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    agent_id: Option<AgentId>,
+    session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    orchestrator: Option<StartSessionOrchestrator>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -908,6 +977,46 @@ fn check_mcp_server(method: &str, server: &HarnessMcpServerDefinition) -> Result
     Ok(())
 }
 
+fn check_orchestrator_model(method: &str, role: &str, model: &StartSessionOrchestratorModel) -> Result<(), String> {
+    let field = format!("orchestrator.models.{role}.modelId");
+    required(method, &field, &model.model_id)?;
+    capped(method, &field, &model.model_id, MODEL_LIMIT)?;
+    let Some((prefix, rest)) = model.model_id.split_once('/') else {
+        return Err(format!("Invalid {method} parameters: {field} must be a provider/model id."));
+    };
+    if prefix.is_empty() || rest.is_empty() || prefix.len() > PROVIDER_LIMIT {
+        return Err(format!("Invalid {method} parameters: {field} must be a provider/model id."));
+    }
+    if let Some(provider) = model.provider_id.as_deref() {
+        let field = format!("orchestrator.models.{role}.providerId");
+        required(method, &field, provider)?;
+        capped(method, &field, provider, PROVIDER_LIMIT)?;
+        if provider != prefix {
+            return Err(format!("Invalid {method} parameters: {field} does not match the model id."));
+        }
+    }
+    Ok(())
+}
+
+/// Orchestrator is Harness-only. Lead and Builder are mandatory; the bridge
+/// resolves Small-task and Router fallbacks from them.
+fn check_start_orchestrator(method: &str, orchestrator: &StartSessionOrchestrator) -> Result<(), String> {
+    if let Some(goal) = orchestrator.goal.as_deref() {
+        if !["cost", "balanced", "output"].contains(&goal) {
+            return Err(format!("Invalid {method} parameters: orchestrator.goal must be cost, balanced or output."));
+        }
+    }
+    check_orchestrator_model(method, "lead", &orchestrator.models.lead)?;
+    check_orchestrator_model(method, "builder", &orchestrator.models.builder)?;
+    if let Some(small) = &orchestrator.models.small {
+        check_orchestrator_model(method, "small", small)?;
+    }
+    if let Some(router) = &orchestrator.models.router {
+        check_orchestrator_model(method, "router", router)?;
+    }
+    Ok(())
+}
+
 fn check_images(method: &str, images: Option<&[ImageAttachment]>) -> Result<(), String> {
     if let Some(images) = images {
         if images.len() > IMAGE_LIMIT {
@@ -1067,6 +1176,15 @@ pub fn validate_params(method: &str, params: &Value) -> Result<Value, String> {
             if let Some(grant) = parsed.grant_id.as_deref() {
                 capped(method, "grantId", grant, GRANT_ID_LIMIT)?;
             }
+            if let Some(orchestrator) = &parsed.orchestrator {
+                if parsed.agent_id != Some(AgentId::Harness) {
+                    return Err(format!("Invalid {method} parameters: Orchestrator applies only to the built-in agent."));
+                }
+                if parsed.model_id.is_some() || parsed.provider_id.is_some() || parsed.reasoning_effort.is_some() {
+                    return Err(format!("Invalid {method} parameters: an Orchestrator session chooses its models from the role settings."));
+                }
+                check_start_orchestrator(method, orchestrator)?;
+            }
             if let Some(model) = parsed.model_id.as_deref() {
                 required(method, "modelId", model)?;
                 capped(method, "modelId", model, MODEL_LIMIT)?;
@@ -1165,6 +1283,20 @@ pub fn validate_params(method: &str, params: &Value) -> Result<Value, String> {
             if parsed.agent_id != AgentId::Harness {
                 return Err(format!("Invalid {method} parameters: only Harness models can be tested."));
             }
+            required(method, "modelId", &parsed.model_id)?;
+            capped(method, "modelId", &parsed.model_id, MODEL_LIMIT)?;
+            emit(method, &parsed)
+        }
+        "orchestratorProbe" => {
+            let parsed: OrchestratorProbeParams = parse(method, body)?;
+            if parsed.agent_id != AgentId::Harness {
+                return Err(format!("Invalid {method} parameters: only Harness models can be probed."));
+            }
+            if !matches!(parsed.role.as_str(), "router" | "lead" | "builder" | "small") {
+                return Err(format!("Invalid {method} parameters: role must be router, lead, builder or small."));
+            }
+            required(method, "providerId", &parsed.provider_id)?;
+            capped(method, "providerId", &parsed.provider_id, PROVIDER_LIMIT)?;
             required(method, "modelId", &parsed.model_id)?;
             capped(method, "modelId", &parsed.model_id, MODEL_LIMIT)?;
             emit(method, &parsed)
@@ -1282,6 +1414,13 @@ pub fn validate_params(method: &str, params: &Value) -> Result<Value, String> {
             capped(method, "text", &parsed.text, TEXT_LIMIT)?;
             check_maybe_id(method, "clientTurnId", parsed.client_turn_id.as_deref())?;
             check_images(method, parsed.images.as_deref())?;
+            if parsed.forced_shape.is_some() {
+                if let Some(agent) = parsed.agent_id {
+                    if agent != AgentId::Harness {
+                        return Err(format!("Invalid {method} parameters: a forced shape applies only to the built-in agent."));
+                    }
+                }
+            }
             if let Some(skill) = parsed.skill.as_ref() {
                 required(method, "skill.selector", skill.selector.trim())?;
                 capped(method, "skill.selector", &skill.selector, ID_LIMIT)?;
@@ -1375,6 +1514,17 @@ pub fn validate_params(method: &str, params: &Value) -> Result<Value, String> {
             }
             emit(method, &parsed)
         }
+        "setOrchestrator" => {
+            let parsed: SetOrchestratorParams = parse(method, body)?;
+            check_id(method, "sessionId", &parsed.session_id)?;
+            if parsed.agent_id.is_some_and(|agent| agent != AgentId::Harness) {
+                return Err(format!("Invalid {method} parameters: Orchestrator applies only to the built-in agent."));
+            }
+            if let Some(orchestrator) = &parsed.orchestrator {
+                check_start_orchestrator(method, orchestrator)?;
+            }
+            emit(method, &parsed)
+        }
         "setSessionOption" => {
             let parsed: SetSessionOptionParams = parse(method, body)?;
             check_id(method, "sessionId", &parsed.session_id)?;
@@ -1464,6 +1614,7 @@ mod tests {
             ("suggest", json!({ "agentId": "opencode", "grantId": "wg-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "prompt": "names only", "modelId": "zen/a" })),
             ("startSession", json!({ "grantId": "wg-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "approvalMode": "promptUnmatched", "modelId": "m", "providerId": "p" })),
             ("startSession", json!({ "agentId": "harness", "grantId": "wg-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "approvalMode": "guarded" })),
+            ("startSession", json!({ "agentId": "harness", "grantId": "wg-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "orchestrator": { "goal": "balanced", "models": { "lead": { "modelId": "anthropic/claude-sonnet-5", "providerId": "anthropic" }, "builder": { "modelId": "deepseek/deepseek-chat" }, "small": { "modelId": "deepseek/deepseek-chat" }, "router": { "modelId": "deepseek/deepseek-chat" } } } })),
             ("startSession", json!({ "agentId": "qwen", "grantId": "wg-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "reasoningEffort": "high" })),
             ("startSession", json!({ "grantId": "wg-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "clientRequestId": "create-1" })),
             ("resumeSession", json!({ "sessionId": "s-1" })),
@@ -1499,11 +1650,15 @@ mod tests {
             ("sendTurn", json!({ "agentId": "opencode", "sessionId": "s-1", "text": "", "images": [] })),
             ("sendTurn", json!({ "sessionId": "s-1", "text": "later", "ifBusy": "queue" })),
             ("sendTurn", json!({ "sessionId": "s-1", "text": "", "skill": { "selector": "fix-bug", "arguments": "auth.ts" } })),
+            ("sendTurn", json!({ "agentId": "harness", "sessionId": "h-1", "text": "hi", "forcedShape": "direct-small" })),
+            ("setOrchestrator", json!({ "agentId": "harness", "sessionId": "h-1" })),
+            ("setOrchestrator", json!({ "agentId": "harness", "sessionId": "h-1", "orchestrator": { "goal": "output", "models": { "lead": { "modelId": "anthropic/lead" }, "builder": { "modelId": "deepseek/build" } } } })),
             ("listSkills", json!({ "sessionId": "s-1" })),
             ("harnessMcp", json!({ "agentId": "harness", "sessionId": "h-1" })),
             ("harnessMcp", json!({ "sessionId": "h-1", "refresh": true })),
             ("harnessMcpConfig", json!({ "agentId": "harness", "sessionId": "h-1" })),
             ("testModel", json!({ "agentId": "harness", "modelId": "anthropic/claude-sonnet-5" })),
+            ("orchestratorProbe", json!({ "agentId": "harness", "role": "builder", "providerId": "anthropic", "modelId": "anthropic/claude-sonnet-5" })),
             ("harnessMcpAddServer", json!({ "sessionId": "h-1", "scope": "workspace", "server": { "name": "docs", "transport": "stdio", "command": "npx", "args": ["-y", "server-filesystem", "."], "env": { "LOG_LEVEL": "warn" } } })),
             ("harnessMcpAddServer", json!({ "sessionId": "h-1", "scope": "home", "server": { "name": "docs", "transport": "http", "url": "https://example.com/mcp", "headers": { "Authorization": "Bearer token" }, "timeoutMs": 30000 } })),
             ("harnessMcpRemoveServer", json!({ "sessionId": "h-1", "scope": "workspace", "name": "docs" })),
@@ -1604,6 +1759,31 @@ mod tests {
         assert!(validate_params("testModel", &json!({ "agentId": "harness", "modelId": "" })).is_err());
         assert!(validate_params("testModel", &json!({ "modelId": "anthropic/m" })).is_err());
         assert!(validate_params("testModel", &json!({ "agentId": "harness", "modelId": "a/m", "providerKeys": {} })).is_err());
+        assert!(validate_params("orchestratorProbe", &json!({ "agentId": "muse", "role": "builder", "providerId": "anthropic", "modelId": "anthropic/m" })).is_err());
+        assert!(validate_params("orchestratorProbe", &json!({ "agentId": "harness", "role": "judge", "providerId": "anthropic", "modelId": "anthropic/m" })).is_err());
+        assert!(validate_params("orchestratorProbe", &json!({ "agentId": "harness", "role": "builder", "providerId": "", "modelId": "anthropic/m" })).is_err());
+        assert!(validate_params("orchestratorProbe", &json!({ "agentId": "harness", "role": "builder", "providerId": "anthropic", "modelId": "" })).is_err());
+        assert!(validate_params("orchestratorProbe", &json!({ "agentId": "harness", "role": "builder", "providerId": "anthropic", "modelId": "m", "refresh": "yes" })).is_err());
+        // Orchestrator is built-in only, carries its own role models, and stays closed.
+        let orchestrator = json!({ "goal": "balanced", "models": { "lead": { "modelId": "anthropic/lead" }, "builder": { "modelId": "deepseek/build" } } });
+        assert!(validate_params("startSession", &json!({ "agentId": "muse", "orchestrator": orchestrator.clone() })).is_err());
+        assert!(validate_params("startSession", &json!({ "orchestrator": orchestrator.clone() })).is_err());
+        assert!(validate_params("startSession", &json!({ "agentId": "harness", "modelId": "anthropic/m", "orchestrator": orchestrator.clone() })).is_err());
+        assert!(validate_params("startSession", &json!({ "agentId": "harness", "reasoningEffort": "high", "orchestrator": orchestrator.clone() })).is_err());
+        assert!(validate_params("startSession", &json!({ "agentId": "harness", "orchestrator": { "goal": "fast", "models": { "lead": { "modelId": "anthropic/lead" }, "builder": { "modelId": "deepseek/build" } } } })).is_err());
+        assert!(validate_params("startSession", &json!({ "agentId": "harness", "orchestrator": { "models": { "lead": { "modelId": "anthropic/lead" } } } })).is_err());
+        assert!(validate_params("startSession", &json!({ "agentId": "harness", "orchestrator": { "models": { "lead": { "modelId": "unslashed" }, "builder": { "modelId": "deepseek/build" } } } })).is_err());
+        assert!(validate_params("startSession", &json!({ "agentId": "harness", "orchestrator": { "models": { "lead": { "modelId": "anthropic/lead", "providerId": "openai" }, "builder": { "modelId": "deepseek/build" } } } })).is_err());
+        assert!(validate_params("startSession", &json!({ "agentId": "harness", "orchestrator": { "models": { "lead": { "modelId": "anthropic/lead" }, "builder": { "modelId": "deepseek/build" } }, "shape": "lead-only" } })).is_err());
+        assert!(validate_params("startSession", &json!({ "agentId": "harness", "orchestrator": { "models": { "lead": { "modelId": "anthropic/lead" }, "builder": { "modelId": "deepseek/build" }, "judge": { "modelId": "deepseek/build" } } } })).is_err());
+        // A live switch carries the same role block; absent means off, and it stays built-in only.
+        let live = validate_params("setOrchestrator", &json!({ "agentId": "harness", "sessionId": "h-1", "orchestrator": orchestrator.clone() })).expect("switch on");
+        assert_eq!(live["orchestrator"]["goal"], json!("balanced"));
+        let off = validate_params("setOrchestrator", &json!({ "agentId": "harness", "sessionId": "h-1" })).expect("switch off");
+        assert!(off.get("orchestrator").is_none());
+        assert!(validate_params("setOrchestrator", &json!({ "agentId": "muse", "sessionId": "s-1", "orchestrator": orchestrator.clone() })).is_err());
+        assert!(validate_params("setOrchestrator", &json!({ "agentId": "harness", "sessionId": "h-1", "orchestrator": { "goal": "fast", "models": { "lead": { "modelId": "anthropic/lead" }, "builder": { "modelId": "deepseek/build" } } } })).is_err());
+        assert!(validate_params("setOrchestrator", &json!({ "agentId": "harness", "sessionId": "h-1", "orchestrator": { "models": { "lead": { "modelId": "anthropic/lead" } } } })).is_err());
         assert!(validate_params("harnessMcpRemoveServer", &json!({ "sessionId": "s", "scope": "workspace" })).is_err());
         assert!(validate_params("harnessMcpRemoveServer", &json!({ "sessionId": "s", "scope": "workspace", "name": "" })).is_err());
         assert!(validate_params("bogus", &json!({})).is_err());
@@ -1615,6 +1795,8 @@ mod tests {
         assert!(validate_params("setApprovalMode", &json!({ "sessionId": "s", "mode": "allowEverything" })).is_err());
         assert!(validate_params("sendTurn", &json!({ "sessionId": "s", "text": "t", "reasoningEffort": "turbo" })).is_err());
         assert!(validate_params("sendTurn", &json!({ "sessionId": "s", "text": "t", "ifBusy": "wait" })).is_err());
+        assert!(validate_params("sendTurn", &json!({ "sessionId": "s", "text": "t", "forcedShape": "router" })).is_err());
+        assert!(validate_params("sendTurn", &json!({ "agentId": "muse", "sessionId": "s", "text": "t", "forcedShape": "direct-small" })).is_err());
         assert!(validate_params("steerTurn", &json!({ "sessionId": "s", "text": "t", "ifBusy": "queue" })).is_err());
         assert!(validate_params("unqueueTurn", &json!({ "sessionId": "s" })).is_err());
         assert!(validate_params("forkSession", &json!({ "sessionId": "s", "lastTurnId": "" })).is_err());
@@ -1715,5 +1897,8 @@ mod tests {
         let mut out = validate_params("sendTurn", &json!({ "sessionId": "s", "text": "t" })).expect("turn");
         strip_native_fields("sendTurn", &mut out);
         assert_eq!(out.get("sessionId"), Some(&json!("s")));
+        // The per-message shape survives validation for the bridge and harness.
+        let out = validate_params("sendTurn", &json!({ "agentId": "harness", "sessionId": "h-1", "text": "t", "forcedShape": "direct-builder" })).expect("forced shape");
+        assert_eq!(out["forcedShape"], json!("direct-builder"));
     }
 }

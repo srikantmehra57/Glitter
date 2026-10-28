@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { asLedger, compact, dayKey, dayStart, EMPTY_LEDGER, groupUsage, ledgerSlices, MAX_CALL_TURNS, MAX_TURN_CALLS, providerOf, recordTurn, RECENT_DAYS, totalsSince, turnEntry, type UsageTurn } from "./usageLedger";
+import { asLedger, compact, dayKey, dayStart, EMPTY_LEDGER, groupCallUsage, groupUsage, ledgerCalls, ledgerSlices, MAX_CALL_TURNS, MAX_TURN_CALLS, providerOf, recordTurn, RECENT_DAYS, routeUsage, summarizeCalls, totalsSince, turnEntry, type UsageCall, type UsageLedger, type UsageTurn } from "./usageLedger";
 import type { ModelCall, Thread } from "./types";
 
 const DAY = 86_400_000;
@@ -34,6 +34,17 @@ const call = (partial: Partial<ModelCall> = {}): ModelCall => ({
   toolCalls: 1,
   ...partial,
 });
+
+const usageCall = (partial: Partial<UsageCall> = {}): UsageCall => ({
+  ...call(),
+  key: "s1:t1:0",
+  turnKey: "s1:t1",
+  agentId: "harness",
+  threadId: "s1",
+  workspace: "/repo",
+  ...partial,
+});
+const storedCalls = (ledger: UsageLedger): UsageCall[] => ledger.calls ?? [];
 
 describe("totalsSince", () => {
   it("counts today's turns and a rolled-up day, and skips yesterday", () => {
@@ -96,14 +107,17 @@ describe("ledger", () => {
     const count = MAX_CALL_TURNS + 4;
     const turns = Array.from({ length: count }, (_, index) => turn({ key: `t${index}`, at: NOW - (count - index) * 60_000, calls: [call()] }));
     const ledger = compact({ version: 1, turns, days: [] }, NOW);
+    const detailed = new Set(turns.slice(-MAX_CALL_TURNS).map((entry) => entry.key));
     expect(ledger.turns).toHaveLength(count);
-    expect(ledger.turns.slice(0, 4).every((entry) => entry.calls === undefined)).toBe(true);
-    expect(ledger.turns.slice(4).every((entry) => entry.calls?.length === 1)).toBe(true);
+    expect(ledger.turns.every((entry) => entry.calls === undefined)).toBe(true);
+    expect(storedCalls(ledger)).toHaveLength(MAX_CALL_TURNS);
+    expect(storedCalls(ledger).every((entry) => detailed.has(entry.turnKey))).toBe(true);
   });
 
   it("trusts nothing malformed from storage", () => {
     expect(asLedger(null)).toEqual(EMPTY_LEDGER);
-    expect(asLedger({ version: 2, turns: [turn()] })).toEqual(EMPTY_LEDGER);
+    expect(asLedger({ version: 3, turns: [] })).toEqual(EMPTY_LEDGER);
+    expect(asLedger({ version: 2, turns: [{ key: 4 }], days: [] })).toEqual(EMPTY_LEDGER);
     const ledger = asLedger({ version: 1, turns: [turn(), { key: 4 }, { ...turn({ key: "x" }), inputTokens: -5, tools: { bash: "lots" } }], days: [{ day: "nope", agentId: "harness", providerId: "x" }] });
     expect(ledger.turns).toHaveLength(2);
     expect(ledger.turns[1]).toMatchObject({ inputTokens: 0, tools: {} });
@@ -117,9 +131,41 @@ describe("ledger", () => {
       { ...turn({ key: "b" }), calls: [] },
       { ...turn({ key: "c" }), calls: many },
     ] });
-    expect(ledger.turns[0].calls).toEqual([call({ inputTokens: 0 })]);
-    expect(ledger.turns[1].calls).toBeUndefined();
-    expect(ledger.turns[2].calls).toEqual(many.slice(-MAX_TURN_CALLS));
+    expect(ledger.turns.every((entry) => entry.calls === undefined)).toBe(true);
+    expect(storedCalls(ledger).filter((entry) => entry.turnKey === "a")).toMatchObject([call({ inputTokens: 0 })]);
+    expect(storedCalls(ledger).filter((entry) => entry.turnKey === "b")).toEqual([]);
+    expect(storedCalls(ledger).filter((entry) => entry.turnKey === "c")).toMatchObject(many.slice(-MAX_TURN_CALLS));
+  });
+
+  it("drops unknown roles and stages from stored calls", () => {
+    const ledger = asLedger({ version: 2, turns: [turn()], days: [], calls: [{ ...usageCall(), role: "admin", stage: "nope" }] });
+    expect(storedCalls(ledger)).toHaveLength(1);
+    expect(storedCalls(ledger)[0]).not.toHaveProperty("role");
+    expect(storedCalls(ledger)[0]).not.toHaveProperty("stage");
+  });
+
+  it("counts a late turn update once, with its newest calls", () => {
+    const first = recordTurn(EMPTY_LEDGER, turn({ calls: [call()] }), NOW);
+    const second = recordTurn(first, turn({ calls: [call({ outputTokens: 999 })] }), NOW);
+    expect(ledgerCalls(second)).toHaveLength(1);
+    expect(storedCalls(second)[0].outputTokens).toBe(999);
+  });
+
+  it("groups per-call usage by route and role without double counting turn totals", () => {
+    const calls = [
+      usageCall({ key: "s1:t1:lead", role: "lead", stage: "lead-plan", routeId: "r1", inputTokens: 1_000, outputTokens: 100, estimatedCost: { amount: 0.5, currency: "USD", partial: false } }),
+      usageCall({ key: "s1:t1:build", role: "builder", stage: "builder", routeId: "r1", inputTokens: 5_000, outputTokens: 300, estimatedCost: { amount: 0.05, currency: "USD", partial: false } }),
+      usageCall({ key: "s2:t2:build", role: "builder", stage: "builder", routeId: "r2", inputTokens: 800, outputTokens: 80 }),
+    ];
+    const ledger = { version: 2 as const, turns: [turn()], days: [], calls };
+    expect(routeUsage(ledger, "r1")).toMatchObject({ calls: 2, inputTokens: 6_000, outputTokens: 400, partial: false });
+    expect(routeUsage(ledger, "r1").costs).toEqual([{ currency: "USD", amount: 0.55 }]);
+    expect(groupCallUsage(calls, (entry) => entry.role).map((group) => ({ id: group.id, calls: group.calls, tokens: group.inputTokens + group.outputTokens }))).toEqual([
+      { id: "builder", calls: 2, tokens: 6_180 },
+      { id: "lead", calls: 1, tokens: 1_100 },
+    ]);
+    expect(summarizeCalls(calls)).toMatchObject({ calls: 3, partial: true, unpricedCalls: 1 });
+    expect(totalsSince(ledger, 0, NOW + 1).tokens).toBe(1_200);
   });
 
   it("totals by provider, largest first", () => {

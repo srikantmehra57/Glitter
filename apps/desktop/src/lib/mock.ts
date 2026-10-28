@@ -274,6 +274,143 @@ export const MOCK_THREADS: Thread[] = [
       },
     ],
   },
+  {
+    sessionId: "preview-4",
+    agentId: "harness",
+    workspacePath: "/Users/you/Glitter",
+    title: "Orchestrator: narrow settings",
+    updatedAt: new Date(Date.now() - 900_000).toISOString(),
+    status: "idle",
+    unread: false,
+    lastOutcome: "completed",
+    lastTurnId: "turn-orch",
+    context: { usedTokens: 21400, windowTokens: 200000, pressure: "ok" },
+    turnStats: { turnId: "turn-orch", durationMs: 38000, inputTokens: 16400, outputTokens: 2900 },
+    routes: {
+      "turn-orch": {
+        routeId: "preview-orchestrator-1",
+        policyVersion: "orchestrator-v2",
+        goal: "balanced",
+        shape: "lead-guided",
+        executedShape: "lead-guided",
+        reasonCodes: ["floor:mid-level"],
+        roles: {
+          lead: { providerId: "anthropic", modelId: "anthropic/claude-sonnet-5" },
+          builder: { providerId: "anthropic", modelId: "anthropic/claude-haiku-4-5" },
+          small: { providerId: "anthropic", modelId: "anthropic/claude-haiku-4-5" },
+          router: { providerId: "anthropic", modelId: "anthropic/claude-haiku-4-5" },
+        },
+        stages: [
+          { stage: "lead-plan", providerId: "anthropic", modelId: "anthropic/claude-sonnet-5", effectiveEffort: "high" },
+          { stage: "builder", providerId: "anthropic", modelId: "anthropic/claude-haiku-4-5", effectiveEffort: "max" },
+          { stage: "consult", providerId: "anthropic", modelId: "anthropic/claude-sonnet-5", effectiveEffort: "high" },
+          { stage: "review", providerId: "anthropic", modelId: "anthropic/claude-sonnet-5", effectiveEffort: "high" },
+        ],
+        consultCount: 1,
+        reviewCount: 1,
+        fallbacks: [],
+        takeovers: [],
+        escalations: [],
+        references: { plan: "orch-plan", buildReport: "orch-report", reviewNotes: "orch-review" },
+      },
+    },
+    items: [
+      {
+        itemId: "orch-user",
+        kind: "userMessage",
+        status: "completed",
+        turnId: "turn-orch",
+        text: "Make the Settings dialog responsive down to 300px without moving the composer.",
+      },
+      {
+        itemId: "orch-plan",
+        kind: "orchestratorPlan",
+        status: "completed",
+        turnId: "turn-orch",
+        text: "Goal: Make Settings usable at 300px without moving the composer.\nAcceptance: The nav stacks above the pane at 300px; the composer buffer stays 16px.\nFiles: apps/desktop/src/settings.css — narrow layout rules; apps/desktop/src/components/SettingsModal.tsx — collapse the nav below 480px.\nSteps: 1. Add the narrow layout rules (settings.css). 2. Keep the nav reachable above the pane (SettingsModal.tsx). 3. Check the 300px and 681px breakpoints.\nChecks: npm run test:ui -- src/components/SettingsModal.test.tsx",
+      },
+      {
+        itemId: "orch-read",
+        kind: "toolCall",
+        status: "completed",
+        turnId: "turn-orch",
+        tool: "read_file",
+        args: '{"path":"apps/desktop/src/settings.css"}',
+        durationMs: 120,
+        visibleOutput: ".settings { display: flex; }\n.settings-nav { width: 240px; }",
+      },
+      {
+        itemId: "orch-ask",
+        kind: "toolCall",
+        status: "completed",
+        turnId: "turn-orch",
+        tool: "ask_lead",
+        args: '{"question":"Should the narrow layout stack the nav above the pane?","excerpt":".settings-nav { width: 240px; }"}',
+        durationMs: 2800,
+        visibleOutput: "Stack it above the pane; keep the 16px composer buffer.",
+      },
+      {
+        itemId: "orch-edit",
+        kind: "toolCall",
+        status: "completed",
+        turnId: "turn-orch",
+        tool: "edit_file",
+        args: '{"path":"apps/desktop/src/settings.css"}',
+        durationMs: 240,
+        presentation: { kind: "diff", path: "apps/desktop/src/settings.css", oldText: ".settings-nav { width: 240px; }", newText: "@media (max-width: 480px) { .settings { display: block; } }" },
+        visibleOutput: "Added the narrow layout rules.",
+      },
+      {
+        itemId: "orch-report",
+        kind: "orchestratorBuildReport",
+        status: "completed",
+        turnId: "turn-orch",
+        text: "Settings now stack the nav above the pane below 480px and keep the composer buffer.\n1 file changed, +12/-3\nChecks: SettingsModal tests — passed",
+      },
+      {
+        itemId: "orch-review",
+        kind: "orchestratorReview",
+        status: "completed",
+        turnId: "turn-orch",
+        text: "Review: pass",
+      },
+      {
+        itemId: "orch-answer",
+        kind: "agentMessage",
+        status: "completed",
+        turnId: "turn-orch",
+        text: "Settings now stack the nav above the pane below 480px; the 16px composer buffer is untouched and the SettingsModal tests pass.",
+      },
+    ],
+  },
+  {
+    // The preview rewrites the last demo thread as Grok, so another installed
+    // agent stays represented while Orchestrator keeps its Harness thread.
+    sessionId: "preview-5",
+    workspacePath: "/Users/you/Glitter",
+    title: "Tighten the reducer",
+    updatedAt: new Date(Date.now() - 5400_000).toISOString(),
+    status: "idle",
+    unread: false,
+    lastOutcome: "completed",
+    lastTurnId: "turn-grok",
+    items: [
+      {
+        itemId: "grok-user",
+        kind: "userMessage",
+        status: "completed",
+        turnId: "turn-grok",
+        text: "Tighten the reducer without changing behaviour.",
+      },
+      {
+        itemId: "grok-answer",
+        kind: "agentMessage",
+        status: "completed",
+        turnId: "turn-grok",
+        text: "The reducer now derives the next state in one pass and keeps every branch identical.",
+      },
+    ],
+  },
 ];
 
 export function mockThreads(): Thread[] {
@@ -483,14 +620,21 @@ export function mockUsageLedger(at = Date.now()): UsageLedger {
       const entry: UsageTurn = { key: `preview:${n}`, at: when, agentId: mix.agentId, providerId: mix.providerId, modelId: mix.modelId, effort: efforts[n % efforts.length], inputTokens: Math.round(mix.input * scale), cachedTokens: Math.round(mix.input * scale * mix.cached), outputTokens: Math.round(mix.output * scale), estimated: false, durationMs: Math.round((40 + noise(n + 11) * 900) * 1000), threadId: `preview-thread-${n % 9}`, workspace: n % 3 ? "/Users/you/code/muse" : "/Users/you/code/site", tools: used };
       // Only the Harness reports its own calls, so only its turns carry a trajectory.
       if (entry.agentId === "harness") {
-        const count = 1 + Math.floor(noise(n + 13) * 4);
+        // Preview routes cover every shape, so route labels and the by-role split
+        // have data before live routing is wired. One turn in five stays manual.
+        const shape = n % 5 === 0 ? "manual" : n % 11 === 0 ? "lead-only" : n % 4 === 0 ? "lead-guided" : n % 7 === 0 ? "small" : "direct-builder";
+        const routed = shape !== "manual";
+        const count = shape === "small" ? 1 : 1 + Math.floor(noise(n + 13) * 4);
         const calls: ModelCall[] = [];
         let elapsed = 0;
         for (let call = 0; call < count; call += 1) {
           // Later calls carry the whole history, so they are the expensive ones.
           const share = (call + 1) / ((count * (count + 1)) / 2);
           const durationMs = Math.round(entry.durationMs * share);
+          const role = shape === "lead-guided" ? (call === 0 ? "lead" : "builder") : shape === "small" ? "small" : shape === "lead-only" ? "lead" : "builder";
+          const stage = shape === "lead-guided" ? (call === 0 ? "lead-plan" : "builder") : shape === "small" ? "small" : shape === "lead-only" ? "takeover" : "builder";
           calls.push({
+            ...(routed ? { routeId: `preview-route-${n}`, role, stage } : {}),
             at: when - entry.durationMs + elapsed,
             providerId: entry.providerId,
             modelId: entry.modelId ?? "",

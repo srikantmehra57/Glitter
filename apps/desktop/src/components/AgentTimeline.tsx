@@ -10,6 +10,7 @@ import { copyText, formatArgs, formatBytes, formatDuration, formatTokens, humani
 import { estimateCost, formatCost } from "../lib/cost";
 import { formatTokenSpeed, readTokenSpeed, TOKEN_SPEED_ESTIMATE } from "../lib/tokenSpeed";
 import { modelFor } from "../lib/effort";
+import { orchestratorRouteCallFact, orchestratorRouteExecution, orchestratorRouteFacts, orchestratorRouteFallback, orchestratorRouteFloor, orchestratorRouteLabel, orchestratorRouteTitle } from "../lib/orchestrator";
 import { currentThread, useAppStore } from "../lib/store";
 import { agentEnabled } from "../lib/types";
 import { AGENT_LABELS, type AgentId, type PlanItem, type Thread, type TokenSpeed } from "../lib/types";
@@ -770,17 +771,40 @@ function ReceiptView({ run, isLast }: { run: AgentRun; isLast: boolean }) {
     const thread = currentThread(state);
     return state.modelsAgentId === (thread?.agentId ?? "muse") ? modelFor(state.models, thread?.config ?? {}) : undefined;
   });
-  const turnCost = stats && costModel ? estimateCost({ promptTokens: stats.inputTokens, outputTokens: stats.outputTokens }, costModel.cost) : undefined;
+  const route = useAppStore((state) => (run.turnId ? currentThread(state)?.routes?.[run.turnId] : undefined));
+  const routeExecution = route ? orchestratorRouteExecution(route) : undefined;
+  const routeCatalogModel = useAppStore((state) => (routeExecution
+    ? state.models.find((model) => model.modelId === routeExecution.modelId && (!model.providerId || model.providerId === routeExecution.providerId))
+      ?? state.models.find((model) => model.modelId === routeExecution.modelId)
+    : undefined));
+  const turnCalls = useAppStore((state) => currentThread(state)?.turnCalls);
+  // A routed turn's cost spans the models it used, so the single-model estimate would be wrong.
+  const turnCost = !route && stats && costModel ? estimateCost({ promptTokens: stats.inputTokens, outputTokens: stats.outputTokens }, costModel.cost) : undefined;
   // Hosts that report no per-turn usage still reported each step's time; their
   // sum, marked ~, fills the receipt's otherwise-empty metrics row.
   const derivedMs = run.steps.reduce((sum, step) => sum + (step.durationMs ?? 0), 0);
-  // One quiet line of facts, most useful first: time, speed, tokens, cost, then the model that did the work.
-  const metrics = stats ? <span className="turn-stats" aria-label="Turn usage">
-    <span className="turn-duration" title="Time spent on this turn">{formatDuration(stats.durationMs)}</span>
-    {stats.tokensPerSecond != null ? <span title={TOKEN_SPEED_ESTIMATE}>{formatTokenSpeed(stats.tokensPerSecond)}</span> : null}
-    {tokenFact(stats)}
+  const routeCallFact = route ? orchestratorRouteCallFact(turnCalls, route.routeId) : undefined;
+  // A floor raised the user's per-message choice; a fallback is routing's own recovery.
+  const routeFloor = route ? orchestratorRouteFloor(route) : undefined;
+  const routeFallback = route ? orchestratorRouteFallback(route) : undefined;
+  const routeFacts = route ? orchestratorRouteFacts(route) : [];
+  const receiptModel = routeExecution ?? costModel;
+  // A route's model is the one the bridge actually ran; its provider prefix would only repeat the provider name.
+  const receiptModelLabel = routeExecution
+    ? humanizeModelLabel(routeExecution.modelId.slice(routeExecution.modelId.indexOf("/") + 1), routeCatalogModel?.displayLabel)
+    : costModel ? humanizeModelLabel(costModel.modelId, costModel.displayLabel) : undefined;
+  const receiptModelTitle = routeExecution
+    ? `${receiptModelLabel} as ${routeExecution.role}${routeExecution.providerId ? ` via ${humanizeProvider(routeExecution.providerId)}` : ""}`
+    : costModel?.providerId ? `${receiptModelLabel} via ${humanizeProvider(costModel.providerId)}` : undefined;
+  // One quiet line of facts, most useful first: time, speed, tokens, cost, the route, then the model that did the work.
+  const metrics = stats || route ? <span className="turn-stats" aria-label="Turn usage">
+    {stats ? <span className="turn-duration" title="Time spent on this turn">{formatDuration(stats.durationMs)}</span> : derivedMs > 0 ? <span className="turn-duration" title="Sum of the step times the agent reported">~{formatDuration(derivedMs)}</span> : null}
+    {stats?.tokensPerSecond != null ? <span title={TOKEN_SPEED_ESTIMATE}>{formatTokenSpeed(stats.tokensPerSecond)}</span> : null}
+    {stats ? tokenFact(stats) : null}
     {turnCost != null && costModel ? <span title="Estimated cost for this turn">≈{formatCost(turnCost, costModel.cost?.currency)}</span> : null}
-    {costModel ? <span className="turn-model" title={costModel.providerId ? `${humanizeModelLabel(costModel.modelId, costModel.displayLabel)} via ${humanizeProvider(costModel.providerId)}` : undefined}><ModelIcon modelId={costModel.modelId} providerId={costModel.providerId} size={12} fallback={<ProductAgentMark id={agentId} size={12} />} />{humanizeModelLabel(costModel.modelId, costModel.displayLabel)}</span> : null}
+    {route ? <span className="turn-route" title={orchestratorRouteTitle(route)}>{orchestratorRouteLabel(route)}{routeFloor ? " · floor" : routeFallback ? " · fallback" : ""}</span> : null}
+    {routeCallFact ? <span className="turn-route-calls" title="Model calls this turn made">{routeCallFact}</span> : null}
+    {receiptModel && receiptModelLabel ? <span className="turn-model" title={receiptModelTitle}><ModelIcon modelId={receiptModel.modelId} providerId={receiptModel.providerId} size={12} fallback={<ProductAgentMark id={agentId} size={12} />} />{receiptModelLabel}</span> : null}
   </span> : derivedMs > 0 ? <span className="turn-stats" aria-label="Turn duration">
     <span className="turn-duration" title="Sum of the step times the agent reported">~{formatDuration(derivedMs)}</span>
   </span> : null;
@@ -814,6 +838,11 @@ function ReceiptView({ run, isLast }: { run: AgentRun; isLast: boolean }) {
             {cuttable && sessionId ? <button type="button" className="ghost-btn small" title="Fork the thread with history up to this turn" onClick={() => void forkThread(sessionId, run.turnId)}><GitFork size={12} aria-hidden="true" />Fork here</button> : null}
           </span>
         </div>
+        {routeFacts.length ? (
+          <div className="receipt-route-facts" aria-label="Route details">
+            {routeFacts.map((fact) => <span key={fact}>{fact}</span>)}
+          </div>
+        ) : null}
         {fileCount ? (() => {
           const files = filesOpen ? changed : changed.slice(0, 3);
           const more = changed.length - files.length;

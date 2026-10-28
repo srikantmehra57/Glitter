@@ -2,7 +2,7 @@ import { lazy, Suspense, useDeferredValue, useEffect, useRef, useState, type CSS
 import { useModalDialog } from "../lib/dialogFocus";
 import { describeError } from "../lib/errors";
 import { useShallow } from "zustand/react/shallow";
-import { Activity, ArchiveRestore, ArrowLeft, Bot, ChartNoAxesColumn, Check, Command, Cpu, Eye, EyeOff, FilePlus, FolderOpen, Info, KeyRound, Lock, MessagesSquare, Minus, Monitor, Moon, Palette, Plug, Plus, Puzzle, RefreshCw, Search, Settings2, ShieldAlert, ShieldCheck, Sun, Trash2, TriangleAlert, X } from "lucide-react";
+import { Activity, ArchiveRestore, ArrowLeft, Bot, ChartNoAxesColumn, Check, Command, Cpu, Eye, EyeOff, FilePlus, FolderOpen, Info, KeyRound, Lock, MessagesSquare, Minus, Monitor, Moon, Palette, Plug, Plus, Puzzle, RefreshCw, Search, Settings2, ShieldAlert, ShieldCheck, Sun, Trash2, TriangleAlert, Workflow, X } from "lucide-react";
 import { diagnosticsSnapshot, openLogFolder } from "../lib/bridge";
 import { isMacPlatform, isTauri } from "../lib/format";
 import { modelFor, VOCABULARY } from "../lib/effort";
@@ -23,9 +23,11 @@ const ExtensionsView = lazy(() => import("./ExtensionsView").then((module) => ({
 const UsageView = lazy(() => import("./UsageView").then((module) => ({ default: module.UsageView })));
 import { LoginPanel } from "./LoginPanel";
 import { ModelLibrary } from "./ModelLibrary";
+import { OrchestratorPanel } from "./OrchestratorPanel";
 import { SelectMenu, type SelectMenuOption } from "./SelectMenu";
 import { Orb } from "./Orb";
 import { ProvidersPanel } from "./ProvidersPanel";
+import { SectionHead, SettingRow } from "./SettingsSection";
 
 const EFFORTS = VOCABULARY;
 
@@ -87,6 +89,7 @@ const SIDEBAR_DENSITY_OPTIONS: SelectMenuOption[] = SIDEBAR_DENSITIES.map((value
 function tabIcon(tab: SettingsTab) {
   const props = { size: 15, strokeWidth: 1.8, "aria-hidden": true } as const;
   if (tab === "Models") return <Cpu {...props} />;
+  if (tab === "Orchestrator") return <Workflow {...props} />;
   if (tab === "Providers") return <Plug {...props} />;
   if (tab === "Agents") return <Bot {...props} />;
   if (tab === "Extensions") return <Puzzle {...props} />;
@@ -98,22 +101,6 @@ function tabIcon(tab: SettingsTab) {
   if (tab === "Usage") return <ChartNoAxesColumn {...props} />;
   if (tab === "Diagnostics") return <Activity {...props} />;
   return <Info {...props} />;
-}
-
-/** One setting: its name and help on the left, its control on the right. */
-function SettingRow({ label, help, children }: { label: ReactNode; help?: ReactNode; children?: ReactNode }) {
-  return <div className="setting-row">
-    <div className="setting-copy">{label}{help ? <span className="field-help">{help}</span> : null}</div>
-    {children ? <div className="setting-control">{children}</div> : null}
-  </div>;
-}
-
-/** A section of a page: a small heading, an optional line under it, and an action at the right. */
-function SectionHead({ id, title, help, action }: { id?: string; title: string; help?: ReactNode; action?: ReactNode }) {
-  return <div className={`settings-card-heading${action ? " with-action" : ""}`}>
-    <div><h4 id={id}>{title}</h4>{help ? <p>{help}</p> : null}</div>
-    {action}
-  </div>;
 }
 
 /**
@@ -823,6 +810,7 @@ export function SettingsModal() {
           <SectionHead title="Model library" help="Switch a provider or a single model off to keep it out of the composer’s picker. Test sends one word and times the reply, so a busy or retired model shows up before you rely on it." />
           <ModelLibrary agents={libraryAgents} customProviders={customProviders(s.providerStatus ?? [])} hidden={draft.hiddenModels ?? []} onHiddenChange={(hiddenModels) => edit({ hiddenModels })} hiddenProviders={draft.hiddenProviders ?? []} onHiddenProvidersChange={(hiddenProviders) => edit({ hiddenProviders })} loadCatalog={s.peekModelCatalog} testModel={s.testModel} onManageProviders={() => setTab("Providers")} />
         </> : null}
+        {page === "Orchestrator" ? <OrchestratorPanel draft={draft} onChange={edit} customProviders={customProviders(s.providerStatus ?? [])} onManageProviders={() => setTab("Providers")} /> : null}
         {page === "Providers" ? <ProvidersPanel onChanged={() => { void s.refreshDetection().then(() => useAppStore.getState().refreshModels(true)); }} /> : null}
         {page === "Agents" ? <div className="agents-panel">
           <SectionHead title="Defaults" />

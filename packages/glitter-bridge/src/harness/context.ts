@@ -129,14 +129,16 @@ function rungOf(output: string): TrimRung {
  * time — full → head+tail → skeleton, oldest first — until the messages fit.
  * A result already carrying a marker (a view fitted on an earlier attempt)
  * continues from that rung, so a retry is strictly smaller than the request
- * before it. Returns the fitted messages (the input array is never mutated),
- * whether anything changed, the estimate afterwards, and whether it now fits.
+ * before it. Returns the request messages (the input array is never mutated),
+ * whether anything changed, the estimate afterwards, and a truthful fit outcome.
+ * A missing budget is explicitly unknown and preserves the request unchanged.
  * `force` is reserved for a provider-reported overflow: it advances one rung
  * even when the conservative local estimate already fits.
  */
-export type FitHistory = { messages: ChatMessage[]; trimmed: boolean; tokens: number; fitted: boolean };
+export type FitOutcome = "fitted" | "unfittable" | "unknown_window";
+export type FitHistory = { messages: ChatMessage[]; trimmed: boolean; tokens: number; outcome: FitOutcome };
 
-export function fitHistory(options: { messages: readonly ChatMessage[]; budget: number; force?: boolean }): FitHistory {
+export function fitHistory(options: { messages: readonly ChatMessage[]; budget?: number | null; force?: boolean }): FitHistory {
   const measure = (messages: readonly ChatMessage[]): number => {
     let tokens = 0;
     for (const message of messages) {
@@ -151,8 +153,10 @@ export function fitHistory(options: { messages: readonly ChatMessage[]; budget: 
     }
     return tokens;
   };
+  const budget = options.budget;
+  if (budget == null) return { messages: options.messages as ChatMessage[], trimmed: false, tokens: 0, outcome: "unknown_window" };
   let tokens = measure(options.messages);
-  if (tokens <= options.budget && !options.force) return { messages: options.messages as ChatMessage[], trimmed: false, tokens, fitted: true };
+  if (tokens <= budget && !options.force) return { messages: options.messages as ChatMessage[], trimmed: false, tokens, outcome: "fitted" };
 
   // Clone the tool messages (the only mutable rung) so the canonical history is untouched.
   const messages = options.messages.map((message) => (message.role === "tool" ? { ...message, results: message.results.map((result) => ({ ...result })) } : message));
@@ -166,7 +170,7 @@ export function fitHistory(options: { messages: readonly ChatMessage[]; budget: 
   for (const message of messages) {
     if (message.role !== "tool") continue;
     for (const result of message.results) {
-      if ((!options.force && tokens <= options.budget) || !result.images?.length) continue;
+      if ((!options.force && tokens <= budget) || !result.images?.length) continue;
       tokens -= result.images.length * IMAGE_TOKENS;
       result.images = undefined;
       const note = "\n[Tool image omitted to fit the context window.]";
@@ -175,12 +179,12 @@ export function fitHistory(options: { messages: readonly ChatMessage[]; budget: 
       changed = true;
     }
   }
-  outer: for (let index = 0; index < messages.length && (options.force || tokens > options.budget); index += 1) {
+  outer: for (let index = 0; index < messages.length && (options.force || tokens > budget); index += 1) {
     const message = messages[index];
     if (message.role !== "tool") continue;
     for (const result of message.results) {
       const recorded = state.get(`${index}:${result.id}`) ?? { rung: rungOf(result.output), original: result.output.length };
-      while ((options.force || tokens > options.budget) && recorded.rung !== "skeleton") {
+      while ((options.force || tokens > budget) && recorded.rung !== "skeleton") {
         const current = result.output;
         const next = recorded.rung === "full" ? headTail(current) : skeleton(result.name, current, recorded.original);
         recorded.rung = recorded.rung === "full" ? "head_tail" : "skeleton";
@@ -191,8 +195,8 @@ export function fitHistory(options: { messages: readonly ChatMessage[]; budget: 
         result.output = next;
         changed = true;
       }
-      if (tokens <= options.budget) break outer;
+      if (tokens <= budget) break outer;
     }
   }
-  return { messages, trimmed: changed, tokens: Math.max(0, tokens), fitted: tokens <= options.budget };
+  return { messages, trimmed: changed, tokens: Math.max(0, tokens), outcome: tokens <= budget ? "fitted" : "unfittable" };
 }

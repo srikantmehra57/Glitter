@@ -94,7 +94,7 @@ These are inputs to this plan, not work to repeat:
 
 | Phase | Outcome | Status |
 |---|---|---|
-| 0 | Trust boundary and known correctness gaps closed | todo |
+| 0 | Trust boundary and known correctness gaps closed | done |
 | 1 | Repeatable live conformance and task-quality baseline | todo |
 | 2 | Context pressure handled with bounded, honest compaction | todo |
 | 3 | Interrupted work recovered without unsafe replay | todo |
@@ -107,43 +107,58 @@ These are inputs to this plan, not work to repeat:
 
 ## Phase 0 — Close trust and correctness gaps
 
-**Status:** todo · **Depends on:** current baseline · **Gate for:** every later
+**Status:** done · **Depends on:** current baseline · **Gate for:** every later
 phase.
 
 Make the existing harness safe to exercise broadly before adding more model or
 tool capability.
 
-- [ ] **0.1 Gate workspace MCP startup on trust.** Do not launch a command or
+- [x] **0.1 Gate workspace MCP startup on trust.** Do not launch a command or
       contact a server merely because a newly opened repository contains
       `.glitter/mcp.json`. Reuse the existing workspace-trust concept, but make
       the server configuration and its behavior visible before consent. Home
       configuration explicitly added by the user must not require redundant
       approval on every turn.
-- [ ] **0.2 Bind MCP consent to the effective configuration.** A changed
+- [x] **0.2 Bind MCP consent to the effective configuration.** A changed
       command, executable identity, argument, URL or authority-relevant
       environment/header configuration requires review. A revoke must take
       effect on the next sync and stop the affected generation when no active
       turn still uses it. Do not persist secrets in a consent record.
-- [ ] **0.3 Preserve atomic MCP synchronization.** A pending or denied server
+- [x] **0.3 Preserve atomic MCP synchronization.** A pending or denied server
       cannot partially join a generation; a replaced server must not silently
       retain the old server's authority under the same approval. Apply the
       existing tool-call permission policy after startup consent; neither check
       replaces the other.
-- [ ] **0.4 Add adversarial boundary coverage.** Prove that a rejected or
+      Evidence (2026-10-26): startup side effects, byte-exact consent, failed
+      replacement, in-flight revocation, native consent and UI states passed
+      `npm run verify`: 753 Node tests plus one environment-skipped Chromium
+      test, 422 UI tests and 213 native tests, with 0 vulnerabilities.
+- [x] **0.4 Add adversarial boundary coverage.** Prove that a rejected or
       unreviewed workspace configuration starts no process and sends no request.
       Cover server initialization side effects, configuration changes,
       revocation, cancellation, symlink/path escape, secret scrubbing and
       malicious or oversized protocol traffic. Bound MCP input buffers and
       response bodies before buffering them, not only tool text afterwards.
-- [ ] **0.5 Fix context-fit failure semantics.** A failed fit must not report
+      Evidence (2026-10-26): `node --test tests/harness.test.mjs` passed 97/97.
+      `npm run verify` passed: 749 Node tests plus one environment-skipped
+      Chromium test, 421 UI tests and 213 native tests, with 0 vulnerabilities.
+- [x] **0.5 Fix context-fit failure semantics.** A failed fit must not report
       that history was shortened to fit. Separate `fitted`, `unfittable` and
       `unknown window` outcomes; preserve the full transcript and give the user
       and model a truthful recovery path. Do not claim that unknown windows
       were fitted.
-- [ ] **0.6 Test current context and provider changes in an unsandboxed macOS
+      Evidence (2026-10-26): `node --test tests/harness.test.mjs` passed 99/99.
+      `npm run verify` passed: 751 Node tests plus one environment-skipped
+      Chromium test, 421 UI tests and 213 native tests, with 0 vulnerabilities.
+- [x] **0.6 Test current context and provider changes in an unsandboxed macOS
       development environment.** Run the existing shell and MCP integration
       tests as first-class sandbox processes and record any environment skips.
       Resolve reproducible product failures before continuing.
+      Evidence (2026-10-26): `npm run test:sandbox` passed 2/2 real seatbelt
+      shell/stdio-MCP checks with no skips; `node --test tests/isolation.test.mjs`
+      passed 14/14 with no skips. `npm run verify` passed: 753 Node tests plus
+      one environment-skipped Chromium test, 422 UI tests and 213 native tests,
+      with 0 vulnerabilities.
 
 **Primary surfaces:** `harness/mcp.ts`, `harness/context.ts`, `harness/host.ts`,
 `packages/glitter-bridge/src/isolation.ts` only if actually needed, the existing
@@ -566,3 +581,4 @@ into this file.
 | Date | Phase/gate | Revision and environment | Evidence and remaining gaps |
 |---|---|---|---|
 | 2026-10-24 | Planning baseline, not completion | Current dirty working tree; macOS review environment | Bridge typecheck passed. Focused harness/isolation run: 128/133 tests passed; all five harness failures hit nested `sandbox-exec` denial, so shell/MCP sandbox behavior remains unverified here. No live-provider or comparative task benchmark was run. |
+| 2026-10-26 | Phase 0 complete (0.1–0.6) | `20b90a2` plus current working-tree changes; macOS arm64 with seatbelt available | `npm run test:sandbox`: 2/2 real shell/stdio-MCP checks, no skips. `node --test tests/isolation.test.mjs`: 14/14, no skips. `npm run verify`: 753 Node tests plus one environment-skipped Chromium test, 422 UI tests, 213 native tests, 0 vulnerabilities. Integration coverage is named in `tests/sandbox-integration.test.mjs`; no live-provider or comparative task benchmark was run. |

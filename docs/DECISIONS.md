@@ -7,6 +7,33 @@ must respect. Don't log routine changes here; they belong in git history and
 
 ---
 
+### Orchestrator separates judgement from execution in the built-in harness
+
+- **Date:** 2026-10-26
+- **Context:** A long tool loop pays one model for both high-judgement decisions
+  and repetitive reading and typing. Automatic model selection was explicitly
+  out of scope without a product decision; [ORCHESTRATOR_PLAN.md](ORCHESTRATOR_PLAN.md)
+  is that decision and defines the implementation and evaluation gates.
+- **Decision:** Build Orchestrator as an opt-in mode for the built-in Harness
+  agent, off by default. The user assigns the Lead, Builder, Small-task and
+  Router roles; providers are independent and the app never infers a role from
+  a model's name. Manual mode, Muse and external agents are unchanged.
+- **Architecture:** Orchestration is a fixed app-driven pipeline, not open-ended
+  model-driven delegation through the `task` tool. Each role works in its own
+  session. Only bounded, validated, provider-neutral handoff documents cross
+  sessions; provider reasoning blocks, signatures and tool-call history never
+  do. The Lead session persists for the thread, while Builder and Small-task
+  sessions are fresh per plan or direct turn.
+- **Safety and accounting:** Every stage keeps the existing permissions,
+  approvals, cancellation and same-model retry behavior. Routing never weakens
+  a risk floor or substitutes an unavailable role silently. Usage is counted
+  per model call, including planning, consultation, review and repair. New live
+  evaluations are opt-in and cost-capped.
+- **Release gate:** Balanced cannot be recommended from unit tests alone. The
+  fixed corpus must compare Lead-alone, Builder-alone and Small-alone baselines
+  with complete Orchestrator accounting, and show matching task success at a
+  clearly lower cost per successful task before Phase 2 ships.
+
 ### Settings is a page, and the picker lists providers, not agents
 
 - **Date:** 2026-10-22
@@ -1043,7 +1070,10 @@ must respect. Don't log routine changes here; they belong in git history and
   `tool_search` away. MCP is the one tool kind that still asks in Autonomous:
   the harness cannot audit what an external server does with a call.
 - **Bounds:** Server names, env and header keys, argument counts, timeouts,
-  tool counts, description sizes and result sizes are bounded. `NODE_OPTIONS`
+  tool counts, description sizes and result sizes are bounded. Stdio frames and
+  each HTTP response, including error bodies and SSE streams, have a 1 MiB
+  ceiling enforced while reading; an oversized stdio server is terminated and
+  no partial generation becomes available. `NODE_OPTIONS`
   is refused, and a stdio server starts under `spawnIsolated` with its
   configured env merged after the environment scrub. Every env and header value
   is registered with the diagnostic redactor before startup; sync errors are
@@ -1162,6 +1192,22 @@ must respect. Don't log routine changes here; they belong in git history and
   does report it, use that signal rather than requiring every new model family
   to be added to a regex.
 
+### OpenRouter's own effort levels replace the gateway vocabulary
+
+- **Date:** 2026-10-26
+- **Decision:** An OpenRouter model row that carries
+  `reasoning.supported_efforts` supplies the picker's tiers, and
+  `reasoning.default_effort` its default. The list keeps the app's tier order
+  and follows the catalog into request validation, so Max reaches the wire
+  where the model lists it and a level the model does not list is dropped
+  instead of sent. A `supported_efforts` of `null` accepts every gateway level;
+  an omitted one means the model exposes no effort selection, so no picker and
+  no invented family levels. Rows without the block, and the Cline and Kilo
+  gateways, keep the family fallback, None to Extra high.
+- **Why:** OpenRouter reports effort support per model, but the fixed gateway
+  list capped every model at Extra high — hiding Max on Kimi K3.1 Pro and
+  others — and offered levels some models reject.
+
 ### The request is fitted to the model's window before it is sent
 
 - **Date:** 2026-10-23
@@ -1184,7 +1230,13 @@ must respect. Don't log routine changes here; they belong in git history and
   overflowed) and retried once inside the ordinary retry budget; a view that
   cannot shrink fails at once, keeping the overflow code non-retryable in
   effect. The window is resolved through the catalog, which the turn now loads
-  if needed, so a listed `context_length` beats the family default.
+  if needed, so a listed `context_length` beats the family default. Fitting
+  reports `fitted`, `unfittable` or `unknown_window`: an unknown window keeps
+  the request unchanged, and only a genuine fit can emit the shortened-to-fit
+  notice. An unfittable request stops before another provider call with a
+  `CONTEXT_WINDOW_EXCEEDED` recovery error naming a new thread or larger model;
+  the full transcript remains intact, and a reactive retry requires a tighter
+  request that actually fits.
 - **Why:** The four reviewed harnesses all manage this (ZCode's context
   builder, dsh's compaction and spill, MiniMax's compaction trigger); ours had
   only the clip, and a long session was the one thing that broke the default

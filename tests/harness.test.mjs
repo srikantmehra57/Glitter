@@ -47,7 +47,8 @@ function anthropicStub(script) {
     if (String(url).endsWith('/models?limit=1000')) return Response.json({ data: [{ id: 'claude-sonnet-9', display_name: 'Claude Sonnet 9' }, { id: 'claude-haiku-9' }] });
     const body = JSON.parse(init.body);
     calls.push({ url: String(url), headers: init.headers, body });
-    return sse(script[calls.length - 1](body));
+    const reply = script[calls.length - 1](body);
+    return reply instanceof Response ? reply : sse(reply);
   };
   return { calls, fetchImpl };
 }
@@ -83,6 +84,36 @@ function host(fetchImpl, store, limits, authorization) {
   return { instance, events };
 }
 
+/** Role checks already passed, so a routed turn starts without live probe calls. */
+const passedProbe = (role, modelId, capabilities = []) => ({ role, providerId: 'anthropic', modelId, probeVersion: 1, status: 'passed', detail: 'seeded', capabilities, checkedAt: Date.now() });
+const orchestratorRoles = {
+  lead: { modelId: 'anthropic/claude-sonnet-9', providerId: 'anthropic' },
+  builder: { modelId: 'anthropic/claude-haiku-9', providerId: 'anthropic' },
+  small: { modelId: 'anthropic/claude-haiku-9', providerId: 'anthropic' },
+  router: { modelId: 'anthropic/claude-haiku-9', providerId: 'anthropic' },
+};
+function seedProbes(instance) {
+  instance.probes = { version: 1, results: [passedProbe('lead', 'anthropic/claude-sonnet-9'), passedProbe('builder', 'anthropic/claude-haiku-9', ['tools'])] };
+}
+
+/** A Router reply that routes a plain question to the Small-task role. */
+const trivialAssessment = { taskKind: 'question', difficulty: 'trivial', designChoices: false, separable: true, causeKnown: true, risk: 'low', confidence: 'high', continuity: 'new', requiredCapabilities: [], reasonCodes: ['ask'] };
+
+/** A plan the validator accepts. The Builder script decides whether it actually edits anything. */
+const stagedPlan = {
+  kind: 'orchestrator-plan',
+  version: 1,
+  goal: 'Make the requested change.',
+  acceptanceCriteria: ['The change is present and checked.'],
+  fileTargets: [{ path: 'hello.txt', symbols: [], intent: 'Change the requested content.' }],
+  steps: [{ intent: 'Apply the change.', files: ['hello.txt'] }],
+  constraints: [],
+  checks: [],
+  risks: [],
+  askLeadIf: [],
+};
+const reviewPass = { kind: 'review-notes', version: 1, outcome: 'pass', fixes: [] };
+
 /** Wait until `count` turns have finished. */
 async function settled(events, count, ms = 4000) {
   for (let waited = 0; waited < ms && events.filter(({ event }) => event === 'turnCompleted').length < count; waited += 10) await new Promise((r) => setTimeout(r, 10));
@@ -117,6 +148,8 @@ test('providers need a key unless they are local or a custom endpoint, which the
   assert.deepEqual(effortTiers('custom-1', 'anthropic/claude-sonnet-4-6'), ['minimal', 'low', 'medium', 'high'], 'a custom gateway recognizes vendor-prefixed reasoning models');
   assert.deepEqual(effortTiers('custom-9', 'openai/gpt-5.4'), ['minimal', 'low', 'medium', 'high']);
   assert.deepEqual(effortTiers('custom-1', 'gpt-4.1'), [], 'a custom endpoint does not claim efforts for non-reasoning models');
+  assert.deepEqual(effortTiers('openrouter', 'moonshotai/kimi-k3.1-pro', 'openai', undefined, ['max', 'high', 'low', 'none']), ['none', 'low', 'high', 'max'], 'a catalog’s own list replaces the family fallback');
+  assert.deepEqual(effortTiers('openrouter', 'moonshotai/kimi-k3.1-pro', 'openai', undefined, []), [], 'an empty catalog list is authoritative too');
   assert.deepEqual(effortTiers('custom-1', 'moonshotai/kimi-k3.1-pro', 'openai', true), ['low', 'high', 'max'], 'Kimi K3.1 Pro takes Moonshot levels, not the gateway four');
   assert.deepEqual(effortTiers('custom-1', 'moonshotai/kimi-k3.1-pro-highspeed'), ['low', 'high', 'max']);
   assert.deepEqual(effortTiers('custom-1', 'moonshotai/kimi-k2.8-preview'), ['low', 'high', 'max']);
@@ -522,6 +555,57 @@ test('the Kilo API lists chat models and sends OpenRouter reasoning', async () =
   assert.equal(events.filter(({ payload }) => payload.item?.kind === 'agentMessage').at(-1).payload.item.text, 'There is hello.txt.');
 });
 
+test('OpenRouter lists each model’s own effort levels and sends the selected one', async () => {
+  const root = await workspace();
+  const requests = [];
+  const fetchImpl = async (url, init) => {
+    if (String(url) === 'https://openrouter.ai/api/v1/models') {
+      return Response.json({ data: [
+        { id: 'moonshotai/kimi-k3.1-pro', name: 'MoonshotAI: Kimi K3.1 Pro', supported_parameters: ['tools'], reasoning: { mandatory: false, default_enabled: true, supported_efforts: ['max', 'high', 'low', 'none'], default_effort: 'max' } },
+        { id: 'openai/gpt-5.5-pro', name: 'OpenAI: GPT-5.5 Pro', supported_parameters: ['tools'], reasoning: { supported_efforts: ['high'], default_effort: 'high' } },
+        { id: 'meta/muse-spark-open', name: 'Meta: Muse Spark Open', reasoning: { supported_efforts: ['xhigh', 'high', 'medium', 'low'], default_effort: 'medium' } },
+        { id: 'recursive/flint-v1.0:free', name: 'Recursive: Flint (free)', reasoning: { mandatory: true } },
+        { id: 'anthropic/claude-opus-4.5', name: 'Anthropic: Claude Opus 4.5', reasoning: { mandatory: false } },
+        { id: 'acme/any-effort', name: 'Acme Any Effort', reasoning: { supported_efforts: null, default_effort: 'medium' } },
+        { id: 'acme/plain-1', name: 'Acme Plain' },
+        { id: 'deepseek/deepseek-r1', name: 'DeepSeek R1' },
+      ] });
+    }
+    const body = JSON.parse(init.body);
+    requests.push({ url: String(url), headers: init.headers, body });
+    return sse([{ choices: [{ delta: { content: 'Done.' }, finish_reason: 'stop' }] }, '[DONE]']);
+  };
+  const events = [];
+  const instance = new HarnessHost((event, payload) => events.push({ event, payload }), new SessionStore(await mkdtemp(join(temporary, 'store-'))), fetchImpl);
+  instance.setCredentials({ openrouter: { key: 'sk-or-test' } });
+  const listed = await instance.listModels();
+  const find = (id) => listed.models.find((model) => model.modelId === id);
+  assert.deepEqual(find('openrouter/moonshotai/kimi-k3.1-pro').reasoningEfforts, ['none', 'low', 'high', 'max'], 'the model’s own levels replace the gateway vocabulary');
+  assert.equal(find('openrouter/moonshotai/kimi-k3.1-pro').defaultReasoningEffort, 'max', 'the catalog’s default wins');
+  assert.deepEqual(find('openrouter/openai/gpt-5.5-pro').reasoningEfforts, ['high'], 'a model with one level offers one level');
+  assert.deepEqual(find('openrouter/meta/muse-spark-open').reasoningEfforts, ['low', 'medium', 'high', 'xhigh'], 'the list keeps the app’s tier order');
+  assert.deepEqual(find('openrouter/recursive/flint-v1.0:free').reasoningEfforts, [], 'a reasoning block without levels offers no effort control');
+  assert.deepEqual(find('openrouter/anthropic/claude-opus-4.5').reasoningEfforts, [], 'an omitted level list suppresses the family fallback');
+  assert.deepEqual(find('openrouter/acme/any-effort').reasoningEfforts, ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'], 'a null list accepts every gateway level');
+  assert.equal(find('openrouter/acme/any-effort').defaultReasoningEffort, 'medium');
+  assert.deepEqual(find('openrouter/acme/plain-1').reasoningEfforts, [], 'a row with no metadata and no known family has none');
+  assert.deepEqual(find('openrouter/deepseek/deepseek-r1').reasoningEfforts, ['none', 'low', 'medium', 'high', 'xhigh'], 'the family fallback stays for rows without the block');
+
+  const { sessionId } = await instance.startSession({ workspaceRoot: root, modelId: 'openrouter/moonshotai/kimi-k3.1-pro', effort: 'max' });
+  await instance.sendTurn({ sessionId, text: 'hello' });
+  await until(events, ({ event }) => event === 'turnCompleted');
+  assert.equal(requests[0].url, 'https://openrouter.ai/api/v1/chat/completions');
+  assert.deepEqual(requests[0].body.reasoning, { effort: 'max' }, 'Max reaches the wire even though the gateway fallback stops at Extra high');
+  assert.equal(requests[0].body.model, 'moonshotai/kimi-k3.1-pro');
+
+  await instance.setModel({ sessionId, modelId: 'openrouter/openai/gpt-5.5-pro' });
+  await instance.setEffort(sessionId, 'low');
+  const before = events.filter(({ event }) => event === 'turnCompleted').length;
+  await instance.sendTurn({ sessionId, text: 'again' });
+  await until(events, () => events.filter(({ event }) => event === 'turnCompleted').length > before);
+  assert.equal(requests.at(-1).body.reasoning, undefined, 'a level the model does not list is not sent');
+});
+
 test('a rate-limited call is retried, and an unconfigured provider fails with what to do', async () => {
   const root = await workspace();
   let attempts = 0;
@@ -592,6 +676,398 @@ test('each model call reports its own tokens, finish reason and duration', async
   assert.equal(calls[0].call.attempt, undefined, 'a first attempt does not announce itself');
 });
 
+test('a routed turn classifies once, records the decision, and runs the chosen role', async () => {
+  const root = await workspace();
+  const storeRoot = await mkdtemp(join(temporary, 'store-'));
+  const { calls, fetchImpl } = anthropicStub([() => textReply(JSON.stringify(trivialAssessment)), () => textReply('Hello.')]);
+  const { instance, events } = host(fetchImpl, new SessionStore(storeRoot));
+  seedProbes(instance);
+  const { sessionId } = await instance.startSession({ workspaceRoot: root, orchestrator: { goal: 'balanced', models: orchestratorRoles } });
+  const { turnId } = await instance.sendTurn({ sessionId, text: 'hi' });
+  const done = await until(events, ({ event }) => event === 'turnCompleted');
+  assert.equal(done.payload.outcome.params.terminal, 'completed');
+  const routeEvent = events.find(({ event }) => event === 'route');
+  assert.ok(routeEvent, 'the route is announced');
+  assert.equal(routeEvent.payload.turnId, turnId);
+  const route = routeEvent.payload.route;
+  assert.equal(route.shape, 'direct-small');
+  assert.equal(route.executedShape, 'direct-small');
+  assert.deepEqual(route.stages.map((stage) => stage.stage), ['router', 'small']);
+  assert.equal(route.roles.lead.modelId, 'anthropic/claude-sonnet-9');
+  const reports = events.filter(({ event }) => event === 'modelCall').map(({ payload }) => payload.call);
+  assert.deepEqual(reports.map((call) => [call.routeId === route.routeId, call.role, call.stage]), [
+    [true, 'router', 'router'],
+    [true, 'small', 'small'],
+  ]);
+  assert.equal(calls.length, 2, 'seeded checks made no extra provider calls');
+  assert.match(JSON.stringify(calls[0].body.system), /You classify one coding-agent request/);
+  assert.equal(JSON.parse(calls[0].body.messages[0].content[0].text).prompt, 'hi', 'the Router sees the request as a bounded envelope');
+  assert.equal(calls[0].body.tools, undefined, 'the Router call offers no tools');
+  assert.deepEqual(calls[1].body.tools.map((tool) => tool.name).includes('write_file'), true, 'the Small call keeps the turn tools');
+  const stored = await readFile(join(storeRoot, 'sessions', `${sessionId}.jsonl`), 'utf8');
+  assert.match(stored, /"type":"route","turnId":"[^"]+"/);
+  assert.match(stored, new RegExp(route.routeId));
+});
+
+test('an invalid Router reply falls back to a staged Lead-guided turn and records the fallback', async () => {
+  const root = await workspace();
+  const storeRoot = await mkdtemp(join(temporary, 'store-'));
+  const { calls, fetchImpl } = anthropicStub([
+    () => textReply('not json'),
+    () => textReply(JSON.stringify(stagedPlan)),
+    () => textReply('Builder did it.'),
+  ]);
+  const { instance, events } = host(fetchImpl, new SessionStore(storeRoot));
+  seedProbes(instance);
+  const { sessionId } = await instance.startSession({ workspaceRoot: root, orchestrator: { goal: 'balanced', models: orchestratorRoles } });
+  await instance.sendTurn({ sessionId, text: 'hi' });
+  const done = await until(events, ({ event }) => event === 'turnCompleted');
+  assert.equal(done.payload.outcome.params.terminal, 'completed');
+  const route = events.filter(({ event }) => event === 'route').at(-1).payload.route;
+  assert.equal(route.shape, 'lead-guided');
+  assert.equal(route.executedShape, 'lead-guided', 'the Router failed but the staged pipeline still ran');
+  assert.equal(route.executionFallback, undefined);
+  assert.ok(route.reasonCodes.includes('router-invalid-json-fallback'));
+  assert.deepEqual(route.stages.map((stage) => stage.stage), ['router', 'lead-plan', 'builder']);
+  const reports = events.filter(({ event }) => event === 'modelCall').map(({ payload }) => payload.call);
+  assert.deepEqual(reports.map((call) => [call.role, call.stage]), [
+    ['router', 'router'],
+    ['lead', 'lead-plan'],
+    ['builder', 'builder'],
+  ]);
+  assert.equal(calls[1].body.tools, undefined, 'the Lead plan call offers no tools');
+  assert.match(JSON.stringify(calls[2].body.system), /ORCHESTRATOR BUILDER MODE/);
+  assert.match(JSON.stringify(calls[2].body.system), /Make the requested change/);
+});
+
+test('a reopened thread replays each route so its turns keep their label', async () => {
+  const root = await workspace();
+  const storeRoot = await mkdtemp(join(temporary, 'store-'));
+  const { fetchImpl } = anthropicStub([() => textReply(JSON.stringify(trivialAssessment)), () => textReply('Hello.')]);
+  const { instance, events } = host(fetchImpl, new SessionStore(storeRoot));
+  seedProbes(instance);
+  const { sessionId } = await instance.startSession({ workspaceRoot: root, orchestrator: { goal: 'balanced', models: orchestratorRoles } });
+  const { turnId } = await instance.sendTurn({ sessionId, text: 'hi' });
+  await until(events, ({ event }) => event === 'turnCompleted');
+  const opened = events.find(({ event }) => event === 'route').payload.route;
+  await instance.closeSession({ sessionId });
+  const reopened = host(fetchImpl, new SessionStore(storeRoot));
+  await reopened.instance.resumeSession({ sessionId, workspaceRoot: root });
+  const replayed = reopened.events.filter(({ event }) => event === 'route').map(({ payload }) => payload);
+  assert.deepEqual(replayed.map(({ turnId: own, route }) => [own, route.routeId]), [[turnId, opened.routeId]]);
+  assert.equal(reopened.events.some(({ event }) => event === 'modelCall'), false, 'replaying a route runs nothing');
+});
+
+test('an Orchestrator thread refuses a manual model or effort change', async () => {
+  const root = await workspace();
+  const { fetchImpl } = anthropicStub([]);
+  const { instance } = host(fetchImpl, new SessionStore(await mkdtemp(join(temporary, 'store-'))));
+  const { sessionId } = await instance.startSession({ workspaceRoot: root, orchestrator: { goal: 'cost', models: orchestratorRoles } });
+  await assert.rejects(() => instance.setModel({ sessionId, modelId: 'anthropic/claude-haiku-9' }), /role models/);
+  await assert.rejects(() => instance.setEffort(sessionId, 'low'), /role's effort/);
+});
+
+test('switching a live thread to Orchestrator stashes the manual pick and restores it', async () => {
+  const root = await workspace();
+  const { fetchImpl } = anthropicStub([]);
+  const { instance } = host(fetchImpl, new SessionStore(await mkdtemp(join(temporary, 'store-'))));
+  const { sessionId } = await instance.startSession({ workspaceRoot: root, modelId: 'anthropic/claude-haiku-9', effort: 'low' });
+  const enabled = await instance.setOrchestrator({ sessionId, orchestrator: { goal: 'balanced', models: orchestratorRoles } });
+  assert.equal(enabled.status, 'accepted');
+  assert.equal(enabled.agentConfig.orchestrator.goal, 'balanced', 'the goal is reported back');
+  assert.equal(enabled.agentConfig.modelId, 'anthropic/claude-sonnet-9', 'the Lead becomes the session model');
+  assert.equal(enabled.agentConfig.effort, undefined, 'the manual effort clears');
+  const disabled = await instance.setOrchestrator({ sessionId });
+  assert.equal(disabled.agentConfig.orchestrator, null);
+  assert.equal(disabled.agentConfig.modelId, 'anthropic/claude-haiku-9', 'the manual model comes back');
+  assert.equal(disabled.agentConfig.effort, 'low', 'and its effort');
+  await instance.setOrchestrator({ sessionId, orchestrator: { goal: 'cost', models: orchestratorRoles } });
+  const again = await instance.setOrchestrator({ sessionId });
+  assert.equal(again.agentConfig.modelId, 'anthropic/claude-haiku-9', 'a second switch restores the same pick, not the Lead');
+  assert.equal(again.agentConfig.effort, 'low');
+});
+
+test('a forced shape skips the Router and records what was asked for', async () => {
+  const root = await workspace();
+  const { calls, fetchImpl } = anthropicStub([() => textReply('Small did it.')]);
+  const { instance, events } = host(fetchImpl, new SessionStore(await mkdtemp(join(temporary, 'store-'))));
+  seedProbes(instance);
+  const { sessionId } = await instance.startSession({ workspaceRoot: root, orchestrator: { goal: 'balanced', models: orchestratorRoles } });
+  const { turnId } = await instance.sendTurn({ sessionId, text: 'rename the helper', forcedShape: 'direct-small' });
+  await until(events, ({ event }) => event === 'turnCompleted');
+  const route = events.find(({ event }) => event === 'route').payload.route;
+  assert.equal(route.shape, 'direct-small');
+  assert.equal(route.requestedShape, 'direct-small');
+  assert.equal(route.preRouteRule, 'pre-route:forced-shape');
+  assert.ok(route.reasonCodes.includes('forced-shape'));
+  assert.deepEqual(route.stages.map((stage) => stage.stage), ['small'], 'no Router call was made');
+  assert.equal(calls.length, 1);
+  assert.equal(events.find(({ event }) => event === 'route').payload.turnId, turnId);
+});
+
+test('a forced shape a floor raises records both shapes and who ran it', async () => {
+  const root = await workspace();
+  const { fetchImpl } = anthropicStub([
+    () => textReply(JSON.stringify(stagedPlan)),
+    () => textReply('Builder handled the risky change.'),
+    () => textReply(JSON.stringify(reviewPass)),
+  ]);
+  const { instance, events } = host(fetchImpl, new SessionStore(await mkdtemp(join(temporary, 'store-'))));
+  instance.probes = { version: 1, results: [passedProbe('lead', 'anthropic/claude-sonnet-9', ['tools']), passedProbe('builder', 'anthropic/claude-haiku-9', ['tools'])] };
+  const { sessionId } = await instance.startSession({ workspaceRoot: root, orchestrator: { goal: 'balanced', models: orchestratorRoles } });
+  await instance.sendTurn({ sessionId, text: 'drop the users table', forcedShape: 'direct-small' });
+  await until(events, ({ event }) => event === 'turnCompleted');
+  const route = events.filter(({ event }) => event === 'route').at(-1).payload.route;
+  assert.equal(route.requestedShape, 'direct-small', 'the record keeps what the message asked for');
+  assert.equal(route.shape, 'lead-guided', 'the high-risk floor wins');
+  assert.equal(route.executedShape, 'lead-guided', 'the staged pipeline runs the Lead plan and Builder build');
+  assert.equal(route.executionFallback, undefined);
+  assert.ok(route.reasonCodes.includes('forced-shape'));
+  assert.ok(route.reasonCodes.includes('floor:high-risk'));
+  assert.deepEqual(route.stages.map((stage) => stage.stage), ['lead-plan', 'builder', 'review'], 'high-risk work is reviewed even in Balanced');
+  assert.equal(route.reviewCount, 1);
+});
+
+test('two rejected plans hand the turn to the Lead and record the fallback', async () => {
+  const root = await workspace();
+  const { calls, fetchImpl } = anthropicStub([
+    () => textReply('not json'),
+    () => textReply('still not json'),
+    () => textReply('I did it myself.'),
+  ]);
+  const { instance, events } = host(fetchImpl, new SessionStore(await mkdtemp(join(temporary, 'store-'))));
+  seedProbes(instance);
+  const { sessionId } = await instance.startSession({ workspaceRoot: root, orchestrator: { goal: 'balanced', models: orchestratorRoles } });
+  await instance.sendTurn({ sessionId, text: 'build the thing', forcedShape: 'lead-guided' });
+  await until(events, ({ event }) => event === 'turnCompleted');
+  const route = events.filter(({ event }) => event === 'route').at(-1).payload.route;
+  assert.equal(route.shape, 'lead-guided');
+  assert.equal(route.executedShape, 'lead-only');
+  assert.equal(route.executionFallback, 'plan-invalid');
+  assert.ok(route.reasonCodes.includes('execution:plan-invalid'));
+  assert.deepEqual(route.stages.map((stage) => stage.stage), ['lead-plan', 'lead-plan', 'lead'], 'the Lead gets one retry, then does the work');
+  assert.match(JSON.stringify(calls[1].body.messages), /could not be completed|rejected/i);
+  assert.match(JSON.stringify(calls[2].body.system), /ORCHESTRATOR LEAD MODE/);
+  assert.equal(events.some(({ event, payload }) => event === 'item' && payload.item?.kind === 'orchestratorPlan'), false, 'a rejected plan is not shown as a handoff');
+  const reports = events.filter(({ event }) => event === 'modelCall').map(({ payload }) => payload.call);
+  assert.deepEqual(reports.map((call) => [call.role, call.stage]), [
+    ['lead', 'lead-plan'],
+    ['lead', 'lead-plan'],
+    ['lead', 'lead'],
+  ]);
+});
+
+test('Output reviews the build, runs one repair, and reviews again', async () => {
+  const root = await workspace();
+  const { calls, fetchImpl } = anthropicStub([
+    () => textReply(JSON.stringify(stagedPlan)),
+    () => toolReply('tu_edit', 'edit_file', { path: 'hello.txt', old_string: 'one', new_string: 'ONE' }),
+    () => textReply('Changed one to ONE.'),
+    () => textReply(JSON.stringify({ kind: 'review-notes', version: 1, outcome: 'changes-required', fixes: ['Also change two.'] })),
+    () => textReply('Fixed two as well.'),
+    () => textReply(JSON.stringify(reviewPass)),
+  ]);
+  const { instance, events } = host(fetchImpl, new SessionStore(await mkdtemp(join(temporary, 'store-'))));
+  seedProbes(instance);
+  const { sessionId } = await instance.startSession({ workspaceRoot: root, approvalMode: 'allowAll', orchestrator: { goal: 'output', models: orchestratorRoles } });
+  await instance.sendTurn({ sessionId, text: 'make the change', forcedShape: 'lead-guided' });
+  const done = await until(events, ({ event }) => event === 'turnCompleted');
+  assert.equal(done.payload.outcome.params.terminal, 'completed');
+  const route = events.filter(({ event }) => event === 'route').at(-1).payload.route;
+  assert.equal(route.executedShape, 'lead-guided');
+  assert.deepEqual(route.stages.map((stage) => stage.stage), ['lead-plan', 'builder', 'review', 'repair', 'review']);
+  assert.equal(route.reviewCount, 2);
+  assert.equal(calls.length, 6);
+  assert.match(JSON.stringify(calls[3].body.messages), /1 file changed, \+1\/-1/, 'the review sees the Builder’s diff stat');
+  assert.match(JSON.stringify(calls[3].body.messages), /Changed one to ONE/, 'the review sees the Builder’s summary');
+  assert.match(JSON.stringify(calls[4].body.system), /Also change two/, 'the repair receives the review notes');
+  const handoffs = events.filter(({ event, payload }) => event === 'item' && payload.item?.kind?.startsWith('orchestrator')).map(({ payload }) => payload.item);
+  assert.deepEqual(handoffs.map((handoff) => handoff.kind), [
+    'orchestratorPlan',
+    'orchestratorBuildReport',
+    'orchestratorReview',
+    'orchestratorBuildReport',
+    'orchestratorReview',
+  ]);
+  assert.equal(route.references.plan, handoffs[0].itemId, 'the route points at the plan item');
+  assert.equal(route.references.buildReport, handoffs[3].itemId, 'the route points at the latest build report');
+  assert.equal(route.references.reviewNotes, handoffs[4].itemId, 'the route points at the latest review');
+  assert.match(handoffs[0].text, /Goal: Make the requested change/);
+  assert.match(handoffs[1].text, /1 file changed, \+1\/-1/);
+  assert.match(handoffs[2].text, /Review: changes-required/);
+  assert.match(handoffs[3].text, /Build report after repair/);
+  assert.match(handoffs[4].text, /Review: pass/);
+  const reports = events.filter(({ event }) => event === 'modelCall').map(({ payload }) => payload.call);
+  assert.deepEqual(reports.map((call) => [call.role, call.stage]), [
+    ['lead', 'lead-plan'],
+    ['builder', 'builder'],
+    ['builder', 'builder'],
+    ['lead', 'review'],
+    ['builder', 'repair'],
+    ['lead', 'review'],
+  ]);
+});
+
+test('a Builder can ask the Lead and continue with the answer', async () => {
+  const root = await workspace();
+  const { calls, fetchImpl } = anthropicStub([
+    () => textReply(JSON.stringify(stagedPlan)),
+    () => toolReply('tu_ask', 'ask_lead', { question: 'Which file should change?', excerpt: 'hello.txt has three lines.' }),
+    () => textReply('Change hello.txt, then verify it.'),
+    () => textReply('Changed hello.txt.'),
+  ]);
+  const { instance, events } = host(fetchImpl, new SessionStore(await mkdtemp(join(temporary, 'store-'))));
+  seedProbes(instance);
+  const { sessionId } = await instance.startSession({ workspaceRoot: root, orchestrator: { goal: 'balanced', models: orchestratorRoles } });
+  await instance.sendTurn({ sessionId, text: 'make the change', forcedShape: 'lead-guided' });
+  await until(events, ({ event }) => event === 'turnCompleted');
+  const route = events.filter(({ event }) => event === 'route').at(-1).payload.route;
+  assert.equal(route.consultCount, 1);
+  assert.deepEqual(route.stages.map((stage) => stage.stage), ['lead-plan', 'builder', 'consult'], 'the consult is recorded inside the build stage');
+  assert.equal(calls.length, 4);
+  assert.ok(calls[1].body.tools.some((tool) => tool.name === 'ask_lead'), 'the Builder is offered the Lead tool');
+  assert.equal(calls[2].body.tools, undefined, 'the consult call is tool-less');
+  assert.match(JSON.stringify(calls[2].body.messages), /Which file should change\?/);
+  assert.match(JSON.stringify(calls[2].body.messages), /hello\.txt has three lines/);
+  assert.match(JSON.stringify(calls[3].body.messages), /Change hello\.txt, then verify it\./, 'the Builder sees the answer as a tool result');
+  const ask = events.filter(({ event, payload }) => event === 'item' && payload.item?.tool === 'ask_lead').at(-1);
+  assert.equal(ask.payload.item.status, 'completed');
+  assert.match(ask.payload.item.visibleOutput, /Change hello\.txt/);
+  const reports = events.filter(({ event }) => event === 'modelCall').map(({ payload }) => payload.call);
+  assert.deepEqual(reports.map((call) => [call.role, call.stage]), [
+    ['lead', 'lead-plan'],
+    ['builder', 'builder'],
+    ['lead', 'consult'],
+    ['builder', 'builder'],
+  ]);
+});
+
+test('the consult budget stops a second ask_lead without another Lead call', async () => {
+  const root = await workspace();
+  const { calls, fetchImpl } = anthropicStub([
+    () => textReply(JSON.stringify(stagedPlan)),
+    () => toolReply('tu_ask1', 'ask_lead', { question: 'First question.' }),
+    () => textReply('First answer.'),
+    () => toolReply('tu_ask2', 'ask_lead', { question: 'Second question.' }),
+    () => textReply('Finished without a second answer.'),
+  ]);
+  const { instance, events } = host(fetchImpl, new SessionStore(await mkdtemp(join(temporary, 'store-'))));
+  seedProbes(instance);
+  const { sessionId } = await instance.startSession({ workspaceRoot: root, orchestrator: { goal: 'cost', models: orchestratorRoles } });
+  await instance.sendTurn({ sessionId, text: 'make the change', forcedShape: 'lead-guided' });
+  await until(events, ({ event }) => event === 'turnCompleted');
+  const route = events.filter(({ event }) => event === 'route').at(-1).payload.route;
+  assert.equal(route.consultCount, 1, 'the cost goal allows one consult');
+  assert.equal(calls.length, 5, 'the refused ask_lead made no provider call');
+  const asks = events.filter(({ event, payload }) => event === 'item' && payload.item?.tool === 'ask_lead');
+  assert.equal(asks.at(-1).payload.item.status, 'failed');
+  assert.match(asks.at(-1).payload.item.failureReason, /No Lead consults remain/);
+  assert.match(JSON.stringify(calls[4].body.messages), /No Lead consults remain/, 'the Builder is told the budget is spent');
+});
+
+test('a repeated failing check triggers one automatic Lead consult', async () => {
+  const root = await workspace();
+  const { calls, fetchImpl } = anthropicStub([
+    () => textReply(JSON.stringify(stagedPlan)),
+    () => toolReply('tu_edit', 'edit_file', { path: 'hello.txt', old_string: 'one', new_string: 'ONE' }),
+    () => toolReply('tu_fail1', 'bash', { command: 'false' }),
+    () => toolReply('tu_fail2', 'bash', { command: 'false' }),
+    () => textReply('Stop re-running the check and inspect the second line.'),
+    () => textReply('Inspected and finished.'),
+  ]);
+  const { instance, events } = host(fetchImpl, new SessionStore(await mkdtemp(join(temporary, 'store-'))));
+  seedProbes(instance);
+  const { sessionId } = await instance.startSession({ workspaceRoot: root, approvalMode: 'allowAll', orchestrator: { goal: 'balanced', models: orchestratorRoles } });
+  await instance.sendTurn({ sessionId, text: 'make the change', forcedShape: 'lead-guided' });
+  await until(events, ({ event }) => event === 'turnCompleted');
+  const route = events.filter(({ event }) => event === 'route').at(-1).payload.route;
+  assert.equal(route.consultCount, 1, 'the stuck check spent one consult');
+  assert.deepEqual(route.stages.map((stage) => stage.stage), ['lead-plan', 'builder', 'consult']);
+  assert.equal(calls.length, 6);
+  assert.match(JSON.stringify(calls[4].body.messages), /failed 2 times after edits/, 'the Lead sees why it was consulted');
+  assert.match(JSON.stringify(calls[5].body.messages), /Lead guidance \(automatic consult · check-failed-twice\)/, 'the Builder sees the guidance');
+  assert.ok(events.some(({ event, payload }) => event === 'agentNotice' && payload.message?.includes('looks stuck')), 'the consult is announced');
+  const consultItem = events.find(({ event, payload }) => event === 'item' && payload.item?.kind === 'orchestratorConsult')?.payload.item;
+  assert.ok(consultItem, 'the automatic consult is in the trajectory');
+  assert.match(consultItem.text, /Automatic consult · check-failed-twice/);
+  assert.match(consultItem.text, /Stop re-running the check/);
+  assert.equal(await readFile(join(root, 'hello.txt'), 'utf8'), 'ONE\ntwo\nthree\n');
+});
+
+test('a question routed to the Lead-guided shape skips planning', async () => {
+  const root = await workspace();
+  const complexQuestion = { ...trivialAssessment, difficulty: 'complex', designChoices: true };
+  const { calls, fetchImpl } = anthropicStub([
+    () => textReply(JSON.stringify(complexQuestion)),
+    () => textReply('Because the shared fixture is not reset.'),
+  ]);
+  const { instance, events } = host(fetchImpl, new SessionStore(await mkdtemp(join(temporary, 'store-'))));
+  seedProbes(instance);
+  const { sessionId } = await instance.startSession({ workspaceRoot: root, orchestrator: { goal: 'balanced', models: orchestratorRoles } });
+  await instance.sendTurn({ sessionId, text: 'Why does the test fail in parallel?' });
+  await until(events, ({ event }) => event === 'turnCompleted');
+  const route = events.filter(({ event }) => event === 'route').at(-1).payload.route;
+  assert.equal(route.shape, 'lead-guided');
+  assert.equal(route.executedShape, 'lead-only');
+  assert.ok(route.reasonCodes.includes('execution:lead-question'));
+  assert.deepEqual(route.stages.map((stage) => stage.stage), ['router', 'lead']);
+  assert.match(JSON.stringify(calls[1].body.system), /ORCHESTRATOR LEAD MODE/);
+  assert.equal(calls[1].body.tools.length > 0, true, 'the Lead answers with tools');
+});
+
+test('a Builder provider error hands the turn to the Lead and records the takeover', async () => {
+  const root = await workspace();
+  const { fetchImpl } = anthropicStub([
+    () => textReply(JSON.stringify(stagedPlan)),
+    () => new Response('bad request', { status: 400 }),
+    () => textReply('The Lead finished it.'),
+  ]);
+  const { instance, events } = host(fetchImpl, new SessionStore(await mkdtemp(join(temporary, 'store-'))));
+  seedProbes(instance);
+  const { sessionId } = await instance.startSession({ workspaceRoot: root, orchestrator: { goal: 'balanced', models: orchestratorRoles } });
+  await instance.sendTurn({ sessionId, text: 'make the change', forcedShape: 'lead-guided' });
+  const done = await until(events, ({ event }) => event === 'turnCompleted');
+  assert.equal(done.payload.outcome.params.terminal, 'completed');
+  const route = events.filter(({ event }) => event === 'route').at(-1).payload.route;
+  assert.equal(route.executedShape, 'lead-guided');
+  assert.deepEqual(route.stages.map((stage) => stage.stage), ['lead-plan', 'builder', 'takeover']);
+  assert.equal(route.takeovers.length, 1);
+  assert.match(route.takeovers[0], /^builder:/);
+  assert.ok(route.reasonCodes.includes('execution:takeover'));
+  const reports = events.filter(({ event }) => event === 'modelCall').map(({ payload }) => payload.call);
+  assert.deepEqual(reports.map((call) => [call.role, call.stage]), [
+    ['lead', 'lead-plan'],
+    ['lead', 'takeover'],
+  ], 'the failed Builder call produced no completed call report');
+});
+
+test('a queued message keeps the shape it was sent with', async () => {
+  const root = await workspace();
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    if (String(url).endsWith('/models?limit=1000')) return Response.json({ data: [{ id: 'claude-haiku-9' }, { id: 'claude-sonnet-9' }] });
+    calls.push(JSON.parse(init.body));
+    const index = calls.length;
+    if (index === 1) await gate;
+    return sse(textReply(index === 1 ? 'Small did it.' : 'Builder did it too.'));
+  };
+  const { instance, events } = host(fetchImpl, new SessionStore(await mkdtemp(join(temporary, 'store-'))));
+  seedProbes(instance);
+  const { sessionId } = await instance.startSession({ workspaceRoot: root, orchestrator: { goal: 'balanced', models: orchestratorRoles } });
+  const first = await instance.sendTurn({ sessionId, text: 'rename the helper', forcedShape: 'direct-small' });
+  const queued = await instance.sendTurn({ sessionId, text: 'and the other one', ifBusy: 'queue', forcedShape: 'direct-builder' });
+  assert.equal(queued.disposition, 'queued');
+  release();
+  const done = await settled(events, 2, 8000);
+  assert.equal(done.filter(({ payload }) => payload.outcome?.params?.terminal === 'completed').length, 2);
+  const routes = events.filter(({ event }) => event === 'route').map(({ payload }) => payload);
+  assert.deepEqual(routes.map(({ turnId }) => turnId), [first.turnId, queued.turnId]);
+  assert.deepEqual(routes.map(({ route }) => [route.requestedShape, route.shape]), [['direct-small', 'direct-small'], ['direct-builder', 'direct-builder']]);
+  assert.equal(calls.length, 2, 'both queued turns skipped the Router');
+});
+
 test('a cached call counts its cache in the input, and a retry says which attempt landed', async () => {
   const root = await workspace();
   let attempts = 0;
@@ -660,6 +1136,30 @@ test('the budget keeps an output reserve, and a small window keeps a positive in
   assert.deepEqual(contextBudget(2_000), { input: 1_800, output: 200 });
 });
 
+test('fitHistory distinguishes fitted, unfittable and unknown-window outcomes', () => {
+  const original = 'x'.repeat(12_000);
+  const messages = [
+    { role: 'user', content: [{ type: 'text', text: 'do it' }] },
+    { role: 'assistant', text: '', toolCalls: [{ id: 'a', name: 'bash', input: { command: 'one' } }] },
+    { role: 'tool', results: [{ id: 'a', name: 'bash', output: original }] },
+  ];
+  const tokens = estimateRequestTokens({ system: { stable: '', volatile: '' }, messages, tools: [] });
+  const exact = fitHistory({ messages, budget: tokens });
+  assert.equal(exact.outcome, 'fitted');
+  assert.equal(exact.tokens, tokens);
+  assert.equal(exact.messages, messages, 'an unchanged request keeps its identity for caching');
+  const impossible = fitHistory({ messages, budget: 1 });
+  assert.equal(impossible.outcome, 'unfittable');
+  assert.equal(impossible.trimmed, true);
+  assert.ok(impossible.tokens > 1);
+  assert.equal(messages[2].results[0].output, original, 'even a failed request view leaves the transcript untouched');
+  const unknown = fitHistory({ messages, budget: null, force: true });
+  assert.equal(unknown.outcome, 'unknown_window');
+  assert.equal(unknown.trimmed, false);
+  assert.equal(unknown.messages, messages, 'an unknown window preserves the request and its identity');
+  assert.equal(unknown.messages[2].results[0].output, original);
+});
+
 test('fitHistory shortens the oldest results first, newest intact, and the ladder marks what it dropped', () => {
   const big = 'x'.repeat(12_000);
   const messages = [
@@ -708,7 +1208,7 @@ test('clipRecency keeps the last 8 messages verbatim and shortens older output',
   assert.equal(clipped[19].results[0].output.length, 9_000, 'the newest tool result is verbatim');
 });
 
-test('a window smaller than the history trims the request, and the transcript keeps the full text', async () => {
+async function runReadBigWindow(window) {
   const root = await workspace();
   const big = `line of output\n`.repeat(700); // ~10.5k chars, inline (under the spill budget)
   await writeFile(join(root, 'big.txt'), big);
@@ -718,7 +1218,7 @@ test('a window smaller than the history trims the request, and the transcript ke
   const bodies = [];
   const fetchImpl = async (url, init) => {
     if (String(url).endsWith('/models?limit=1000')) {
-      return Response.json({ data: [{ id: 'claude-sonnet-9', context_length: 2_000 }] });
+      return Response.json({ data: [{ id: 'claude-sonnet-9', context_length: window }] });
     }
     chatAttempts += 1;
     const body = JSON.parse(init.body);
@@ -744,19 +1244,37 @@ test('a window smaller than the history trims the request, and the transcript ke
   const { sessionId } = await instance.startSession({ workspaceRoot: root });
   await instance.sendTurn({ sessionId, text: 'read big.txt' });
   const done = await until(events, ({ event }) => event === 'turnCompleted');
+  return { chatAttempts, bodies, events, store, sessionId, done };
+}
+
+test('a genuinely fitted window trims the request, notices once, and keeps the full transcript', async () => {
+  const { chatAttempts, bodies, events, store, sessionId, done } = await runReadBigWindow(4_000);
   assert.equal(done.payload.outcome.params.terminal, 'completed');
   assert.equal(chatAttempts, 2);
-  // The provider request carried a ladder marker, not the raw 10k bytes.
   assert.ok(!bodies[1].includes('TAIL-MARKER-'), 'the request view is shortened');
   assert.ok(/chars elided|shortened to fit the context window/.test(bodies[1]), 'the request says what was dropped');
-  // The notice fires once for the session.
   const notices = events.filter(({ event, payload }) => event === 'agentNotice' && /shortened/.test(String(payload.message)));
   assert.equal(notices.length, 1);
-  // The transcript on disk keeps the full text; only the request view was shortened.
+  assert.equal(notices[0].payload.level, 'info');
   const { items } = await store.read(sessionId);
   const persisted = JSON.stringify(items);
   assert.ok(persisted.includes('TAIL-MARKER-'), 'the transcript keeps the full tool output');
   assert.ok(persisted.includes('line of output'), 'the transcript keeps the head too');
+});
+
+test('an unfittable tool-result view fails before the next provider call with recovery and the transcript intact', async () => {
+  const { chatAttempts, events, store, sessionId, done } = await runReadBigWindow(3_200);
+  assert.equal(done.payload.outcome.params.terminal, 'failed');
+  assert.equal(chatAttempts, 1, 'the follow-up request known not to fit is not sent');
+  const error = done.payload.outcome.params.error.message;
+  assert.match(error, /cannot fit the model's context window/i);
+  assert.match(error, /full transcript is preserved/i);
+  assert.match(error, /new thread|larger context window/i);
+  assert.equal(events.some(({ event, payload }) => event === 'agentNotice' && /shortened to fit/i.test(String(payload.message))), false);
+  const { items } = await store.read(sessionId);
+  const persisted = JSON.stringify(items);
+  assert.ok(persisted.includes('TAIL-MARKER-'), 'the failed request view never truncates the durable tool output');
+  assert.ok(persisted.includes('line of output'), 'the durable tool output keeps its head too');
 });
 
 test('an overflow is recovered by a tighter trim, and a second overflow fails the turn', async () => {
@@ -767,10 +1285,9 @@ test('an overflow is recovered by a tighter trim, and a second overflow fails th
   const bodies = [];
   const fetchImpl = async (url, init) => {
     if (String(url).endsWith('/models?limit=1000')) {
-      // A window the natural trim (head+tail) just fits, so only the reactive path goes deeper.
-      // The system prompt and tool schemas cost ~2.8k tokens, so the message budget at 6k
-      // is ~2.6k: the full ~30k-char result does not fit, head+tail does.
-      return Response.json({ data: [{ id: 'claude-sonnet-9', context_length: 6_000 }] });
+      // The natural trim fits this window; only the provider-reported path goes deeper.
+      // The full ~30k-char result does not fit, while a shortened result does.
+      return Response.json({ data: [{ id: 'claude-sonnet-9', context_length: 8_000 }] });
     }
     chatAttempts += 1;
     bodies.push(String(init.body));
@@ -809,7 +1326,7 @@ test('an overflow is recovered by a tighter trim, and a second overflow fails th
   // And a provider that keeps overflowing fails after the one tighter trim, with its words.
   let again = 0;
   const alwaysOverflow = async (url, init) => {
-    if (String(url).endsWith('/models?limit=1000')) return Response.json({ data: [{ id: 'claude-sonnet-9', context_length: 6_000 }] });
+    if (String(url).endsWith('/models?limit=1000')) return Response.json({ data: [{ id: 'claude-sonnet-9', context_length: 8_000 }] });
     again += 1;
     if (again === 1) {
       return sse([
@@ -1943,6 +2460,94 @@ test('plan feedback is the user\'s own message, and keeping the plan costs no mo
   assert.match(calls.at(-1).body.messages.at(-1).content[0].content, /is staying in Plan mode/, 'the kept review stays in the history ahead of the next message');
 });
 
+test('a staged Plan-mode turn presents the Lead plan and builds only after approval', async () => {
+  const root = await workspace();
+  const { calls, fetchImpl } = anthropicStub([
+    () => textReply(JSON.stringify(stagedPlan)),
+    () => toolReply('tu_edit', 'edit_file', { path: 'hello.txt', old_string: 'one', new_string: 'ONE' }),
+    () => textReply('Changed hello.txt.'),
+  ]);
+  const { instance, events } = host(fetchImpl, new SessionStore(await mkdtemp(join(temporary, 'store-'))));
+  seedProbes(instance);
+  const { sessionId } = await instance.startSession({ workspaceRoot: root, mode: 'plan', approvalMode: 'allowAll', orchestrator: { goal: 'balanced', models: orchestratorRoles } });
+  await instance.sendTurn({ sessionId, text: 'make the change', forcedShape: 'lead-guided' });
+  await settled(events, 1);
+  assert.equal(calls.length, 1, 'only the Lead plan call ran');
+  assert.equal(calls[0].body.tools, undefined, 'the plan call is tool-less');
+  const route = events.filter(({ event }) => event === 'route').at(-1).payload.route;
+  assert.equal(route.executedShape, 'lead-guided');
+  assert.deepEqual(route.stages.map((stage) => stage.stage), ['lead-plan']);
+  assert.ok(route.reasonCodes.includes('execution:plan-review'));
+  const request = events.find(({ event, payload }) => event === 'userInputs' && payload.requests.length).payload.requests[0];
+  assert.equal(request.intent.kind, 'planReview');
+  assert.match(request.intent.plan, /Make the requested change/);
+  assert.deepEqual(request.questions[0].options.map((option) => option.label), ['Approve', 'Keep planning']);
+  const planItem = events.find(({ event, payload }) => event === 'item' && payload.item?.kind === 'orchestratorPlan').payload.item;
+  assert.equal(route.references.plan, planItem.itemId, 'the reviewed plan is the recorded plan');
+  await instance.respondUserInput({ sessionId, userInputId: request.userInputId, response: { action: 'answer', answers: [{ questionId: 'q1', selectedLabel: 'Approve' }] } });
+  await settled(events, 2);
+  assert.equal(calls.length, 3);
+  assert.ok(calls[1].body.tools.some((tool) => tool.name === 'edit_file'), 'the next turn is the Builder');
+  assert.match(JSON.stringify(calls[1].body.system), /ORCHESTRATOR BUILDER MODE/);
+  assert.match(JSON.stringify(calls[1].body.messages), /The user approved the plan/);
+  assert.equal(await readFile(join(root, 'hello.txt'), 'utf8'), 'ONE\ntwo\nthree\n');
+  const built = events.filter(({ event }) => event === 'route').at(-1).payload.route;
+  assert.deepEqual(built.stages.map((stage) => stage.stage), ['builder'], 'the approved plan is not planned again');
+  assert.ok(built.reasonCodes.includes('execution:approved-plan'));
+  assert.equal(built.references.plan, planItem.itemId, 'the build turn points at the reviewed plan');
+});
+
+test('staged plan feedback revises the plan in Plan mode without a build', async () => {
+  const root = await workspace();
+  const revised = { ...stagedPlan, goal: 'Make the requested change with tests.', steps: [{ intent: 'Add the test.', files: ['hello.txt'] }] };
+  const { calls, fetchImpl } = anthropicStub([
+    () => textReply(JSON.stringify(stagedPlan)),
+    () => textReply(JSON.stringify(revised)),
+  ]);
+  const { instance, events } = host(fetchImpl, new SessionStore(await mkdtemp(join(temporary, 'store-'))));
+  seedProbes(instance);
+  const { sessionId } = await instance.startSession({ workspaceRoot: root, mode: 'plan', orchestrator: { goal: 'balanced', models: orchestratorRoles } });
+  await instance.sendTurn({ sessionId, text: 'make the change', forcedShape: 'lead-guided' });
+  await settled(events, 1);
+  const pending = () => events.filter(({ event, payload }) => event === 'userInputs' && payload.requests.length).at(-1).payload.requests[0];
+  await instance.respondUserInput({ sessionId, userInputId: pending().userInputId, response: { action: 'clarify', text: 'Add tests first.' } });
+  await settled(events, 2);
+  assert.equal(calls.length, 2, 'the feedback triggers a new plan, not a build');
+  assert.equal(calls[1].body.tools, undefined, 'still only the Lead plan call');
+  assert.match(JSON.stringify(calls[1].body.messages), /Add tests first/, 'the feedback is in the Lead brief');
+  assert.match(pending().intent.plan, /with tests/);
+  assert.equal(events.some(({ event, payload }) => event === 'modelCall' && payload.call.role === 'builder'), false, 'no Builder call ran');
+});
+
+test('a pending staged plan survives a restart and still builds after approval', async () => {
+  const root = await workspace();
+  const storeRoot = await mkdtemp(join(temporary, 'store-'));
+  const { calls, fetchImpl } = anthropicStub([
+    () => textReply(JSON.stringify(stagedPlan)),
+    () => toolReply('tu_edit', 'edit_file', { path: 'hello.txt', old_string: 'one', new_string: 'ONE' }),
+    () => textReply('Changed after restart.'),
+  ]);
+  const first = host(fetchImpl, new SessionStore(storeRoot));
+  seedProbes(first.instance);
+  const { sessionId } = await first.instance.startSession({ workspaceRoot: root, mode: 'plan', approvalMode: 'allowAll', orchestrator: { goal: 'balanced', models: orchestratorRoles } });
+  await first.instance.sendTurn({ sessionId, text: 'make the change', forcedShape: 'lead-guided' });
+  await settled(first.events, 1);
+  await first.instance.closeSession({ sessionId });
+
+  const second = host(fetchImpl, new SessionStore(storeRoot));
+  seedProbes(second.instance);
+  const resumed = await second.instance.resumeSession({ sessionId, workspaceRoot: root, approvalMode: 'allowAll' });
+  const request = resumed.userInputs[0];
+  assert.equal(request.intent.kind, 'planReview', 'the plan review survives the restart');
+  await second.instance.respondUserInput({ sessionId, userInputId: request.userInputId, response: { action: 'answer', answers: [{ questionId: 'q1', selectedLabel: 'Approve' }] } });
+  await settled(second.events, 1);
+  assert.equal(calls.length, 3, 'the restarted approval builds without a second plan call');
+  assert.ok(calls[1].body.tools.some((tool) => tool.name === 'edit_file'));
+  assert.equal(await readFile(join(root, 'hello.txt'), 'utf8'), 'ONE\ntwo\nthree\n');
+  const built = second.events.filter(({ event }) => event === 'route').at(-1).payload.route;
+  assert.ok(built.reasonCodes.includes('execution:approved-plan'));
+});
+
 /** A newline-delimited JSON-RPC MCP server with one `echo` tool. */
 const MCP_ECHO_SERVER = String.raw`
 import { createInterface } from 'node:readline';
@@ -2146,6 +2751,76 @@ test('MCP review stays visible while untrusted startup and stale consent fail cl
   }
 });
 
+test('untrusted HTTP MCP review and refresh send no request', async () => {
+  const root = await workspace();
+  const home = await mkdtemp(join(temporary, 'home-'));
+  let requests = 0;
+  const http = createServer((req, res) => {
+    requests += 1;
+    res.writeHead(500).end('unexpected request');
+  });
+  await new Promise((done) => http.listen(0, '127.0.0.1', done));
+  const { instance } = host(anthropicStub([]).fetchImpl, new SessionStore(await mkdtemp(join(temporary, 'store-'))), { homeDir: home }, () => ({ workspaceTrusted: false }));
+  try {
+    const { port } = http.address();
+    await mkdir(join(root, '.glitter'));
+    await writeFile(join(root, '.glitter', 'mcp.json'), JSON.stringify({ mcpServers: {
+      remote: { type: 'http', url: `http://127.0.0.1:${port}/rpc` },
+    } }));
+    const { sessionId } = await instance.startSession({ workspaceRoot: root, mcpAuthorization: { workspaceTrusted: false } });
+    const review = await instance.mcpConfig({ sessionId });
+    assert.deepEqual(review.servers.map((row) => row.name), ['remote']);
+    await instance.mcpStatus({ sessionId, refresh: true });
+    assert.equal(requests, 0, 'review and refresh cannot contact an unapproved server');
+  } finally {
+    await instance.stop();
+    await new Promise((done) => { http.closeAllConnections(); http.close(done); });
+  }
+});
+
+test('an oversized stdio MCP frame fails closed and stops the server', async () => {
+  const root = await workspace();
+  const home = await mkdtemp(join(temporary, 'home-'));
+  await mkdir(join(root, '.glitter'));
+  const pidPath = join(root, 'mcp-overflow.pid');
+  const scriptPath = join(temporary, 'mcp-overflow-server.mjs');
+  await writeFile(scriptPath, `
+import { writeFileSync } from 'node:fs';
+import { createInterface } from 'node:readline';
+const padding = 'x'.repeat(${2 * 1024 * 1024});
+const send = (message) => process.stdout.write(JSON.stringify(message) + '\\n');
+writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));
+process.on('SIGTERM', () => process.exit(0));
+createInterface({ input: process.stdin }).on('line', (line) => {
+  const body = JSON.parse(line);
+  if (body.id == null) return;
+  const result = body.method === 'initialize'
+    ? { protocolVersion: '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'overflow', version: '1.0.0' }, padding }
+    : { tools: [] };
+  send({ jsonrpc: '2.0', id: body.id, result });
+});
+`);
+  await writeFile(join(root, '.glitter', 'mcp.json'), JSON.stringify({ mcpServers: {
+    overflow: { command: process.execPath, args: [scriptPath] },
+  } }));
+  const manager = new McpManager(home, () => {});
+  try {
+    await manager.ensure(root, await authorization(root, home), 'overflow');
+    assert.match(manager.status('overflow').error ?? '', /byte limit/);
+    assert.deepEqual(manager.status('overflow').servers, [], 'an oversized generation never becomes available');
+    const pid = Number(await readFile(pidPath, 'utf8'));
+    assert.ok(Number.isInteger(pid) && pid > 0);
+    let alive = true;
+    for (let waited = 0; waited < 3000 && alive; waited += 20) {
+      try { process.kill(pid, 0); } catch { alive = false; break; }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.equal(alive, false, 'the offending process is terminated');
+  } finally {
+    await manager.close();
+  }
+});
+
 test('an HTTP MCP server is reached with its configured headers and session', async () => {
   const root = await workspace();
   const home = await mkdtemp(join(temporary, 'home-'));
@@ -2189,6 +2864,136 @@ test('an HTTP MCP server is reached with its configured headers and session', as
     assert.equal(call.headers['mcp-session-id'], 's-42', 'later requests carry the negotiated session');
     assert.equal(call.headers['mcp-protocol-version'], '2025-06-18');
   } finally {
+    await new Promise((done) => { http.closeAllConnections(); http.close(done); });
+  }
+});
+
+test('oversized HTTP MCP JSON and error bodies are rejected at the byte limit', async () => {
+  const padding = 'x'.repeat(2 * 1024 * 1024);
+  const http = createServer(async (req, res) => {
+    let text = '';
+    for await (const chunk of req) text += chunk;
+    const body = text ? JSON.parse(text) : null;
+    if (req.url === '/error') {
+      res.writeHead(500, { 'content-type': 'text/plain' });
+      res.end(padding);
+      return;
+    }
+    if (body?.id == null) {
+      res.writeHead(202).end();
+      return;
+    }
+    const result = body.method === 'initialize'
+      ? { protocolVersion: '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'http-overflow', version: '1.0.0' }, padding }
+      : { tools: [] };
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ jsonrpc: '2.0', id: body.id, result }));
+  });
+  await new Promise((done) => http.listen(0, '127.0.0.1', done));
+  try {
+    const { port } = http.address();
+    for (const path of ['/json', '/error']) {
+      const root = await workspace();
+      const home = await mkdtemp(join(temporary, 'home-'));
+      await mkdir(join(root, '.glitter'));
+      await writeFile(join(root, '.glitter', 'mcp.json'), JSON.stringify({ mcpServers: {
+        overflow: { type: 'http', url: `http://127.0.0.1:${port}${path}` },
+      } }));
+      const manager = new McpManager(home, () => {});
+      const session = `http-overflow-${path.slice(1)}`;
+      try {
+        await manager.ensure(root, await authorization(root, home), session);
+        assert.match(manager.status(session).error ?? '', /byte limit/, path);
+        assert.deepEqual(manager.status(session).servers, [], `${path} never produces a partial generation`);
+      } finally {
+        await manager.close();
+      }
+    }
+  } finally {
+    await new Promise((done) => { http.closeAllConnections(); http.close(done); });
+  }
+});
+
+test('oversized MCP SSE traffic is rejected before a later valid reply', async () => {
+  const root = await workspace();
+  const home = await mkdtemp(join(temporary, 'home-'));
+  await mkdir(join(root, '.glitter'));
+  const padding = 'x'.repeat(2 * 1024 * 1024);
+  const http = createServer(async (req, res) => {
+    let text = '';
+    for await (const chunk of req) text += chunk;
+    const body = JSON.parse(text);
+    if (body.id == null) {
+      res.writeHead(202).end();
+      return;
+    }
+    const result = body.method === 'initialize'
+      ? { protocolVersion: '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'sse-overflow', version: '1.0.0' } }
+      : { tools: [] };
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end(`data: ${padding}\n\ndata: ${JSON.stringify({ jsonrpc: '2.0', id: body.id, result })}\n\n`);
+  });
+  await new Promise((done) => http.listen(0, '127.0.0.1', done));
+  const manager = new McpManager(home, () => {});
+  try {
+    const { port } = http.address();
+    await writeFile(join(root, '.glitter', 'mcp.json'), JSON.stringify({ mcpServers: {
+      overflow: { type: 'http', url: `http://127.0.0.1:${port}/sse-overflow` },
+    } }));
+    await manager.ensure(root, await authorization(root, home), 'sse-overflow');
+    assert.match(manager.status('sse-overflow').error ?? '', /byte limit/);
+    assert.deepEqual(manager.status('sse-overflow').servers, []);
+  } finally {
+    await manager.close();
+    await new Promise((done) => { http.closeAllConnections(); http.close(done); });
+  }
+});
+
+test('bounded MCP SSE works and cancellation stops an in-flight response body', async () => {
+  const root = await workspace();
+  const home = await mkdtemp(join(temporary, 'home-'));
+  await mkdir(join(root, '.glitter'));
+  let markCallStarted;
+  const callStarted = new Promise((resolve) => { markCallStarted = resolve; });
+  const http = createServer(async (req, res) => {
+    let text = '';
+    for await (const chunk of req) text += chunk;
+    const body = JSON.parse(text);
+    if (body.id == null) {
+      res.writeHead(202).end();
+      return;
+    }
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    if (body.method === 'tools/call') {
+      res.write(': waiting\n\n');
+      markCallStarted();
+      return;
+    }
+    const result = body.method === 'initialize'
+      ? { protocolVersion: '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'bounded-sse', version: '1.0.0' } }
+      : { tools: [{ name: 'lookup', description: 'Look up a record', inputSchema: { type: 'object', properties: { q: { type: 'string' } } } }] };
+    res.end(`data: ${JSON.stringify({ jsonrpc: '2.0', id: body.id, result })}\n\n`);
+  });
+  await new Promise((done) => http.listen(0, '127.0.0.1', done));
+  const manager = new McpManager(home, () => {});
+  const turn = { sessionId: 'bounded-sse', turnId: 'turn-sse', workspaceRoot: root, mode: 'build' };
+  try {
+    const { port } = http.address();
+    await writeFile(join(root, '.glitter', 'mcp.json'), JSON.stringify({ mcpServers: {
+      remote: { type: 'http', url: `http://127.0.0.1:${port}/bounded-sse` },
+    } }));
+    await manager.ensure(root, await authorization(root, home), 'bounded-sse');
+    const generation = manager.acquire(turn);
+    const row = generation?.byName.get(mcpToolName('remote', 'lookup'));
+    assert.ok(row);
+    const controller = new AbortController();
+    const running = row.definition.run(root, { q: 'cats' }, controller.signal);
+    await callStarted;
+    controller.abort();
+    await assert.rejects(running, /turn was stopped/i);
+  } finally {
+    manager.release(turn);
+    await manager.close();
     await new Promise((done) => { http.closeAllConnections(); http.close(done); });
   }
 });
@@ -2337,6 +3142,38 @@ test('MCP tools are discovered on demand, ask, run, and are revoked without a pa
     assert.doesNotMatch(calls[3].body.system.map((block) => block.text).join('\n'), /MCP servers are connected/);
   } finally {
     await instance.stop();
+  }
+});
+
+test('revoking MCP during a live turn keeps only its snapshot until release', async () => {
+  const root = await workspace();
+  const home = await mkdtemp(join(temporary, 'home-'));
+  const scriptPath = join(temporary, 'mcp-live-revocation-server.mjs');
+  await writeFile(scriptPath, MCP_ECHO_SERVER);
+  await mkdir(join(root, '.glitter'));
+  const config = (servers) => writeFile(join(root, '.glitter', 'mcp.json'), JSON.stringify({ mcpServers: servers }));
+  await config({ echo: { command: process.execPath, args: [scriptPath] } });
+  const manager = new McpManager(home, () => {});
+  const turn = { sessionId: 'live-revocation', turnId: 'turn-live', workspaceRoot: root, mode: 'build' };
+  try {
+    await manager.ensure(root, await authorization(root, home), turn.sessionId);
+    const old = manager.acquire(turn);
+    assert.ok(old);
+    assert.equal(old.refs, 1);
+    await config({});
+    await manager.ensure(root, await authorization(root, home), turn.sessionId);
+    assert.equal(old.retired, true, 'the next turn cannot acquire the revoked generation');
+    assert.equal(old.refs, 1, 'the live turn retains its snapshot');
+    const running = ({ exchange }) => exchange.child.exitCode == null && exchange.child.signalCode == null;
+    assert.ok(old.servers.every(running), 'the snapshot remains usable until its turn finishes');
+    assert.deepEqual(manager.status(turn.sessionId), { servers: [], error: null });
+    manager.release(turn);
+    const stopped = ({ exchange }) => exchange.child.exitCode != null || exchange.child.signalCode != null;
+    for (let waited = 0; waited < 3000 && !old.servers.every(stopped); waited += 20) await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.ok(old.servers.every(stopped), 'the last release stops the revoked generation');
+  } finally {
+    manager.release(turn);
+    await manager.close();
   }
 });
 
@@ -2511,4 +3348,94 @@ test('testModel times a one-word reply, keeps it off every transcript, and names
   assert.deepEqual(await store.list(), [], 'and writes no session');
   await assert.rejects(() => instance.testModel({ modelId: 'openai/gpt-5' }), (error) => error.code === 'MISSING_CREDENTIAL' && /OpenAI has no key/.test(error.message));
   await assert.rejects(() => instance.testModel({ modelId: 'no-provider' }), /does not name a provider/);
+});
+
+const probeAssessment = () => JSON.stringify({
+  taskKind: 'minor_edit', difficulty: 'trivial', designChoices: false, separable: true, causeKnown: true,
+  risk: 'low', confidence: 'high', continuity: 'new', requiredCapabilities: [], reasonCodes: ['probe'],
+});
+const probePlan = () => JSON.stringify({
+  kind: 'orchestrator-plan', version: 1, goal: 'Add one sentence to the readme.',
+  acceptanceCriteria: ['The readme names the probe.'], fileTargets: [{ path: 'README.md', symbols: [], intent: 'Add a sentence.' }],
+  steps: [{ intent: 'Add the sentence.', files: ['README.md'] }], constraints: [], checks: [], risks: [], askLeadIf: [],
+});
+
+test('orchestrator builder probes run a real tool loop in a scratch directory and cache the result', async () => {
+  const store = new SessionStore(await mkdtemp(join(temporary, 'store-')));
+  const probeTurn = () => [
+    () => toolReply('probe-write', 'write_file', { path: './orchestrator-probe.txt', content: 'orchestrator-probe-ok' }),
+    () => toolReply('probe-read', 'read_file', { path: 'orchestrator-probe.txt' }),
+    () => textReply('probe-ok'),
+  ];
+  const { calls, fetchImpl } = anthropicStub([...probeTurn(), ...probeTurn()]);
+  const { instance, events } = host(fetchImpl, store);
+  const target = { role: 'builder', providerId: 'anthropic', modelId: 'anthropic/claude-sonnet-9' };
+
+  const passed = await instance.orchestratorProbe(target);
+  assert.equal(passed.status, 'passed', passed.detail);
+  assert.deepEqual(passed.capabilities, ['tools']);
+  assert.match(passed.detail, /Builder tool use and edit verified/);
+  assert.equal(calls.length, 3);
+  assert.deepEqual(calls[0].body.tools.map((tool) => tool.name).sort(), ['read_file', 'write_file'], 'the builder probe offers only the two edit tools');
+  assert.match(JSON.stringify(calls[1].body.messages), /orchestrator-probe-ok/, 'the write result is sent back before the read');
+  assert.match(JSON.stringify(calls[2].body.messages), /orchestrator-probe-ok/, 'the read result is sent back before the final reply');
+  assert.equal(events.length, 0, 'a probe emits nothing a thread would show');
+  assert.deepEqual(await store.list(), [], 'and opens no session');
+
+  const cached = await instance.orchestratorProbe(target);
+  assert.equal(cached.checkedAt, passed.checkedAt);
+  assert.equal(calls.length, 3, 'the second read comes from the cache');
+
+  const refreshed = await instance.orchestratorProbe({ ...target, refresh: true });
+  assert.equal(refreshed.status, 'passed');
+  assert.ok(refreshed.checkedAt >= passed.checkedAt);
+  assert.equal(calls.length, 6, 'a refresh runs the check again');
+});
+
+test('router and lead probes check their formats with no tools at all', async () => {
+  const store = new SessionStore(await mkdtemp(join(temporary, 'store-')));
+  const { calls, fetchImpl } = anthropicStub([
+    () => textReply(probeAssessment()),
+    () => textReply(probePlan()),
+  ]);
+  const { instance, events } = host(fetchImpl, store);
+
+  const router = await instance.orchestratorProbe({ role: 'router', providerId: 'anthropic', modelId: 'anthropic/claude-haiku-9' });
+  assert.equal(router.status, 'passed');
+  assert.match(router.detail, /Strict router JSON verified/);
+  assert.deepEqual(router.capabilities, []);
+
+  const lead = await instance.orchestratorProbe({ role: 'lead', providerId: 'anthropic', modelId: 'anthropic/claude-haiku-9' });
+  assert.equal(lead.status, 'passed');
+  assert.match(lead.detail, /Plan format verified/);
+
+  assert.equal(calls.length, 2, 'each role has its own cache entry');
+  for (const call of calls) assert.deepEqual(call.body.tools ?? [], [], 'format probes offer no tools');
+  assert.equal(events.length, 0);
+});
+
+test('a failed probe cannot take a role, stays in its scratch directory, and reports config errors', async () => {
+  const store = new SessionStore(await mkdtemp(join(temporary, 'store-')));
+  const outside = join(temporary, 'escaped-by-probe.txt');
+  const { calls, fetchImpl } = anthropicStub([
+    () => toolReply('probe-write', 'write_file', { path: outside, content: 'orchestrator-probe-ok' }),
+    () => toolReply('probe-read', 'read_file', { path: 'orchestrator-probe.txt' }),
+    () => textReply('probe-ok'),
+  ]);
+  const { instance } = host(fetchImpl, store);
+  const target = { role: 'small', providerId: 'anthropic', modelId: 'anthropic/claude-sonnet-9' };
+
+  const failed = await instance.orchestratorProbe(target);
+  assert.equal(failed.status, 'failed');
+  assert.deepEqual(failed.capabilities, []);
+  assert.match(failed.detail, /write_file must target orchestrator-probe\.txt/);
+  assert.match(JSON.stringify(calls[2].body.messages), /outside the workspace/, 'the write itself was refused');
+  await assert.rejects(() => stat(outside), 'nothing was written outside the scratch directory');
+
+  const cached = await instance.orchestratorProbe(target);
+  assert.equal(cached.checkedAt, failed.checkedAt);
+  assert.equal(calls.length, 3, 'a failure is cached until a refresh');
+
+  await assert.rejects(() => instance.orchestratorProbe({ role: 'builder', providerId: 'openai', modelId: 'openai/gpt-5' }), (error) => error.code === 'MISSING_CREDENTIAL' && /OpenAI has no key/.test(error.message));
+  await assert.rejects(() => instance.orchestratorProbe({ role: 'judge', providerId: 'anthropic', modelId: 'anthropic/claude-sonnet-9' }), /Unknown orchestrator role/);
 });

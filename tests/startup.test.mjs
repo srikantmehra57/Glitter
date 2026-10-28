@@ -42,6 +42,7 @@ const replacements = {
     export const bridge=(...args)=>globalThis.storeBridge(...args);
     export const gitReview=async(...args)=>globalThis.readReview?.(...args) ?? {files:[],diff:"",truncated:false};
     export const gitSnapshot=async()=>({branch:'main',dirty:false,files:[],diff:'',truncated:false});
+    export const gitGraph=async(...args)=>globalThis.readGitGraph?.(...args) ?? {graph:'',truncated:false};
     export const verifyGrants=async(entries)=>entries.map((entry)=>({id:entry.id,ok:true,path:entry.path}));
     export const removeGrant=async()=>{};
     export const onBridgeEvent=(handler)=>{globalThis.storeEvent=handler;return ()=>{}};
@@ -246,6 +247,52 @@ test('a new thread is only a draft until the first send starts its session', asy
   assert.equal(count(calls, 'startSession'), 1, 'the first send starts the session');
   assert.equal(state.selectedSessionId, 'new-1');
   assert.ok(state.threads.some((thread) => thread.sessionId === 'new-1'));
+});
+
+for (const { explicit, draftAgent } of [{ explicit: false, draftAgent: 'harness' }, { explicit: true, draftAgent: 'harness' }, { explicit: false, draftAgent: 'opencode' }]) {
+  test(`a manual draft model overrides ${explicit ? 'explicit' : 'inherited'} Orchestrator on the first send from ${draftAgent}`, async () => {
+    const { store, calls } = await bootedStore();
+    const model = { modelId: 'anthropic/claude-haiku', providerId: 'anthropic', reasoningEfforts: ['low', 'high'] };
+    const orchestrator = { goal: 'balanced', models: { lead: { modelId: 'anthropic/claude-opus' }, builder: model } };
+    globalThis.modelRows = [model];
+    try {
+      store.setState({
+        workspaces: [{ id: 'w', path: '/repo', name: 'repo', grantId: 'g1' }], selectedWorkspaceId: 'w', preview: false,
+        agents: [{ ...MUSE, id: 'harness', protocol: 'native' }], enabledAgents: { harness: true, opencode: false }, defaultAgentId: 'harness', detectionChecked: true,
+        defaultEffort: 'high', modelsAgentId: 'harness', models: [model],
+        orchestratorEnabled: true, orchestratorModels: orchestrator.models,
+        drafts: { 'project:w': { text: '', images: [], config: { agentId: draftAgent, effort: 'high', ...(explicit ? { orchestrator } : {}) } } },
+      });
+      await store.getState().setSessionConfig({ approvalMode: 'auto' });
+      assert.deepEqual(store.getState().drafts['project:w'].config.orchestrator, explicit ? orchestrator : undefined);
+      await store.getState().setSessionConfig({ modelId: model.modelId, providerId: model.providerId });
+      await settle();
+      assert.equal(store.getState().drafts['project:w'].config.orchestrator, null);
+      assert.equal(store.getState().orchestratorEnabled, true);
+      assert.equal(count(calls, 'startSession'), 0);
+      store.setState({ composer: 'Explain this function' });
+      assert.equal(await store.getState().sendPrompt(), true);
+      const starts = calls.filter(([method]) => method === 'startSession');
+      assert.equal(starts.length, 1);
+      assert.equal(starts[0][1].modelId, model.modelId);
+      assert.equal(starts[0][1].reasoningEffort, 'high');
+      assert.equal(starts[0][1].approvalMode, 'auto');
+      assert.equal(Object.hasOwn(starts[0][1], 'orchestrator'), false);
+    } finally {
+      await settle();
+      globalThis.modelRows = undefined;
+    }
+  });
+}
+
+test('a draft goal change keeps Orchestrator enabled without changing its manual model', async () => {
+  const { store } = await bootedStore();
+  const orchestrator = { goal: 'cost', models: { lead: { modelId: 'anthropic/claude-opus' }, builder: { modelId: 'anthropic/claude-haiku' } } };
+  store.setState({ selectedWorkspaceId: 'w', defaultAgentId: 'harness', enabledAgents: { harness: true }, drafts: { 'project:w': { text: '', images: [], config: { agentId: 'harness', modelId: 'anthropic/claude-sonnet', orchestrator } } } });
+  await store.getState().setSessionConfig({ orchestrator: { ...orchestrator, goal: 'output' } });
+  const config = store.getState().drafts['project:w'].config;
+  assert.deepEqual(config.orchestrator, { ...orchestrator, goal: 'output' });
+  assert.equal(config.modelId, 'anthropic/claude-sonnet');
 });
 
 test('an image-only first send carries its images into the pending card', async () => {

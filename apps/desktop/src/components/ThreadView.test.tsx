@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { ThreadView } from "./ThreadView";
 import { resetStore, seedStore } from "../test/store";
 import { useAppStore } from "../lib/store";
+import type { OrchestratorRoute } from "../lib/types";
 
 vi.mock("./Orb", () => ({ Orb: () => <span /> }));
 
@@ -130,6 +131,44 @@ describe("thread layout", () => {
     expect(useAppStore.getState().dockOpen).toBe(true);
   });
 
+  it("uses icon-only pane controls and opens Files and Monitor directly", () => {
+    seedStore({ preview: true, dockOpen: false, inspectorTab: "changes" });
+    render(<ThreadView />);
+    const browser = screen.getByRole("button", { name: "Toggle browser" });
+    const terminal = screen.getByRole("button", { name: "Toggle terminal" });
+    const files = screen.getByRole("button", { name: "Toggle files" });
+    const monitor = screen.getByRole("button", { name: "Toggle monitor" });
+    const changes = screen.getByRole("button", { name: "Toggle changes" });
+    for (const button of [browser, terminal, files, monitor, changes]) expect(button.textContent).toBe("");
+    expect(browser).toHaveAttribute("data-tooltip", "Browser");
+    expect(terminal).toHaveAttribute("data-tooltip", expect.stringMatching(/^Terminal/));
+    expect(files).toHaveAttribute("data-tooltip", "Files");
+    expect(monitor).toHaveAttribute("data-tooltip", "Monitor");
+    expect(changes).toHaveAttribute("data-tooltip", expect.stringMatching(/^Changes/));
+
+    fireEvent.click(files);
+    expect(useAppStore.getState().inspectorTab).toBe("files");
+    expect(useAppStore.getState().dockOpen).toBe(true);
+    expect(files).toHaveAttribute("aria-pressed", "true");
+    expect(changes).toHaveAttribute("aria-pressed", "false");
+
+    fireEvent.click(monitor);
+    expect(useAppStore.getState().inspectorTab).toBe("activity");
+    expect(useAppStore.getState().dockOpen).toBe(true);
+    expect(files).toHaveAttribute("aria-pressed", "false");
+    expect(monitor).toHaveAttribute("aria-pressed", "true");
+
+    fireEvent.click(changes);
+    expect(useAppStore.getState().inspectorTab).toBe("changes");
+    expect(useAppStore.getState().dockOpen).toBe(true);
+    expect(changes).toHaveAttribute("aria-pressed", "true");
+
+    fireEvent.click(monitor);
+    expect(useAppStore.getState().inspectorTab).toBe("activity");
+    fireEvent.click(monitor);
+    expect(useAppStore.getState().dockOpen).toBe(false);
+  });
+
   it("keeps the title bar outside the main panel, directly before it", () => {
     const { container } = render(<ThreadView />);
     const bar = container.querySelector("header.topbar");
@@ -162,7 +201,7 @@ describe("thread layout", () => {
     expect(setOpen).toHaveBeenLastCalledWith(true);
   });
 
-  it("the Changes toggle lands on a changes/diff tab, not Monitor or Environment", () => {
+  it("the Changes toggle lands on a changes/diff tab, not Monitor, Files or Environment", () => {
     const setOpen = vi.fn();
     const setTab = vi.fn();
     // Monitor was the open inspector: switching to Changes must leave it.
@@ -178,6 +217,12 @@ describe("thread layout", () => {
     fireEvent.click(within(screen.getByRole("group", { name: "Thread or Changes view" })).getByRole("button", { name: "Changes" }));
     expect(setTab).toHaveBeenCalledWith("changes");
     environment.unmount();
+    setTab.mockClear();
+    seedStore({ dockOpen: false, inspectorTab: "files" });
+    const files = render(<ThreadView />);
+    fireEvent.click(within(screen.getByRole("group", { name: "Thread or Changes view" })).getByRole("button", { name: "Changes" }));
+    expect(setTab).toHaveBeenCalledWith("changes");
+    files.unmount();
     // Diff stays Diff when it was the open inspector.
     setTab.mockClear();
     seedStore({ dockOpen: false, inspectorTab: "diff" });
@@ -435,6 +480,61 @@ describe("completion usage", () => {
     render(<ThreadView />);
     expect(screen.queryByRole("region", { name: "Done" })).toBeNull();
     expect(within(screen.getByRole("region", { name: "Stopped" })).getByLabelText("Turn usage")).toHaveTextContent("12K in · 3.1K out");
+  });
+});
+
+describe("routed turns", () => {
+  const route: OrchestratorRoute = {
+    routeId: "r1",
+    policyVersion: "policy-1",
+    goal: "balanced",
+    shape: "direct-small",
+    reasonCodes: ["ask"],
+    roles: {
+      lead: { providerId: "anthropic", modelId: "anthropic/claude-opus-4-1" },
+      builder: { providerId: "deepseek", modelId: "deepseek/deepseek-v4" },
+      small: { providerId: "deepseek", modelId: "deepseek/deepseek-v4" },
+    },
+    stages: [{ stage: "small", providerId: "deepseek", modelId: "deepseek/deepseek-v4" }],
+    consultCount: 0,
+    reviewCount: 0,
+    fallbacks: [],
+    takeovers: [],
+    escalations: [],
+    references: {},
+  };
+
+  beforeEach(() => {
+    resetStore();
+    seedStore({
+      workspaces: [{ id: "w", path: "/repo", name: "repo", grantId: "g" }],
+      selectedWorkspaceId: "w",
+      selectedSessionId: "s1",
+      threads: [{
+        sessionId: "s1", workspacePath: "/repo", title: "Work", updatedAt: new Date().toISOString(), status: "running", unread: false, opened: true,
+        activeTurnId: "t1", turnStartedAt: Date.now() - 3_000, routes: { t1: route },
+        items: [{ itemId: "u", kind: "userMessage", status: "completed", text: "Do the work", turnId: "t1" }],
+      }],
+      models: [],
+    });
+  });
+
+  it("names the route on the live status line", () => {
+    render(<ThreadView />);
+    expect(screen.getByText(/Small route/)).toBeInTheDocument();
+  });
+
+  it("marks a live route a floor raised", () => {
+    seedStore({
+      threads: [{
+        sessionId: "s1", workspacePath: "/repo", title: "Work", updatedAt: new Date().toISOString(), status: "running", unread: false, opened: true,
+        activeTurnId: "t1", turnStartedAt: Date.now() - 3_000,
+        routes: { t1: { ...route, shape: "lead-guided", requestedShape: "direct-small", reasonCodes: ["forced-shape", "floor:high-risk"] } },
+        items: [{ itemId: "u", kind: "userMessage", status: "completed", text: "Do the work", turnId: "t1" }],
+      }],
+    });
+    render(<ThreadView />);
+    expect(screen.getByText(/Lead-guided route · floor/)).toBeInTheDocument();
   });
 });
 

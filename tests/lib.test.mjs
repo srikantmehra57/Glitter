@@ -418,14 +418,15 @@ test('sidebar density and reduced motion persist safely and can be found in Appe
   assert.ok(css.includes('html[data-motion="reduce"]'));
 });
 
-test('the interface font is one of the installed faces, and an unknown choice stays on System', () => {
+test('the interface font is an available sans-serif, and an unknown choice stays on System', () => {
   assert.equal(DEFAULT_SETTINGS.uiFont, 'system');
   assert.equal(UI_FONTS.length, 6);
   assert.equal(new Set(Object.values(UI_FONT_STACKS)).size, UI_FONTS.length, 'each face has its own stack');
   const css = readFileSync('apps/desktop/src/styles.css', 'utf8');
   assert.ok(css.includes(`--font-sans: ${UI_FONT_STACKS.system};`), 'the stylesheet default is the System stack');
   assert.equal(normalizeUiFont('helvetica'), 'helvetica');
-  assert.equal(normalizeUiFont('newYork'), 'newYork');
+  assert.equal(normalizeUiFont('inter'), 'inter');
+  assert.equal(normalizeUiFont('newYork'), 'system', 'the retired serif falls back to System');
   assert.equal(normalizeUiFont('comic sans'), 'system');
   assert.equal(normalizeUiFont(undefined), 'system');
   assert.equal(settingsFields({ ...DEFAULT_SETTINGS, uiFont: 'avenir' }).uiFont, 'avenir');
@@ -436,10 +437,12 @@ test('the interface font is one of the installed faces, and an unknown choice st
   const desktop = { prefersDark: true, windowMaterial: true, reducedTransparency: false };
   assert.equal(resolveTheme(base, desktop).properties['--font-sans'], UI_FONT_STACKS.system);
   assert.equal(resolveTheme({ ...base, uiFont: 'helvetica' }, desktop).properties['--font-sans'], UI_FONT_STACKS.helvetica);
-  assert.equal(resolveTheme({ ...base, uiFont: 'newYork' }, desktop).properties['--font-sans'], UI_FONT_STACKS.newYork);
+  assert.equal(resolveTheme({ ...base, uiFont: 'inter' }, desktop).properties['--font-sans'], UI_FONT_STACKS.inter);
   assert.ok(settingsTabsMatching('helvetica').includes('Theme'));
   assert.ok(settingsTabsMatching('futura').includes('Theme'));
-  assert.deepEqual(settingsTabsMatching('new york'), ['Theme']);
+  assert.ok(settingsTabsMatching('inter').includes('Theme'));
+  assert.deepEqual(settingsTabsMatching('new york'), []);
+  assert.deepEqual(settingsTabsMatching('serif'), []);
 });
 
 test('shortHash truncates digests and leaves short text alone', () => {

@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { LineFrames } from "../framing.js";
 import { mcpConfigFingerprints, readMcpConfigBytes } from "./mcp-config.js";
 import { spawnIsolated, terminateTree } from "../isolation.js";
 import { diagnostics } from "../redaction.js";
@@ -33,6 +34,8 @@ const MAX_TOOL_DESCRIPTION = 2_000;
 const MAX_PROMPT_NAMES = 12;
 const MAX_SEARCH_RESULTS = 8;
 const OUTPUT_CHARS = 24 * 1024;
+/** Reject hostile input before a frame or response can accumulate without bound. */
+const MAX_MCP_MESSAGE_BYTES = 1024 * 1024;
 const PROTOCOL_VERSION = "2025-06-18";
 const FALLBACK_PROTOCOL_VERSION = "2024-11-05";
 const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
@@ -375,18 +378,57 @@ function toolText(result: unknown): { text: string; isError: boolean } {
   return { text: bounded(parts.join("\n") || "(no output)"), isError: record.isError === true };
 }
 
+function messageTooLarge(name: string, kind: "frame" | "response"): Error {
+  return new Error(`The ${name} MCP server sent a ${kind} that exceeds the ${MAX_MCP_MESSAGE_BYTES}-byte limit.`);
+}
+
+/** Read a non-streaming response with a hard byte ceiling, including error bodies. */
+async function readBoundedResponse(response: Response, name: string): Promise<string> {
+  const declared = Number(response.headers.get("content-length"));
+  if (declared > MAX_MCP_MESSAGE_BYTES) {
+    if (response.body) await response.body.cancel().catch(() => {});
+    throw messageTooLarge(name, "response");
+  }
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const chunks: Buffer[] = [];
+  let received = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      received += value.byteLength;
+      if (received > MAX_MCP_MESSAGE_BYTES) throw messageTooLarge(name, "response");
+      chunks.push(Buffer.from(value));
+    }
+    return Buffer.concat(chunks, received).toString("utf8");
+  } finally {
+    await reader.cancel().catch(() => {});
+  }
+}
+
 type Exchange = { listTools(signal?: AbortSignal): Promise<McpTool[]>; callTool(name: string, input: Record<string, unknown>, signal?: AbortSignal): Promise<{ text: string; isError: boolean }>; close(): Promise<void> };
 
 class StdioExchange implements Exchange {
   private nextId = 1;
-  private buffer = "";
+  private readonly frames = new LineFrames(MAX_MCP_MESSAGE_BYTES);
   private readonly pending = new Map<number, { resolve: (result: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   private readonly stderr: string[] = [];
+  private termination?: ReturnType<typeof terminateTree>;
   private closed = false;
 
   private constructor(private readonly config: McpServerConfig, private readonly child: ReturnType<typeof spawnIsolated>["child"]) {
     child.stdin.on("error", () => {});
-    child.stdout.on("data", (chunk: Buffer) => this.receive(chunk.toString("utf8")));
+    child.stdout.on("data", (chunk: Buffer) => {
+      if (this.closed) return;
+      try {
+        this.frames.push(chunk, (line) => this.receive(line));
+      } catch {
+        this.fail(messageTooLarge(config.name, "frame").message);
+        this.child.stdout.destroy();
+        this.termination = terminateTree(this.child);
+      }
+    });
     child.stderr.on("data", (chunk: Buffer) => {
       if (this.stderr.join("").length < 2_000) this.stderr.push(chunk.toString("utf8").slice(0, 500));
     });
@@ -411,29 +453,28 @@ class StdioExchange implements Exchange {
     this.child.stdin.write(`${JSON.stringify(message)}\n`);
   }
 
-  private receive(chunk: string) {
-    this.buffer += chunk;
-    let newline: number;
-    while ((newline = this.buffer.indexOf("\n")) >= 0) {
-      const line = this.buffer.slice(0, newline).trim();
-      this.buffer = this.buffer.slice(newline + 1);
-      if (!line) continue;
-      let message: JsonRpc;
-      try { message = JSON.parse(line) as JsonRpc; } catch { continue; }
-      // A server request (roots, sampling) is outside what we offer. Answer it
-      // so the server does not wait forever; notifications need no answer.
-      if (message.method && message.id != null) {
-        try { this.send({ jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "This client does not support server requests." } }); } catch { /* closing */ }
-        continue;
-      }
-      if (message.id == null) continue;
-      const waiter = this.pending.get(Number(message.id));
-      if (!waiter) continue;
-      this.pending.delete(Number(message.id));
-      clearTimeout(waiter.timer);
-      if (message.error) waiter.reject(new Error(`${this.config.name}: ${message.error.message ?? "the MCP server returned an error"}`));
-      else waiter.resolve(message.result);
+  private receive(raw: string) {
+    const line = raw.trim();
+    if (!line) return;
+    let message: JsonRpc;
+    try {
+      const parsed: unknown = JSON.parse(line);
+      if (!isRecord(parsed)) return;
+      message = parsed as JsonRpc;
+    } catch { return; }
+    // A server request (roots, sampling) is outside what we offer. Answer it
+    // so the server does not wait forever; notifications need no answer.
+    if (message.method && message.id != null) {
+      try { this.send({ jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "This client does not support server requests." } }); } catch { /* closing */ }
+      return;
     }
+    if (message.id == null) return;
+    const waiter = this.pending.get(Number(message.id));
+    if (!waiter) return;
+    this.pending.delete(Number(message.id));
+    clearTimeout(waiter.timer);
+    if (message.error) waiter.reject(new Error(`${this.config.name}: ${message.error.message ?? "the MCP server returned an error"}`));
+    else waiter.resolve(message.result);
   }
 
   private fail(message: string) {
@@ -508,10 +549,12 @@ class StdioExchange implements Exchange {
   }
 
   async close() {
-    if (this.closed) return;
-    this.fail(`The ${this.config.name} MCP server was closed.`);
-    try { this.child.stdin.end(); } catch { /* closed */ }
-    await terminateTree(this.child);
+    if (!this.termination && !this.closed) {
+      this.fail(`The ${this.config.name} MCP server was closed.`);
+      try { this.child.stdin.end(); } catch { /* closed */ }
+      this.termination = terminateTree(this.child);
+    }
+    await this.termination;
   }
 }
 
@@ -557,7 +600,7 @@ class HttpExchange implements Exchange {
     }
     if (!response.ok) {
       const hint = response.status === 401 || response.status === 403 ? ` Add an Authorization header to ${this.config.name}.headers if the server needs one.` : "";
-      const detail = bounded(await response.text().catch(() => ""), 500).trim();
+      const detail = bounded(await readBoundedResponse(response, this.config.name), 500).trim();
       throw new Error(`${this.config.name} returned HTTP ${response.status}${detail ? `: ${detail}` : "."}${hint}`);
     }
     return response;
@@ -580,19 +623,26 @@ class HttpExchange implements Exchange {
     if (this.closed) throw new Error(`The ${this.config.name} MCP server is closed.`);
     const id = this.nextId++;
     const response = await this.post({ jsonrpc: "2.0", id, method, params }, timeoutMs, signal);
-    const session = response.headers.get("mcp-session-id");
-    if (session) this.sessionId = session;
-    const type = response.headers.get("content-type") ?? "";
-    let message: JsonRpc | undefined;
-    if (type.includes("text/event-stream")) message = await this.readEvent(response, id);
-    else {
-      const body = await response.json().catch(() => null);
-      const rows = Array.isArray(body) ? body : [body];
-      message = rows.find((row): row is JsonRpc => isRecord(row) && Number(row.id) === id);
+    try {
+      const session = response.headers.get("mcp-session-id");
+      if (session) this.sessionId = session;
+      const type = response.headers.get("content-type") ?? "";
+      let message: JsonRpc | undefined;
+      if (type.includes("text/event-stream")) message = await this.readEvent(response, id);
+      else {
+        const text = await readBoundedResponse(response, this.config.name);
+        let body: unknown = null;
+        try { body = JSON.parse(text); } catch { /* answered with no JSON message */ }
+        const rows = Array.isArray(body) ? body : [body];
+        message = rows.find((row): row is JsonRpc => isRecord(row) && Number(row.id) === id);
+      }
+      if (!message) throw new Error(`${this.config.name} closed the response before answering ${method}.`);
+      if (message.error) throw new Error(`${this.config.name}: ${message.error.message ?? "the MCP server returned an error"}`);
+      return message.result;
+    } catch (error) {
+      if (signal?.aborted) throw new Error("The turn was stopped.");
+      throw error;
     }
-    if (!message) throw new Error(`${this.config.name} closed the response before answering ${method}.`);
-    if (message.error) throw new Error(`${this.config.name}: ${message.error.message ?? "the MCP server returned an error"}`);
-    return message.result;
   }
 
   private async readEvent(response: Response, id: number): Promise<JsonRpc | undefined> {
@@ -600,10 +650,15 @@ class HttpExchange implements Exchange {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
+    let received = 0;
     try {
+      const declared = Number(response.headers.get("content-length"));
+      if (declared > MAX_MCP_MESSAGE_BYTES) throw messageTooLarge(this.config.name, "response");
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
+        received += value.byteLength;
+        if (received > MAX_MCP_MESSAGE_BYTES) throw messageTooLarge(this.config.name, "response");
         buffer += decoder.decode(value, { stream: true });
         let newline: number;
         while ((newline = buffer.indexOf("\n")) >= 0) {
@@ -613,7 +668,9 @@ class HttpExchange implements Exchange {
           const data = line.slice(5).trim();
           if (!data) continue;
           try {
-            const message = JSON.parse(data) as JsonRpc;
+            const parsed: unknown = JSON.parse(data);
+            if (!isRecord(parsed)) continue;
+            const message = parsed as JsonRpc;
             if (Number(message.id) === id) return message;
           } catch { /* not a JSON frame */ }
         }

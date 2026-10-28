@@ -7,7 +7,7 @@ import { MOCK_FILES, MOCK_GIT, MOCK_GIT_GRAPH, MOCK_MODELS, MOCK_THREADS, mockGi
 import type { ProviderStatus } from "./providers";
 export type { ProviderStatus } from "./providers";
 import type { DiagnosticsSnapshot, EditorChoice, SupportPaths, ThemeMode, BrowserControlResult, BrowserFrame, BrowserStateEvent } from "./types";
-import type { AgentId, AgentIdentity, AgentSessionConfig, ApprovalRequest, CatalogEntry, CatalogInstallResult, CatalogList, CatalogRemoveResult, CliUpdateOutcome, CliUpdateStatus, ContextUsage, Detection, DroppedFile, EnterpriseStatus, GitBranch, GitGraph, GoalState, HarnessMcpConfig, HarnessMcpConfigServer, HarnessMcpReview, HarnessMcpScope, HarnessMcpServerInput, ModelCall, PlanItem, PullRequest, GitReview, GitReviewRequest, GitSnapshot, SessionConfig, SessionMetadata, SnapshotRestore, ThreadWorktree, TokenUsage, TranscriptItem, TurnSnapshot, UserInputRequest, WorkspaceFile, WorktreeRemoval, PluginDetail, PluginEntry, SkillDetail, SkillEntry } from "./types";
+import type { AgentId, AgentIdentity, AgentSessionConfig, ApprovalRequest, CatalogEntry, CatalogInstallResult, CatalogList, CatalogRemoveResult, CliUpdateOutcome, CliUpdateStatus, ContextUsage, Detection, DroppedFile, EnterpriseStatus, GitBranch, GitGraph, GoalState, HarnessMcpConfig, HarnessMcpConfigServer, HarnessMcpReview, HarnessMcpScope, HarnessMcpServerInput, ModelCall, PlanItem, PullRequest, GitReview, GitReviewRequest, GitSnapshot, SessionConfig, SessionMetadata, SnapshotRestore, ThreadWorktree, TokenUsage, TranscriptItem, TurnSnapshot, UserInputRequest, WorkspaceFile, WorktreeRemoval, PluginDetail, PluginEntry, SkillDetail, SkillEntry, OrchestratorProbeResult, OrchestratorRole, OrchestratorRoute } from "./types";
 
 /**
  * The payload each bridge event carries, declared once here instead of being
@@ -37,6 +37,8 @@ export interface BridgeEventPayloads {
   sessionFacts: { sessionId: string; plan?: PlanItem[]; goal?: GoalState | null; context?: ContextUsage | null; usage?: TokenUsage | null; branch?: string | null };
   /** One model call the Harness made in the running turn. The app keeps them as that turn's trajectory. */
   modelCall: { sessionId: string; turnId: string; call: ModelCall };
+  /** A routed turn's decision, emitted before its first stage starts. */
+  route: { sessionId: string; turnId: string; route: OrchestratorRoute };
   /** `turnEnded`: the questions ended the turn (Harness), so the thread is idle until they are answered. */
   userInputs: { sessionId: string; requests: UserInputRequest[]; turnEnded?: boolean };
   item: { sessionId: string; item: TranscriptItem };
@@ -291,6 +293,7 @@ function mockBridge(method: string, params: Record<string, unknown>): unknown {
     case "userShell":
     case "setReasoningEffort":
     case "setModel":
+    case "setOrchestrator":
       return { commandId: "mock-cmd", status: "accepted" };
     case "setApprovalMode":
       return { commandId: "mock-cmd", status: "accepted", effectiveMode: { mode: params.mode } };
@@ -316,6 +319,21 @@ function mockBridge(method: string, params: Record<string, unknown>): unknown {
         if (/kimi/i.test(modelId)) reject(bridgeError("The provider is overloaded. Try again shortly.", "SERVER", true));
         else resolve({ latencyMs: 640 + (modelId.length % 9) * 97, firstTokenMs: 410 + (modelId.length % 5) * 60, reply: "ready" });
       }, 500 + (modelId.length % 7) * 140));
+    }
+    case "orchestratorProbe": {
+      // The preview answers each role's fixed check without a provider; a "kimi" model shows the failure path.
+      const role = String(params.role ?? "") as OrchestratorRole;
+      const providerId = String(params.providerId ?? "");
+      const modelId = String(params.modelId ?? "");
+      return new Promise((resolve, reject) => setTimeout(() => {
+        if (/kimi/i.test(modelId)) reject(bridgeError("The model did not return the format the check asks for.", "SERVER", true));
+        else resolve({
+          role, providerId, modelId, probeVersion: 1, status: "passed",
+          detail: role === "router" ? "Strict router JSON verified." : role === "lead" ? "Plan format verified." : "Builder tool use and edit verified.",
+          capabilities: role === "builder" || role === "small" ? ["tools"] : [],
+          checkedAt: Date.now(),
+        } satisfies OrchestratorProbeResult);
+      }, 420 + (modelId.length % 6) * 90));
     }
     case "harnessMcpAddServer": {
       const scope = params.scope as HarnessMcpScope;

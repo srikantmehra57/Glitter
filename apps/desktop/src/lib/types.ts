@@ -7,8 +7,8 @@ export type AccentColor = "ember" | "mono" | "blue" | "violet" | "pink" | "orang
 /** How deep the dark theme goes; `mid` is the default Smoke palette. */
 export const DARK_INTENSITIES = ["subtle", "mid", "black"] as const;
 export type DarkIntensity = (typeof DARK_INTENSITIES)[number];
-/** Interface typeface. `system` is the face in styles.css; the rest ship with macOS. */
-export const UI_FONTS = ["system", "helvetica", "avenir", "gill", "futura", "newYork"] as const;
+/** Interface typeface. `system` is the face in styles.css; Inter is bundled and the rest ship with macOS. */
+export const UI_FONTS = ["system", "inter", "helvetica", "avenir", "gill", "futura"] as const;
 export type UiFont = (typeof UI_FONTS)[number];
 /** Vertical rhythm for workspace and thread rows; standard preserves the original 28px rows. */
 export const SIDEBAR_DENSITIES = ["standard", "comfortable", "compact"] as const;
@@ -62,7 +62,7 @@ export const EDITOR_CHOICES = ["default", "vscode", "cursor", "zed", "idea"] as 
 export type EditorChoice = (typeof EDITOR_CHOICES)[number];
 export const EDITOR_LABELS: Record<EditorChoice, string> = { default: "System default", vscode: "VS Code", cursor: "Cursor", zed: "Zed", idea: "IntelliJ IDEA" };
 /** Settings pages, in navigation order. Names and groups are in `lib/settingsNav.ts`. */
-export const SETTINGS_TABS = ["Models", "Providers", "Agents", "Extensions", "Permissions", "Threads", "General", "Theme", "Shortcuts", "Usage", "Diagnostics", "About"] as const;
+export const SETTINGS_TABS = ["Models", "Orchestrator", "Providers", "Agents", "Extensions", "Permissions", "Threads", "General", "Theme", "Shortcuts", "Usage", "Diagnostics", "About"] as const;
 export type SettingsTab = (typeof SETTINGS_TABS)[number];
 
 /** `harness` is the app's own agent: it calls model providers with the user's keys (Settings → Providers). */
@@ -306,7 +306,7 @@ export type PluginCapability = { id: string; kind?: string | null; description: 
 export type PluginDetail = { id: string; version?: string | null; description: string; capabilities: PluginCapability[] };
 
 /** Live options an ACP agent reports for a session. */
-export type AgentSessionConfig = { modelId?: string; effort?: ReasoningEffort; mode?: string; modes?: Array<{ value: string; name?: string; description?: string }> };
+export type AgentSessionConfig = { modelId?: string; effort?: ReasoningEffort; mode?: string; modes?: Array<{ value: string; name?: string; description?: string }>; orchestrator?: OrchestratorConfig | null };
 
 export type ApprovalChoice = {
   choiceId: string;
@@ -334,7 +334,57 @@ export type ComposerImage = { mediaType: string; base64Data: string; name: strin
 /** One file from a native OS drop, inspected by the Rust shell. */
 export type DroppedFile = { path: string; name: string; isDir: boolean; size: number; mediaType?: string | null; base64Data?: string | null; error?: string | null };
 export type ContextRef = { id: string; kind: "file" | "folder"; path: string };
-export type SessionConfig = { agentId?: AgentId; modelId?: string; providerId?: string; approvalMode?: ApprovalMode; effort?: ReasoningEffort; mode?: string };
+export type SessionConfig = { agentId?: AgentId; modelId?: string; providerId?: string; approvalMode?: ApprovalMode; effort?: ReasoningEffort; mode?: string; orchestrator?: OrchestratorConfig | null };
+
+/** Orchestrator roles, in the order Settings lists them. Router is under Advanced. */
+export const ORCHESTRATOR_ROLES = ["lead", "builder", "small", "router"] as const;
+export type OrchestratorRole = (typeof ORCHESTRATOR_ROLES)[number];
+export const ORCHESTRATOR_GOALS = ["cost", "balanced", "output"] as const;
+export type OrchestratorGoal = (typeof ORCHESTRATOR_GOALS)[number];
+/** A role's model. Absent `small` means the Builder; absent `router` means Small-task. */
+export type OrchestratorModel = { modelId: string; providerId?: string };
+export type OrchestratorAssignments = Partial<Record<OrchestratorRole, OrchestratorModel>>;
+/** Orchestrator mode as a live session reports it: the goal and the role models to route with. */
+export type OrchestratorConfig = { goal: OrchestratorGoal; models: OrchestratorAssignments };
+/** A role's live capability check: whether the model can do that role's work, and why not. */
+export type OrchestratorProbeResult = {
+  role: OrchestratorRole;
+  providerId: string;
+  modelId: string;
+  probeVersion: number;
+  status: "passed" | "failed";
+  detail: string;
+  capabilities: Array<"tools" | "vision" | "long_context">;
+  checkedAt: number;
+};
+
+export const ORCHESTRATOR_SHAPES = ["direct-small", "direct-builder", "lead-guided", "lead-only"] as const;
+export type OrchestratorShape = (typeof ORCHESTRATOR_SHAPES)[number];
+export type OrchestratorRouteStage = "router" | "scout" | "lead-plan" | "lead" | "builder" | "consult" | "review" | "repair" | "takeover" | "small";
+export type OrchestratorRouteModel = { providerId: string; modelId: string };
+/** One routed turn's durable decision: models, stages and counts, never prompts or private reasoning. */
+export type OrchestratorRoute = {
+  routeId: string;
+  policyVersion: string;
+  goal: OrchestratorGoal;
+  shape: OrchestratorShape;
+  /** The shape actually run this turn; absent for a turn blocked before execution. */
+  executedShape?: OrchestratorShape;
+  executionFallback?: "lead-single-stage" | "plan-invalid";
+  reasonCodes: string[];
+  preRouteRule?: string;
+  /** The shape this message asked for, before the policy floors ran. */
+  requestedShape?: OrchestratorShape;
+  roles: Record<"lead" | "builder" | "small", OrchestratorRouteModel> & { router?: OrchestratorRouteModel };
+  stages: Array<OrchestratorRouteModel & { stage: OrchestratorRouteStage; effectiveEffort?: string }>;
+  consultCount: number;
+  reviewCount: number;
+  fallbacks: string[];
+  takeovers: string[];
+  escalations: string[];
+  references: { plan?: string; buildReport?: string; reviewNotes?: string };
+};
+
 export type Model = { modelId: string; displayLabel?: string; providerId?: string; isActive?: boolean; isDefault?: boolean; unavailable?: boolean; /** Named by a thread or the saved default, but absent from the agent's catalog. */ unlisted?: boolean; description?: string | null; contextLimit?: number | null; releaseDate?: string | null; cost?: { input: string; output: string; cached?: string; currency?: string | null } | null; reasoningEfforts?: ReasoningEffort[]; defaultReasoningEffort?: ReasoningEffort; effortSource?: "host" | "vocabulary"; /** Cline's current free promotion. Absent for other agents. */ free?: boolean };
 export type SessionMetadata = { sessionId: string; name?: string | null; title?: string | null; workspaceRoot?: string | null; updatedAt?: string; status?: string; activeTurnId?: string | null; modelId?: string | null; providerId?: string | null; approvalMode?: { mode: ApprovalMode } };
 export type SessionOpening = { sessionId: string; alreadyOpen?: boolean; userInputs?: UserInputRequest[]; opening?: { result: { session: SessionMetadata } } };
@@ -444,7 +494,18 @@ export type TokenUsage = { promptTokens?: number; totalTokens?: number; outputTo
  * One model call inside a turn, as the harness reports it. A turn with tools
  * makes several; the sequence is the turn's trajectory.
  */
+export type OrchestratorUsageRole = "lead" | "builder" | "small" | "router";
+export type OrchestratorUsageStage = "router" | "scout" | "lead-plan" | "lead" | "builder" | "consult" | "review" | "repair" | "takeover" | "small";
+export type EstimatedCost = { amount: number; currency: string; /** One or more token legs had no catalog price. */ partial: boolean };
 export type ModelCall = {
+  /** Stable host id, used to deduplicate late or replayed accounting. */
+  callId?: string;
+  /** Present only on a turn driven by Orchestrator. */
+  routeId?: string;
+  role?: OrchestratorUsageRole;
+  stage?: OrchestratorUsageStage;
+  /** Catalog-priced estimate captured with the call; never presented as a bill. */
+  estimatedCost?: EstimatedCost;
   at: number;
   providerId: string;
   modelId: string;
@@ -592,6 +653,8 @@ export type Thread = {
   turnStats?: { turnId?: string; durationMs: number; outputTokens?: number; inputTokens?: number; cachedTokens?: number; estimated?: boolean; tokensPerSecond?: number };
   /** The model calls made so far in the running turn; cleared when the next one starts. */
   turnCalls?: ModelCall[];
+  /** Each routed turn's decision, keyed by turn id so receipts keep their label and resume restores it. */
+  routes?: Record<string, OrchestratorRoute>;
   goal?: GoalState | null;
   context?: ContextUsage | null;
   usage?: TokenUsage | null;
@@ -712,6 +775,11 @@ export type Settings = {
   suggestionsAgentId?: AgentId;
   /** Model override for suggestions; absent means the agent's cheapest catalog model. */
   suggestionsModelId?: string;
+  /** Route new built-in agent threads through the Orchestrator roles. */
+  orchestratorEnabled?: boolean;
+  orchestratorGoal?: OrchestratorGoal;
+  /** Role assignments for built-in agent threads. Missing roles fall back per `lib/orchestrator.ts`. */
+  orchestratorModels?: OrchestratorAssignments;
   /** Models switched off in Settings → Models, as `modelVisibilityKey` strings. They leave the model picker, not the catalog. */
   hiddenModels?: string[];
   /** Providers switched off in Settings → Models, as `providerKey` strings. They leave the model picker. */
@@ -750,6 +818,9 @@ export const DEFAULT_SETTINGS: Settings = {
   suggestionsAgentId: undefined,
   suggestionsModelId: undefined,
   shortcutOverrides: {},
+  orchestratorEnabled: false,
+  orchestratorGoal: "balanced",
+  orchestratorModels: {},
   hiddenModels: [],
   hiddenProviders: [],
   workspaces: [],

@@ -44,6 +44,7 @@ function packageSection(name, version, license, files) {
 const EXPECTED_ROWS = {
   'playwright-core': '1.64.1',
   'chromium-bidi': '12.1.0',
+  '@fontsource-variable/inter': '5.3.0',
   '@tauri-apps/api': '2.12.3',
   '@tauri-apps/plugin-store': '2.5.0',
   '@tauri-apps/plugin-notification': '2.6.0',

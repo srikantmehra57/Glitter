@@ -1,14 +1,15 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { EXIT_FAST_MS, usePresence } from "../lib/presence";
-import { Check, ChevronDown, EyeOff, Info, KeyRound, Search, SlidersHorizontal, Sparkles, X, Zap } from "lucide-react";
+import { Activity, Check, ChevronDown, EyeOff, Info, KeyRound, Search, SlidersHorizontal, Sparkles, X, Zap } from "lucide-react";
 import { isFastModel } from "../lib/effort";
 import { humanizeModelLabel } from "../lib/format";
 import { menuPosition } from "../lib/menuPosition";
 import { leadingBrandSlug, modelBrand } from "../lib/brands";
 import { pickerModels } from "../lib/modelVisibility";
+import { ORCHESTRATOR_GOAL_COPY } from "../lib/orchestrator";
 import { providerIds, providerName, type ProviderEntry } from "../lib/providers";
-import { AGENT_IDS, AGENT_LABELS, type AgentId, type AgentInfo, type Model } from "../lib/types";
+import { AGENT_IDS, AGENT_LABELS, type AgentId, type AgentInfo, type Model, type OrchestratorConfig } from "../lib/types";
 import { AgentMark, ModelIcon, ModelMark, ProviderMark, SourceRail, type RailSource } from "./AgentPicker";
 
 export function modelKey(model: { modelId: string; providerId?: string }) {
@@ -112,6 +113,14 @@ type Props = {
   onManageModels?: () => void;
   /** Settings → Providers, to add a key. */
   onManageProviders?: () => void;
+  /** The thread's Orchestrator block; null keeps the picker on manual models. */
+  orchestrator?: OrchestratorConfig | null;
+  /** False while Settings holds no Lead and Builder, so the row leads there first. */
+  orchestratorReady?: boolean;
+  /** Turns Orchestrator on or off for this thread. Present only for built-in agent threads. */
+  onOrchestratorChange?: (enabled: boolean) => void;
+  /** Settings → Orchestrator, opened when the roles are incomplete. */
+  onManageOrchestrator?: () => void;
 };
 
 const SIZE = { width: 540, height: 480, short: 380 };
@@ -122,7 +131,7 @@ const PLAIN_SIZE = { width: 420, height: 460 };
  * it and closes. The rail lists providers and the list shows that provider's
  * models — two levels, nothing nested. Effort is its own control (EffortPicker).
  */
-export function ModelPicker({ models, agentId, agents = [], agentDisabled, customProviders: customs = [], value, loading, disabled, applying, title, hidden, hiddenProviders, onChange, onChooseOther, loadCatalog, onRescan, onShowCapabilities, onManageModels, onManageProviders }: Props) {
+export function ModelPicker({ models, agentId, agents = [], agentDisabled, customProviders: customs = [], value, loading, disabled, applying, title, hidden, hiddenProviders, onChange, onChooseOther, loadCatalog, onRescan, onShowCapabilities, onManageModels, onManageProviders, orchestrator, orchestratorReady = false, onOrchestratorChange, onManageOrchestrator }: Props) {
   const root = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
@@ -141,6 +150,7 @@ export function ModelPicker({ models, agentId, agents = [], agentDisabled, custo
   const selected = models.find((model) => modelKey(model) === value);
   const needle = query.trim().toLowerCase();
   const selectionLocked = disabled || loading || applying;
+  const orchestratorOn = Boolean(orchestrator);
 
   // Agents shown as providers: the current one always, then every other installed one, in a fixed order.
   const shownAgents = useMemo(() => {
@@ -284,7 +294,7 @@ export function ModelPicker({ models, agentId, agents = [], agentDisabled, custo
   const choose = (row: { model: Model; source: Source }) => {
     if (selectionLocked || row.source.disabled) return;
     if (row.source.agentId !== agentId) onChooseOther?.(row.source.agentId, row.model);
-    else if (modelKey(row.model) !== value) onChange(row.model);
+    else if (orchestratorOn || modelKey(row.model) !== value) onChange(row.model);
     close();
   };
   const openPanel = () => {
@@ -325,17 +335,18 @@ export function ModelPicker({ models, agentId, agents = [], agentDisabled, custo
         aria-expanded={open}
         aria-controls={pop.mounted ? dialogId : undefined}
         aria-label="Model"
-        aria-description={`${chipSource} · ${label}`}
+        aria-description={orchestrator ? `Orchestrator · ${ORCHESTRATOR_GOAL_COPY[orchestrator.goal].label}` : `${chipSource} · ${label}`}
         disabled={disabled}
         onClick={() => { if (open) setOpen(false); else openPanel(); }}
         onKeyDown={(event) => {
           if (event.key === "ArrowUp" || event.key === "ArrowDown") { event.preventDefault(); openPanel(); }
         }}
       >
-        {chipProvider ? <ProviderMark id={chipProvider} size={16} name={providerName(chipProvider, customs)} /> : <AgentMark id={agentId} size={16} />}
-        {showModelIcon && selected ? <ModelMark modelId={selected.modelId} providerId={selected.providerId} size={16} /> : null}
-        <span className="picker-value">{label}</span>
-        {selected && isFastModel(selected) ? <Zap size={12} className="model-fast" aria-label="Fast" /> : null}
+        {orchestrator ? <span className="model-orchestrator-mark"><Activity size={15} aria-hidden="true" /></span>
+          : chipProvider ? <ProviderMark id={chipProvider} size={16} name={providerName(chipProvider, customs)} /> : <AgentMark id={agentId} size={16} />}
+        {!orchestrator && showModelIcon && selected ? <ModelMark modelId={selected.modelId} providerId={selected.providerId} size={16} /> : null}
+        <span className="picker-value">{orchestrator ? "Orchestrator" : label}</span>
+        {!orchestrator && selected && isFastModel(selected) ? <Zap size={12} className="model-fast" aria-label="Fast" /> : null}
         <ChevronDown size={12} className="select-chevron" data-open={open || undefined} aria-hidden="true" />
       </button>
       {pop.mounted ? createPortal(
@@ -398,6 +409,37 @@ export function ModelPicker({ models, agentId, agents = [], agentDisabled, custo
               />
               {query ? <button type="button" className="icon-btn" aria-label="Clear model search" onClick={() => { setQuery(""); setActive(0); search.current?.focus(); }}><X size={12} aria-hidden="true" /></button> : null}
             </label> : null}
+            {onOrchestratorChange && !needle ? (
+              <div className="model-orchestrator">
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={orchestratorOn}
+                  className="model-option model-orchestrator-row"
+                  disabled={Boolean(disabled || applying)}
+                  onClick={() => {
+                    // Incomplete roles cannot route a turn: the row leads to Settings instead of switching.
+                    if (!orchestratorOn && !orchestratorReady) { close(); onManageOrchestrator?.(); return; }
+                    onOrchestratorChange(!orchestratorOn);
+                    close();
+                  }}
+                >
+                  <span className="model-icon"><span className="model-orchestrator-mark"><Activity size={20} aria-hidden="true" /></span></span>
+                  <span className="model-copy">
+                    <span className="model-name">
+                      <span className="model-label">Orchestrator</span>
+                      {!orchestratorOn && !orchestratorReady ? <span className="picker-tag">Set up</span> : null}
+                    </span>
+                    <span className="model-meta">
+                      {orchestrator ? `${ORCHESTRATOR_GOAL_COPY[orchestrator.goal].label} · Lead, Builder and Small-task come from Settings`
+                        : orchestratorReady ? "Route each message across the role models in Settings"
+                        : "Choose a Lead and a Builder in Settings first"}
+                    </span>
+                  </span>
+                  <span className={`orchestrator-switch${orchestratorOn ? " on" : ""}`} aria-hidden="true"><i /></span>
+                </button>
+              </div>
+            ) : null}
             <div className="model-catalog">
               <div key={needle ? "search" : sourceId ?? ""} id={listId} role="listbox" aria-label="Model" aria-busy={Boolean(sourceLoading || applying)}>
                 {sourceLoading && !needle ? <p className="picker-empty" role="status">Loading {source?.name ?? "models"}…</p> : !rows.length ? <p className="picker-empty">{emptyText}</p> : null}

@@ -4,10 +4,11 @@ import userEvent from "@testing-library/user-event";
 import { AgentTimeline, WorkingIndicator } from "./AgentTimeline";
 import { useAppStore } from "../lib/store";
 import { resetStore, seedStore } from "../test/store";
-import type { Thread, TranscriptItem } from "../lib/types";
+import type { ModelCall, OrchestratorRoute, Thread, TranscriptItem } from "../lib/types";
 
 vi.mock("./AgentPicker", () => ({
   AgentMark: () => <span data-testid="agent-mark" />,
+  ModelIcon: () => <span data-testid="model-icon" />,
 }));
 // Every message renders its text through Markdown once, so counting those renders counts message renders.
 const marks = vi.hoisted(() => ({ count: 0 }));
@@ -53,6 +54,40 @@ const thread = (partial: Partial<Thread> = {}): Thread => ({
   status: "idle",
   unread: false,
   items: [],
+  ...partial,
+});
+
+const route = (partial: Partial<OrchestratorRoute> = {}): OrchestratorRoute => ({
+  routeId: "r1",
+  policyVersion: "policy-1",
+  goal: "balanced",
+  shape: "lead-guided",
+  executedShape: "lead-guided",
+  reasonCodes: ["plan"],
+  roles: {
+    lead: { providerId: "anthropic", modelId: "anthropic/claude-opus-4-1" },
+    builder: { providerId: "deepseek", modelId: "deepseek/deepseek-v4" },
+    small: { providerId: "deepseek", modelId: "deepseek/deepseek-v4" },
+  },
+  stages: [{ stage: "lead", providerId: "anthropic", modelId: "anthropic/claude-opus-4-1" }],
+  consultCount: 0,
+  reviewCount: 0,
+  fallbacks: [],
+  takeovers: [],
+  escalations: [],
+  references: {},
+  ...partial,
+});
+
+const call = (partial: Partial<ModelCall> = {}): ModelCall => ({
+  at: Date.now(),
+  providerId: "anthropic",
+  modelId: "anthropic/claude-opus-4-1",
+  inputTokens: 0,
+  cachedTokens: 0,
+  outputTokens: 0,
+  durationMs: 1_000,
+  toolCalls: 0,
   ...partial,
 });
 
@@ -327,6 +362,110 @@ describe("AgentTimeline", () => {
       ],
     }));
     expect(screen.getByTitle("Sum of the step times the agent reported")).toHaveTextContent("~10s");
+  });
+
+  it("names the route, its calls and the model that ran it, without a single-model cost", () => {
+    seedStore({ models: [{ modelId: "anthropic/claude-opus-4-1", providerId: "anthropic", displayLabel: "Claude Opus 4.1" }] });
+    mount(thread({
+      lastTurnId: "t1",
+      lastOutcome: "completed",
+      items: [
+        item({ itemId: "u1", kind: "userMessage", turnId: "t1", text: "go" }),
+        item({ itemId: "a1", kind: "agentMessage", turnId: "t1", text: "done" }),
+      ],
+      turnStats: { turnId: "t1", durationMs: 12_000, inputTokens: 900, outputTokens: 100 },
+      routes: { t1: route() },
+      turnCalls: [
+        call({ routeId: "r1", role: "lead" }),
+        call({ routeId: "r1", role: "builder", providerId: "deepseek", modelId: "deepseek/deepseek-v4" }),
+      ],
+    }));
+    const receipt = within(screen.getByRole("region", { name: "Done" }));
+    expect(receipt.getByTitle(/Routed as Lead-guided \(balanced\)/)).toHaveTextContent("Lead-guided");
+    expect(receipt.getByText("2 calls · 2 models")).toBeInTheDocument();
+    expect(receipt.getByText("Claude Opus 4.1")).toBeInTheDocument();
+    expect(receipt.queryByText(/^≈/)).toBeNull();
+  });
+
+  it("keeps an earlier routed turn's label after a later, unrouted turn finishes", () => {
+    mount(thread({
+      lastTurnId: "t2",
+      lastOutcome: "completed",
+      items: [
+        item({ itemId: "u1", kind: "userMessage", turnId: "t1", text: "one" }),
+        item({ itemId: "a1", kind: "agentMessage", turnId: "t1", text: "done one" }),
+        item({ itemId: "u2", kind: "userMessage", turnId: "t2", text: "two" }),
+        item({ itemId: "a2", kind: "agentMessage", turnId: "t2", text: "done two" }),
+      ],
+      routes: { t1: route() },
+      turnCalls: [],
+    }));
+    expect(screen.getByTitle(/Routed as Lead-guided/)).toHaveTextContent("Lead-guided");
+  });
+
+  it("marks a routed turn that fell back, and why on hover", () => {
+    mount(thread({
+      lastTurnId: "t1",
+      lastOutcome: "completed",
+      items: [item({ itemId: "a1", kind: "agentMessage", turnId: "t1", text: "done" })],
+      routes: { t1: route({ executedShape: "lead-only", executionFallback: "lead-single-stage", reasonCodes: ["router-unavailable-fallback"] }) },
+    }));
+    const fact = screen.getByText("Lead-guided · fallback");
+    expect(fact).toHaveAttribute("title", expect.stringContaining("The Router was unavailable"));
+    expect(fact.getAttribute("title")).toContain("ran as the Lead alone");
+  });
+
+  it("shows the staged route facts and handoff documents in the turn", () => {
+    mount(thread({
+      lastTurnId: "t1",
+      lastOutcome: "completed",
+      items: [
+        item({ itemId: "p1", kind: "orchestratorPlan", status: "completed", turnId: "t1", text: "Goal: Make it fit.\nAcceptance: It fits." }),
+        item({ itemId: "a1", kind: "agentMessage", turnId: "t1", text: "done" }),
+      ],
+      routes: {
+        t1: route({
+          stages: [
+            { stage: "lead-plan", providerId: "anthropic", modelId: "anthropic/claude-opus-4-1" },
+            { stage: "builder", providerId: "deepseek", modelId: "deepseek/deepseek-v4" },
+            { stage: "consult", providerId: "anthropic", modelId: "anthropic/claude-opus-4-1" },
+            { stage: "review", providerId: "anthropic", modelId: "anthropic/claude-opus-4-1" },
+          ],
+          consultCount: 1,
+          reviewCount: 1,
+        }),
+      },
+    }));
+    const facts = screen.getByLabelText("Route details");
+    expect(facts).toHaveTextContent("Lead plan · claude-opus-4-1 → Builder · deepseek-v4");
+    expect(facts).toHaveTextContent("Builder asked the Lead · 1 of 2");
+    expect(facts).toHaveTextContent("Reviewed by claude-opus-4-1");
+    expect(screen.getByText("Lead plan")).toBeInTheDocument();
+    expect(screen.getByText(/Make it fit/)).toBeInTheDocument();
+  });
+
+  it("marks a floor that raised the per-message shape, and names what was asked for", () => {
+    mount(thread({
+      lastTurnId: "t1",
+      lastOutcome: "completed",
+      items: [item({ itemId: "a1", kind: "agentMessage", turnId: "t1", text: "done" })],
+      routes: { t1: route({ requestedShape: "direct-small", reasonCodes: ["forced-shape", "floor:high-risk"] }) },
+    }));
+    const fact = screen.getByText("Lead-guided · floor");
+    expect(fact).toHaveAttribute("title", expect.stringContaining("You asked for Small; routed as Lead-guided (balanced)"));
+    expect(fact.getAttribute("title")).toContain("A floor raised this message from Small to Lead-guided.");
+  });
+
+  it("keeps a clean per-message pick unmarked", () => {
+    mount(thread({
+      lastTurnId: "t1",
+      lastOutcome: "completed",
+      items: [item({ itemId: "a1", kind: "agentMessage", turnId: "t1", text: "done" })],
+      routes: { t1: route({ requestedShape: "direct-builder", shape: "direct-builder", executedShape: "direct-builder", reasonCodes: ["forced-shape"] }) },
+    }));
+    const fact = screen.getByText("Builder");
+    expect(fact).not.toHaveTextContent("floor");
+    expect(fact).toHaveAttribute("title", "Routed as Builder (balanced)");
   });
 
   it("adds no receipt just to say a snapshot is unavailable", () => {

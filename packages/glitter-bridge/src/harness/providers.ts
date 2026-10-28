@@ -138,10 +138,12 @@ export const SENDS_NONE = new Set(["nvidia", "cline", "openrouter", "kilo"]);
 
 /**
  * The effort tiers a model takes, or none when it has no reasoning control.
- * Providers do not report this, so it follows their published model families;
- * an unknown model simply shows no effort picker.
+ * A catalog that names the accepted levels (OpenRouter does) is authoritative.
+ * Otherwise providers do not report this, so it follows their published model
+ * families; an unknown model simply shows no effort picker.
  */
-export function effortTiers(providerId: string, model: string, wire: "anthropic" | "openai" = providerId === "anthropic" ? "anthropic" : "openai", listedReasoning?: boolean): Tier[] {
+export function effortTiers(providerId: string, model: string, wire: "anthropic" | "openai" = providerId === "anthropic" ? "anthropic" : "openai", listedReasoning?: boolean, listedEfforts?: readonly string[]): Tier[] {
+  if (listedEfforts) return TIERS.filter((tier) => listedEfforts.includes(tier));
   const id = model.toLowerCase();
   if (wire === "anthropic") {
     // Extended thinking: Claude 3.7 and every later family. 3.0 and 3.5 lack it.

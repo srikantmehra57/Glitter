@@ -7,6 +7,7 @@ import { formatDuration, formatResetIn, humanizeStopReason, relativeTime, usageW
 import { mockUsageLedger } from "../lib/mock";
 import { PROVIDERS, customProviders } from "../lib/providers";
 import { groupUsage, ledgerSlices, type UsageGroup, type UsageSlice } from "../lib/usageLedger";
+import { ORCHESTRATOR_USAGE_ROLE_LABELS } from "../lib/orchestrator";
 import { activityMap, busiestDay, chartLabels, formatCount, formatSpan, peakTokens, smoothPath, streakStats, tokenTrend, type ActivityGrain } from "../lib/usageChart";
 import { AGENT_LABELS, agentEnabled, type AgentId, type ModelCall } from "../lib/types";
 import { AgentMark } from "./AgentPicker";
@@ -248,6 +249,7 @@ function Trajectory({ turns, slots, emptyText = "Harness turns list every call h
                       <li key={`${call.at}:${position}`}>
                         <span className="usage-call-step">{position + 1}</span>
                         <span className="usage-call-what">
+                          {call.role ? <span className="picker-tag usage-call-role">{ORCHESTRATOR_USAGE_ROLE_LABELS[call.role]}</span> : null}
                           {modelLabel(call.modelId)}
                           {call.effort ? <em>{call.effort}</em> : null}
                           {call.attempt ? <span className="picker-tag usage-call-retry">attempt {call.attempt}</span> : null}

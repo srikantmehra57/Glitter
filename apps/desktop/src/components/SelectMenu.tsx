@@ -1,4 +1,4 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Check, ChevronDown } from "lucide-react";
 import { menuPosition } from "../lib/menuPosition";
@@ -15,6 +15,10 @@ export type SelectMenuOption = {
   tag?: string;
   /** Draw this option in its own face, so a font menu can show the choice. */
   fontFamily?: string;
+  /** A section label drawn above the first option that carries it. */
+  heading?: string;
+  /** The closed chip's text when this option is selected, when it needs more than its label. */
+  triggerLabel?: string;
 };
 
 type SelectMenuProps = {
@@ -215,7 +219,7 @@ export function SelectMenu({
         {icon}
         {label ? <span className="selector-label">{label}</span> : null}
         <span className={`select-value ${selected ? "" : "placeholder"}`.trim()} style={selected?.fontFamily ? { fontFamily: selected.fontFamily } : undefined}>
-          {selected?.label ?? placeholder}
+          {selected?.triggerLabel ?? selected?.label ?? placeholder}
         </span>
         <ChevronDown className="select-chevron" size={12} aria-hidden="true" data-open={open || undefined} />
       </button>
@@ -224,54 +228,56 @@ export function SelectMenu({
         <div ref={popoverRef} id={listboxId} className={`select-menu-popover${pop.closing ? " closing" : ""}`} role="listbox" aria-label={ariaLabel ?? label ?? placeholder} style={position ?? { visibility: "hidden" }}>
           {heading ? <div className="menu-heading" aria-hidden="true">{heading}</div> : null}
           {options.map((option, index) => (
-            <button
-              key={option.value}
-              ref={(node) => { optionRefs.current[index] = node; }}
-              type="button"
-              role="option"
-              className={`select-option${option.description ? " rich" : ""}${index === activeIndex ? " active" : ""}${option.tone ? ` ${option.tone}` : ""}`}
-              style={option.fontFamily ? { fontFamily: option.fontFamily } : undefined}
-              aria-selected={index === selectedIndex}
-              disabled={option.disabled}
-              onMouseEnter={() => setActiveIndex(index)}
-              onClick={() => choose(option)}
-              onKeyDown={(event) => {
-                if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-                  event.preventDefault();
-                  setActiveIndex(move(index, event.key === "ArrowDown" ? 1 : -1));
-                } else if (event.key === "Home") {
-                  event.preventDefault();
-                  setActiveIndex(firstEnabled(options));
-                } else if (event.key === "End") {
-                  event.preventDefault();
-                  setActiveIndex(lastEnabled(options));
-                } else if (event.key === "Enter" || event.key === " ") {
-                  event.preventDefault();
-                  choose(option);
-                } else if (event.key === "Escape") {
-                  event.preventDefault();
-                  // close already returns focus to the trigger.
-                  close();
-                } else if (event.key === "Tab") {
-                  // Dismiss and return to the trigger. The option is about to
-                  // unmount, so without this Tab drops the keyboard user onto
-                  // <body> and out of the composer. Prevention is deliberate:
-                  // the browser would otherwise advance from a node React has
-                  // not removed yet, which lands somewhere unpredictable.
-                  event.preventDefault();
-                  setOpen(false);
-                  triggerRef.current?.focus();
-                }
-              }}
-            >
-              {option.icon ? <span className="option-icon" aria-hidden="true">{option.icon}</span> : null}
-              <span className="option-copy">
-                <span>{option.label}{option.tag ? <span className="option-tag">{option.tag}</span> : null}</span>
-                {option.description ? <small>{option.description}</small> : null}
-              </span>
-              {/* The check's slot is kept on every row, so the right gutter lines up whichever row is chosen. */}
-              <span className="option-check" aria-hidden="true">{index === selectedIndex ? <Check size={14} strokeWidth={2.5} /> : null}</span>
-            </button>
+            <Fragment key={option.value}>
+              {option.heading && (index === 0 || options[index - 1].heading !== option.heading) ? <div className="menu-heading select-group" aria-hidden="true">{option.heading}</div> : null}
+              <button
+                ref={(node) => { optionRefs.current[index] = node; }}
+                type="button"
+                role="option"
+                className={`select-option${option.description ? " rich" : ""}${index === activeIndex ? " active" : ""}${option.tone ? ` ${option.tone}` : ""}`}
+                style={option.fontFamily ? { fontFamily: option.fontFamily } : undefined}
+                aria-selected={index === selectedIndex}
+                disabled={option.disabled}
+                onMouseEnter={() => setActiveIndex(index)}
+                onClick={() => choose(option)}
+                onKeyDown={(event) => {
+                  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                    event.preventDefault();
+                    setActiveIndex(move(index, event.key === "ArrowDown" ? 1 : -1));
+                  } else if (event.key === "Home") {
+                    event.preventDefault();
+                    setActiveIndex(firstEnabled(options));
+                  } else if (event.key === "End") {
+                    event.preventDefault();
+                    setActiveIndex(lastEnabled(options));
+                  } else if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    choose(option);
+                  } else if (event.key === "Escape") {
+                    event.preventDefault();
+                    // close already returns focus to the trigger.
+                    close();
+                  } else if (event.key === "Tab") {
+                    // Dismiss and return to the trigger. The option is about to
+                    // unmount, so without this Tab drops the keyboard user onto
+                    // <body> and out of the composer. Prevention is deliberate:
+                    // the browser would otherwise advance from a node React has
+                    // not removed yet, which lands somewhere unpredictable.
+                    event.preventDefault();
+                    setOpen(false);
+                    triggerRef.current?.focus();
+                  }
+                }}
+              >
+                {option.icon ? <span className="option-icon" aria-hidden="true">{option.icon}</span> : null}
+                <span className="option-copy">
+                  <span>{option.label}{option.tag ? <span className="option-tag">{option.tag}</span> : null}</span>
+                  {option.description ? <small>{option.description}</small> : null}
+                </span>
+                {/* The check's slot is kept on every row, so the right gutter lines up whichever row is chosen. */}
+                <span className="option-check" aria-hidden="true">{index === selectedIndex ? <Check size={14} strokeWidth={2.5} /> : null}</span>
+              </button>
+            </Fragment>
           ))}
         </div>
         </div>,

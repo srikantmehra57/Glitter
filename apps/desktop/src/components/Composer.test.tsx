@@ -5,7 +5,7 @@ import { Composer } from "./Composer";
 import { useAppStore } from "../lib/store";
 import { resetStore, seedStore } from "../test/store";
 import { indentText } from "../lib/composerText";
-import type { Thread } from "../lib/types";
+import type { Model, SessionConfig, Thread } from "../lib/types";
 
 // The model picker sits in the composer's tree; counting its renders counts composer renders.
 const pickerRenders = vi.hoisted(() => ({ count: 0 }));
@@ -485,5 +485,147 @@ describe("cost estimate", () => {
     seedStore({ models: [{ ...priced[0], cost: null }], modelsAgentId: "muse" });
     render(<Composer />);
     expect(screen.queryByText("Est. cost")).toBeNull();
+  });
+});
+
+describe("Orchestrator mode", () => {
+  beforeEach(resetStore);
+
+  const lead = { modelId: "anthropic/claude-opus", providerId: "anthropic" };
+  const builder = { modelId: "anthropic/claude-haiku", providerId: "anthropic" };
+  const sessionOrchestrator = { goal: "balanced" as const, models: { lead, builder, small: builder, router: builder } };
+  const harnessModels: Model[] = [{ modelId: lead.modelId, providerId: lead.providerId, reasoningEfforts: ["low", "high"], defaultReasoningEffort: "high", isActive: true }];
+
+  function seedHarness(config: Partial<SessionConfig> = { orchestrator: sessionOrchestrator }, threadPatch: Partial<Thread> = {}) {
+    seedStore({
+      workspaces: [{ id: "w", path: "/repo", name: "repo", grantId: "g" }],
+      selectedWorkspaceId: "w",
+      threads: [thread({ agentId: "harness", config: { agentId: "harness", modelId: lead.modelId, providerId: lead.providerId, effort: "high", approvalMode: "guarded", ...config }, ...threadPatch })],
+      selectedSessionId: "s1",
+      models: harnessModels,
+      modelsAgentId: "harness",
+      agents: [{ id: "harness", name: "Harness", protocol: "native", found: true, path: null, version: null, verified: true, signIn: "", authenticated: true }],
+      enabledAgents: { harness: true },
+    });
+  }
+
+  const goalChip = () => screen.getByRole("button", { name: /^Orchestrator goal/ });
+  const openPicker = () => fireEvent.click(screen.getByRole("button", { name: "Model" }));
+  const orchestratorSwitch = () => screen.getByRole("switch", { name: /Orchestrator/ });
+
+  it("replaces the effort control with the goal in the same footprint", () => {
+    seedHarness();
+    render(<Composer />);
+    expect(screen.getByRole("button", { name: "Model" })).toHaveTextContent("Orchestrator");
+    expect(goalChip()).toHaveTextContent("Balanced");
+    expect(goalChip()).toHaveAccessibleName("Orchestrator goal, Balanced; Auto");
+    expect(screen.queryByRole("button", { name: /^Reasoning effort/ })).toBeNull();
+  });
+
+  it("keeps a manual thread on its model and effort, and switches it over from the picker", () => {
+    const setSessionConfig = vi.fn(async () => {});
+    seedHarness({ orchestrator: null });
+    seedStore({
+      setSessionConfig,
+      orchestratorGoal: "output",
+      orchestratorModels: { lead, builder },
+    });
+    render(<Composer />);
+    expect(screen.getByRole("button", { name: "Model" })).not.toHaveTextContent("Orchestrator");
+    expect(screen.getByRole("button", { name: /^Reasoning effort/ })).toBeInTheDocument();
+    openPicker();
+    fireEvent.click(orchestratorSwitch());
+    expect(setSessionConfig).toHaveBeenCalledWith({ orchestrator: { goal: "output", models: sessionOrchestrator.models } });
+  });
+
+  it.each([false, true])("a draft manual pick restores model and effort with explicit Orchestrator %s", async (explicit) => {
+    seedHarness();
+    seedStore({
+      preview: true, threads: [], selectedSessionId: null,
+      defaultAgentId: "harness", defaultModel: lead.modelId, defaultProviderId: lead.providerId, defaultEffort: "high",
+      orchestratorEnabled: true, orchestratorModels: { lead, builder },
+      refreshModels: vi.fn(async () => {}),
+      drafts: explicit ? { "project:w": { text: "", images: [], config: { agentId: "harness", ...lead, effort: "high", orchestrator: sessionOrchestrator } } } : {},
+    });
+    render(<Composer />);
+    expect(goalChip()).toBeInTheDocument();
+    openPicker();
+    fireEvent.click(screen.getByRole("option", { selected: true }));
+    await vi.waitFor(() => expect(screen.getByRole("button", { name: "Model" })).not.toHaveTextContent("Orchestrator"));
+    expect(screen.getByRole("button", { name: "Model" })).toHaveTextContent("Claude Opus");
+    expect(screen.getByRole("button", { name: /^Reasoning effort/ })).toHaveTextContent("High");
+    expect(screen.queryByRole("button", { name: /^Orchestrator goal/ })).toBeNull();
+    expect(useAppStore.getState().drafts["project:w"].config?.orchestrator).toBeNull();
+    expect(useAppStore.getState().orchestratorEnabled).toBe(true);
+  });
+
+  it("leads to Settings when the roles are incomplete, and switches with no change to a non-built-in thread", () => {
+    seedHarness({ orchestrator: null });
+    seedStore({ orchestratorModels: { lead } });
+    const view = render(<Composer />);
+    openPicker();
+    expect(orchestratorSwitch()).toHaveTextContent("Set up");
+    fireEvent.click(orchestratorSwitch());
+    expect(useAppStore.getState().settingsOpen).toBe(true);
+    expect(useAppStore.getState().settingsTab).toBe("Orchestrator");
+    view.unmount();
+
+    // A Muse thread never offers the row, even with roles saved in Settings.
+    resetStore();
+    seedWorkspace();
+    seedStore({ orchestratorModels: { lead, builder } });
+    render(<Composer />);
+    openPicker();
+    expect(screen.queryByRole("switch", { name: /Orchestrator/ })).toBeNull();
+  });
+
+  it("writes a goal change to the session", () => {
+    const setSessionConfig = vi.fn(async () => {});
+    seedHarness();
+    seedStore({ setSessionConfig });
+    render(<Composer />);
+    fireEvent.click(goalChip());
+    fireEvent.click(screen.getByRole("option", { name: /^Optimize for cost/ }));
+    expect(setSessionConfig).toHaveBeenCalledWith({ orchestrator: { ...sessionOrchestrator, goal: "cost" } });
+  });
+
+  it("sends the queued shape once, then returns the control to Auto", async () => {
+    const sendPrompt = vi.fn(async () => true);
+    seedHarness();
+    seedStore({ sendPrompt });
+    const user = userEvent.setup();
+    render(<Composer />);
+    fireEvent.click(goalChip());
+    fireEvent.click(screen.getByRole("option", { name: /^Small/ }));
+    expect(goalChip()).toHaveTextContent("Balanced · Small next");
+    await user.type(screen.getByRole("combobox"), "rename the helper");
+    await user.keyboard("{Enter}");
+    expect(sendPrompt).toHaveBeenCalledWith({ shape: "direct-small" });
+    await vi.waitFor(() => expect(goalChip()).not.toHaveTextContent("next"));
+    expect(goalChip()).toHaveAccessibleName("Orchestrator goal, Balanced; Auto");
+  });
+
+  it("holds the shape when the send did not go out", async () => {
+    const sendPrompt = vi.fn(async () => false);
+    seedHarness();
+    seedStore({ sendPrompt, composer: "rename the helper" });
+    render(<Composer />);
+    fireEvent.click(goalChip());
+    fireEvent.click(screen.getByRole("option", { name: /^Lead only/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(sendPrompt).toHaveBeenCalledWith({ shape: "lead-only" });
+    await act(async () => {});
+    expect(goalChip()).toHaveTextContent("Balanced · Lead only next");
+  });
+
+  it("turns Orchestrator off from the picker", () => {
+    const setSessionConfig = vi.fn(async () => {});
+    seedHarness();
+    seedStore({ setSessionConfig });
+    render(<Composer />);
+    openPicker();
+    expect(orchestratorSwitch()).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(orchestratorSwitch());
+    expect(setSessionConfig).toHaveBeenCalledWith({ orchestrator: null });
   });
 });

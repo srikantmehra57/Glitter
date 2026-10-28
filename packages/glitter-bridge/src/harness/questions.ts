@@ -135,6 +135,11 @@ function planReview(plan: string): Question {
   };
 }
 
+/** The same card a model's exit_plan_mode call asks, for a plan the host wrote. */
+export function planReviewQuestion(plan: string): Question {
+  return planReview(plan);
+}
+
 /** Offered in Plan mode only: present the finished plan, and Build mode starts when the user approves it. */
 export const EXIT_PLAN_TOOL: ToolDefinition = {
   schema: {

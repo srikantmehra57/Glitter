@@ -180,6 +180,7 @@ const BRIDGE_METHODS: &[&str] = &[
     "harnessMcpAddServer",
     "harnessMcpRemoveServer",
     "testModel",
+    "orchestratorProbe",
     "mcpServers",
     "userShell",
     "readOutput",
@@ -199,6 +200,7 @@ const BRIDGE_METHODS: &[&str] = &[
     "decideApproval",
     "setApprovalMode",
     "setModel",
+    "setOrchestrator",
     "setSessionOption",
     "usage",
     "startLogin",
@@ -1068,7 +1070,7 @@ fn bridge_request_impl<R: Runtime>(state: &AppState, app: &AppHandle<R>, id: Str
     }
     if matches!(
         method.as_str(),
-        "startHost" | "stopHost" | "listSessions" | "listModels" | "suggest" | "startSession" | "resumeSession" | "forkSession" | "compactSession" | "readSession" | "readChildSession" | "pageHistory" | "listSkills" | "harnessMcp" | "harnessMcpConfig" | "harnessMcpAddServer" | "harnessMcpRemoveServer" | "testModel" | "mcpServers" | "readOutput" | "setReasoningEffort" | "subagentControl" | "taskControl" | "workflowControl" | "goalControl" | "sendTurn" | "steerTurn" | "unqueueTurn" | "cancelTurn" | "setModel" | "setSessionOption"
+        "startHost" | "stopHost" | "listSessions" | "listModels" | "suggest" | "startSession" | "resumeSession" | "forkSession" | "compactSession" | "readSession" | "readChildSession" | "pageHistory" | "listSkills" | "harnessMcp" | "harnessMcpConfig" | "harnessMcpAddServer" | "harnessMcpRemoveServer" | "testModel" | "orchestratorProbe" | "mcpServers" | "readOutput" | "setReasoningEffort" | "subagentControl" | "taskControl" | "workflowControl" | "goalControl" | "sendTurn" | "steerTurn" | "unqueueTurn" | "cancelTurn" | "setModel" | "setSessionOption"
     ) {
         inject_agent_bin(state, &mut params)?;
     }
@@ -1184,7 +1186,7 @@ fn bridge_request_impl<R: Runtime>(state: &AppState, app: &AppHandle<R>, id: Str
     }
     if matches!(
         method.as_str(),
-        "forkSession" | "compactSession" | "closeSession" | "readSession" | "readChildSession" | "pageHistory" | "listSkills" | "harnessMcp" | "harnessMcpConfig" | "harnessMcpAddServer" | "harnessMcpRemoveServer" | "userShell" | "readOutput" | "setReasoningEffort" | "subagentControl" | "taskControl" | "workflowControl" | "goalControl" | "sendTurn" | "steerTurn" | "unqueueTurn" | "cancelTurn" | "respondUserInput" | "setApprovalMode" | "setModel" | "setSessionOption" | "renameSession"
+        "forkSession" | "compactSession" | "closeSession" | "readSession" | "readChildSession" | "pageHistory" | "listSkills" | "harnessMcp" | "harnessMcpConfig" | "harnessMcpAddServer" | "harnessMcpRemoveServer" | "userShell" | "readOutput" | "setReasoningEffort" | "subagentControl" | "taskControl" | "workflowControl" | "goalControl" | "sendTurn" | "steerTurn" | "unqueueTurn" | "cancelTurn" | "respondUserInput" | "setApprovalMode" | "setModel" | "setOrchestrator" | "setSessionOption" | "renameSession"
     ) {
         let session_id = params.get("sessionId").and_then(Value::as_str).unwrap_or("");
         require_session(state, session_id)?;

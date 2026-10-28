@@ -8,6 +8,7 @@ import { SETTINGS_TABS, type SettingsTab } from "./types";
  */
 export const SETTINGS_TAB_LABELS: Record<SettingsTab, string> = {
   Models: "Models",
+  Orchestrator: "Orchestrator",
   Providers: "Providers",
   Agents: "Agents",
   Extensions: "Extensions",
@@ -22,7 +23,7 @@ export const SETTINGS_TAB_LABELS: Record<SettingsTab, string> = {
 };
 
 export const SETTINGS_NAV_GROUPS: ReadonlyArray<{ label: string; tabs: readonly SettingsTab[] }> = [
-  { label: "AI", tabs: ["Models", "Providers", "Agents"] },
+  { label: "AI", tabs: ["Models", "Orchestrator", "Providers", "Agents"] },
   { label: "Workspace", tabs: ["Extensions", "Permissions", "Threads"] },
   { label: "App", tabs: ["General", "Theme", "Shortcuts", "Usage"] },
   { label: "System", tabs: ["Diagnostics", "About"] },
@@ -30,6 +31,7 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<{ label: string; tabs: readonly 
 
 export const SETTINGS_TAB_COPY: Record<SettingsTab, string> = {
   Models: "Defaults for new threads, and which models the picker offers. Test a model before you rely on it.",
+  Orchestrator: "Split new built-in agent threads between a Lead that plans and a Builder that types. Off by default.",
   Providers: "Connect model providers with your own API keys. Keys stay in your Mac’s keychain.",
   Agents: "The built-in agent and the coding agent CLIs Glitter can run, with their sign-in and connection.",
   Extensions: "Skills, MCP servers and plugins, from the built-in store or your own.",
@@ -45,13 +47,14 @@ export const SETTINGS_TAB_COPY: Record<SettingsTab, string> = {
 
 const SEARCH_TERMS: Record<SettingsTab, string> = {
   Models: "default model effort reasoning hide show enable disable visible test latency busy responsive picker",
+  Orchestrator: "lead builder small task router goal cost balanced output plan review routes roles model mixing delegation sub-agents subagents",
   Providers: "api key byok bring your own anthropic claude openai gpt google gemini openrouter cline kilo xai grok deepseek groq mistral nvidia nim ollama lm studio local custom endpoint",
   Agents: "muse opencode grok gemini qwen goose cline third-party cli sign in out subscription api key credential binary path connection contributor harness built-in default agent agents.md",
   Extensions: "skills mcp servers plugins import store install",
   Permissions: "approval sandbox network shell file writes ephemeral read only ask auto full access",
   Threads: "archive restore delete history",
   General: "notifications alerts editor vscode cursor zed intellij suggestions",
-  Theme: "light dark system intensity subtle mid pure black oled display interface zoom scale magnify enlarge shrink reduce motion accessibility animation font typeface helvetica avenir gill sans futura new york serif accent color colour sidebar density standard comfortable compact rows spacing tint translucent translucency transparency thinking orb animation",
+  Theme: "light dark system intensity subtle mid pure black oled display interface zoom scale magnify enlarge shrink reduce motion accessibility animation font typeface inter helvetica avenir gill sans futura accent color colour sidebar density standard comfortable compact rows spacing tint translucent translucency transparency thinking orb animation",
   Shortcuts: "keybindings hotkeys remap custom commands slash macros prompts",
   Usage: "tokens cost spend",
   Diagnostics: "logs health enterprise protocol",

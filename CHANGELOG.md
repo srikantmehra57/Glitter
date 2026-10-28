@@ -12,9 +12,25 @@ licence terms.
 
 ### Fixed
 
+- **Manual model picks leave Orchestrator.** Choosing a model, including the
+  already-selected one, restores manual controls for the thread or draft without
+  changing the new-thread default. Settings goal choices now show their summaries.
+- **OpenRouter models use their own effort levels.** A model that publishes
+  supported efforts (Kimi K3.1 Pro, for one) now offers Max and only the levels
+  it accepts, instead of a fixed None to Extra high list. The selected level is
+  validated against that per-model list before it reaches the request.
 - **Narrow Inspector Back controls stay clickable.** Between 681–1000px, the
   sidebar resize grab zone no longer covers Back to changes in full-width
   Environment, Git Graph, Files, Monitor or scoped-diff views.
+- **Context fitting no longer presents an unfittable request as shortened to
+  fit.** Fitting distinguishes genuine fits, unfittable requests and unknown
+  windows. An unfittable follow-up stops before another provider call, preserves
+  the full transcript, and suggests a new thread or a model with a larger
+  context window; unknown windows remain untrimmed and unannounced.
+- **MCP protocol input is bounded before buffering.** Stdio frames and HTTP
+  JSON, error and SSE responses have a 1 MiB ceiling. Oversized traffic fails
+  closed without exposing a partial tool generation, and an offending stdio
+  server is terminated rather than left running.
 - **Image previews keep keyboard focus inside a native modal.** The close button
   receives initial focus, Escape dismisses the preview, and closing returns focus
   to the image that opened it.
@@ -34,6 +50,70 @@ licence terms.
 
 ### Added
 
+- **Settings gains an Orchestrator page.** Assign a Lead, Builder and Small-task
+  model from any connected provider, choose a cost, balanced or output goal, and
+  see which providers receive prompts and code. Small-task follows the Builder
+  and Router follows Small-task until given their own models. It is off by
+  default and applies only to built-in agent threads.
+- **Built-in agent threads route each turn while Orchestrator is on.** A thread
+  started with the toggle enabled receives the goal and role models, and every
+  turn runs the no-model pre-route rules, one bounded tool-less Router call for
+  open prompts and the policy floors before the decided stage runs. The
+  decision is emitted to the app and saved with the session; an invalid or
+  unreachable Router falls back to Lead-guided without a retry, and manual model
+  and effort changes are refused on these threads.
+- **Lead-guided turns run as a staged Lead plan and Builder build.** The Lead
+  writes a validated plan from a bounded neutral thread brief, retrying once
+  when the plan is rejected; the Builder executes it with tools; the app
+  assembles a build report from the edits and checks the Builder actually
+  produced; and the Lead reviews high-risk work in every goal and other
+  non-trivial work in Output, with one repair and a re-review in Output. A
+  Builder provider error or step limit lets the Lead take over in Balanced and
+  Output, a plan rejected twice falls back to a Lead-only turn, and the route
+  records each stage, its model and its effective effort. Plan and review calls
+  stay out of the thread's model history.
+- **The Builder can ask the Lead, and a stuck build gets one automatic consult.**
+  Within the goal's consult budget, the Builder calls `ask_lead` with a question
+  and the smallest relevant excerpt and receives the Lead's answer as a tool
+  result. The app also consults the Lead when it detects the same check failing
+  twice after edits, a file edited back to an earlier version, or a near-limit
+  build with edits and no passing check; the guidance reaches the Builder as a
+  user message. Consults are recorded on the route with their model and
+  effective effort, and an exhausted budget returns a clear refusal instead of
+  another paid call.
+- **A staged turn shows its plan, report and review in the thread.** The
+  completed receipt gains one quiet route-facts line naming the Lead plan and
+  Builder, the consults spent, any takeover and the reviewer, with the same
+  facts on hover. The Lead plan, build report, review notes and automatic
+  guidance are durable trajectory steps, and the route references the plan,
+  latest build report and latest review so a reopened thread keeps them.
+- **A staged Plan-mode turn reviews the Lead plan before building.** The
+  validated plan opens the existing plan-review card; approving it turns Plan
+  mode off and the next turn builds that plan without a second Lead plan call,
+  while feedback revises the plan in Plan mode. A pending or just-approved plan
+  survives reopening the thread.
+- **The composer runs an Orchestrator thread, with a shape per message.**
+  Built-in agent threads get an Orchestrator switch in the model picker, which
+  applies the saved roles to the live session and restores the previous model
+  and effort when switched off. While it is on, the chip reads Orchestrator and
+  the effort control becomes the goal control. Its menu also queues Auto, Small,
+  Builder, Lead-guided or Lead only for the next message; a delivered send
+  returns the control to Auto, a steer leaves the shape queued, and a goal pick
+  leaves it alone.
+- **A routed turn says how it ran.** The live status line and the completed
+  turn's receipt name the route shape, mark a floor that raised the per-message
+  shape and a fallback, with the reason on hover, report the calls and models
+  behind the turn, and show the model that executed it; the single-model cost
+  estimate is left out because the turn spans roles. Routes are saved with their
+  turn and restored when a thread is reopened, and each call in Usage's
+  trajectory carries its role tag.
+- **Orchestrator role models are checked before they are trusted.** Assigning a
+  model runs its role's fixed check — a scratch-directory tool edit for the
+  Builder and Small-task, plan JSON for the Lead, strict router JSON for the
+  Router — and caches the answer per role and model. Each picker shows **Ready**
+  or **Not supported** with the reason, and an icon button runs the check again.
+  An inherited Small-task shows the Builder's result; the Router is checked when
+  Advanced opens.
 - **The inspector gains an Environment view.** Collapsible cards bring the local
   workspace, reported context usage, real MCP connectors, saved tool outputs and
   the current local Browser server into one place. Output rows open in Files,
@@ -71,10 +151,12 @@ licence terms.
   streamed to the app. It is calculated locally and does not depend on provider
   or CLI usage reports.
 - **The interface face is a choice.** Appearance → Font offers System (SF Pro,
-  the default), Helvetica, Avenir, Gill Sans, Futura and New York. Each name
-  in the menu is drawn in that face. The choice covers the whole interface;
-  code, diffs and the terminal keep their monospace face. The faces are ones
-  already installed on the Mac — nothing is downloaded.
+  the default), Inter, Helvetica, Avenir, Gill Sans and Futura. Inter is bundled
+  locally and never requested from a remote service; the other optional faces
+  ship with macOS. The New York serif choice is removed, and saved selections
+  fall back to System. Each name in the menu is drawn in that face. The choice
+  covers the whole interface; code, diffs and the terminal keep their monospace
+  face.
 - **Dark mode comes in three depths.** Appearance → Interface theme gains a
   **Dark intensity** picker — Subtle (Graphite, the surface ladder lifted one
   rung), Mid (Smoke, the previous and default look) and Pure black (true black,
@@ -95,6 +177,11 @@ licence terms.
 
 ### Changed
 
+- **Title-bar pane controls are icon-only.** Browser, Terminal and Changes keep
+  their names in tooltips, while new direct Files and Monitor icons open those
+  inspector views without a menu. Clicking another view switches to it, clicking
+  the active view closes it, and only the current view appears pressed.
+  Environment remains available under More views.
 - **Glitter's identity uses the Obsidian Monolith artwork.** The new faceted
   mark, source concepts and regenerated native icons replace the previous
   geometric G and spark across the app and website.
@@ -116,9 +203,10 @@ licence terms.
   taking vertical space above the composer. Terminal and Changes share that
   panel space, so opening one switches away from the other.
 - **Changes is one quiet review surface.** The four-tab strip is gone: Diff is
-  a detail view with Back to changes, while Files and Monitor live in a compact
-  More views menu. Scope selection is available from the Changes list, remote
-  Git operations sit in one Git actions menu, and file rows are single-line and
+  a detail view with Back to changes, Files and Monitor have direct title-bar
+  icons, and Environment lives in the More views menu. Scope selection is
+  available from the Changes list, remote Git operations sit in one Git actions
+  menu, and file rows are single-line and
   dense, with repeated Modified labels removed. Stage, commit, discard, review
   scopes, file navigation, and line comments keep their existing behavior.
 - **Permissions are three modes, and they belong to the app.** The composer

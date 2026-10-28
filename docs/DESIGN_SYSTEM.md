@@ -16,7 +16,7 @@ document should be corrected.
 
 1. **Protocol-honest.** Show what the agent is doing. Never invent chain-of-thought. Prefer host todos, goals, tool names, and exit codes.
 2. **Frost and ember.** Matte grey canvas, frosted glass panels, soft diffuse elevation, an ember glow as the brand signal. Transcripts, code and diffs always sit on solid surfaces; glass is for chrome (composer, popovers, dialogs), and the sidebar sits on the shell, which can show the window's own material. Live agent state uses `thinking-orbs` (`components/Orb.tsx`) and a restrained pulsing composer rule.
-3. **Desktop, not web.** Overlay titlebar, dense lists, real menus and palettes. The default type is the system face; Appearance → Font can switch the interface to another face already installed on the Mac. No remote fonts and no webfont download.
+3. **Desktop, not web.** Overlay titlebar, dense lists, real menus and palettes. The default type is the system face; Appearance → Font can switch the interface to the bundled Inter face or another face already installed on the Mac. Fonts never load from a remote service.
 4. **Density with hierarchy.** Developer sessions are long. Prefer 13px body, tight rows, collapsed tools. Hierarchy from contrast and spacing, not cards.
 5. **One vocabulary.** Workspace, Thread, Agent, Provider, Model, Run, Plan, Changes, Terminal.
 6. **Every control is real.** Hidden > disabled > fake.
@@ -127,13 +127,13 @@ WCAG AA (4.5:1). It must not carry a second hardcoded color palette.
 | Choice | Face |
 |---|---|
 | System | SF Pro on this Mac (the default) |
+| Inter | Inter Variable, bundled locally with weights 100–900 |
 | Helvetica | Helvetica Neue, then Helvetica |
 | Avenir | Avenir Next |
 | Gill Sans | Gill Sans |
 | Futura | Futura |
-| New York | New York, a text serif |
 
-Each stack names a face that ships with macOS and then a relative that ships more widely, so a missing face still resolves. No Google Fonts. No webfont download.
+Inter comes from `@fontsource-variable/inter` and is compiled into the app, so it works offline and looks the same on every Mac. Each other optional stack names a face that ships with macOS and then a relative that ships more widely, so a missing face still resolves. There are no remote font requests and no serif interface choice; a retired or unknown saved value falls back to System.
 
 **Interface zoom is native window scaling, not a second type scale.** Appearance →
 Display & accessibility has Zoom out, the current percentage, Zoom in and Reset.
@@ -476,7 +476,10 @@ controls (`.picker-trigger`, and `.select-trigger` inside `.composer-foot`)
 that fill a capsule on hover; short 16px hairlines separate model, effort and
 permissions, as one separates attach and mention from them. The model control
 pairs the agent mark with the model name; effort is its own control beside it.
-Every agent has the same permissions control, headed Permissions. The app
+On a built-in agent thread the model control may instead read **Orchestrator**
+with an Activity mark, and the effort control becomes the goal control in the
+same footprint (see Goal below). Every agent has the same permissions control,
+headed Permissions. The app
 decides for every model: **Ask** (edits run, commands ask), **Auto** (risky
 commands still ask) and **Full access** (no approval prompts). A thread already
 on Read only keeps that choice until it is changed. Each description is one
@@ -521,7 +524,14 @@ the list (the thread's current model stays), and a provider switched off — or
 with every model off — leaves the rail unless the thread's model comes from it;
 the foot says how many are hidden
 and links to Manage models and Manage providers. One click on a row picks it
-and closes.
+and closes. A built-in agent thread gets one **Orchestrator** switch row above
+the list: off, it describes routing across the role models in Settings, or says
+a Lead and Builder are needed first and leads to Settings; on, it names the
+goal. It is hidden while a search is active, other agents never show it, and a
+switch closes the picker. Turning it on or off reaches the live session at once,
+and turning it off restores the manual model and effort from before. Picking a
+model row, including the selected one, leaves Orchestrator for that thread or
+draft without changing the new-thread default in Settings.
 
 **Select menus** (`SelectMenu`: permissions, mode, effort, every select in
 Settings) share one anatomy. The popover has a 6px inset. A row is a grid: a
@@ -549,6 +559,20 @@ effect. A pick stays drawn while it applies, and a rejected pick returns to
 the session's applied value. The model and effort commands open these two
 controls.
 
+**Goal** (`GoalPicker`) takes the effort control's place while Orchestrator
+runs on a built-in thread, in the same select menu and chip. The chip names the
+goal in one word — Cost, Balanced, Output — and, while a shape is queued for the
+next message, both, as in “Balanced · Small next”. The menu carries two
+headings: **Goal** (Optimize for cost, Balanced, Optimize for output, each with
+its one-line summary) and **This message** (Auto, then Small, Builder,
+Lead-guided and Lead only, each with its one-line description; Auto is tagged
+Default). A shape applies to the next message, not the running turn: a delivered
+send returns the control to Auto, a steer leaves the shape queued, and a send
+that failed keeps it. A goal pick leaves a queued shape alone. Picks follow the
+same drawn-while-applying rule as effort. Floors still apply after sending, and
+the live line and completion receipt mark `· floor` when one raised the chosen
+shape; the reason is on hover.
+
 In the model list a check trails the selected capsule row, a Zap marks the
 base row while its fast variant is selected, and price sits right of the name,
 so rows compare at a glance.
@@ -559,7 +583,17 @@ A completed turn closes with one quiet line under the reply, with no rule or
 box, starting on the content column: a small success check leading **Done**,
 then the turn's facts in `--text-sm` `--tertiary`, dot-separated — duration,
 estimated token speed, tokens, estimated cost, and the model last with a 12px mark — and Undo,
-Review and Fork here as quiet buttons at the end. A completed answer keeps this line even when
+Review and Fork here as quiet buttons at the end. A routed turn replaces the
+cost estimate with its route: the decided shape, a `floor` mark when a floor
+raised the per-message choice and a `fallback` mark when routing itself fell
+back (the reason on hover), the calls and models it used, and the
+model that executed it as the last fact. A staged Orchestrator turn adds one
+quiet route-facts line under the head: `--text-xs` `--tertiary`, dot-separated,
+with the Lead plan and Builder, consults spent, any takeover and the reviewer.
+Single-role routes add no line. The plan, build report, review notes and
+automatic guidance appear as ordinary collapsed trajectory steps titled **Lead
+plan**, **Build report**, **Lead review** and **Lead guidance**. A completed
+answer keeps this line even when
 the host supplies no usage or edit summary, so Review always opens the Changes pane. Undo appears
 only when a saved file state lets it run; the strip never explains why it is absent. Only an Undo or Reapply that failed adds a line. An
 undone turn reads **Undone** in place of Done, and its button offers Reapply.
@@ -595,7 +629,7 @@ and the navigation, search and the command palette all read those names.
 
 | Group | Pages |
 |---|---|
-| AI | Models · Providers · Agents |
+| AI | Models · Orchestrator · Providers · Agents |
 | Workspace | Extensions · Permissions · Threads |
 | App | General · Appearance · Commands & shortcuts · Usage |
 | System | Diagnostics · About |
@@ -609,6 +643,21 @@ and the navigation, search and the command palette all read those names.
   failed. A search field at the top searches every provider; a provider with
   more than ten models has its own search inside its card. Long lists fold
   after eight rows.
+- **Orchestrator**: **Use Orchestrator for new threads** (off by default; the
+  help names the default agent when it is not the built-in one), then **Goal** —
+  Optimize for cost, Balanced or Optimize for output, each with a one-line
+  summary — then **Roles**: Lead, Builder and Small-task model pickers from
+  every connected provider, where Small-task offers **Same as Builder**. Each
+  picker carries its role's fixed capability check underneath: a spinner while
+  it runs, then a quiet **Ready** or **Not supported** chip with the reason and
+  an icon button to run it again. An inherited Small-task shows the Builder's
+  check; the Router is checked when **Advanced** opens. A collapsed
+  **Advanced** card holds the Router picker, which offers **Same as
+  Small-task**. A missing catalog shows one quiet card linking to Providers; an
+  enabled but incomplete setup states that a Lead and Builder are required. A
+  **Data disclosure** card lists each provider that will receive prompts and
+  code, grouped by role order, and names local providers. It applies to
+  built-in agent threads only.
 - **Providers**: API keys for the built-in agent. Custom endpoints are added
   with **Add a custom endpoint** (a full-width quiet row at the foot of the
   card): the form asks for a name, the API type (OpenAI-compatible — Chat
@@ -645,7 +694,9 @@ and the navigation, search and the command palette all read those names.
   means, and the grid stays the same year. Last 7 days and Last 30 days filter
   only the daily trend, from the trend card's own head. A donut shows each
   model's share. Provider, trajectory, agent, tool
-  and insight cards follow in the same card chrome. The Muse subscription meter
+  and insight cards follow in the same card chrome, and each call in the
+  trajectory carries a quiet role tag (Router, Small, Builder, Lead) when the
+  Orchestrator made it. The Muse subscription meter
   is last, and only while Muse is shown. The map uses chart series 1, so it
   stays a data colour when the accent changes. Model lines and the donut take
   the series palette in size order. Refresh and Clear history sit at the top
@@ -750,6 +801,14 @@ reach it as they reach the sidebar. The main panel starts below it and holds
 only the thread; the title bar is never drawn inside the panel. Its title lines
 up with the panel's left edge and its last action with the panel's right edge.
 
+**Pane controls.** Browser, Terminal, Files, Monitor and Changes are icon-only
+buttons, in that order, with their names in hover and keyboard-focus tooltips;
+Terminal and Changes also include their shortcuts. Files and Monitor open their
+inspector views directly instead of duplicating them in a menu. A direct view
+button switches away from another view on the first click and closes only its
+own active view on the next. Its pressed state follows that view, with Changes
+including Diff; it does not merely follow whether the inspector is open.
+
 **The sidebar group.** Show/Hide sidebar and Search are one group of 28px icon
 buttons, in that order, with tooltips and no labels. With the sidebar open the
 group sits at the sidebar's right edge (12px in); collapsed, it slides with the
@@ -782,9 +841,10 @@ It is a real pane beside the transcript, not an overlay: a left-edge separator r
 four-tab strip. The 44px header names the current view in `--text-md` `--ink`,
 with a plain `--text-xs` file count and compact diff totals rather than a count
 pill. Diff is a detail state with **Back to changes**, not a peer destination.
-Files, Environment, Monitor and Git Graph live in the icon-only **More views**
-menu and also offer Back to changes. Each view names its region. Refresh belongs
-to Changes, Diff and Git Graph; Expand and Close remain available everywhere.
+Files and Monitor have direct icon-only title-bar buttons; Environment and Git
+Graph live in the icon-only **More views** menu. Every non-Changes view also
+offers Back to changes. Each view names its region. Refresh belongs to Changes,
+Diff and Git Graph; Expand and Close remain available everywhere.
 
 **Environment.** A compact stack of transparent, bordered, collapsible cards
 opens with Environmental Information: the active branch, Changes and its

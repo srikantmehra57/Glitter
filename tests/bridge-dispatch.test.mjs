@@ -95,6 +95,10 @@ export class HarnessHost {
   decideApproval() { return { decided: 'harness' }; }
   setCredentials(credentials) { this.credentials = credentials; }
   listModels() { return { models: Object.keys(this.credentials ?? {}).sort() }; }
+  orchestratorProbe(options) { return { probe: options, providers: Object.keys(this.credentials ?? {}).sort() }; }
+  async startSession(options) { return { sessionId: 'h-owned', options }; }
+  async sendTurn(options) { return { turnId: 'h-turn', via: 'harness', ...(options.forcedShape ? { forcedShape: options.forcedShape } : {}) }; }
+  async setOrchestrator(options) { return { status: 'accepted', via: 'harness', orchestrator: options.orchestrator }; }
 }`;
 
 const agentsStub = `
@@ -276,6 +280,69 @@ test('Harness reads providers from the native credential payload', async () => {
     });
     assert.equal(response.ok, true, response.error);
     assert.deepEqual(response.result.models, ['custom-1', 'kilo', 'nvidia']);
+  });
+});
+
+test('an Orchestrator role check names its role, provider and model after native credential injection', async () => {
+  await withBridge(async (bridge) => {
+    const response = await bridge.request('orchestratorProbe', {
+      agentId: 'harness',
+      role: 'builder',
+      providerId: 'anthropic',
+      modelId: 'anthropic/claude-sonnet-9',
+      refresh: true,
+      providerKeys: { anthropic: { key: 'CANARY-ANTHROPIC-KEY' } },
+    });
+    assert.equal(response.ok, true, response.error);
+    assert.deepEqual(response.result, {
+      probe: { role: 'builder', providerId: 'anthropic', modelId: 'anthropic/claude-sonnet-9', refresh: true },
+      providers: ['anthropic'],
+    });
+  });
+});
+
+test('a Harness start forwards the Orchestrator role settings intact', async () => {
+  await withBridge(async (bridge) => {
+    const orchestrator = {
+      goal: 'output',
+      models: {
+        lead: { modelId: 'anthropic/lead', providerId: 'anthropic' },
+        builder: { modelId: 'deepseek/build' },
+      },
+    };
+    const started = await bridge.request('startSession', { agentId: 'harness', workspaceRoot: '/repo', orchestrator });
+    assert.equal(started.ok, true, started.error);
+    assert.equal(started.result.sessionId, 'h-owned');
+    assert.deepEqual(started.result.options.orchestrator, orchestrator, 'goal and role models reach the harness unchanged');
+    assert.equal(started.result.options.modelId, undefined, 'Orchestrator chooses the models, not the manual picker');
+  });
+});
+
+test('a live Orchestrator switch forwards its settings and its off state', async () => {
+  await withBridge(async (bridge) => {
+    const orchestrator = {
+      goal: 'cost',
+      models: {
+        lead: { modelId: 'anthropic/lead' },
+        builder: { modelId: 'deepseek/build' },
+      },
+    };
+    const enabled = await bridge.request('setOrchestrator', { agentId: 'harness', sessionId: 'h-owned', orchestrator });
+    assert.equal(enabled.ok, true, enabled.error);
+    assert.deepEqual(enabled.result, { status: 'accepted', via: 'harness', orchestrator });
+    const disabled = await bridge.request('setOrchestrator', { agentId: 'harness', sessionId: 'h-owned', orchestrator: null });
+    assert.deepEqual(disabled.result, { status: 'accepted', via: 'harness', orchestrator: null });
+  });
+});
+
+test('a forced shape reaches the Harness turn, and an unknown one is refused', async () => {
+  await withBridge(async (bridge) => {
+    const sent = await bridge.request('sendTurn', { agentId: 'harness', sessionId: 'h-owned', text: 'hi', forcedShape: 'direct-builder' });
+    assert.equal(sent.ok, true, sent.error);
+    assert.equal(sent.result.forcedShape, 'direct-builder');
+    const bad = await bridge.request('sendTurn', { agentId: 'harness', sessionId: 'h-owned', text: 'hi', forcedShape: 'router' });
+    assert.equal(bad.ok, false);
+    assert.equal(bad.error, 'A forced shape must be direct-small, direct-builder, lead-guided or lead-only.');
   });
 });
 

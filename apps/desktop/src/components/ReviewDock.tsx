@@ -26,8 +26,6 @@ const NO_COMMENTS: LineComment[] = [];
 const MORE_VIEW_OPTIONS: SelectMenuOption[] = [
   { value: "environment", label: "Environment", description: "Workspace, Git, context, outputs and servers" },
   { value: "graph", label: "Git Graph", description: "Branch topology and commit history" },
-  { value: "files", label: "Files", description: "Browse workspace files" },
-  { value: "activity", label: "Monitor", description: "Goals, tasks and subagents" },
 ];
 const SCOPE_LABELS: Record<ReviewScope, string> = { all: "All changes", lastTurn: "Last turn", staged: "Staged", unstaged: "Unstaged", branch: "Branch" };
 const SCOPE_OPTIONS = REVIEW_SCOPES.map((scope) => ({ value: scope, label: SCOPE_LABELS[scope] }));
@@ -438,7 +436,7 @@ export function ReviewDock() {
         {s.inspectorTab === "changes" && fileCount ? <span className="dock-count">{fileCount}</span> : null}
       </div>
       {reviewView && statFiles.length ? <span className="dock-stat"><span className={`add${added ? "" : " zero"}`}>+{added}</span><span className={`del${removed ? "" : " zero"}`}>−{removed}</span></span> : <span className="grow" />}
-      <SelectMenu id="dock-more" className="action-menu dock-more" ariaLabel="More views" value="" placeholder="" options={MORE_VIEW_OPTIONS} onChange={(value) => { if (value === "files" || value === "activity" || value === "environment" || value === "graph") s.setInspectorTab(value); }} icon={<Ellipsis size={15} />} />
+      <SelectMenu id="dock-more" className="action-menu dock-more" ariaLabel="More views" value="" placeholder="" options={MORE_VIEW_OPTIONS} onChange={(value) => { if (value === "environment" || value === "graph") s.setInspectorTab(value); }} icon={<Ellipsis size={15} />} />
       <button className="icon-btn small" aria-label={s.dockExpanded ? "Restore split view" : `Expand ${viewTitle.toLowerCase()}`} aria-pressed={s.dockExpanded} data-tooltip-align="end" data-tooltip={s.dockExpanded ? "Restore split view" : `Expand ${viewTitle.toLowerCase()}`} onClick={() => s.setDockExpanded(!s.dockExpanded)}>{s.dockExpanded ? <Minimize2 size={13} /> : <Maximize2 size={13} />}</button>
       {reviewView || graphView ? <button className="icon-btn small" aria-label={graphView ? "Refresh Git graph" : "Refresh changes"} data-tooltip-align="end" data-tooltip="Refresh" disabled={!workspace || s.gitLoading || reviewLoading || Boolean(s.gitGraphLoading)} onClick={() => { if (graphView) void s.refreshGitGraph(); else if (scoped) void s.refreshReview(); else void s.refreshGit(); }}><RefreshCw size={13} className={s.gitLoading || reviewLoading || Boolean(s.gitGraphLoading) ? "spin" : ""} /></button> : null}
       <button className="icon-btn small" aria-label={`Close ${viewTitle.toLowerCase()}`} data-tooltip-align="end" data-tooltip={`Close  ${shortcutText("toggle-changes")}`} onClick={() => s.setDockOpen(false)}><X size={14} /></button>

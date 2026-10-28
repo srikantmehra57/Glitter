@@ -22,32 +22,21 @@ beforeEach(() => {
   } });
 });
 
-it("keeps Changes primary and opens Environment, Files and Monitor from More views", () => {
+it("keeps Changes primary and opens Environment from More views", () => {
   render(<ReviewDock />);
   expect(screen.queryByRole("tablist", { name: "Changes view" })).toBeNull();
   expect(screen.getByRole("region", { name: "Changes" })).toBeInTheDocument();
   expect(screen.queryByText("Modified")).toBeNull();
 
   fireEvent.click(screen.getByRole("button", { name: "More views" }));
-  fireEvent.click(screen.getByRole("option", { name: /^Files/ }));
-  expect(useAppStore.getState().inspectorTab).toBe("files");
-  expect(screen.getByRole("region", { name: "Files" })).toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: "Back to changes" }));
-  expect(screen.getByRole("region", { name: "Changes" })).toBeInTheDocument();
-
-  fireEvent.click(screen.getByRole("button", { name: "More views" }));
+  expect(screen.queryByRole("option", { name: /^Files/ })).toBeNull();
+  expect(screen.queryByRole("option", { name: /^Monitor/ })).toBeNull();
   fireEvent.click(screen.getByRole("option", { name: /^Environment/ }));
   expect(useAppStore.getState().inspectorTab).toBe("environment");
   expect(screen.getByRole("region", { name: "Environment" })).toBeInTheDocument();
   expect(screen.getByText("This computer")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Back to changes" }));
   expect(screen.getByRole("region", { name: "Changes" })).toBeInTheDocument();
-
-  fireEvent.click(screen.getByRole("button", { name: "More views" }));
-  fireEvent.click(screen.getByRole("option", { name: /^Monitor/ }));
-  expect(useAppStore.getState().inspectorTab).toBe("activity");
-  expect(screen.getByRole("region", { name: "Monitor" })).toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: "Back to changes" }));
   expect(useAppStore.getState().inspectorTab).toBe("changes");
 });
 

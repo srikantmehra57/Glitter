@@ -21,6 +21,7 @@ import { ThreadView } from "./components/ThreadView";
 import { openPicker } from "./lib/commands";
 import { modalOpen } from "./lib/dialogFocus";
 import { actionFor, chordOf, menuOwned, shortcutForMenu, type ShortcutId } from "./lib/shortcuts";
+import "@fontsource-variable/inter";
 import "./styles.css";
 import "./settings.css";
 
@@ -56,7 +57,7 @@ function runShortcut(id: ShortcutId) {
     case "open-workspace": void state.chooseProject(); break;
     case "toggle-sidebar": state.setSidebarCollapsed(!state.sidebarCollapsed); break;
     case "toggle-changes":
-      if (!state.dockOpen && (state.inspectorTab === "activity" || state.inspectorTab === "environment")) state.setInspectorTab("changes");
+      if (!state.dockOpen && (state.inspectorTab === "activity" || state.inspectorTab === "environment" || state.inspectorTab === "files")) state.setInspectorTab("changes");
       state.setDockOpen(!state.dockOpen);
       break;
     case "terminal": state.setTerminalOpen(!state.terminalOpen); break;

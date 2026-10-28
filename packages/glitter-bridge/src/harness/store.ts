@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { PendingQuestion } from "./questions.js";
 import type { ApprovalMode } from "./permission/policy.js";
+import type { OrchestratorSettings, RouteRecord } from "./orchestrator/types.js";
 import type { ChatMessage, ContentPart } from "./wire.js";
 
 export type PendingSteer = { itemId: string; text: string; images?: Array<{ mediaType: string; base64Data: string }> };
@@ -37,6 +38,10 @@ export type SessionMeta = {
   modelId?: string;
   effort?: string;
   mode?: string;
+  /** Present only on a thread started with Orchestrator. Role models override `modelId` and `effort`. */
+  orchestrator?: OrchestratorSettings;
+  /** The manual model and effort to restore when Orchestrator is switched off. */
+  manual?: { modelId?: string; effort?: string };
   /** Present only on a delegated child. Hidden from the session list, shown in its parent's log. */
   delegation?: DelegationPolicy;
   /**
@@ -57,7 +62,9 @@ type Record_ =
   | { type: "questionSettled"; userInputId: string }
   /** Accepted steering is durable before its model-history boundary. */
   | { type: "steer"; steering: PendingSteer }
-  | { type: "steerSettled"; itemIds: string[] };
+  | { type: "steerSettled"; itemIds: string[] }
+  /** One routed turn's decision and the stages it ran. Durable for the thread's audit trail. */
+  | { type: "route"; turnId: string; route: RouteRecord };
 
 const SESSION_ID = /^h-[a-z0-9-]{8,64}$/;
 
@@ -164,7 +171,7 @@ export class SessionStore {
   }
 
   /** Messages for the model and items for the transcript. A torn last line (a crash mid-write) is skipped. */
-  async read(sessionId: string): Promise<{ messages: ChatMessage[]; items: Array<Record<string, unknown>>; steering?: PendingSteer[]; question?: PendingQuestion; delegation?: DelegationPolicy }> {
+  async read(sessionId: string): Promise<{ messages: ChatMessage[]; items: Array<Record<string, unknown>>; steering?: PendingSteer[]; question?: PendingQuestion; delegation?: DelegationPolicy; routes?: Array<{ turnId: string; route: RouteRecord }> }> {
     const path = this.file(sessionId);
     if (!existsSync(path)) return { messages: [], items: [] };
     let question: PendingQuestion | undefined;
@@ -172,6 +179,7 @@ export class SessionStore {
     const messages: ChatMessage[] = [];
     const items = new Map<string, Record<string, unknown>>();
     const steering = new Map<string, PendingSteer>();
+    const routes: Array<{ turnId: string; route: RouteRecord }> = [];
     const started = new Set<string>();
     for (const line of (await readFile(path, "utf8")).split("\n")) {
       if (!line.trim()) continue;
@@ -192,13 +200,14 @@ export class SessionStore {
       else if (record.type === "question" && record.question) question = record.question;
       else if (record.type === "questionSettled" && record.userInputId === question?.userInputId) question = undefined;
       else if (record.type === "delegation" && record.delegation) delegation = record.delegation;
+      else if (record.type === "route" && typeof record.turnId === "string" && record.route) routes.push({ turnId: record.turnId, route: record.route });
     }
     // A crash mid-tool leaves the assistant message without a result. The marker says the call had started.
     for (const message of messages) {
       if (message.role !== "assistant") continue;
       for (const call of message.toolCalls ?? []) if (started.has(call.id)) call.started = true;
     }
-    return { messages, items: [...items.values()], ...(steering.size ? { steering: [...steering.values()] } : {}), ...(question ? { question } : {}), ...(delegation ? { delegation } : {}) };
+    return { messages, items: [...items.values()], ...(steering.size ? { steering: [...steering.values()] } : {}), ...(question ? { question } : {}), ...(delegation ? { delegation } : {}), ...(routes.length ? { routes } : {}) };
   }
 
   remove(sessionId: string): Promise<void> {

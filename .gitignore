@@ -30,4 +30,5 @@ playwright-report/
 .tooling/
 .superdesign/
 .audit/
+.zcode/
 brag-output/

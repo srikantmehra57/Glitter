@@ -101,6 +101,19 @@ describe("UsageView", () => {
     expect(within(rows[1]).getByText("1.4K in · 80 out")).toHaveAttribute("title", "1,400 input, 900 of it cached · 80 output tokens");
   });
 
+  it("tags each routed call with the role that made it", () => {
+    const now = Date.now();
+    seed({ usageLedger: { version: 1, days: [], turns: [turn({ calls: [
+      { at: now - 30_000, providerId: "anthropic", modelId: "anthropic/claude-opus-4-1", role: "lead", stage: "lead-plan", inputTokens: 400, cachedTokens: 0, outputTokens: 60, stopReason: "end_turn", durationMs: 8_000, toolCalls: 0 },
+      { at: now, providerId: "deepseek", modelId: "deepseek/deepseek-v4", role: "builder", stage: "builder", inputTokens: 900, cachedTokens: 0, outputTokens: 120, stopReason: "end_turn", durationMs: 9_000, toolCalls: 1 },
+    ] })] } });
+    render(<UsageView embedded />);
+    const card = screen.getByRole("region", { name: "Trajectory" });
+    const rows = [...card.querySelectorAll(".usage-call-what")] as HTMLElement[];
+    expect(rows[0]).toHaveTextContent("Lead");
+    expect(rows[1]).toHaveTextContent("Builder");
+  });
+
   it("filters trajectory calls to one thread and returns to all threads", () => {
     const now = Date.now();
     const call = { at: now - 60_000, providerId: "anthropic", modelId: "anthropic/claude-sonnet-5", inputTokens: 100, cachedTokens: 0, outputTokens: 20, stopReason: "end_turn", durationMs: 1_000, toolCalls: 0 };

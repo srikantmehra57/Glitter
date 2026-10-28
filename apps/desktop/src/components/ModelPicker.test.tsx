@@ -313,6 +313,96 @@ it("leaves a provider switched off, or with every model off, out of the rail unl
   expect(screen.getAllByRole("tab").map((tab) => tab.getAttribute("aria-label"))).toEqual(["Anthropic", "OpenAI", "Kilo API"]);
 });
 
+const ORCHESTRATOR = { goal: "balanced" as const, models: { lead: { modelId: "anthropic/claude-opus" }, builder: { modelId: "anthropic/claude-haiku" } } };
+
+it("offers the Orchestrator row only where a thread can use it", () => {
+  const models: Model[] = [{ modelId: "anthropic/claude-sonnet", providerId: "anthropic" }];
+  const props = { models, agentId: "harness" as const, value: modelKey(models[0]), loading: false, disabled: false, onChange: vi.fn() };
+  const view = render(<ModelPicker {...props} />);
+  fireEvent.click(screen.getByRole("button", { name: "Model" }));
+  expect(screen.queryByRole("switch", { name: /Orchestrator/ })).toBeNull();
+  view.unmount();
+  render(<ModelPicker {...props} onOrchestratorChange={vi.fn()} orchestratorReady />);
+  fireEvent.click(screen.getByRole("button", { name: "Model" }));
+  expect(screen.getByRole("switch", { name: /Orchestrator/ })).toHaveAttribute("aria-checked", "false");
+});
+
+it("switches Orchestrator on and off with one click, and closes", () => {
+  const models: Model[] = [{ modelId: "anthropic/claude-sonnet", providerId: "anthropic" }];
+  const onOrchestratorChange = vi.fn();
+  const props = { models, agentId: "harness" as const, value: modelKey(models[0]), loading: false, disabled: false, onChange: vi.fn(), orchestratorReady: true, onOrchestratorChange };
+  const view = render(<ModelPicker {...props} />);
+  fireEvent.click(screen.getByRole("button", { name: "Model" }));
+  fireEvent.click(screen.getByRole("switch", { name: /Orchestrator/ }));
+  expect(onOrchestratorChange).toHaveBeenLastCalledWith(true);
+  expect(screen.getByRole("button", { name: "Model" })).toHaveAttribute("aria-expanded", "false");
+  view.rerender(<ModelPicker {...props} orchestrator={ORCHESTRATOR} />);
+  fireEvent.click(screen.getByRole("button", { name: "Model" }));
+  const on = screen.getByRole("switch", { name: /Orchestrator/ });
+  expect(on).toHaveAttribute("aria-checked", "true");
+  expect(on).toHaveTextContent("Balanced");
+  fireEvent.click(on);
+  expect(onOrchestratorChange).toHaveBeenLastCalledWith(false);
+});
+
+it.each([0, 1])("selects manual model %i while Orchestrator is on, even when already selected", (index) => {
+  const models: Model[] = [{ modelId: "anthropic/claude-sonnet", providerId: "anthropic" }, { modelId: "anthropic/claude-haiku", providerId: "anthropic" }];
+  const onChange = vi.fn();
+  render(<ModelPicker models={models} agentId="harness" value={modelKey(models[0])} loading={false} disabled={false} onChange={onChange} orchestrator={ORCHESTRATOR} onOrchestratorChange={vi.fn()} orchestratorReady />);
+  const trigger = screen.getByRole("button", { name: "Model" });
+  fireEvent.click(trigger);
+  fireEvent.click(screen.getByRole("option", { selected: index === 0 }));
+  expect(onChange).toHaveBeenCalledExactlyOnceWith(models[index]);
+  expect(trigger).toHaveAttribute("aria-expanded", "false");
+  expect(trigger).toHaveFocus();
+});
+
+it("does not reapply the selected model when Orchestrator is off", () => {
+  const model: Model = { modelId: "anthropic/claude-sonnet", providerId: "anthropic" };
+  const onChange = vi.fn();
+  render(<ModelPicker models={[model]} agentId="harness" value={modelKey(model)} loading={false} disabled={false} onChange={onChange} orchestrator={null} onOrchestratorChange={vi.fn()} orchestratorReady />);
+  fireEvent.click(screen.getByRole("button", { name: "Model" }));
+  fireEvent.click(screen.getByRole("option", { selected: true }));
+  expect(onChange).not.toHaveBeenCalled();
+});
+
+it("reads Orchestrator on the trigger, with the goal and without a manual model mark", () => {
+  const models: Model[] = [{ modelId: "anthropic/claude-sonnet-fast", providerId: "anthropic", displayLabel: "Claude Sonnet Fast" }];
+  render(<ModelPicker models={models} agentId="harness" value={modelKey(models[0])} loading={false} disabled={false} onChange={vi.fn()} orchestrator={{ ...ORCHESTRATOR, goal: "output" }} onOrchestratorChange={vi.fn()} orchestratorReady />);
+  const trigger = screen.getByRole("button", { name: "Model" });
+  expect(trigger).toHaveTextContent("Orchestrator");
+  expect(trigger).not.toHaveTextContent("Claude Sonnet");
+  expect(trigger).toHaveAccessibleDescription("Orchestrator · Optimize for output");
+  expect(trigger.querySelector(".model-fast")).toBeNull();
+});
+
+it("leads to Settings instead of switching while the roles are incomplete", () => {
+  const models: Model[] = [{ modelId: "anthropic/claude-sonnet", providerId: "anthropic" }];
+  const onOrchestratorChange = vi.fn();
+  const onManageOrchestrator = vi.fn();
+  render(<ModelPicker models={models} agentId="harness" value={modelKey(models[0])} loading={false} disabled={false} onChange={vi.fn()} onOrchestratorChange={onOrchestratorChange} onManageOrchestrator={onManageOrchestrator} />);
+  fireEvent.click(screen.getByRole("button", { name: "Model" }));
+  const row = screen.getByRole("switch", { name: /Orchestrator/ });
+  expect(row).toHaveTextContent("Set up");
+  expect(row).toHaveTextContent("Choose a Lead and a Builder in Settings first");
+  fireEvent.click(row);
+  expect(onManageOrchestrator).toHaveBeenCalledTimes(1);
+  expect(onOrchestratorChange).not.toHaveBeenCalled();
+  expect(screen.getByRole("button", { name: "Model" })).toHaveAttribute("aria-expanded", "false");
+});
+
+it("keeps the Orchestrator row out of a search and locked while a change applies", () => {
+  const models: Model[] = Array.from({ length: 7 }, (_, index) => ({ modelId: `anthropic/claude-${index}`, providerId: "anthropic" }));
+  const props = { models, agentId: "harness" as const, value: modelKey(models[0]), loading: false, onChange: vi.fn(), orchestratorReady: true, onOrchestratorChange: vi.fn() };
+  const view = render(<ModelPicker {...props} disabled={false} />);
+  fireEvent.click(screen.getByRole("button", { name: "Model" }));
+  fireEvent.change(screen.getByRole("combobox", { name: "Search models" }), { target: { value: "claude" } });
+  expect(screen.queryByRole("switch", { name: /Orchestrator/ })).toBeNull();
+  fireEvent.change(screen.getByRole("combobox", { name: "Search models" }), { target: { value: "" } });
+  view.rerender(<ModelPicker {...props} disabled={false} applying />);
+  expect(screen.getByRole("switch", { name: /Orchestrator/ })).toBeDisabled();
+});
+
 it("shows each provider as an icon, named by its label and a floating tip", () => {
   const models: Model[] = [{ modelId: "anthropic/claude-sonnet", providerId: "anthropic", displayLabel: "Claude Sonnet" }, { modelId: "openai/gpt-5", providerId: "openai", displayLabel: "GPT-5" }];
   render(<ModelPicker models={models} agentId="harness" value={modelKey(models[0])} loading={false} disabled={false} onChange={vi.fn()} onRescan={async () => {}} />);

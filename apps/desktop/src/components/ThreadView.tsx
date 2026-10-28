@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { backgroundAgents, describeAgents, describeLive, estimateTurnTokens, hasVisibleReply, trailingWork } from "../lib/agent";
-import { ArrowDown, TriangleAlert, Bug, ChevronRight, CircleAlert, FlaskConical, FolderOpen, GitBranch, GitCompareArrows, GitFork, Globe2, History, LoaderCircle, PanelRight, Pencil, RotateCcw, ScanSearch, Sparkles, SquareTerminal, WifiOff, X } from "lucide-react";
+import { Activity as ActivityIcon, ArrowDown, TriangleAlert, Bug, ChevronRight, CircleAlert, FlaskConical, FolderOpen, GitBranch, GitCompareArrows, GitFork, Globe2, History, LoaderCircle, PanelRight, Pencil, RotateCcw, ScanSearch, Sparkles, SquareTerminal, WifiOff, X } from "lucide-react";
 import { Orb } from "./Orb";
 import { BranchMenu } from "./BranchMenu";
 import { FindBar } from "./FindBar";
@@ -19,6 +19,7 @@ import type { Thread } from "../lib/types";
 import { AgentTimeline, PlanMenu, WorkingIndicator } from "./AgentTimeline";
 import { ReviewDock } from "./ReviewDock";
 import { defaultTier, isPeak, modelFor, tiersFor } from "../lib/effort";
+import { orchestratorRouteFloor, orchestratorRouteLabel } from "../lib/orchestrator";
 import { ApprovalCard } from "./ApprovalCard";
 import { Composer } from "./Composer";
 import { UserInputCards } from "./UserInputCards";
@@ -36,7 +37,9 @@ function Activity({ thread, closing = false }: { thread: Thread; closing?: boole
   const tokens = reported >= estimated ? (reported ? `${formatTokens(reported)} tokens` : "") : `~${formatTokens(estimated)} tokens`;
   const speedReading = readTokenSpeed(thread.tokenSpeed, now);
   const speed = !closing && !waiting && !thread.cancelRequested && speedReading && !speedReading.idle ? formatTokenSpeed(speedReading.tokensPerSecond) : "";
-  const meta = [formatDuration(now - (thread.turnStartedAt ?? seen)), tokens, speed].filter(Boolean).join(" · ");
+  const route = thread.activeTurnId ? thread.routes?.[thread.activeTurnId] : undefined;
+  const routeFloor = route ? orchestratorRouteFloor(route) : undefined;
+  const meta = [formatDuration(now - (thread.turnStartedAt ?? seen)), route ? `${orchestratorRouteLabel(route)} route${routeFloor ? " · floor" : ""}` : "", tokens, speed].filter(Boolean).join(" · ");
   const live = useMemo(() => trailingWork(thread.items), [thread.items]);
   const label = thread.userInputs?.length ? "Waiting for your answer" : thread.pendingApproval ? "Waiting for approval" : thread.cancelRequested ? "Stopping…" : describeLive(live) ?? describeAgents(backgroundAgents(thread.items)) ?? thread.goal?.currentWork ?? "Thinking";
   const models = useAppStore((state) => state.models);
@@ -207,6 +210,13 @@ export function ThreadView() {
   // The empty state lifts the composer to the middle of the column. A terminal
   // opens beside the thread, so it does not change that vertical placement.
   const centered = Boolean(workspace && newThreadView && !starting);
+  const changesOpen = s.inspectorTab === "changes" || s.inspectorTab === "diff";
+  const toggleInspector = (tab: "changes" | "files" | "activity") => {
+    const active = tab === "changes" ? changesOpen : s.inspectorTab === tab;
+    if (s.dockOpen && active) { s.setDockOpen(false); return; }
+    if (tab === "changes" ? !changesOpen : s.inspectorTab !== tab) s.setInspectorTab(tab);
+    s.setDockOpen(true);
+  };
   const aboveComposer = useMemo(() => {
     const planMenu = planFloating && thread?.plan ? <PlanMenu key={thread.sessionId} items={thread.plan} /> : null;
     const jumpRow = latest.mounted ? <div className="jump-latest-row"><button className={`jump-latest${latest.closing ? " closing" : ""}`} tabIndex={latest.closing ? -1 : undefined} onClick={jump}><ArrowDown size={13} />Jump to latest</button></div> : null;
@@ -261,19 +271,16 @@ export function ThreadView() {
       {thread && !thread.agentId ? <button className="icon-btn topbar-action" aria-label="Fork thread" data-tooltip="Fork into a new thread" onClick={() => void s.forkThread(thread.sessionId)}><GitFork size={15} /><span>Fork</span></button> : null}
       <WorkLocation />
       {branch ? <BranchMenu branch={branch} worktree={Boolean(thread?.worktree)} locked={thread?.status === "running"} /> : null}
-      {workspace ? <button className="icon-btn topbar-action" aria-label="Toggle browser" aria-pressed={browserOpen} data-tooltip="Browser" onClick={() => setBrowserOpen(!browserOpen)}><Globe2 size={15} /><span>Browser</span></button> : null}
-      {workspace ? <button className="icon-btn topbar-action" aria-label="Toggle terminal" aria-pressed={terminalOpen} data-tooltip={`Terminal  ${shortcutText("terminal")}`} onClick={() => setTerminalOpen(!terminalOpen)}><SquareTerminal size={15} /><span>Terminal</span></button> : null}
-      {/* One button for the side pane. Its views (Changes, Diff, Environment,
-          Files, Monitor) share the same title-bar destination. */}
-      <button className="icon-btn topbar-action" aria-label="Toggle changes" aria-pressed={s.dockOpen} data-tooltip={`Changes  ${shortcutText("toggle-changes")}`} data-tooltip-align="end" onClick={() => {
-        if (s.dockOpen) s.setDockOpen(false);
-        else { s.setInspectorTab("changes"); s.setDockOpen(true); }
-      }}><PanelRight size={15} /><span>Changes</span></button>
+      {workspace ? <button className="icon-btn topbar-action" aria-label="Toggle browser" aria-pressed={browserOpen} data-tooltip="Browser" onClick={() => setBrowserOpen(!browserOpen)}><Globe2 size={15} /></button> : null}
+      {workspace ? <button className="icon-btn topbar-action" aria-label="Toggle terminal" aria-pressed={terminalOpen} data-tooltip={`Terminal  ${shortcutText("terminal")}`} onClick={() => setTerminalOpen(!terminalOpen)}><SquareTerminal size={15} /></button> : null}
+      {workspace ? <button className="icon-btn topbar-action" aria-label="Toggle files" aria-pressed={s.dockOpen && s.inspectorTab === "files"} data-tooltip="Files" onClick={() => toggleInspector("files")}><FolderOpen size={15} /></button> : null}
+      {workspace ? <button className="icon-btn topbar-action" aria-label="Toggle monitor" aria-pressed={s.dockOpen && s.inspectorTab === "activity"} data-tooltip="Monitor" onClick={() => toggleInspector("activity")}><ActivityIcon size={15} /></button> : null}
+      <button className="icon-btn topbar-action" aria-label="Toggle changes" aria-pressed={s.dockOpen && changesOpen} data-tooltip={`Changes  ${shortcutText("toggle-changes")}`} data-tooltip-align="end" onClick={() => toggleInspector("changes")}><PanelRight size={15} /></button>
       {/* Compact widths and the expanded dock show Changes full-pane; the
           thread is still one tap away without losing the composer. */}
       {!browserOpen ? <div className="review-toggle segmented" role="group" aria-label="Thread or Changes view">
         <button aria-pressed={!s.dockOpen} onClick={() => s.setDockOpen(false)}>Thread</button>
-        <button aria-pressed={s.dockOpen} onClick={() => { if (s.inspectorTab === "activity" || s.inspectorTab === "environment") s.setInspectorTab("changes"); s.setDockOpen(true); }}>Changes</button>
+        <button aria-pressed={s.dockOpen} onClick={() => { if (!changesOpen) s.setInspectorTab("changes"); s.setDockOpen(true); }}>Changes</button>
       </div> : null}
     </header>
     <main id="main-content" tabIndex={-1} className={`main ${s.dockOpen ? "" : "solo"}${s.dockExpanded && s.dockOpen ? " dock-focused" : ""}`}>

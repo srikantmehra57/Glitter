@@ -73,7 +73,7 @@ describe("usage ledger", () => {
     emit("modelCall", { sessionId: "h-session-1", turnId: "t1", call: call({ stopReason: "end_turn", inputTokens: 1_400, outputTokens: 80 }) });
     emit("sessionFacts", { sessionId: "h-session-1", usage: { promptTokens: 6_000, outputTokens: 1_000, totalTokens: 7_000 } });
     emit("turnCompleted", completed);
-    expect(useAppStore.getState().usageLedger.turns[0].calls?.map((entry) => [entry.stopReason, entry.inputTokens, entry.outputTokens])).toEqual([["tool_use", 900, 40], ["end_turn", 1_400, 80]]);
+    expect(useAppStore.getState().usageLedger.calls?.map((entry) => [entry.stopReason, entry.inputTokens, entry.outputTokens])).toEqual([["tool_use", 900, 40], ["end_turn", 1_400, 80]]);
   });
 
   it("starts the next turn's trajectory from nothing", () => {
@@ -83,7 +83,8 @@ describe("usage ledger", () => {
     emit("modelCall", { sessionId: "h-session-1", turnId: "t2", call: call({ stopReason: "tool_use" }) });
     emit("sessionFacts", { sessionId: "h-session-1", usage: { promptTokens: 5_000, outputTokens: 800, totalTokens: 5_800 } });
     emit("turnCompleted", { sessionId: "h-session-1", turnId: "t2", outcome: { kind: "completed", params: { terminal: "completed" } } });
-    expect(useAppStore.getState().usageLedger.turns.map((entry) => [entry.key, entry.calls?.length])).toEqual([["h-session-1:t2", 1]]);
+    const ledger = useAppStore.getState().usageLedger;
+    expect(ledger.turns.map((entry) => [entry.key, ledger.calls?.filter((call) => call.turnKey === entry.key).length])).toEqual([["h-session-1:t2", 1]]);
   });
 
   it("updates cached input when it arrives after the turn, and keeps its trajectory", () => {
@@ -94,7 +95,7 @@ describe("usage ledger", () => {
     const durationMs = useAppStore.getState().usageLedger.turns[0].durationMs;
     emit("usage", { sessionId: "h-session-1", usage: { promptTokens: 5_000, outputTokens: 700, cacheReadTokens: 900 } });
     expect(useAppStore.getState().usageLedger.turns[0]).toMatchObject({ inputTokens: 1_800, cachedTokens: 800, outputTokens: 100, durationMs });
-    expect(useAppStore.getState().usageLedger.turns[0].calls).toHaveLength(1);
+    expect(useAppStore.getState().usageLedger.calls).toHaveLength(1);
   });
 
   it("updates the same entry when usage lands after the turn ended", () => {
