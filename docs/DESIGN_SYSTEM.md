@@ -589,11 +589,12 @@ raised the per-message choice and a `fallback` mark when routing itself fell
 back (the reason on hover), the calls and models it used, and the
 model that executed it as the last fact. A staged Orchestrator turn adds one
 quiet route-facts line under the head: `--text-xs` `--tertiary`, dot-separated,
-with the Lead plan and Builder, consults spent, any takeover and the reviewer.
-Single-role routes add no line. The plan, build report, review notes and
-automatic guidance appear as ordinary collapsed trajectory steps titled **Lead
-plan**, **Build report**, **Lead review** and **Lead guidance**. A completed
-answer keeps this line even when
+with a Scout when one ran, the Lead plan and Builder, consults spent, any
+takeover and the reviewer. Single-role routes add no line. The plan, context
+pack, build report, review notes and automatic guidance appear as ordinary
+collapsed trajectory steps titled **Lead plan**, **Context pack**, **Build
+report**, **Lead review** and **Lead guidance**. A completed answer keeps this
+line even when
 the host supplies no usage or edit summary, so Review always opens the Changes pane. Undo appears
 only when a saved file state lets it run; the strip never explains why it is absent. Only an Undo or Reapply that failed adds a line. An
 undone turn reads **Undone** in place of Done, and its button offers Reapply.

@@ -173,6 +173,18 @@ test('Grok refresh discovers newly served variants and keeps Fast pricing and ef
   } finally { await host.stop(); }
 });
 
+test('Grok keeps the live catalog when an older session names fewer models', async () => {
+  const { host } = fakeAgent('grok', ['--grok-catalog', '--grok-stale-session']);
+  try {
+    const fresh = await host.listModels(undefined, true);
+    assert.deepEqual(fresh.models.map((model) => model.modelId), ['grok-4.7', 'grok-4.7-build-fast', 'grok-4.6']);
+    const { sessionId } = await host.startSession({ workspaceRoot: temporary });
+    const listed = await host.listModels(sessionId);
+    assert.deepEqual(listed.models.map((model) => model.modelId), ['grok-4.7', 'grok-4.7-build-fast', 'grok-4.6'], 'a model released after the session started still reaches the picker');
+    assert.equal(listed.models.find((model) => model.modelId === 'grok-4.6').isActive, true, 'the session still marks the active row');
+  } finally { await host.stop(); }
+});
+
 test('an empty model listing is not kept: the next listing asks the agent again', async () => {
   const { host } = fakeAgent('opencode', ['--late-catalog']);
   try {

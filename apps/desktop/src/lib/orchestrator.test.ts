@@ -275,6 +275,31 @@ describe("route facts", () => {
       reasonCodes: ["execution:approved-plan"],
     });
     expect(orchestratorRouteFacts(approved)).toEqual(["Approved plan · claude-opus-5 → Builder · deepseek-v4"]);
+
+    const resumed = route({
+      stages: [
+        { stage: "builder", providerId: "deepseek", modelId: "deepseek/deepseek-v4" },
+      ],
+      reasonCodes: ["execution:resumed-builder"],
+    });
+    expect(orchestratorRouteFacts(resumed)).toEqual(["Builder resumed · deepseek-v4"]);
+
+    const tuned = route({ consultBudget: 3, consultCount: 1 });
+    expect(orchestratorRouteFacts(tuned)).toContain("Builder asked the Lead · 1 of 3");
+
+    const scouted = route({
+      stages: [
+        { stage: "scout", providerId: "anthropic", modelId: "anthropic/claude-haiku-4-5" },
+        { stage: "lead-plan", providerId: "anthropic", modelId: "anthropic/claude-opus-5" },
+        { stage: "builder", providerId: "deepseek", modelId: "deepseek/deepseek-v4" },
+      ],
+    });
+    expect(orchestratorRouteFacts(scouted)).toEqual([
+      "Scout · claude-haiku-4-5",
+      "Lead plan · claude-opus-5 → Builder · deepseek-v4",
+    ]);
+    expect(orchestratorRouteNote(route({ reasonCodes: ["scout:invalid"] }))).toMatch(/Scouting did not produce/);
+    expect(orchestratorRouteNote(route({ reasonCodes: ["lead-read:unavailable"] }))).toMatch(/planned from the brief/);
   });
 
   it("leaves single-role turns to the receipt's own model fact", () => {

@@ -32,3 +32,4 @@ playwright-report/
 .audit/
 .zcode/
 brag-output/
+evals/orchestrator/reports/

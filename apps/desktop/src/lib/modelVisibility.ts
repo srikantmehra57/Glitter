@@ -50,3 +50,14 @@ export function withModelsHidden(hidden: readonly string[] | undefined, agentId:
   const rest = (hidden ?? []).filter((key) => !keys.includes(key));
   return normalizeHiddenModels(hide ? [...rest, ...keys] : rest);
 }
+
+/**
+ * The menus outside the composer — Settings' default and suggestion pickers and
+ * Orchestrator's role pickers — honour the same switches as the composer, so a
+ * provider turned off in Settings → Models cannot come back through a dropdown.
+ */
+export function selectableModels<T extends ModelRef>(models: readonly T[], agentId: string, hidden: readonly string[] | undefined, hiddenProviders: readonly string[] | undefined): T[] {
+  if (!hidden?.length && !hiddenProviders?.length) return [...models];
+  const off = new Set(hidden ?? []);
+  return models.filter((model) => !off.has(modelVisibilityKey(agentId, model)) && !hiddenProviders?.includes(providerKey(agentId, model.providerId)));
+}

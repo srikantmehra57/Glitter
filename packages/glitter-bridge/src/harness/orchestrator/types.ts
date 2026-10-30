@@ -1,3 +1,5 @@
+import type { StuckTuning } from "./stuck.js";
+
 export type OrchestratorGoal = "cost" | "balanced" | "output";
 export type OrchestratorShape = "direct-small" | "direct-builder" | "lead-guided" | "lead-only";
 export type OrchestratorRole = "lead" | "builder" | "small";
@@ -37,6 +39,8 @@ export type RoutePolicyDecision = {
   leadPlan: boolean;
   leadReview: boolean;
   leadDiagnosis: boolean;
+  /** Run the Small-task Scout before the Lead plan. */
+  scout: boolean;
   consultBudget: number;
   repairBudget: number;
   builderFailure?: "stop" | "takeover";
@@ -54,6 +58,19 @@ export type OrchestratorRoleSnapshot = Record<OrchestratorRole, OrchestratorMode
 export type OrchestratorSettings = {
   goal: OrchestratorGoal;
   roles: Record<OrchestratorRole, OrchestratorModel> & { router: OrchestratorModel };
+};
+
+/**
+ * Internal knobs, resolved once per host. The app never exposes them; the
+ * evaluation runner and deterministic tests override them. Scout entries gate
+ * 3.2; zero Lead-read budgets keep 3.3 reads off.
+ */
+export type OrchestratorTuning = {
+  consultBudgets: Record<OrchestratorGoal, number>;
+  reviewAllComplex: boolean;
+  stuck: StuckTuning;
+  scout: { enabled: boolean; maxReadCalls: number; maxPackChars: number; maxExcerptChars: number };
+  leadReads: Record<OrchestratorGoal, { calls: number; chars: number }>;
 };
 export type RouteStageRecord = OrchestratorModel & { stage: OrchestratorStage; effectiveEffort?: string };
 
@@ -73,10 +90,12 @@ export type RouteRecord = {
   requestedShape?: OrchestratorShape;
   roles: OrchestratorRoleSnapshot;
   stages: RouteStageRecord[];
+  /** The consult budget the policy gave this turn; absent on older records. */
+  consultBudget?: number;
   consultCount: number;
   reviewCount: number;
   fallbacks: string[];
   takeovers: string[];
   escalations: string[];
-  references: { plan?: string; buildReport?: string; reviewNotes?: string };
+  references: { plan?: string; contextPack?: string; buildReport?: string; reviewNotes?: string };
 };

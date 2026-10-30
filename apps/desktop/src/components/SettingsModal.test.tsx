@@ -156,6 +156,24 @@ describe("settings navigation", () => {
     expect(useAppStore.getState().contributorMode).toBeUndefined();
   });
 
+  it("keeps providers and models switched off in the library out of the default model list", async () => {
+    seedStore({
+      settingsTab: "Models",
+      defaultAgentId: "harness",
+      agents: [{ id: "harness", name: "Harness", protocol: "native", found: true, path: null, version: null, verified: true, signIn: "", authenticated: true }],
+      hiddenModels: ["harness|anthropic|anthropic/claude-haiku-4-5"],
+      hiddenProviders: ["harness:kilo"],
+    });
+    render(<SettingsModal />);
+    const model = screen.getByRole("button", { name: "Default model" });
+    await vi.waitFor(() => expect(model).toBeEnabled());
+    fireEvent.click(model);
+    const list = within(screen.getByRole("listbox", { name: "Default model" }));
+    expect(list.getByText("Claude Sonnet 5", { exact: true })).toBeInTheDocument();
+    expect(list.queryByText("Claude Haiku 4.5")).toBeNull();
+    expect(list.queryByText("anthropic/claude-sonnet-4.6")).toBeNull();
+  });
+
   it("shows a catalog error instead of presenting the saved model as the only available choice", async () => {
     seedStore({ settingsTab: "Models", defaultModel: "muse-spark-1.3-contributor", loadModelCatalog: vi.fn(async () => { throw new Error("Connection closed"); }) });
     render(<SettingsModal />);
@@ -519,6 +537,26 @@ describe("settings navigation", () => {
     await vi.waitFor(() => expect(useAppStore.getState().orchestratorModels).toEqual({ lead: { modelId: "anthropic/claude-sonnet-5", providerId: "anthropic" } }));
     expect(screen.getByText("Changes save as you make them")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Save & restart connection" })).toBeNull();
+  });
+
+  it("keeps providers and models switched off in the library out of the Orchestrator role lists", async () => {
+    seedStore({
+      settingsTab: "Orchestrator",
+      orchestratorEnabled: true,
+      orchestratorModels: { lead: { modelId: "anthropic/claude-haiku-4-5", providerId: "anthropic" } },
+      hiddenModels: ["harness|anthropic|anthropic/claude-haiku-4-5"],
+      hiddenProviders: ["harness:kilo"],
+    });
+    render(<SettingsModal />);
+    const lead = screen.getByRole("button", { name: "Lead model" });
+    await vi.waitFor(() => expect(lead).toBeEnabled());
+    fireEvent.click(lead);
+    const list = within(screen.getByRole("listbox", { name: "Lead model" }));
+    expect(list.getByText("Claude Sonnet 5", { exact: true })).toBeInTheDocument();
+    expect(list.queryByText("Claude Haiku 4.5")).toBeNull();
+    expect(list.queryByText("anthropic/claude-sonnet-4.6")).toBeNull();
+    // The saved Lead is switched off, so it stays visible as the current choice.
+    expect(list.getByText("Off in Settings → Models")).toBeInTheDocument();
   });
 
   it("asks for both required roles and discloses every provider that receives the prompt", async () => {

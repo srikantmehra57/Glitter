@@ -170,6 +170,10 @@ export function orchestratorRouteExecution(route: OrchestratorRoute): (Orchestra
 const ROUTE_FALLBACK_NOTES: Record<string, string> = {
   "router-invalid-json-fallback": "The Router reply was invalid, so this turn ran Lead-guided without review.",
   "router-unavailable-fallback": "The Router was unavailable, so this turn ran Lead-guided without review.",
+  "scout:invalid": "Scouting did not produce a usable context pack, so the Lead planned without one.",
+  "scout:unavailable": "The Scout could not use read tools, so the Lead planned without a context pack.",
+  "scout:small-no-tools": "The Small-task model has no tools, so scouting was skipped.",
+  "lead-read:unavailable": "The Lead could not use read tools, so it planned from the brief.",
 };
 
 const SHAPE_RANK: Record<OrchestratorShape, number> = Object.fromEntries(ORCHESTRATOR_SHAPES.map((shape, index) => [shape, index])) as Record<OrchestratorShape, number>;
@@ -246,14 +250,21 @@ function lastStage(route: OrchestratorRoute, stage: OrchestratorRoute["stages"][
 export function orchestratorRouteFacts(route: OrchestratorRoute): string[] {
   if (route.shape !== "lead-guided") return [];
   const facts: string[] = [];
+  const scout = lastStage(route, "scout");
+  if (scout) facts.push(`Scout · ${orchestratorModelName(scout.modelId)}`);
   const plan = lastStage(route, "lead-plan");
   const builder = lastStage(route, "builder") ?? lastStage(route, "repair");
   const approved = route.reasonCodes.includes("execution:approved-plan");
+  const resumed = route.reasonCodes.includes("execution:resumed-builder");
   if (plan && builder) facts.push(`${approved ? "Approved plan" : "Lead plan"} · ${orchestratorModelName(plan.modelId)} → Builder · ${orchestratorModelName(builder.modelId)}`);
-  else if (builder) facts.push(`${approved ? `Approved plan · ${orchestratorModelName(route.roles.lead.modelId)} → ` : ""}Builder · ${orchestratorModelName(builder.modelId)}`);
+  else if (builder) {
+    if (approved) facts.push(`Approved plan · ${orchestratorModelName(route.roles.lead.modelId)} → Builder · ${orchestratorModelName(builder.modelId)}`);
+    else if (resumed) facts.push(`Builder resumed · ${orchestratorModelName(builder.modelId)}`);
+    else facts.push(`Builder · ${orchestratorModelName(builder.modelId)}`);
+  }
   else if (plan && route.executionFallback !== "plan-invalid") facts.push(`Lead plan · ${orchestratorModelName(plan.modelId)}`);
   if (route.consultCount > 0) {
-    const budget = CONSULT_BUDGET[route.goal];
+    const budget = route.consultBudget ?? CONSULT_BUDGET[route.goal];
     facts.push(`Builder asked the Lead · ${route.consultCount} of ${budget}`);
   }
   const takeover = route.takeovers[route.takeovers.length - 1];

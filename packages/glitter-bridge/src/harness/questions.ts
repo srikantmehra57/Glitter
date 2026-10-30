@@ -34,6 +34,9 @@ export type PendingQuestion = {
   item: Record<string, unknown>;
   questions: Question[];
   intent?: UserInputIntent;
+  /** A Builder question completes in its own session, not the thread history. */
+  target?: "builder";
+  planId?: string;
   /** Every result of the batch in model order; the question's own slot is filled on settlement. */
   results: Array<{ id: string; name: string; output: string; isError?: boolean }>;
 };

@@ -6,6 +6,7 @@ import { Activity, ArchiveRestore, ArrowLeft, Bot, ChartNoAxesColumn, Check, Com
 import { diagnosticsSnapshot, openLogFolder } from "../lib/bridge";
 import { isMacPlatform, isTauri } from "../lib/format";
 import { modelFor, VOCABULARY } from "../lib/effort";
+import { selectableModels } from "../lib/modelVisibility";
 import { APP_VERSION } from "../lib/version";
 import { AgentMark, ModelIcon } from "./AgentPicker";
 import { AGENT_IDS, AGENT_LABELS, APPROVAL_DESCRIPTIONS, APPROVAL_LABELS, APPROVAL_ORDER, AUTH_MODE_DESCRIPTIONS, AUTH_MODE_LABELS, AUTH_MODE_ORDER, AUTH_SOURCE_LABELS, AUTH_SOURCE_SHORT, DARK_INTENSITIES, DEFAULT_ENABLED_AGENTS, EDITOR_CHOICES, EDITOR_LABELS, EFFORT_LABELS, SIDEBAR_DENSITIES, THINKING_ORBS, UI_FONTS, agentEnabled, type CustomCommand, type EditorChoice, type AccentColor, type AgentId, type AgentInfo, type ApprovalMode, type AuthMode, type CliUpdateOutcome, type CliUpdateStatus, type Detection, type HostPosture, type ReasoningEffort, type SandboxNetwork, type SettingsTab, type ThemeMode, type ThinkingOrbStyle, type DarkIntensity, type SidebarDensity, type Settings } from "../lib/types";
@@ -597,7 +598,9 @@ export function SettingsModal() {
     if (s.settingsOpen && tab === "Diagnostics" && !s.preview) void s.refreshEnterprise();
   }, [s.settingsOpen, tab]);
   const defaultModels = modelCatalog.agentId === defaultsAgentId ? modelCatalog.models : [];
-  const modelOptions: SelectMenuOption[] = defaultModels.map((model) => ({
+  // The default model follows the same Settings → Models switches as the composer.
+  const offeredDefaults = selectableModels(defaultModels, defaultsAgentId, draft.hiddenModels, draft.hiddenProviders);
+  const modelOptions: SelectMenuOption[] = offeredDefaults.map((model) => ({
     value: modelKey(model),
     label: humanizeModelLabel(model.modelId, model.displayLabel),
     description: humanizeProvider(model.providerId),
@@ -607,8 +610,8 @@ export function SettingsModal() {
   const defaultModelValue = draft.defaultModel ? modelKey(selectedDefault ?? { modelId: draft.defaultModel, providerId: draft.defaultProviderId }) : undefined;
   const modelByKey = new Map(defaultModels.map((model) => [modelKey(model), model]));
   const savedUnlisted = Boolean(draft.defaultModel && !selectedDefault && !modelCatalog.loading && !modelCatalog.error && defaultModels.length);
-  if (defaultModelValue && !modelByKey.has(defaultModelValue)) {
-    modelOptions.push({ value: defaultModelValue, label: humanizeModelLabel(draft.defaultModel), description: "Saved selection · not in the current catalog" });
+  if (defaultModelValue && !modelOptions.some((option) => option.value === defaultModelValue)) {
+    modelOptions.push({ value: defaultModelValue, label: humanizeModelLabel(draft.defaultModel), description: selectedDefault ? "Off in Settings → Models" : "Saved selection · not in the current catalog" });
   }
   // Smart-suggestions pickers (General page): the chosen agent's catalog feeds
   // the model list; "Automatic"/"Cheapest" leave the choice to the store.
@@ -626,9 +629,10 @@ export function SettingsModal() {
     return () => { current = false; };
   }, [s.settingsOpen, tab, suggestionAgentId, draft.suggestionsEnabled, s.loadModelCatalog]);
   const suggestModels = suggestCatalog.agentId === suggestionAgentId ? suggestCatalog.models : [];
+  const offeredSuggest = selectableModels(suggestModels, suggestionAgentId, draft.hiddenModels, draft.hiddenProviders);
   const suggestModelOptions: SelectMenuOption[] = [
     { value: "", label: "Cheapest available", description: "The lowest-cost model the agent reports" },
-    ...suggestModels.filter((model) => !model.unavailable).map((model) => ({
+    ...offeredSuggest.filter((model) => !model.unavailable).map((model) => ({
       value: modelKey(model),
       label: humanizeModelLabel(model.modelId, model.displayLabel),
       description: [humanizeProvider(model.providerId), model.cost?.input ? `${model.cost.input}/M in` : ""].filter(Boolean).join(" · "),
@@ -638,8 +642,8 @@ export function SettingsModal() {
   const selectedSuggest = modelFor(suggestModels, { modelId: draft.suggestionsModelId });
   const suggestModelValue = draft.suggestionsModelId ? modelKey(selectedSuggest ?? { modelId: draft.suggestionsModelId }) : "";
   const suggestByKey = new Map(suggestModels.map((model) => [modelKey(model), model]));
-  if (suggestModelValue && !suggestByKey.has(suggestModelValue)) {
-    suggestModelOptions.push({ value: suggestModelValue, label: humanizeModelLabel(draft.suggestionsModelId ?? suggestModelValue), description: "Saved selection · not in the current catalog" });
+  if (suggestModelValue && !suggestModelOptions.some((option) => option.value === suggestModelValue)) {
+    suggestModelOptions.push({ value: suggestModelValue, label: humanizeModelLabel(draft.suggestionsModelId ?? suggestModelValue), description: selectedSuggest ? "Off in Settings → Models" : "Saved selection · not in the current catalog" });
   }
   const settingsPatch = (): Partial<Settings> => Object.fromEntries(RESTART_KEYS.map((key) => [key, settled(draft[key])]));
   const saveAndClose = async () => {

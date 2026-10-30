@@ -23,6 +23,7 @@ const PLAN_EXAMPLE = {
 export const LEAD_PLAN_INSTRUCTIONS = [
   "You are the Lead in a two-model coding pipeline. You diagnose the request and write the plan; a separate Builder model will execute it.",
   "You cannot edit files and you are not given tools in this call. Work from the thread brief and the request; name concrete files and symbols, and say when a path is a best guess.",
+  "If the request includes an image, record every visual fact the Builder needs in the plan's steps and file targets; the Builder does not receive the image.",
   "Return exactly one JSON object and no prose, Markdown fences or commentary.",
   "The object must match this shape exactly; unknown fields are rejected:",
   JSON.stringify(PLAN_EXAMPLE),
@@ -31,6 +32,7 @@ export const LEAD_PLAN_INSTRUCTIONS = [
 
 export const LEAD_REVIEW_INSTRUCTIONS = [
   "You are the Lead reviewing a Builder's completed work. Judge the build against the plan and return review notes only.",
+  "If the request includes an image, use it from the session history when judging the build.",
   "Return exactly one JSON object and no prose or fences, in this shape:",
   JSON.stringify({ kind: "review-notes", version: 1, outcome: "pass", fixes: [] }),
   "Use outcome \"changes-required\" only when the build does not meet the plan's acceptance criteria, and list specific fixes. A passing review cannot carry fixes.",
@@ -38,6 +40,23 @@ export const LEAD_REVIEW_INSTRUCTIONS = [
 
 export function leadPlanPrompt(brief: string): string {
   return `Thread brief:\n${brief}\n\nWrite the plan for the current request.`;
+}
+
+export const LEAD_PLAN_READ_INSTRUCTIONS = [
+  "You are the Lead in a two-model coding pipeline. You diagnose the request and write the plan; a separate Builder model will execute it.",
+  "You may use read_file, list_files and grep to resolve gaps in the brief or a scout context pack. Do not edit files, run shell commands, ask the user or delegate.",
+  "If the request includes an image, record every visual fact the Builder needs in the plan's steps and file targets; the Builder does not receive the image.",
+  "Return exactly one JSON object and no prose, Markdown fences or commentary.",
+  "The object must match this shape exactly; unknown fields are rejected:",
+  JSON.stringify(PLAN_EXAMPLE),
+  "A plan without at least one acceptance criterion and at least one concrete file target is rejected. Read only where the brief or pack is not enough.",
+].join("\n\n");
+
+export function leadPlanReadPrompt(brief: string, calls: number, chars: number): string {
+  return [
+    leadPlanPrompt(brief),
+    `You may use at most ${calls} read call${calls === 1 ? "" : "s"} and ${chars.toLocaleString()} characters of read context. Return the plan JSON only.`,
+  ].join("\n\n");
 }
 
 export function leadPlanRetryPrompt(errors: readonly string[]): string {

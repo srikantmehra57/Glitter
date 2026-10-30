@@ -5,6 +5,9 @@ const update = (sessionId, body) => send({ method: "session/update", params: { s
 let pendingPrompt = null;
 let nextSession = 1;
 const grokCatalog = process.argv.includes("--grok-catalog");
+// The probe session lists every model; the user session that follows names an older, shorter list.
+const grokStaleSession = process.argv.includes("--grok-stale-session");
+let grokSessions = 0;
 const authRequired = process.argv.includes("--auth-required");
 const rejectModel = process.argv.includes("--reject-model");
 const growCatalog = process.argv.includes("--grow-catalog");
@@ -26,6 +29,7 @@ const grokModels = [
   { modelId: "grok-4.7-build-fast", name: "Grok 4.7 Fast", description: "Fast variant. 2x the price.", _meta: { totalContextTokens: 256000, reasoningEfforts: [{ value: "high", default: true }, { value: "low" }] } },
   { modelId: "grok-4.6", name: "Grok 4.6" },
 ];
+const grokOptions = () => grokStaleSession && grokSessions++ > 0 ? [{ value: "grok-4.6", name: "Grok 4.6" }] : grokModels.map((model) => ({ value: model.modelId, name: model.name }));
 createInterface({ input: process.stdin }).on("line", (line) => {
   const message = JSON.parse(line);
   const { id, method, params } = message;
@@ -59,7 +63,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   if (method === "session/list") return send({ id, result: { sessions: [{ sessionId: "s-old", cwd: params.cwd, title: "Earlier work", updatedAt: "2026-09-19T00:00:00Z" }] } });
   if (method === "session/new" && authRequired) return send({ id, error: { code: -32000, message: "Authentication required. Sign in to load models." } });
   if (method === "session/new" && grokCatalog) return send({ id, result: { sessionId: `s${nextSession++}`, models: { currentModelId: "grok-4.6", availableModels: grokModels }, configOptions: [
-    { id: "model", category: "model", currentValue: "grok-4.6", options: grokModels.map((model) => ({ value: model.modelId, name: model.name })) },
+    { id: "model", category: "model", currentValue: "grok-4.6", options: grokOptions() },
     { id: "reasoning_effort", category: "thought_level", currentValue: "high", options: [{ value: "high" }, { value: "low" }, { value: "xhigh" }] },
   ] } });
   if (method === "session/close") return send({ id, result: {} });

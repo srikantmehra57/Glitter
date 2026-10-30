@@ -377,12 +377,14 @@ export type OrchestratorRoute = {
   requestedShape?: OrchestratorShape;
   roles: Record<"lead" | "builder" | "small", OrchestratorRouteModel> & { router?: OrchestratorRouteModel };
   stages: Array<OrchestratorRouteModel & { stage: OrchestratorRouteStage; effectiveEffort?: string }>;
+  /** The consult budget the policy gave this turn; absent on older records. */
+  consultBudget?: number;
   consultCount: number;
   reviewCount: number;
   fallbacks: string[];
   takeovers: string[];
   escalations: string[];
-  references: { plan?: string; buildReport?: string; reviewNotes?: string };
+  references: { plan?: string; contextPack?: string; buildReport?: string; reviewNotes?: string };
 };
 
 export type Model = { modelId: string; displayLabel?: string; providerId?: string; isActive?: boolean; isDefault?: boolean; unavailable?: boolean; /** Named by a thread or the saved default, but absent from the agent's catalog. */ unlisted?: boolean; description?: string | null; contextLimit?: number | null; releaseDate?: string | null; cost?: { input: string; output: string; cached?: string; currency?: string | null } | null; reasoningEfforts?: ReasoningEffort[]; defaultReasoningEffort?: ReasoningEffort; effortSource?: "host" | "vocabulary"; /** Cline's current free promotion. Absent for other agents. */ free?: boolean };

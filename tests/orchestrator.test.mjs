@@ -5,6 +5,7 @@ import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { PRE_ROUTE_CASES, PRE_ROUTE_RULES, measurePreRoute, validatePreRouteCases } from '../evals/orchestrator/pre-route.mjs';
 
 const temporary = await mkdtemp(join(tmpdir(), 'glitter-orchestrator-'));
 const outfile = join(temporary, 'orchestrator.mjs');
@@ -14,7 +15,9 @@ export { preRoute, decideRoute, createRouteRecord, continuationAssessment, ORCHE
 export { validateContextPack, validatePlan, validateBuildReport, validateReviewNotes, validateHandoff, parseHandoff, parsePlan } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/orchestrator/handoffs.ts'))};
 export { neutralEntries, neutralTranscriptTail, threadBrief, MAX_THREAD_BRIEF_CHARS } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/orchestrator/transcript.ts'))};
 export { ASK_LEAD_TOOL, LEAD_CONSULT_INSTRUCTIONS, leadConsultPrompt, stuckConsultPrompt } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/orchestrator/consult.ts'))};
-export { createStuckState, observeStuck, stepLimitSignal } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/orchestrator/stuck.ts'))};
+export { LEAD_PLAN_INSTRUCTIONS, LEAD_PLAN_READ_INSTRUCTIONS, LEAD_REVIEW_INSTRUCTIONS } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/orchestrator/prompts.ts'))};
+export { createStuckState, observeStuck, planChecksSignal, rearmStuck, stepLimitSignal, DEFAULT_STUCK_TUNING } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/orchestrator/stuck.ts'))};
+export { DEFAULT_ORCHESTRATOR_TUNING, resolveOrchestratorTuning } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/orchestrator/tuning.ts'))};
 export { approvedPlanFromHistory, pendingPlanFromHistory, planMarkdown, MAX_PLAN_MARKDOWN_CHARS } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/orchestrator/plan-mode.ts'))};
 export { probeRequest, validateProbeResponse, runProbe, createProbeStore, findProbe, probeNeeded, probePassed, recordProbe, roleCapabilitiesFromProbes, PROBE_VERSION, PROBE_FILE, PROBE_CONTENT, PROBE_DONE, ROUTER_PROBE_ASSESSMENT } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/orchestrator/probes.ts'))};
 export { normalizeOrchestratorSettings } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/orchestrator/settings.ts'))};
@@ -30,7 +33,9 @@ const {
   validateContextPack, validatePlan, validateBuildReport, validateReviewNotes, validateHandoff, parseHandoff, parsePlan,
   neutralEntries, neutralTranscriptTail, threadBrief, MAX_THREAD_BRIEF_CHARS,
   ASK_LEAD_TOOL, LEAD_CONSULT_INSTRUCTIONS, leadConsultPrompt, stuckConsultPrompt,
-  createStuckState, observeStuck, stepLimitSignal,
+  LEAD_PLAN_INSTRUCTIONS, LEAD_PLAN_READ_INSTRUCTIONS, LEAD_REVIEW_INSTRUCTIONS,
+  createStuckState, observeStuck, planChecksSignal, rearmStuck, stepLimitSignal, DEFAULT_STUCK_TUNING,
+  DEFAULT_ORCHESTRATOR_TUNING, resolveOrchestratorTuning,
   approvedPlanFromHistory, pendingPlanFromHistory, planMarkdown, MAX_PLAN_MARKDOWN_CHARS,
   probeRequest, validateProbeResponse, runProbe, createProbeStore, findProbe, probeNeeded, probePassed, recordProbe, roleCapabilitiesFromProbes,
   PROBE_VERSION, PROBE_FILE, PROBE_CONTENT, PROBE_DONE, ROUTER_PROBE_ASSESSMENT,
@@ -166,6 +171,27 @@ test('forced shapes and continuations are pre-routed but cannot avoid floors', (
   assert.equal(continuation.preRouteRule, 'pre-route:continuation');
 });
 
+test('the pre-route evaluation matrix matches the policy and covers every rule', () => {
+  assert.deepEqual(validatePreRouteCases(PRE_ROUTE_CASES), []);
+  const report = measurePreRoute({ preRoute, decideRoute });
+  assert.deepEqual(report.failures, []);
+  assert.equal(report.total, PRE_ROUTE_CASES.length);
+  assert.equal(report.matched, report.total);
+  assert.deepEqual(
+    report.byRule.filter((row) => row.rule !== 'router').map((row) => row.rule).sort(),
+    [...PRE_ROUTE_RULES].sort(),
+    'the matrix covers every current rule and lists no stale one',
+  );
+  assert.ok(report.floors >= 2, 'forced and continued small shapes are raised by floors');
+  assert.ok(report.candidates.some((row) => row.candidate === 'failing-test'));
+  assert.ok(report.candidates.some((row) => row.candidate === 'attachment-only'));
+
+  const broken = measurePreRoute({ preRoute: () => ({ decided: false }), decideRoute });
+  assert.equal(broken.failures.length, report.decided, 'a drifting rule is reported, not silently accepted');
+  assert.ok(validatePreRouteCases([PRE_ROUTE_CASES[0], PRE_ROUTE_CASES[0]]).length, 'duplicate ids are rejected');
+  assert.ok(validatePreRouteCases([{ ...PRE_ROUTE_CASES[0], prompt: '' }]).length, 'empty prompts are rejected');
+});
+
 test('goals change involvement without adding Lead work to trivial tasks', () => {
   for (const goal of ['cost', 'balanced', 'output']) {
     const trivial = route({ goal, assessment: assessment({ difficulty: 'trivial' }) });
@@ -263,6 +289,24 @@ test('capability floors use the Lead or stop with named unsupported roles', () =
   const noFallback = route({ roleCapabilities: { lead: [], builder: ALL_CAPABILITIES.builder, small: [] }, assessment: assessment({ difficulty: 'trivial', requiredCapabilities: ['vision'] }) });
   assert.equal(noFallback.canStart, false);
   assert.deepEqual(noFallback.capabilityIssues, [{ role: 'small', capability: 'vision' }, { role: 'lead', capability: 'vision' }]);
+});
+
+test('attachment capabilities apply even when the assessment omits them', () => {
+  const withoutVision = { lead: ['tools'], builder: ['tools'], small: ['tools'] };
+  const complex = assessment({ difficulty: 'complex', requiredCapabilities: [] });
+  const blocked = route({ roleCapabilities: withoutVision, assessment: complex, requiredCapabilities: ['vision'] });
+  assert.equal(blocked.canStart, false, 'an image turn cannot use a model without vision');
+  assert.deepEqual(blocked.capabilityIssues, [{ role: 'lead', capability: 'vision' }]);
+  const capable = route({ assessment: complex, requiredCapabilities: ['vision'] });
+  assert.equal(capable.canStart, true);
+  assert.equal(capable.shape, 'lead-guided');
+  const fallback = route({
+    roleCapabilities: { lead: ['tools', 'vision'], builder: ['tools'], small: ['tools'] },
+    assessment: assessment({ difficulty: 'trivial', requiredCapabilities: [] }),
+    requiredCapabilities: ['vision'],
+  });
+  assert.equal(fallback.shape, 'lead-only');
+  assert.ok(fallback.reasonCodes.includes('capability:small-to-lead'));
 });
 
 test('policy matrix preserves every difficulty, confidence, override and capability floor', () => {
@@ -387,7 +431,7 @@ test('neutral entries keep only plain user and answer text', () => {
     { role: 'user', content: [{ type: 'image', mediaType: 'image/png', data: 'x' }] },
   ]);
   assert.deepEqual(entries, [
-    { kind: 'user', text: 'first' },
+    { kind: 'user', text: 'first\n[1 image attachment]' },
     { kind: 'answer', text: 'second' },
     { kind: 'user', text: '[1 image attachment]' },
   ]);
@@ -442,6 +486,81 @@ test('the step-limit signal needs edits, no passing check, and a short runway', 
   assert.equal(stepLimitSignal(untouched, 1), undefined, 'no edits means nothing to rescue');
 });
 
+test('identical tool calls are a stuck signal; different arguments are progress', () => {
+  const state = createStuckState();
+  const call = (inputKey, step) => observeStuck(state, { tool: 'grep', inputKey, path: 'a.ts' }, DEFAULT_STUCK_TUNING, step);
+  assert.equal(call('{"pattern":"x"}', 0), undefined);
+  assert.equal(call('{"pattern":"y"}', 1), undefined, 'different arguments are not a repeat');
+  assert.equal(call('{"pattern":"x"}', 2), undefined);
+  const signal = call('{"pattern":"x"}', 3);
+  assert.equal(signal?.code, 'repeated-call');
+  assert.match(signal.detail, /grep.*3 times/);
+  assert.equal(call('{"pattern":"x"}', 4), undefined, 'the same signal fires once');
+  rearmStuck(state, 'repeated-call');
+  assert.equal(call('{"pattern":"x"}', 5)?.code, 'repeated-call', 'a new attempt after guidance may ask again');
+});
+
+test('failed edits are a stuck signal but a corrected retry is not', () => {
+  const state = createStuckState();
+  const fail = (inputKey, step) => observeStuck(state, { tool: 'edit_file', inputKey, path: 'a.ts', failed: true, detail: 'old_string not found' }, DEFAULT_STUCK_TUNING, step);
+  assert.equal(fail('v1', 0), undefined);
+  assert.equal(fail('v2', 1), undefined, 'a corrected retry is progress');
+  const signal = fail('v1', 2);
+  assert.equal(signal?.code, 'edit-failed-twice');
+  assert.match(signal.detail, /edit_file.*2 times.*a\.ts/);
+  assert.equal(fail('v3', 3), undefined, 'the same signal fires once');
+  assert.match(state.recentFailures.join('\n'), /old_string not found/);
+});
+
+test('edits with no new target for too many steps is a stuck signal', () => {
+  const state = createStuckState();
+  observeStuck(state, { tool: 'edit_file', inputKey: 'e1', path: 'a.ts', oldText: 'A', newText: 'B' }, DEFAULT_STUCK_TUNING, 0);
+  assert.equal(observeStuck(state, { tool: 'read_file', inputKey: 'r1', path: 'a.ts' }, DEFAULT_STUCK_TUNING, 5), undefined, 'still inside the window');
+  const signal = observeStuck(state, { tool: 'read_file', inputKey: 'r2', path: 'a.ts' }, DEFAULT_STUCK_TUNING, 6);
+  assert.equal(signal?.code, 'no-progress');
+  assert.match(signal.detail, /No new file.*6 steps/);
+
+  const fresh = createStuckState();
+  observeStuck(fresh, { path: 'a.ts', oldText: 'A', newText: 'B' }, DEFAULT_STUCK_TUNING, 0);
+  observeStuck(fresh, { tool: 'read_file', inputKey: 'r1', path: 'b.ts' }, DEFAULT_STUCK_TUNING, 6);
+  assert.equal(observeStuck(fresh, { tool: 'read_file', inputKey: 'r2', path: 'b.ts' }, DEFAULT_STUCK_TUNING, 7), undefined, 'a new path is progress');
+});
+
+test('plan checks near the limit consult only when they are still failing', () => {
+  const state = createStuckState();
+  observeStuck(state, { tool: 'edit_file', inputKey: 'e', path: 'a.ts', oldText: 'A', newText: 'B' });
+  assert.equal(planChecksSignal(state, ['npm test'], 5), undefined, 'not close enough');
+  const signal = planChecksSignal(state, ['npm test', 'npm run lint'], 4);
+  assert.equal(signal?.code, 'plan-checks-failing');
+  assert.match(signal.detail, /npm test/);
+  assert.equal(planChecksSignal(state, ['npm test'], 1), undefined, 'the same signal fires once');
+
+  const passed = createStuckState();
+  observeStuck(passed, { tool: 'edit_file', inputKey: 'e', path: 'a.ts', oldText: 'A', newText: 'B' });
+  observeStuck(passed, { tool: 'bash', inputKey: 'c', command: 'npm test', exitCode: 0 });
+  assert.equal(planChecksSignal(passed, ['npm test'], 1), undefined, 'a passing plan check is evidence');
+
+  assert.equal(planChecksSignal(createStuckState(), ['npm test'], 1), undefined, 'no attempts means nothing to rescue');
+});
+
+test('a re-armed check signal needs another failure before asking again', () => {
+  const state = createStuckState();
+  observeStuck(state, { path: 'a.ts', oldText: 'A', newText: 'B' });
+  assert.equal(observeStuck(state, { command: 'npm test', exitCode: 1 }), undefined, 'one failure is not stuck');
+  assert.equal(observeStuck(state, { command: 'npm test', exitCode: 1 })?.code, 'check-failed-twice');
+  assert.equal(observeStuck(state, { command: 'npm test', exitCode: 1 }), undefined, 'no repeat before re-arm');
+  rearmStuck(state, 'check-failed-twice');
+  assert.equal(observeStuck(state, { command: 'npm test', exitCode: 1 })?.code, 'check-failed-twice', 'another failure after guidance may ask again');
+});
+
+test('the Lead prompts carry visual facts to a Builder that does not receive the image', () => {
+  for (const instructions of [LEAD_PLAN_INSTRUCTIONS, LEAD_PLAN_READ_INSTRUCTIONS]) {
+    assert.match(instructions, /visual fact the Builder needs/);
+    assert.match(instructions, /Builder does not receive the image/);
+  }
+  assert.match(LEAD_REVIEW_INSTRUCTIONS, /use it from the session history/);
+});
+
 test('the consult contract carries the plan and bounds the Builder’s evidence', () => {
   assert.equal(ASK_LEAD_TOOL.name, 'ask_lead');
   assert.deepEqual(ASK_LEAD_TOOL.parameters.required, ['question']);
@@ -470,6 +589,86 @@ test('a restored continuation keeps the shape and the high-risk floor', () => {
   const trivial = continuationAssessment({ ...base, shape: 'direct-small', executedShape: 'direct-small', reasonCodes: [] });
   assert.equal(trivial.difficulty, 'trivial');
   assert.equal(trivial.risk, 'low');
+});
+
+test('tuning overrides are clamped and defaults preserved', () => {
+  const tuned = resolveOrchestratorTuning({
+    consultBudgets: { cost: 0, balanced: 3, output: 99 },
+    reviewAllComplex: true,
+    stuck: { checkFailures: 0, editHistory: 4, repeatedCalls: 1, editFailures: 99, noNewTargetSteps: 1, stepLimitStepsLeft: -1 },
+    scout: { enabled: true, maxReadCalls: 1000 },
+    leadReads: { balanced: { calls: -5, chars: 10 } },
+  });
+  assert.equal(tuned.consultBudgets.cost, 0);
+  assert.equal(tuned.consultBudgets.balanced, 3);
+  assert.equal(tuned.consultBudgets.output, 8);
+  assert.equal(tuned.reviewAllComplex, true);
+  assert.equal(tuned.stuck.checkFailures, 1);
+  assert.equal(tuned.stuck.editHistory, 4);
+  assert.equal(tuned.stuck.repeatedCalls, 2);
+  assert.equal(tuned.stuck.editFailures, 10);
+  assert.equal(tuned.stuck.noNewTargetSteps, 2);
+  assert.equal(tuned.stuck.stepLimitStepsLeft, 0);
+  assert.equal(tuned.scout.enabled, true);
+  assert.equal(tuned.scout.maxReadCalls, 50);
+  assert.equal(tuned.leadReads.balanced.calls, 0);
+  assert.equal(tuned.leadReads.balanced.chars, 10);
+  assert.equal(tuned.leadReads.output.calls, DEFAULT_ORCHESTRATOR_TUNING.leadReads.output.calls);
+});
+
+test('consult budgets and balanced review follow tuning', () => {
+  const tuning = resolveOrchestratorTuning({ consultBudgets: { cost: 0, balanced: 3, output: 5 }, reviewAllComplex: true });
+  const complex = assessment({ difficulty: 'complex' });
+  const cost = decideRoute({ goal: 'cost', roleCapabilities: ALL_CAPABILITIES, assessment: complex, tuning });
+  assert.equal(cost.consultBudget, 0);
+  const balanced = decideRoute({ goal: 'balanced', roleCapabilities: ALL_CAPABILITIES, assessment: complex, tuning });
+  assert.equal(balanced.consultBudget, 3);
+  assert.equal(balanced.leadReview, true);
+  const defaultBalanced = decideRoute({ goal: 'balanced', roleCapabilities: ALL_CAPABILITIES, assessment: complex });
+  assert.equal(defaultBalanced.leadReview, false);
+  const mid = decideRoute({ goal: 'balanced', roleCapabilities: ALL_CAPABILITIES, assessment: assessment({ difficulty: 'mid', designChoices: false }), tuning });
+  assert.equal(mid.leadReview, false);
+  const output = decideRoute({ goal: 'output', roleCapabilities: ALL_CAPABILITIES, assessment: complex, tuning });
+  assert.equal(output.consultBudget, 5);
+  assert.equal(output.leadReview, true);
+});
+
+test('scouting is gated by tuning, goal, difficulty and Small-task tools', () => {
+  const tuning = resolveOrchestratorTuning({ scout: { enabled: true } });
+  const complex = assessment({ difficulty: 'complex' });
+  assert.equal(decideRoute({ goal: 'cost', roleCapabilities: ALL_CAPABILITIES, assessment: complex, tuning }).scout, true);
+  assert.equal(decideRoute({ goal: 'balanced', roleCapabilities: ALL_CAPABILITIES, assessment: complex, tuning }).scout, true);
+  assert.equal(decideRoute({ goal: 'output', roleCapabilities: ALL_CAPABILITIES, assessment: complex, tuning }).scout, false, 'Output uses Lead reads');
+  assert.equal(decideRoute({ goal: 'cost', roleCapabilities: ALL_CAPABILITIES, assessment: complex }).scout, false, 'the internal flag is off by default');
+  assert.equal(decideRoute({ goal: 'cost', roleCapabilities: ALL_CAPABILITIES, assessment: assessment({ difficulty: 'mid', taskKind: 'bug_fix', causeKnown: true }), tuning }).scout, false);
+  assert.equal(decideRoute({ goal: 'cost', roleCapabilities: ALL_CAPABILITIES, assessment: assessment({ difficulty: 'mid', taskKind: 'bug_fix', causeKnown: false }), tuning }).scout, true, 'an unknown cause gets a scout');
+  assert.equal(decideRoute({ goal: 'cost', roleCapabilities: ALL_CAPABILITIES, assessment: assessment({ difficulty: 'trivial' }), tuning }).scout, false);
+  const noTools = decideRoute({ goal: 'cost', roleCapabilities: { ...ALL_CAPABILITIES, small: [] }, assessment: complex, tuning });
+  assert.equal(noTools.scout, false);
+  assert.ok(noTools.reasonCodes.includes('scout:small-no-tools'));
+  assert.equal(decideRoute({ goal: 'cost', roleCapabilities: ALL_CAPABILITIES, routerFailure: 'unavailable', tuning }).scout, false, 'a Router failure does not add a scout call');
+});
+
+test('stuck thresholds follow tuning', () => {
+  const state = createStuckState();
+  const tuning = { ...DEFAULT_STUCK_TUNING, checkFailures: 3 };
+  observeStuck(state, { path: 'a.ts', oldText: 'A', newText: 'B' }, tuning);
+  assert.equal(observeStuck(state, { command: 'npm test', exitCode: 1 }, tuning), undefined);
+  assert.equal(observeStuck(state, { command: 'npm test', exitCode: 1 }, tuning), undefined);
+  assert.equal(observeStuck(state, { command: 'npm test', exitCode: 1 }, tuning)?.code, 'check-failed-twice');
+
+  const editState = createStuckState();
+  const editTuning = { ...DEFAULT_STUCK_TUNING, editHistory: 3 };
+  observeStuck(editState, { path: 'a.ts', oldText: 'A', newText: 'B' }, editTuning);
+  observeStuck(editState, { path: 'a.ts', oldText: 'B', newText: 'C' }, editTuning);
+  assert.equal(observeStuck(editState, { path: 'a.ts', oldText: 'C', newText: 'B' }, editTuning), undefined, 'not enough prior versions');
+  observeStuck(editState, { path: 'a.ts', oldText: 'B', newText: 'D' }, editTuning);
+  assert.equal(observeStuck(editState, { path: 'a.ts', oldText: 'D', newText: 'B' }, editTuning)?.code, 'edit-back-and-forth');
+
+  const stepState = createStuckState();
+  observeStuck(stepState, { path: 'a.ts', oldText: 'A', newText: 'B' });
+  assert.equal(stepLimitSignal(stepState, 3, 2), undefined);
+  assert.equal(stepLimitSignal(stepState, 2, 2)?.code, 'step-limit');
 });
 
 test('plan-mode helpers render the plan and recover pending and approved staged plans', () => {

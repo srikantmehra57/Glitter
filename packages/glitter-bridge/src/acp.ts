@@ -589,6 +589,19 @@ export class AcpAgentHost {
     }
     // Session options are authoritative for availability; the catalog adds metadata.
     const byId = new Map(catalog.map((model) => [model.modelId, model]));
+    // Grok's session names the models that existed when it started, while its
+    // catalog is re-read on every listing. Start from the catalog so a model
+    // released since (grok-4.7 in an older thread) still reaches the picker, and
+    // keep any row only the session names.
+    if (this.spec.id === "grok" && catalog.length) {
+      const selected = new Map(fromSession.map((model) => [model.modelId, model]));
+      const merged = catalog.map((model) => {
+        const current = selected.get(model.modelId);
+        return current ? { ...model, ...current, isActive: current.isActive === true } : { ...model, isActive: false };
+      });
+      for (const model of fromSession) if (!byId.has(model.modelId)) merged.push({ ...model, isActive: model.isActive === true });
+      return { models: await this.present(merged), source: "catalog" };
+    }
     return { models: await this.present(fromSession.map((model) => ({ ...byId.get(model.modelId), ...model, ...(byId.get(model.modelId)?.reasoningEfforts && !model.reasoningEfforts ? { reasoningEfforts: byId.get(model.modelId)!.reasoningEfforts } : {}) }))), source: "session" };
   }
 

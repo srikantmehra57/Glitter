@@ -80,7 +80,8 @@ export function neutralEntries(messages: readonly ChatMessage[]): NeutralTranscr
     if (message.role === "user") {
       const text = message.content.filter((part) => part.type === "text").map((part) => part.text).join("\n").trim();
       const images = message.content.filter((part) => part.type === "image").length;
-      const shown = text || (images ? `[${images} image attachment${images === 1 ? "" : "s"}]` : "");
+      const attachment = images ? `[${images} image attachment${images === 1 ? "" : "s"}]` : "";
+      const shown = [text, attachment].filter(Boolean).join("\n");
       if (shown) entries.push({ kind: "user", text: shown });
     } else if (message.role === "assistant" && message.text.trim()) {
       entries.push({ kind: "answer", text: message.text.trim() });

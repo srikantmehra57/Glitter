@@ -4,10 +4,18 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { PendingQuestion } from "./questions.js";
 import type { ApprovalMode } from "./permission/policy.js";
+import type { OrchestratorPlan } from "./orchestrator/handoffs.js";
 import type { OrchestratorSettings, RouteRecord } from "./orchestrator/types.js";
 import type { ChatMessage, ContentPart } from "./wire.js";
 
 export type PendingSteer = { itemId: string; text: string; images?: Array<{ mediaType: string; base64Data: string }> };
+
+/** A fresh Builder session for one plan; active until it finishes or a new task replaces it. */
+export type BuilderSessionRecord = {
+  planId: string;
+  plan: OrchestratorPlan;
+  messages: ChatMessage[];
+};
 
 /**
  * The harness owns its sessions, so it keeps them: one append-only JSONL file
@@ -64,7 +72,14 @@ type Record_ =
   | { type: "steer"; steering: PendingSteer }
   | { type: "steerSettled"; itemIds: string[] }
   /** One routed turn's decision and the stages it ran. Durable for the thread's audit trail. */
-  | { type: "route"; turnId: string; route: RouteRecord };
+  | { type: "route"; turnId: string; route: RouteRecord }
+  /** The Lead's own session for the thread; reset when its model changes. */
+  | { type: "leadMessage"; message: ChatMessage }
+  | { type: "leadReset" }
+  /** A fresh Builder session for one plan, kept across a user question. */
+  | { type: "builderStart"; planId: string; plan: OrchestratorPlan }
+  | { type: "builderMessage"; planId: string; message: ChatMessage }
+  | { type: "builderEnd"; planId: string };
 
 const SESSION_ID = /^h-[a-z0-9-]{8,64}$/;
 
@@ -171,12 +186,14 @@ export class SessionStore {
   }
 
   /** Messages for the model and items for the transcript. A torn last line (a crash mid-write) is skipped. */
-  async read(sessionId: string): Promise<{ messages: ChatMessage[]; items: Array<Record<string, unknown>>; steering?: PendingSteer[]; question?: PendingQuestion; delegation?: DelegationPolicy; routes?: Array<{ turnId: string; route: RouteRecord }> }> {
+  async read(sessionId: string): Promise<{ messages: ChatMessage[]; items: Array<Record<string, unknown>>; steering?: PendingSteer[]; question?: PendingQuestion; delegation?: DelegationPolicy; routes?: Array<{ turnId: string; route: RouteRecord }>; leadMessages?: ChatMessage[]; builder?: BuilderSessionRecord }> {
     const path = this.file(sessionId);
     if (!existsSync(path)) return { messages: [], items: [] };
     let question: PendingQuestion | undefined;
     let delegation: DelegationPolicy | undefined;
     const messages: ChatMessage[] = [];
+    const leadMessages: ChatMessage[] = [];
+    let builder: BuilderSessionRecord | undefined;
     const items = new Map<string, Record<string, unknown>>();
     const steering = new Map<string, PendingSteer>();
     const routes: Array<{ turnId: string; route: RouteRecord }> = [];
@@ -186,6 +203,11 @@ export class SessionStore {
       let record: Record_;
       try { record = JSON.parse(line) as Record_; } catch { continue; }
       if (record.type === "message") messages.push(record.message);
+      else if (record.type === "leadMessage" && record.message) leadMessages.push(record.message);
+      else if (record.type === "leadReset") leadMessages.length = 0;
+      else if (record.type === "builderStart" && typeof record.planId === "string" && record.plan) builder = { planId: record.planId, plan: record.plan, messages: [] };
+      else if (record.type === "builderMessage" && builder && record.planId === builder.planId && record.message) builder.messages.push(record.message);
+      else if (record.type === "builderEnd" && builder?.planId === record.planId) builder = undefined;
       else if (record.type === "steer" && typeof record.steering?.itemId === "string" && typeof record.steering.text === "string") steering.set(record.steering.itemId, record.steering);
       else if (record.type === "steerSettled" && Array.isArray(record.itemIds)) {
         for (const itemId of record.itemIds) {
@@ -207,7 +229,7 @@ export class SessionStore {
       if (message.role !== "assistant") continue;
       for (const call of message.toolCalls ?? []) if (started.has(call.id)) call.started = true;
     }
-    return { messages, items: [...items.values()], ...(steering.size ? { steering: [...steering.values()] } : {}), ...(question ? { question } : {}), ...(delegation ? { delegation } : {}), ...(routes.length ? { routes } : {}) };
+    return { messages, items: [...items.values()], ...(steering.size ? { steering: [...steering.values()] } : {}), ...(question ? { question } : {}), ...(delegation ? { delegation } : {}), ...(routes.length ? { routes } : {}), ...(leadMessages.length ? { leadMessages } : {}), ...(builder ? { builder } : {}) };
   }
 
   remove(sessionId: string): Promise<void> {

@@ -122,8 +122,8 @@ function buildStep(item: TranscriptItem): AgentStep {
   if (item.kind === "reminderChild") {
     return { id: item.itemId, kind: "reminder", status: itemStatus(item.status), title: "Reminder", detail: item.text || item.fallbackText, item };
   }
-  if (item.kind === "orchestratorPlan" || item.kind === "orchestratorBuildReport" || item.kind === "orchestratorReview" || item.kind === "orchestratorConsult") {
-    const title = item.kind === "orchestratorPlan" ? "Lead plan" : item.kind === "orchestratorBuildReport" ? "Build report" : item.kind === "orchestratorReview" ? "Lead review" : "Lead guidance";
+  if (item.kind === "orchestratorPlan" || item.kind === "orchestratorContextPack" || item.kind === "orchestratorBuildReport" || item.kind === "orchestratorReview" || item.kind === "orchestratorConsult") {
+    const title = item.kind === "orchestratorPlan" ? "Lead plan" : item.kind === "orchestratorContextPack" ? "Context pack" : item.kind === "orchestratorBuildReport" ? "Build report" : item.kind === "orchestratorReview" ? "Lead review" : "Lead guidance";
     return { id: item.itemId, kind: "other", status: itemStatus(item.status), title, detail: item.text || item.fallbackText, item };
   }
   if (item.kind === "systemMessage") {

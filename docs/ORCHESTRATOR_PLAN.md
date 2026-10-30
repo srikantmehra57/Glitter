@@ -37,16 +37,22 @@ Orchestrator on or off from the model picker, live, restoring the manual model
 and effort when switched off; its effort control becomes the goal control, with
 a per-message shape that applies to the next message and returns to Auto after
 it; a floor that raised the shape is marked on the live line and the receipt.
-The Builder runs in the thread's own model history (sanitized at the model
-boundary) rather than a separate fresh session, and the plan call is tool-less,
-so the Lead plans without reading files and its session does not yet persist
-across turns; consult answers come from the plan plus the Builder's question,
-not a remembered Lead conversation. The build report carries the Builder's
-summary, diff stat and checks, not the patch itself. In Plan mode the validated
-Lead plan opens the existing plan-review card; the Builder starts only after
-approval, and the approved plan carries into the next Build turn, recovered
-from the session after a restart. Scout context packs, a fresh Builder session,
-a persistent Lead session, and the evaluation corpus and three manual baselines
+Each staged plan's Builder now runs in a fresh session seeded with the plan and
+a bounded neutral transcript, and a staged turn keeps only neutral user and
+final-answer messages in the thread; a Builder question or a restart resumes
+that plan's session, and a model change resets it. The Lead keeps its own
+durable session for the thread (plans, build reports, reviews and consult
+answers), reset when its model changes; the plan call is tool-less unless the
+goal's Lead-read budget is enabled. Request images go to the Lead plan, read
+stage and review session; the Builder's neutral session sees only the
+attachment count and works from the plan. The build report carries the
+Builder's summary, a bounded patch, diff stat and checks. In Plan mode the
+validated Lead plan opens the existing plan-review card; the Builder starts only after approval, and the
+approved plan carries into the next Build turn, recovered from the session after
+a restart. A Builder resumed after a user question reviews only the changes
+made after that question; replaying the pre-question observations into the
+build report remains. Scout and Lead reads are implemented behind their internal
+budgets; the evaluation corpus is in place, while the three manual baselines
 remain outstanding.
 
 `docs/HARNESS_UPGRADE_PLAN.md:569` lists automatic model selection as out of
@@ -265,6 +271,11 @@ approval.
 | Needs vision, tools or long context | Only roles whose model has it; otherwise the Lead does that part |
 | User said "no sub-agents", "don't review" | Honoured, without weakening permissions |
 
+Attachment images are a capability floor: any stage that receives them needs
+vision. Lead-guided turns send the request images to the Lead's plan, reads and
+review; the Builder's fresh session stays neutral and works from the written
+plan. Direct shapes and Lead-only execution already carry the thread image.
+
 ## Sessions and history across providers
 
 Replaying one provider's conversation to another breaks: reasoning signatures,
@@ -354,7 +365,9 @@ line and receipt mark `· floor` with the reason on hover.
 Short facts in the turn header and trajectory, never private reasoning:
 
 - "Lead plan · <lead> → Builder · <builder>"
+- "Scout · <small>"
 - "Approved plan · <lead> → Builder · <builder>"
+- "Builder resumed · <builder>"
 - "Builder asked the Lead · 1 of 2"
 - "Lead took over · tests kept failing"
 - "Reviewed by <lead> · 2 reviews"
@@ -372,11 +385,12 @@ executing model in place of the single-model estimate; the final route event
 carries every stage that ran, and the executor is read from the last stage that
 wrote code, so a plan or review call never replaces the Builder. A staged turn
 adds one quiet route-facts line with the plan/build pair, consults, takeover and
-review, and the same facts are in the receipt's hover title. The plan, build
-report, review notes and automatic guidance are durable steps, and the route
-references the plan, latest build report and latest review item. A Plan-mode
-turn opens the same plan in the plan-review card; approval builds that plan, and
-feedback plans again. Usage tags each trajectory call with its role.
+review, and the same facts are in the receipt's hover title. The plan, context
+pack, build report, review notes and automatic guidance are durable steps, and
+the route references the plan, latest context pack, latest build report and latest
+review item. A Plan-mode turn opens the same plan in the plan-review card;
+approval builds that plan, and feedback plans again. Usage tags each trajectory
+call with its role.
 
 ## Persistence and accounting
 
@@ -384,11 +398,11 @@ feedback plans again. Usage tags each trajectory call with its role.
 
 Additive settings defaults; older settings load unchanged. Each routed turn
 stores: route ID and policy version; goal, shape, reason codes and pre-route
-rule; role snapshot; models and effective efforts per stage; consult and review
-counts; fallbacks, takeovers and escalations; references to the plan and
-reports, each the item id of that handoff in the turn's trajectory. No keys, no
-router reasoning, no duplicate prompt. Ephemeral sessions keep records in memory
-only.
+rule; role snapshot; models and effective efforts per stage; the consult budget
+and consult/review counts; fallbacks, takeovers and escalations; references to
+the plan, context pack and reports, each the item id of that handoff in the
+turn's trajectory. No keys, no router reasoning, no duplicate prompt. Ephemeral
+sessions keep records in memory only.
 
 ### Usage per call
 
@@ -456,8 +470,18 @@ complex or high-risk fixture runs Small direct.
 
 ### Phase 3 — Adaptive quality
 
-**Status:** planned, not started. Begin after the Phase 0 corpus and baselines
-exist: every decision below is a corpus comparison, not a guess.
+**Status:** in progress. 3.0.2's route reason codes for explicit and automatic
+consults, stuck signals and review outcomes are landed, as is 3.0.3's bounded
+patch in the build report, an expanded 3.0.1 corpus/runner with free validation,
+dry-run, host-bundle, pre-route and report-comparison checks and a tune/holdout
+split, 3.0.4's session isolation, 3.0.5's internal
+tuning contract, 3.1's shared read-only stage and read probe, 3.2's scout
+context pack behind the internal flag, 3.3's opt-in Lead reads, 3.4's richer
+stuck signals and re-armed automatic consult, and 3.5's free pre-route matrix.
+Live baseline runs still need provider keys and spend; the consult/pre-route
+decisions, the Balanced review experiment and the exit report are next. Tune
+only after the corpus and baselines exist: every decision below is a corpus
+comparison, not a guess.
 
 **Exit gate:** the chosen defaults match or beat the Phase 2 Balanced baseline's
 success rate at lower or equal cost per successful task; the review-all-complex
@@ -478,116 +502,136 @@ choice is supported by the corpus; no floor or safety behavior weakens; and
 #### 3.0 Prerequisites
 
 1. **Corpus, baselines and runner (Phase 0 carry-over).** Build the fixed
-   fixture repositories, automated checks and manual rubric described under
-   Live evaluation; record Lead-alone, Builder-alone and Small-alone baselines
+   fixture repositories, automated checks and a manual rubric with a
+   `scores.json` sidecar described under Live evaluation; record Lead-alone,
+   Builder-alone and Small-alone baselines
    at their highest supported effort. Add an opt-in, cost-capped
    `eval:orchestrator` runner under `evals/orchestrator/` that runs any
    configuration and writes a machine-readable report plus a short table. It is
-   not part of `npm run verify`. Run each fixture two to three times; keep a
-   holdout set so rules are not tuned on the same tasks that report success.
+   not part of `npm run verify`. The corpus and runner are in place: 16 tasks
+   (28 checks) span the plan's minor, copy, bug, feature, security, migration,
+   continuation, long-thread, long-context, plan-mode, redesign, vision and
+   ambiguous classes. The tune/holdout split is in place: 8 tuning and 8
+   holdout tasks, selected with `--split=tune|holdout`, so rules are not tuned
+   on the tasks that report success. Vision images ride with a task's first
+   turn. `--validate`, `--list`,
+   `--dry`, `--check-host` and `--pre-route` are free, while live baseline runs
+   still need provider keys and spend. Run each fixture two to three times.
    Record task success, review quality, cost per success, role split, plan
    rejection, consult rate, takeover rate, pre-route accuracy, router skip rate,
    time to first edit and latency.
-2. **Decision-grade instrumentation.** Add additive route metadata, preferably
-   reason codes plus a small signal list, for scout use and fallback, Lead read
-   steps, stuck signals, explicit versus automatic consults, consult outcomes
-   and review outcome. Stage rows and `modelCall` role/stage already cover
-   models and usage; fill the gaps without storing prompts or reasoning. The
-   runner reads the persisted routes and items and captures the host's
-   `modelCall` and `turnCompleted` events; the app's Usage ledger stays the
-   app-side view.
-3. **Patch-bearing build report.** Populate `BuildReport.diff` with a bounded
-   patch from the Builder's edit observations, so a review can judge the actual
-   change. Without it, the review experiment in 3.6 cannot measure review
+2. **Decision-grade instrumentation (landed for scout use, Lead read steps,
+   plan retries, stuck signals, consults and review outcomes).** Add additive
+   route metadata, preferably reason codes plus a small signal list, for scout
+   use and fallback, Lead read steps, stuck signals, explicit versus automatic
+   consults, consult outcomes and review outcome. Stage rows and `modelCall`
+   role/stage already cover models and usage; fill the gaps without storing
+   prompts or reasoning. The runner reads the persisted routes and items and
+   captures the host's `modelCall` and `turnCompleted` events; the app's Usage
+   ledger stays the app-side view.
+3. **Patch-bearing build report (landed).** Populate `BuildReport.diff` with a
+   bounded patch from the Builder's edit observations, so a review can judge the
+   actual change. Without it, the review experiment in 3.6 cannot measure review
    quality.
-4. **Session isolation.** Move the Lead to a durable session for the thread
-   (requests, plans, build reports, review notes and consult answers) with its
-   model fixed for the thread; provider-specific blocks stay inside that
-   session, while the app-owned transcript remains neutral. Give each Builder a
-   fresh session seeded with the plan and a bounded neutral transcript. This is
-   the Phase 2 architecture carry-over listed as outstanding. If it is deferred,
-   label the evaluation baseline "stateless Lead" and do not claim Phase 3
-   gains that depend on continuity.
-5. **Internal tuning config.** Add an `OrchestratorTuning` block with defaults
-   in the bridge (scout on/off, Lead read budget, stuck thresholds, consult
-   budgets, review-all-complex) that only the evaluation runner and tests can
-   override. Phase 3 exposes nothing in Settings; Phase 5 does.
+4. **Session isolation (landed).** The Lead has a durable session for the
+   thread (requests, plans, build reports, review notes and consult answers)
+   with its model fixed for the thread; provider-specific blocks stay inside
+   that session, while the app-owned transcript remains neutral. Each plan's
+   Builder gets a fresh session seeded with the plan and a bounded neutral
+   transcript; a Builder question or a restart resumes the same session, and a
+   model change resets it. Staged turns write only neutral user and final-answer
+   messages to the thread. Direct and manual shapes keep their existing history.
+   A resumed Builder's review currently covers the changes made after its
+   question; replaying the earlier observations into the build report is a
+   follow-up.
+5. **Internal tuning config (landed).** `OrchestratorTuning` (in
+   `tuning.ts`) carries the consult budgets, Balanced review-all-complex,
+   stuck thresholds and reserved scout/Lead-read budgets. The host resolves and
+   clamps a partial override from `HostLimits.tuning`; the evaluation runner
+   exposes it as `--tuning`, and tests use the same seam. The app never exposes
+   these values in Settings, and Phase 5 does. The route record keeps the
+   consult budget it ran with. The scout and Lead-read entries are consumed by
+   3.2 and 3.3 and stay off or zero until the corpus supports them.
 
-#### 3.1 Shared read-only stage
+#### 3.1 Shared read-only stage (landed)
 
-Build one local-history tool loop used by both the scout and the Lead reads.
-It offers only `read_file`, `list_files` and `grep`; no edits, shell, MCP,
-delegation or `ask_user`. It runs against the workspace under the existing
-permission guards with a step count and a character/token budget, supports
-cancellation, and returns the final text. Tool items stay visible in the
-trajectory, but the stage's model history is local and never enters the
-thread's Builder history. Calls carry the role and stage in `modelCall` and
-Usage. Extend the role probe so a model that cannot use read tools cannot take
-a read-enabled role; fall back to no reads, never to another model.
+The local-history loop is in place as `runReadOnlyStage`. It offers only
+`read_file`, `list_files` and `grep`; no edits, shell, MCP, delegation or
+`ask_user`. It runs against the workspace under the existing permission guards
+with a step count and a character budget, suppresses the model's text and
+reasoning from the transcript while keeping tool items visible, and returns the
+final text plus the read tools used. Calls carry the role and stage in
+`modelCall` and Usage. A hallucinated non-read tool is refused before it runs.
+The internal `orchestratorReadProbe` verifies a real successful read, caches the
+answer per model, and is what read-enabled stages call; a failure means fall
+back to no reads, never another model. It is intentionally not a Settings role
+probe.
 
-Acceptance: budgets enforced; no non-read tool is offered or executed; invalid
-final JSON follows the stage's retry/fallback path; cancellation at any read;
-provider-specific blocks never cross sessions; deterministic tests cover budget
-exhaustion, disallowed tools and a model that ignores the tool contract.
+The scout (3.2) and Lead reads (3.3) use this loop. Deterministic tests cover
+the read probe (pass, text-only, wrong path, non-read tool), read-only tool
+filtering, text suppression, budget exhaustion and role/stage accounting.
 
-#### 3.2 Scout context pack
+#### 3.2 Scout context pack (landed)
 
-Run the Small-task model through 3.1 to produce the already-defined
-`context-pack` handoff (`handoffs.ts`), validated and bounded, with one retry.
-The prompt asks for the files, symbols and short excerpts relevant to the
-objective, with paths and line ranges, not whole files. On failure, record a
-fallback and let the Lead plan without a pack; never substitute another model.
+The Scout path is implemented behind the internal `tuning.scout.enabled` flag
+(default off until the corpus justifies it). When enabled for Cost or Balanced
+Lead-guided work on complex or unknown-cause requests, the Small-task model runs
+through `runReadOnlyStage` and returns a validated `context-pack`; one rejected
+pack gets one retry. Its read tools must actually be used, the pack and excerpts
+are capped by the tuning values, and the pack is a durable
+`orchestratorContextPack` item referenced by the route. The Lead plan prompt
+carries the pack. A failed read probe, invalid pack or unavailable Scout records
+a fallback and the Lead plans without it; no other model is substituted. Output
+keeps Lead reads rather than a scout.
 
-Start with scout for Cost goals on complex and unknown-cause work; Balanced is
-the phase's target default, enabled behind the evaluation flag so the corpus can
-choose between scout and Lead reads. Output uses Lead reads (3.3) rather than a
-scout. Start with a 12-read-call budget and a 24k-character pack (8k per
-excerpt); tune from the corpus. Emit the pack as a durable
-`orchestratorContextPack` trajectory item, record a `scout` stage with its model
-and effective effort, and add a route fact such as
-`Scout · <small> → Lead plan · <lead>`. The pack is included in the Lead plan
-prompt; the packed text must stay within the existing handoff limit.
+Tests cover the enabled path, the invalid-pack fallback, a Scout without read
+tool support, the context-pack item/route fact and the policy gates. The live
+corpus still decides when the flag is turned on by default.
 
-Acceptance: pack size and excerpts bounded; no edits; fallback recorded; the
-pack item and route stage survive resume; tests for valid, invalid and
-unavailable scout calls; corpus shows a cost or quality gain before it is
-enabled by default.
+#### 3.3 Lead reads (landed)
 
-#### 3.3 Lead reads
+The Lead plan stage now has an optional read path through 3.1. It is off by
+default: a goal's `leadReads` budget must set positive `calls` and `chars`
+(Cost initial target is zero, Balanced 6/24k, Output 20/64k; the corpus chooses
+when to enable them). When a budget is set and the internal read probe passes,
+the Lead reads in its own durable session before writing the plan; reads are
+tagged `lead-plan`, visible in the trajectory, and never enter the Builder's
+session. The plan is validated as today, with one read-stage retry; two rejected
+plans still fall back to the Lead-only turn. A failed read probe or read stage
+records `lead-read:unavailable` and the Lead plans tool-less from the brief; no
+other model is substituted. In Plan mode, reads happen before the plan-review
+card. The read stage and the tool-less plan carry the current request's images
+when the Lead is vision-capable; an approved or resumed plan reattaches only
+images the Lead session does not already hold.
 
-Give the Lead plan stage a read budget through the same 3.1 loop. Initial
-targets: Cost zero reads, Balanced a small budget (for example 6 read calls or
-24k characters), Output a larger cap (for example 20 read calls or 64k
-characters); tune from the corpus. The Lead starts
-from the scout pack when present, reads further only where needed, then returns
-the plan JSON in the same call sequence. Validate the plan as today; one retry;
-two failures still fall back to the Lead-only turn. Reads are tagged
-`lead-plan`, appear as trajectory steps, and never become Builder history. In
-Plan mode, reads happen before the plan-review card; the Builder still starts
-only after approval.
+Tests cover the enabled path, the tool-less default, the no-read-tool fallback,
+the read-stage retry, image delivery to the read-and-plan stage, and role/stage
+accounting.
 
-Acceptance: per-goal read budgets enforced; no write or shell calls; an invalid
-final plan follows the existing retry/fallback; plan review and approval still
-work; provider/capability fallbacks are named; tests cover an exhausted budget,
-a model that keeps reading, and a plan produced after reads.
+#### 3.4 Stuck detection v2 (landed)
 
-#### 3.4 Stuck detection v2
-
-Tune the existing deterministic signals and add: the same tool call repeated
-with identical arguments, the same edit failing repeatedly, no new file or
-symbol touched over several steps, and the plan's checks still failing near the
-step limit. Include the last two or three failing outputs and the edited paths
-as bounded evidence. Keep one automatic consult per signal per plan; allow a
-second only after the first produced guidance and a new attempt recurs, always
-inside the goal's budget. Record `stuck:<code>` and
-`consult:auto:<code>`/`consult:explicit` reason codes so the corpus can measure
-false positives and consult success. Do not fire when a question is already
-pending or the budget is spent.
+The detector tracks seven deterministic codes: `check-failed-twice`,
+`edit-back-and-forth`, `repeated-call` (the same tool with canonical
+arguments), `edit-failed-twice` (the same failed edit signature), `no-progress`
+(no new path over `noNewTargetSteps` after edits), `plan-checks-failing` (the
+plan's checks are still not passing near the step limit), and `step-limit`. The
+Builder loop observes every call and result, not only edit and command
+presentations, and passes the step index. Evidence is the last three bounded
+failure lines plus the edited paths, never prompts or reasoning. Each signal
+fires at most once per Builder attempt; a successful automatic consult re-arms
+only its own code, so a second consult needs another occurrence and the goal's
+remaining budget. The state is per turn: a resumed Builder after a user question
+starts a new attempt, and the route still records `stuck:<code>` and
+`consult:auto:<code>`. The thresholds are internal tuning values. Do not fire
+when a question is already pending or the budget is spent.
 
 Acceptance: deterministic tests for each signal and for legitimate retries that
 must not fire; no duplicate identical consult; consult evidence is bounded and
 contains no provider-private data; corpus reports false-positive and
 consult-success rates before thresholds are changed.
+
+Tests cover each new signal, the tuning clamps, a corrected retry that must not
+fire, and a second automatic consult only after guidance.
 
 #### 3.5 Consult budgets and pre-route rules from data
 
@@ -600,6 +644,15 @@ previous change ("same as before"); an attachment-only request; and the
 existing exact-small-change, high-risk and continuation rules. A rule never
 lowers a floor, and every skip records `pre-route:<rule>` for accuracy and
 router-skip measurements. Phase 3 keeps these internal; Phase 5 exposes tuning.
+
+The free measurement half is landed in `evals/orchestrator/pre-route.mjs`: 23
+labeled cases cover every current rule, floor raises and negative lookalikes,
+and `--pre-route` prints rule accuracy and the Router-skip rate without a
+provider call. Candidate cases are reported with their current route, not
+asserted. It already exposes one rule interaction: the exact-small rule claims
+a prompt naming a failing test or a stack trace before the Router can assess
+the cause. Whether to add a failing-test candidate rule, and every budget or
+default change, still waits for the live corpus.
 
 Acceptance: corpus pre-route accuracy and router-skip rate; no floor regression;
 bad-router fallback unchanged; every new rule has fixtures and a documented
@@ -616,6 +669,13 @@ Start with review only; evaluate one Balanced repair as a separate variant only
 if review findings often require fixes and the corpus supports the cost. Cost
 mode keeps no review except the high-risk floor; Output keeps its existing
 review, repair and re-review.
+
+The free comparison half is landed: `--compare` reads `report.json` files and
+prints success, cost per success, cost by role, router-skip, consult, takeover,
+plan-retry/fallback and review-outcome rates, latency and time to first edit per
+config and split. Manual tasks use a sidecar `scores.json` with 0-2 rubric
+scores; the comparison reports their mean and scored count. The live A/B still
+waits for provider keys and spend.
 
 Acceptance: corpus A/B with cost and quality; no review of trivial work;
 high-risk behavior unchanged; the chosen default is recorded in this document

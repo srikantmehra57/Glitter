@@ -4,12 +4,14 @@ import type {
   OrchestratorRoleCapabilities,
   OrchestratorRoleSnapshot,
   OrchestratorShape,
+  OrchestratorTuning,
   PreRouteResult,
   RoutePolicyDecision,
   RouteRecord,
   RouterAssessment,
   RouterFailure,
 } from "./types.js";
+import { DEFAULT_ORCHESTRATOR_TUNING } from "./tuning.js";
 
 export const ORCHESTRATOR_POLICY_VERSION = "orchestrator-v2";
 export const MAX_EXACT_SMALL_PROMPT_CHARS = 240;
@@ -109,6 +111,8 @@ export type RoutePolicyInput = {
   roleCapabilities: OrchestratorRoleCapabilities;
   preRoute?: PreRouteResult;
   assessment?: RouterAssessment;
+  /** Capabilities the turn needs regardless of the assessment, such as image input. */
+  requiredCapabilities?: RouterAssessment["requiredCapabilities"];
   /** Required when no pre-route rule or valid assessment is available. */
   routerFailure?: RouterFailure;
   /** Optional deterministic floor from context not present in the router envelope. */
@@ -117,10 +121,13 @@ export type RoutePolicyInput = {
   reviewAllowed?: boolean;
   previousAttemptFailed?: boolean;
   previousShape?: OrchestratorShape;
+  /** Internal tuning, resolved by the host; defaults match the Phase 2 policy. */
+  tuning?: OrchestratorTuning;
 };
 
 /** Apply forced shapes, difficulty, goals and every floor in one deterministic place. */
 export function decideRoute(input: RoutePolicyInput): RoutePolicyDecision {
+  const tuning = input.tuning ?? DEFAULT_ORCHESTRATOR_TUNING;
   const preRouted = input.preRoute?.decided ? input.preRoute : undefined;
   const failure = preRouted ? undefined : input.assessment ? undefined : input.routerFailure;
   if (!preRouted && !input.assessment && !failure) throw new Error("An assessment or an explicit router failure is required.");
@@ -181,7 +188,7 @@ export function decideRoute(input: RoutePolicyInput): RoutePolicyDecision {
     reasons.push("floor:output-lead-writes-risk");
   }
 
-  const required = new Set(assessment.requiredCapabilities);
+  const required = new Set([...assessment.requiredCapabilities, ...(input.requiredCapabilities ?? [])]);
   const capabilityIssues: RoutePolicyDecision["capabilityIssues"] = [];
   const supports = (role: keyof OrchestratorRoleCapabilities, capability: RouterAssessment["requiredCapabilities"][number]) => input.roleCapabilities[role].includes(capability);
   const missing = (role: keyof OrchestratorRoleCapabilities) => [...required].filter((capability) => !supports(role, capability));
@@ -216,10 +223,18 @@ export function decideRoute(input: RoutePolicyInput): RoutePolicyDecision {
   hasLead = shape === "lead-guided" || shape === "lead-only";
   const leadDiagnosis = hasLead && assessment.taskKind === "bug_fix" && !assessment.causeKnown;
   const leadPlan = shape === "lead-guided" || highRisk;
-  const optionalReview = !failure && input.goal === "output" && assessment.difficulty !== "trivial" && hasLead;
+  const optionalReview = !failure && hasLead && assessment.difficulty !== "trivial"
+    && (input.goal === "output" || (input.goal === "balanced" && tuning.reviewAllComplex && assessment.difficulty === "complex"));
   const leadReview = hasLead && (highRisk || (optionalReview && input.reviewAllowed !== false));
   if (optionalReview && input.reviewAllowed === false && !highRisk) reasons.push("review:user-disabled");
-  const consultBudget = shape === "lead-guided" ? input.goal === "cost" ? 1 : input.goal === "balanced" ? 2 : 4 : 0;
+  const consultBudget = shape === "lead-guided" ? tuning.consultBudgets[input.goal] : 0;
+  // Scouting is an internal experiment for Cost/Balanced Lead-guided work. It
+  // never blocks the turn: a Small-task model without tools simply skips it.
+  const wantsScout = !failure && hasLead && shape === "lead-guided" && tuning.scout.enabled
+    && (input.goal === "cost" || input.goal === "balanced")
+    && (assessment.difficulty === "complex" || (assessment.taskKind === "bug_fix" && !assessment.causeKnown));
+  const scout = wantsScout && input.roleCapabilities.small.includes("tools");
+  if (wantsScout && !scout) reasons.push("scout:small-no-tools");
   const repairBudget = leadReview && input.goal === "output" ? 1 : 0;
   const efforts: RoutePolicyDecision["efforts"] = {};
   // Every stage that writes or repairs code runs at the model's highest
@@ -238,6 +253,7 @@ export function decideRoute(input: RoutePolicyInput): RoutePolicyDecision {
     leadPlan,
     leadReview,
     leadDiagnosis,
+    scout,
     consultBudget,
     repairBudget,
     ...(shape === "lead-guided" ? { builderFailure: input.goal === "cost" ? "stop" as const : "takeover" as const } : {}),
@@ -291,6 +307,7 @@ export function createRouteRecord(input: {
       ...(input.roles.router ? { router: { ...input.roles.router } } : {}),
     },
     stages: [],
+    consultBudget: input.decision.consultBudget,
     consultCount: 0,
     reviewCount: 0,
     fallbacks: [

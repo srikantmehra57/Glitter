@@ -12,6 +12,24 @@ licence terms.
 
 ### Fixed
 
+- **Grok threads list newly released models.** An open Grok session names only
+  the models the CLI knew when it started, so a newer release (Grok 4.7 in an
+  older thread) never reached the picker. The picker now takes the live catalog
+  and uses the session only to mark the active row.
+- **Settings and Orchestrator menus honour Models switches.** The default-model,
+  suggestion-model and Orchestrator role lists no longer offer a provider or
+  model switched off in Settings → Models (Kilo, for one). A saved role model
+  that is switched off stays visible as the current choice, labelled as off.
+- **Orchestrator image turns reach the Lead.** A staged Lead plan, its read
+  stage and the Lead review now receive the request images; the Builder's
+  neutral session sees only the attachment count and works from the written
+  plan. An image turn now requires a vision-capable role, so a text-only Lead
+  stops with a clear message instead of planning without the image.
+- **Models are told which model is serving the call.** Each request's system
+  prompt now names the model and provider for that call, so an identity question
+  is answered from the request instead of the model's training prior; a routed
+  turn names the model that actually serves each stage. The line rides in the
+  uncached half, so the cacheable prefix is unchanged.
 - **Manual model picks leave Orchestrator.** Choosing a model, including the
   already-selected one, restores manual controls for the thread or draft without
   changing the new-thread default. Settings goal choices now show their summaries.
@@ -81,6 +99,13 @@ licence terms.
   user message. Consults are recorded on the route with their model and
   effective effort, and an exhausted budget returns a clear refusal instead of
   another paid call.
+- **A stuck Builder is detected earlier and can ask again after new guidance.**
+  Beyond a check failing twice and an edit reverting, the app consults the Lead
+  when the Builder repeats the same tool call with identical arguments, the same
+  edit fails twice, no new file is touched for several steps, or the plan's
+  checks still fail near the step limit. The Lead sees the last bounded failure
+  lines and the edited paths. Each signal consults once; only another occurrence
+  after guidance may ask again, within the goal's budget.
 - **A staged turn shows its plan, report and review in the thread.** The
   completed receipt gains one quiet route-facts line naming the Lead plan and
   Builder, the consults spent, any takeover and the reviewer, with the same
@@ -92,6 +117,14 @@ licence terms.
   mode off and the next turn builds that plan without a second Lead plan call,
   while feedback revises the plan in Plan mode. A pending or just-approved plan
   survives reopening the thread.
+- **Lead reviews see the actual patch.** A staged build's review report now
+  carries a bounded hunk for each edited file, while the trajectory keeps the
+  short summary, diff stat and checks.
+- **Orchestrator roles keep their own sessions.** The Lead remembers plans,
+  build reports, reviews and consult answers across turns; each plan's Builder
+  starts fresh with the plan and a bounded neutral transcript, resumes after a
+  Builder question or a restart, and resets when its model changes. Staged turns
+  keep only neutral user and final-answer messages in the thread.
 - **The composer runs an Orchestrator thread, with a shape per message.**
   Built-in agent threads get an Orchestrator switch in the model picker, which
   applies the saved roles to the live session and restores the previous model

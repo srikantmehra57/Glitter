@@ -222,6 +222,11 @@ export function parsePlan(raw: string): HandoffValidation<OrchestratorPlan> {
   return json.ok ? validatePlan(json.value) : json;
 }
 
+export function parseContextPack(raw: string): HandoffValidation<ContextPack> {
+  const json = parsed(raw);
+  return json.ok ? validateContextPack(json.value) : json;
+}
+
 export function parseReviewNotes(raw: string): HandoffValidation<ReviewNotes> {
   const json = parsed(raw);
   return json.ok ? validateReviewNotes(json.value) : json;

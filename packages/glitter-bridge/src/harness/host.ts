@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir, platform, tmpdir } from "node:os";
 import { approvalAlive, approvalExpiry, approvalExpiryMono, APPROVAL_TTL_MS, describeIsolation, osSandboxAvailable, type IsolationReport } from "../isolation.js";
@@ -14,23 +14,26 @@ import { McpManager, addMcpServer as writeMcpServer, mcpExtension, readMcpConfig
 import { DELEGATE_LEAF_PROFILE, DELEGATE_PROFILE, MAX_DELEGATED_STEPS, MAX_DELEGATION_DEPTH, delegationExtension, type DelegationRequest, type DelegationResult } from "./delegation.js";
 import { ASK_USER_TOOL, EXIT_PLAN_TOOL, planReviewQuestion, questionRequest, settlement, type Asked, type PendingQuestion } from "./questions.js";
 import { discoverSkills, expandInvocation, skillsExtension } from "./skills.js";
-import { SessionStore, type DelegationPolicy, type PendingSteer, type SessionMeta } from "./store.js";
+import { SessionStore, type BuilderSessionRecord, type DelegationPolicy, type PendingSteer, type SessionMeta } from "./store.js";
 import { BUILTIN_EXTENSION, BUILTIN_TOOLS, canonicalize, confine, executeTool, executionMode, prepareTool, repeatReminder, scheduleToolCalls, type PresentationMeta, type ToolKind } from "./tools.js";
 import { CONTEXT_WINDOW, ProviderError, isTransientProviderError, isTruncatedStop, streamChat, truncatedToolResult, type AssistantMessage, type ChatMessage, type ContentPart, type ImagePart, type SystemPrompt, type ToolCall, type ToolSchema } from "./wire.js";
-import { PROBE_FILE, PROBE_VERSION, createProbeStore, findProbe, isProbeRole, probeNeeded, recordProbe, roleCapabilitiesFromProbes, runProbe, type ProbeRequest, type ProbeResponse, type ProbeResult, type ProbeRole, type ProbeStore } from "./orchestrator/probes.js";
+import { PROBE_CONTENT, PROBE_DONE, PROBE_FILE, PROBE_VERSION, createProbeStore, findProbe, isProbeRole, probeNeeded, recordProbe, roleCapabilitiesFromProbes, runProbe, type ProbeRequest, type ProbeResponse, type ProbeResult, type ProbeRole, type ProbeStore } from "./orchestrator/probes.js";
 import { parseRouterAssessment } from "./orchestrator/assessment.js";
 import { catalogCapabilities } from "./orchestrator/capabilities.js";
 import { resolveEffortTarget } from "./orchestrator/effort.js";
 import { ASK_LEAD_TOOL, LEAD_CONSULT_INSTRUCTIONS, leadConsultPrompt, stuckConsultPrompt } from "./orchestrator/consult.js";
-import { parsePlan, parseReviewNotes, validateBuildReport, type BuildReport, type OrchestratorPlan, type ReviewNotes } from "./orchestrator/handoffs.js";
+import { parseContextPack, parsePlan, parseReviewNotes, validateBuildReport, type BuildReport, type ContextPack, type OrchestratorPlan, type ReviewNotes } from "./orchestrator/handoffs.js";
 import { sanitizeHistory } from "./orchestrator/history.js";
 import { continuationAssessment, createRouteRecord, decideRoute, preRoute } from "./orchestrator/policy.js";
 import { approvedPlanFromHistory, pendingPlanFromHistory, planMarkdown, type StagedPlan } from "./orchestrator/plan-mode.js";
-import { builderInstructions, LEAD_PLAN_INSTRUCTIONS, LEAD_REVIEW_INSTRUCTIONS, leadExecutionNote, leadPlanPrompt, leadPlanRetryPrompt, leadReviewPrompt, repairInstructions } from "./orchestrator/prompts.js";
+import { builderInstructions, LEAD_PLAN_INSTRUCTIONS, LEAD_PLAN_READ_INSTRUCTIONS, LEAD_REVIEW_INSTRUCTIONS, leadExecutionNote, leadPlanPrompt, leadPlanReadPrompt, leadPlanRetryPrompt, leadReviewPrompt, repairInstructions } from "./orchestrator/prompts.js";
 import { ROUTER_SYSTEM, routerEnvelope, type RouterRecentTurn } from "./orchestrator/router.js";
+import { SCOUT_INSTRUCTIONS, scoutPackSummary, scoutPrompt, scoutRetryPrompt } from "./orchestrator/scout.js";
 import { normalizeOrchestratorSettings } from "./orchestrator/settings.js";
-import { createStuckState, observeStuck, stepLimitSignal, type StuckSignal } from "./orchestrator/stuck.js";
+import { createStuckState, observeStuck, planChecksSignal, rearmStuck, stepLimitSignal, type StuckObservation, type StuckSignal } from "./orchestrator/stuck.js";
+import { READ_ONLY_TOOL_NAMES } from "./orchestrator/read.js";
 import { neutralEntries, threadBrief } from "./orchestrator/transcript.js";
+import { resolveOrchestratorTuning } from "./orchestrator/tuning.js";
 import type {
   EffortTarget,
   OrchestratorCapability,
@@ -39,6 +42,7 @@ import type {
   OrchestratorSettings,
   OrchestratorShape,
   OrchestratorStage,
+  OrchestratorTuning,
   RoutePolicyDecision,
   RouteRecord,
   RouteStageRecord,
@@ -102,12 +106,51 @@ function lineDelta(oldText: string, newText: string): { added: number; removed: 
   while (suffix < before.length - prefix && suffix < after.length - prefix && before[before.length - 1 - suffix] === after[after.length - 1 - suffix]) suffix += 1;
   return { added: after.length - prefix - suffix, removed: before.length - prefix - suffix };
 }
+
+const MAX_PATCH_LINES = 200;
+const MAX_REPORT_DIFF_CHARS = 60_000;
+
+/**
+ * One hunk around the changed span. It is intentionally a presentation of the
+ * edit, not a git patch: enough for the Lead to judge the change, bounded so a
+ * large rewrite cannot dominate the review prompt.
+ */
+function linePatch(path: string, oldText: string, newText: string): string | undefined {
+  const before = oldText ? oldText.split("\n") : [];
+  const after = newText ? newText.split("\n") : [];
+  let prefix = 0;
+  while (prefix < before.length && prefix < after.length && before[prefix] === after[prefix]) prefix += 1;
+  let suffix = 0;
+  while (suffix < before.length - prefix && suffix < after.length - prefix && before[before.length - 1 - suffix] === after[after.length - 1 - suffix]) suffix += 1;
+  const oldLines = before.slice(prefix, before.length - suffix);
+  const newLines = after.slice(prefix, after.length - suffix);
+  if (!oldLines.length && !newLines.length) return undefined;
+  const cut = oldLines.length > MAX_PATCH_LINES || newLines.length > MAX_PATCH_LINES;
+  return [
+    `--- a/${path}`,
+    `+++ b/${path}`,
+    `@@ -${prefix + 1},${Math.min(oldLines.length, MAX_PATCH_LINES)} +${prefix + 1},${Math.min(newLines.length, MAX_PATCH_LINES)} @@`,
+    ...oldLines.slice(0, MAX_PATCH_LINES).map((line) => `-${line}`),
+    ...newLines.slice(0, MAX_PATCH_LINES).map((line) => `+${line}`),
+    ...(cut ? ["… (patch shortened)"] : []),
+  ].join("\n");
+}
 const CATALOG_TTL_MS = 10 * 60 * 1000;
 const LIST_TIMEOUT_MS = 15_000;
 /** First-turn role checks get a shorter budget than a Settings-initiated check. */
 const ROUTE_PROBE_TIMEOUT_MS = 60_000;
 /** Classification is one short call; it must not hold a turn open. */
 const ROUTER_TIMEOUT_MS = 30_000;
+/** The Lead session is durable but bounded; older exchanges are compacted. */
+const MAX_LEAD_SESSION_MESSAGES = 80;
+const MAX_LEAD_SESSION_CHARS = 240_000;
+/** Image bytes do not count against the text budget; the context fitter still sees the part. */
+const IMAGE_SESSION_WEIGHT = 4_000;
+
+function messageWeight(message: ChatMessage): number {
+  if (message.role !== "user") return JSON.stringify(message).length;
+  return message.content.reduce((sum, part) => sum + (part.type === "text" ? part.text.length : IMAGE_SESSION_WEIGHT), 0);
+}
 const ORCHESTRATOR_ROLE_NAME: Record<OrchestratorRole, string> = { lead: "Lead", builder: "Builder", small: "Small-task" };
 
 function unfittableContextError(): ProviderError {
@@ -238,10 +281,12 @@ type ToolObservation = {
 type BuildObservations = {
   files: Map<string, { added: number; removed: number }>;
   checks: BuildReport["checks"];
+  /** Bounded hunks for the review; never shown as a tool item. */
+  patches: string[];
 };
 
 /** Durable, user-visible handoff documents in the turn's trajectory. */
-type HandoffItemKind = "orchestratorPlan" | "orchestratorBuildReport" | "orchestratorReview" | "orchestratorConsult";
+type HandoffItemKind = "orchestratorPlan" | "orchestratorContextPack" | "orchestratorBuildReport" | "orchestratorReview" | "orchestratorConsult";
 
 type RouteResolution = {
   record: RouteRecord;
@@ -287,6 +332,10 @@ type Live = {
   pendingPlan?: StagedPlan & { itemId?: string };
   /** A staged plan the user approved; the next Build turn executes it without re-planning. */
   approvedPlan?: { plan: OrchestratorPlan; itemId?: string };
+  /** The Lead's own durable session for this thread. */
+  leadMessages: ChatMessage[];
+  /** The current plan's fresh Builder session, kept across a user question. */
+  builder?: BuilderSessionRecord;
 };
 
 /** One call's result. A call that asks the user also carries its questions and its transcript item. */
@@ -302,6 +351,8 @@ type HostLimits = {
   approvalChannel?: boolean;
   /** Test seam: the folder user skills load from. Production uses the OS home folder. */
   homeDir?: string;
+  /** Internal Orchestrator tuning for the evaluator and tests; never exposed in Settings. */
+  tuning?: unknown;
 };
 
 export class HarnessHost {
@@ -316,13 +367,17 @@ export class HarnessHost {
   private probes: ProbeStore = createProbeStore();
   /** One live check per role and model, so two Settings views never pay for the same probe. */
   private readonly probeRuns = new Map<string, Promise<ProbeResult>>();
+  /** Read-tool capability per model; a failed check is cached for this host's lifetime. */
+  private readonly readProbes = new Map<string, Promise<{ ok: boolean; detail: string }>>();
   private readonly emit: Emit;
+  private readonly tuning: OrchestratorTuning;
   private readonly mcp: McpManager;
   /** Tools, prompt sections and hooks. Each turn works from a snapshot taken when it starts. */
   readonly registry = new ExtensionRegistry();
 
   constructor(emit: Emit, private readonly store = new SessionStore(), private readonly fetchImpl: typeof fetch = fetch, private readonly limits: HostLimits = {}, private readonly authorization: (sessionId: string) => McpAuthorization | undefined = () => undefined) {
     this.emit = emit;
+    this.tuning = resolveOrchestratorTuning(this.limits.tuning);
     this.registry.register(BUILTIN_EXTENSION);
     this.registry.register(delegationExtension(this));
     this.registry.register(skillsExtension(this.homeDir));
@@ -529,7 +584,7 @@ export class HarnessHost {
   }
 
   private track(meta: SessionMeta, messages: ChatMessage[], approvalMode?: string): Live {
-    const live: Live = { meta, messages, mcpAuthorization: this.authorization(meta.sessionId) ?? { workspaceTrusted: false }, approvalMode: APPROVAL_MODES.has(approvalMode as ApprovalMode) ? approvalMode as ApprovalMode : "promptUnmatched", grants: [], prompting: false, controller: null, turnId: "idle", counter: 0, usage: { promptTokens: meta.usage?.promptTokens ?? 0, outputTokens: meta.usage?.outputTokens ?? 0, cacheReadTokens: meta.usage?.cacheReadTokens ?? 0, cacheWriteTokens: meta.usage?.cacheWriteTokens ?? 0 }, queue: [], steering: [], replacing: false, repeatCount: 0 };
+    const live: Live = { meta, messages, mcpAuthorization: this.authorization(meta.sessionId) ?? { workspaceTrusted: false }, approvalMode: APPROVAL_MODES.has(approvalMode as ApprovalMode) ? approvalMode as ApprovalMode : "promptUnmatched", grants: [], prompting: false, controller: null, turnId: "idle", counter: 0, usage: { promptTokens: meta.usage?.promptTokens ?? 0, outputTokens: meta.usage?.outputTokens ?? 0, cacheReadTokens: meta.usage?.cacheReadTokens ?? 0, cacheWriteTokens: meta.usage?.cacheWriteTokens ?? 0 }, queue: [], steering: [], replacing: false, repeatCount: 0, leadMessages: [] };
     this.sessions.set(meta.sessionId, live);
     return live;
   }
@@ -540,7 +595,7 @@ export class HarnessHost {
     const meta = await this.store.meta(options.sessionId);
     if (!meta) throw new Error("This thread's history is no longer on this device.");
     if (meta.workspaceRoot !== options.workspaceRoot) throw new Error("That thread belongs to another workspace.");
-    const { messages, items, steering, question, delegation, routes } = await this.store.read(options.sessionId);
+    const { messages, items, steering, question, delegation, routes, leadMessages, builder } = await this.store.read(options.sessionId);
     // The log is authoritative for a child's scope: if the index lost the
     // stamp, restore it and persist it, never adopt the caller's mode.
     const policy = meta.delegation ?? delegation;
@@ -553,6 +608,9 @@ export class HarnessHost {
     live.steering = steering ?? [];
     // Replay the transcript exactly as it was recorded; nothing runs again.
     live.question = question;
+    live.leadMessages = leadMessages ?? [];
+    live.builder = builder;
+    await this.ensureRoleSessions(live);
     // A staged plan review keeps its validated plan in the synthetic call, so a
     // restart can still approve it; the route restores the shape the build
     // continuation must keep.
@@ -562,14 +620,18 @@ export class HarnessHost {
         const item = items.find((entry) => entry.kind === "orchestratorPlan" && entry.turnId === question.turnId);
         live.pendingPlan = { ...pending, ...(item?.itemId ? { itemId: String(item.itemId) } : {}) };
       }
-      const pendingRoute = (routes ?? []).find((entry) => entry.turnId === question.turnId)?.route;
-      if (pendingRoute) live.openTask = { shape: pendingRoute.executedShape ?? pendingRoute.shape, assessment: continuationAssessment(pendingRoute) };
-    } else {
+    } else if (!question) {
       const approved = approvedPlanFromHistory(messages);
       if (approved) {
         const item = [...items].reverse().find((entry) => entry.kind === "orchestratorPlan");
         live.approvedPlan = { plan: approved, ...(item?.itemId ? { itemId: String(item.itemId) } : {}) };
       }
+    }
+    if (question) {
+      // A pending question's answer must keep the route that asked it, whether
+      // it was a plan review or a Builder question.
+      const pendingRoute = (routes ?? []).find((entry) => entry.turnId === question.turnId)?.route;
+      if (pendingRoute) live.openTask = { shape: pendingRoute.executedShape ?? pendingRoute.shape, assessment: continuationAssessment(pendingRoute) };
     }
     for (const route of routes ?? []) this.emit("route", { sessionId: options.sessionId, turnId: route.turnId, route: route.route });
     // The call a pending question belongs to is still open: it completes when the question is answered.
@@ -965,6 +1027,7 @@ export class HarnessHost {
       // A new user message is a new task, even while a plan review waits.
       live.approvedPlan = undefined;
       live.pendingPlan = undefined;
+      if (live.builder) await this.endBuilderSession(live);
       if (!live.meta.orchestrator && request.effort && request.effort !== live.meta.effort) await this.changed(live, { effort: request.effort });
       // An unanswered question is settled first, so its result sits ahead of this message.
       await this.settleQuestion(live, { action: "superseded" });
@@ -1058,12 +1121,13 @@ export class HarnessHost {
   }
 
   /** Move steered messages into the model history. The transcript item was emitted when the steer was accepted. */
-  private async flushSteering(live: Live): Promise<boolean> {
+  private async flushSteering(live: Live, push?: (message: ChatMessage) => Promise<void>): Promise<boolean> {
     if (!live.steering.length) return false;
     const batch = live.steering.splice(0);
     for (const item of batch) {
       const message: ChatMessage = { role: "user", content: this.userContent(item.text, item.images) };
-      live.messages.push(message);
+      if (push) await push(message);
+      else live.messages.push(message);
     }
     await this.store.append(live.meta.sessionId, [{ type: "steerSettled", itemIds: batch.map((item) => item.itemId) }]);
     this.resetRepeat(live);
@@ -1122,6 +1186,7 @@ export class HarnessHost {
     if (!settings || live.meta.delegation) return undefined;
     const routeId = `r-${randomUUID()}`;
     const attachments = this.currentAttachments(live);
+    const requiredCapabilities: OrchestratorCapability[] = attachments.some((attachment) => attachment.mediaType.startsWith("image/")) ? ["vision"] : [];
     const routed = preRoute({ prompt, ...(openTask ? { openTask } : {}), ...(forcedShape ? { forcedShape } : {}), attachments });
     const checked = await this.ensureRoleProbes(settings, signal);
     if (checked && !live.muted) {
@@ -1152,6 +1217,8 @@ export class HarnessHost {
         store: this.probes,
         catalog: await this.roleCatalogCapabilities(settings),
       }),
+      tuning: this.tuning,
+      ...(requiredCapabilities.length ? { requiredCapabilities } : {}),
       ...(routed.decided ? { preRoute: routed } : assessment ? { assessment } : { routerFailure: failure ?? "unavailable" }),
     });
     const record = createRouteRecord({ routeId, goal: settings.goal, decision, roles: settings.roles });
@@ -1361,7 +1428,25 @@ export class HarnessHost {
   private currentAttachments(live: Live): Array<{ name: string; mediaType: string }> {
     const last = live.messages.at(-1);
     if (last?.role !== "user") return [];
-    return last.content.map((part, index) => part.type === "image" ? { name: `image-${index + 1}`, mediaType: part.mediaType } : null).filter((attachment): attachment is { name: string; mediaType: string } => attachment !== null);
+    const attachments: Array<{ name: string; mediaType: string }> = [];
+    for (const part of last.content) {
+      if (part.type === "image") attachments.push({ name: `image-${attachments.length + 1}`, mediaType: part.mediaType });
+    }
+    return attachments;
+  }
+
+  /** The current request's image bytes, for the role that must see them. */
+  private currentImages(live: Live): ImagePart[] {
+    const last = live.messages.at(-1);
+    if (last?.role !== "user") return [];
+    return last.content.filter((part): part is ImagePart => part.type === "image");
+  }
+
+  /** Images the Lead's session does not already hold, byte for byte. */
+  private missingLeadImages(live: Live, images: readonly ImagePart[]): ImagePart[] {
+    if (!images.length) return [];
+    const held = new Set(live.leadMessages.flatMap((message) => message.role === "user" ? message.content.filter((part) => part.type === "image").map((part) => part.data) : []));
+    return images.filter((image) => !held.has(image.data));
   }
 
   /** Ask the user about one call. Thread choices come from the policy, narrowest first. */
@@ -1570,9 +1655,24 @@ export class HarnessHost {
     /** Extra schemas this stage offers; defaults to the turn's registry tools. */
     toolSchemas?: () => readonly ToolSchema[];
     /** Runs after a normal tool batch is in history, before the next call. */
-    afterTools?: (results: readonly CallResult[], context: { step: number; stepsLeft: number }) => Promise<void>;
+    afterTools?: (results: readonly CallResult[], context: { step: number; stepsLeft: number; calls: readonly ToolCall[] }) => Promise<void>;
+    /** An isolated role session; defaults to the thread's neutral history. */
+    history?: { messages: ChatMessage[]; push: (message: ChatMessage) => Promise<void> };
+    /** A Builder question completes in its isolated session. */
+    questionTarget?: "builder";
+    /** Suppress the model's text/reasoning items while keeping tool items. */
+    emitText?: boolean;
+    /** A hard whitelist; a hallucinated tool call is refused without running. */
+    allowedTools?: ReadonlySet<string>;
   }): Promise<{ text: string; capped: boolean; asked: boolean; cancelled: boolean; steps: number }> {
     const sessionId = live.meta.sessionId;
+    const history = input.history ?? {
+      messages: live.messages,
+      push: async (message: ChatMessage) => {
+        live.messages.push(message);
+        await this.store.append(sessionId, [{ type: "message", message }]);
+      },
+    };
     let text = "";
     let capped = false;
     let asked = false;
@@ -1580,7 +1680,7 @@ export class HarnessHost {
     for (let step = 0; step < input.stepCap; step += 1) {
       if (input.signal.aborted) return { text, capped, asked, cancelled: true, steps };
       // Steering that arrived during tools waits until the results are in the history.
-      await this.flushSteering(live);
+      await this.flushSteering(live, input.history?.push);
       if (input.signal.aborted) return { text, capped, asked, cancelled: true, steps };
       steps += 1;
       const modelId = input.stage?.model.modelId ?? live.meta.modelId ?? await this.defaultModel();
@@ -1594,15 +1694,16 @@ export class HarnessHost {
       const window = listed?.contextLimit ?? contextWindow(provider.id, model);
       const route = input.stage ? { routeId: input.stage.routeId, role: input.stage.role, stage: input.stage.stage, ...(input.stage.effort ? { effort: input.stage.effort } : {}) } : undefined;
       const schemas = input.toolSchemas?.() ?? input.offered();
-      const { message: reply, stopReason, effort } = await this.callModel(live, provider, modelId, model, input.system, schemas, input.signal, window, listed?.listedReasoning, listed?.reasoningEfforts, route);
+      const isolated = input.history ? clipRecency(history.messages) : undefined;
+      const callOptions = { ...(isolated ? { messages: isolated } : {}), ...(input.emitText === false ? { emitText: false } : {}) };
+      const { message: reply, stopReason, effort } = await this.callModel(live, provider, modelId, model, input.system, schemas, input.signal, window, listed?.listedReasoning, listed?.reasoningEfforts, route, Object.keys(callOptions).length ? callOptions : undefined);
       // A provider that rejected the effort fell back for this call; the route record keeps what actually ran.
       if (input.stage && effort !== input.stage.effort) {
         input.stage.effort = effort;
         if (effort) input.stage.record.effectiveEffort = effort;
         else delete input.stage.record.effectiveEffort;
       }
-      live.messages.push(reply);
-      await this.store.append(sessionId, [{ type: "message", message: reply }]);
+      await history.push(reply);
       // A cut-off reply can carry valid JSON that is still an incomplete tool call. Do not run it.
       if (isTruncatedStop(stopReason) && reply.toolCalls?.length) {
         const results = reply.toolCalls.map((call) => {
@@ -1611,8 +1712,7 @@ export class HarnessHost {
           return { id: call.id, name: call.name, output, isError: true as const };
         });
         const message: ChatMessage = { role: "tool", results };
-        live.messages.push(message);
-        await this.store.append(sessionId, [{ type: "message", message }]);
+        await history.push(message);
         if (step === input.stepCap - 1) {
           capped = true;
           this.stageCapNotice(live, input.noticeCap);
@@ -1628,13 +1728,20 @@ export class HarnessHost {
       const calls = reply.toolCalls;
       const reminders = calls.map((call) => this.observeRepeat(live, call.name, call.input));
       const stopped = (index: number) => ({ id: calls[index].id, name: calls[index].name, output: this.withRepeat("The user stopped this turn.", reminders[index]), isError: true as const });
+      const denied = (index: number) => {
+        const call = calls[index];
+        const output = `The ${call.name} tool is not available in this stage.`;
+        this.emitItem(live, { ...this.toolBase(live, call, call.input), status: "failed", failureReason: output, visibleOutput: output }, true);
+        return { id: call.id, name: call.name, output, isError: true as const };
+      };
       const askLead = input.askLead;
       const results = await scheduleToolCalls({
-        safe: calls.map((call) => call.name === ASK_LEAD_TOOL.name ? false : executionMode(contributions.tools.get(call.name)) === "concurrent"),
+        safe: calls.map((call) => (input.allowedTools && !input.allowedTools.has(call.name)) || call.name === ASK_LEAD_TOOL.name ? false : executionMode(contributions.tools.get(call.name)) === "concurrent"),
         signal: input.signal,
         onAborted: stopped,
         run: (index) => {
           if (input.signal.aborted) return Promise.resolve(stopped(index));
+          if (input.allowedTools && !input.allowedTools.has(calls[index].name)) return Promise.resolve(denied(index));
           if (askLead && calls[index].name === ASK_LEAD_TOOL.name) return askLead(calls[index]);
           return this.runToolCall(live, contributions, calls[index], input.signal, reminders[index]);
         },
@@ -1645,20 +1752,87 @@ export class HarnessHost {
       if (input.collect) for (const result of results) this.collectObservation(input.collect, result);
       if (results.some((result) => result.question)) {
         // The turn ends with the questions. Their answer completes this tool message in a new turn.
-        await this.parkQuestion(live, input.turnId, results);
+        await this.parkQuestion(live, input.turnId, results, input.questionTarget === "builder" && live.builder ? { builder: { planId: live.builder.planId } } : undefined);
         asked = true;
         break;
       }
       const message: ChatMessage = { role: "tool", results };
-      live.messages.push(message);
-      await this.store.append(sessionId, [{ type: "message", message }]);
-      if (input.afterTools) await input.afterTools(results, { step, stepsLeft: input.stepCap - step - 1 });
+      await history.push(message);
+      if (input.afterTools) await input.afterTools(results, { step, stepsLeft: input.stepCap - step - 1, calls });
       if (step === input.stepCap - 1) {
         capped = true;
         this.stageCapNotice(live, input.noticeCap);
       }
     }
     return { text, capped, asked, cancelled: input.signal.aborted, steps };
+  }
+
+  /**
+   * One read-only stage. The model gets read_file/list_files/grep in a local
+   * history, no writes, shell, MCP, questions or delegation; its text is
+   * suppressed from the transcript while tool items stay visible. Used by the
+   * scout and Lead reads once their policies enable them.
+   */
+  private async runReadOnlyStage(input: {
+    live: Live;
+    turn: TurnContributions;
+    turnId: string;
+    signal: AbortSignal;
+    routeId: string;
+    record: RouteRecord;
+    role: "lead" | "small";
+    stage: OrchestratorStage;
+    model: OrchestratorModel;
+    effort: EffortTarget;
+    system: SystemPrompt;
+    brief: string;
+    /** Images from the current request, when this role must see them. */
+    images?: ImagePart[];
+    maxSteps: number;
+    maxChars: number;
+    history?: { messages: ChatMessage[]; push: (message: ChatMessage) => Promise<void> };
+  }): Promise<{ text: string; toolsUsed: string[]; capped: boolean }> {
+    let history = input.history;
+    if (!history) {
+      const messages: ChatMessage[] = [];
+      history = { messages, push: async (message: ChatMessage) => { messages.push(message); } };
+    }
+    const stageHistory = history;
+    await stageHistory.push({ role: "user", content: [{ type: "text", text: input.brief }, ...(input.images ?? [])] });
+    const readSchemas = () => input.turn.schemas.filter((schema) => READ_ONLY_TOOL_NAMES.has(schema.name));
+    if (!readSchemas().length) throw new Error("No read tools are available in this workspace.");
+    const effort = await this.effortFor(input.model.modelId, input.effort);
+    const row: RouteStageRecord = { providerId: input.model.providerId, modelId: input.model.modelId, stage: input.stage, ...(effort ? { effectiveEffort: effort } : {}) };
+    input.record.stages.push(row);
+    const route: StageRoute = { routeId: input.routeId, record: row, role: input.role, stage: input.stage, model: input.model, ...(effort ? { effort } : {}) };
+    const allowed = new Set(READ_ONLY_TOOL_NAMES);
+    const used = new Set<string>();
+    let open = true;
+    const afterTools = async (results: readonly CallResult[]) => {
+      for (const result of results) if (READ_ONLY_TOOL_NAMES.has(result.name)) used.add(result.name);
+      if (!open) return;
+      const chars = stageHistory.messages.reduce((sum, message) => sum + messageWeight(message), 0);
+      if (chars < input.maxChars) return;
+      open = false;
+      allowed.clear();
+      await stageHistory.push({ role: "user", content: [{ type: "text", text: "The read budget is exhausted. Return the final JSON now with what you have." }] });
+    };
+    const run = await this.runStageLoop(input.live, input.turn, {
+      turnId: input.turnId,
+      system: input.system,
+      signal: input.signal,
+      stepCap: Math.max(1, Math.floor(input.maxSteps)),
+      noticeCap: Math.max(1, Math.floor(input.maxSteps)),
+      active: new Set<string>(),
+      offered: readSchemas,
+      toolSchemas: () => open ? readSchemas() : [],
+      allowedTools: allowed,
+      emitText: false,
+      history: stageHistory,
+      stage: route,
+      afterTools,
+    });
+    return { text: run.text, toolsUsed: [...used], capped: run.capped };
   }
 
   /**
@@ -1698,7 +1872,10 @@ export class HarnessHost {
       system: SystemPrompt;
       collect?: BuildObservations;
       /** Builder and repair stages may ask the Lead within the goal's budget. */
-      consult?: { askLead: (call: ToolCall) => Promise<CallResult>; toolSchemas: () => readonly ToolSchema[]; afterTools: (results: readonly CallResult[], context: { step: number; stepsLeft: number }) => Promise<void> };
+      consult?: { askLead: (call: ToolCall) => Promise<CallResult>; toolSchemas: () => readonly ToolSchema[]; afterTools: (results: readonly CallResult[], context: { step: number; stepsLeft: number; calls: readonly ToolCall[] }) => Promise<void> };
+      /** A Builder stage uses its own fresh/resumed session. */
+      history?: { messages: ChatMessage[]; push: (message: ChatMessage) => Promise<void> };
+      questionTarget?: "builder";
     }) => {
       if (remaining <= 0) throw new Error(`${HARNESS_NAME} reached this turn's step limit before the next stage could start.`);
       const effort = await this.effortFor(options.model.modelId, options.effort);
@@ -1716,6 +1893,8 @@ export class HarnessHost {
         stage: route,
         ...(options.collect ? { collect: options.collect } : {}),
         ...(options.consult ? { askLead: options.consult.askLead, toolSchemas: options.consult.toolSchemas, afterTools: options.consult.afterTools } : {}),
+        ...(options.history ? { history: options.history } : {}),
+        ...(options.questionTarget ? { questionTarget: options.questionTarget } : {}),
       });
       remaining = Math.max(0, remaining - run.steps);
       if (run.capped) capped = true;
@@ -1724,6 +1903,9 @@ export class HarnessHost {
 
     const objective = input.prompt.trim() || neutralEntries(live.messages).filter((entry) => entry.kind === "user").at(-1)?.text || "The current request.";
     const brief = threadBrief({ ...(live.meta.title ? { title: live.meta.title } : {}), objective, transcript: neutralEntries(live.messages) });
+    const images = this.currentImages(live);
+    await this.ensureRoleSessions(live);
+    const planImages = this.missingLeadImages(live, images);
 
     // A question needs no plan: the Lead answers it directly.
     if (input.assessment?.taskKind === "question") {
@@ -1735,47 +1917,162 @@ export class HarnessHost {
     }
 
     const approved = live.approvedPlan;
-    let plan: ReturnType<typeof parsePlan>;
-    if (approved) {
+    const resumed = live.builder;
+    // The plan call carries the image on a fresh plan; an approved or resumed
+    // plan still needs it in the Lead's session for review and consults. Skip
+    // an image the session already holds, so an approval does not duplicate it.
+    if (planImages.length && (approved || resumed)) {
+      await this.appendLeadMessage(live, { role: "user", content: [{ type: "text", text: "The current request includes this attachment." }, ...planImages] });
+    }
+    let scoutPack: ContextPack | undefined;
+    if (decision.scout && !resumed && !approved) {
+      const small = settings.roles.small;
+      try {
+        const probe = await this.orchestratorReadProbe({ modelId: small.modelId, signal });
+        if (!probe.ok) {
+          this.reason(record, "scout:unavailable");
+          record.fallbacks.push("scout:unavailable");
+          this.notice(live, "info", `Scouting was skipped: ${probe.detail}`);
+        } else {
+          const scoutMessages: ChatMessage[] = [];
+          const scoutHistory = { messages: scoutMessages, push: async (message: ChatMessage) => { scoutMessages.push(message); } };
+          const scoutSystem = this.stageSystem(input.system, SCOUT_INSTRUCTIONS);
+          const runScout = (briefText: string) => this.runReadOnlyStage({
+            live,
+            turn: input.turn,
+            turnId: input.turnId,
+            signal,
+            routeId: input.routeId,
+            record,
+            role: "small",
+            stage: "scout",
+            model: small,
+            effort: "low",
+            system: scoutSystem,
+            brief: briefText,
+            maxSteps: this.tuning.scout.maxReadCalls,
+            maxChars: this.tuning.scout.maxPackChars,
+            history: scoutHistory,
+          });
+          let run = await runScout(scoutPrompt({ brief, maxPackChars: this.tuning.scout.maxPackChars, maxExcerptChars: this.tuning.scout.maxExcerptChars }));
+          let parsed = parseContextPack(run.text);
+          let errors = parsed.ok ? this.validateScoutPack(parsed.value, run.toolsUsed) : parsed.errors;
+          if (errors.length) {
+            run = await runScout(scoutRetryPrompt(errors));
+            parsed = parseContextPack(run.text);
+            errors = parsed.ok ? this.validateScoutPack(parsed.value, run.toolsUsed) : parsed.errors;
+          }
+          if (parsed.ok && !errors.length) {
+            scoutPack = parsed.value;
+            record.references.contextPack = this.emitHandoff(live, "orchestratorContextPack", scoutPackSummary(scoutPack));
+            this.reason(record, "scout:used");
+          } else {
+            this.reason(record, "scout:invalid");
+            record.fallbacks.push("scout:invalid");
+            this.notice(live, "warning", `Scouting did not produce a usable context pack: ${errors.join(" ")}`);
+          }
+        }
+      } catch (error) {
+        if (signal.aborted) throw error;
+        this.reason(record, "scout:unavailable");
+        record.fallbacks.push("scout:unavailable");
+        this.notice(live, "warning", `Scouting was skipped: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    let plan: ReturnType<typeof parsePlan> | undefined;
+    if (resumed) {
+      // A user answer continued the same plan; keep the Builder's own session.
+      plan = { ok: true, value: resumed.plan };
+      record.reasonCodes.push("execution:resumed-builder");
+      record.references.plan = resumed.planId;
+    } else if (approved) {
       plan = { ok: true, value: approved.plan };
       record.reasonCodes.push("execution:approved-plan");
       if (approved.itemId) record.references.plan = approved.itemId;
     } else {
-      const leadPlanSystem = this.stageSystem(input.system, LEAD_PLAN_INSTRUCTIONS);
-      const planMessages: ChatMessage[] = [{ role: "user", content: [{ type: "text", text: leadPlanPrompt(brief) }] }];
-      let raw = await this.auxiliaryCall({
-        live,
-        signal,
-        routeId: input.routeId,
-        record,
-        role: "lead",
-        stage: "lead-plan",
-        model: lead,
-        effort: decision.efforts.lead ?? "high",
-        system: leadPlanSystem,
-        messages: planMessages,
-      });
-      plan = parsePlan(raw);
-      if (!plan.ok) {
-        planMessages.push({ role: "assistant", text: raw, modelId: lead.modelId });
-        planMessages.push({ role: "user", content: [{ type: "text", text: leadPlanRetryPrompt(plan.errors) }] });
-        raw = await this.auxiliaryCall({
+      const planBrief = scoutPack ? `${brief}\n\nScout context pack (read-only excerpts):\n${JSON.stringify(scoutPack)}` : brief;
+      const reads = this.tuning.leadReads[settings.goal];
+      let readAttempted = false;
+      if (reads.calls > 0 && reads.chars > 0) {
+        try {
+          const probe = await this.orchestratorReadProbe({ modelId: lead.modelId, signal });
+          if (!probe.ok) {
+            this.reason(record, "lead-read:unavailable");
+            record.fallbacks.push("lead-read:unavailable");
+            this.notice(live, "info", `Lead reads were skipped: ${probe.detail}`);
+          } else {
+            readAttempted = true;
+            const readSystem = this.stageSystem(input.system, LEAD_PLAN_READ_INSTRUCTIONS);
+            const leadHistory = { messages: live.leadMessages, push: (message: ChatMessage) => this.appendLeadMessage(live, message) };
+            const runPlan = (text: string, withImages = false) => this.runReadOnlyStage({
+              live,
+              turn: input.turn,
+              turnId: input.turnId,
+              signal,
+              routeId: input.routeId,
+              record,
+              role: "lead",
+              stage: "lead-plan",
+              model: lead,
+              effort: decision.efforts.lead ?? "high",
+              system: readSystem,
+              brief: text,
+              ...(withImages && planImages.length ? { images: planImages } : {}),
+              maxSteps: reads.calls,
+              maxChars: reads.chars,
+              history: leadHistory,
+            });
+            const first = await runPlan(leadPlanReadPrompt(planBrief, reads.calls, reads.chars), true);
+            plan = parsePlan(first.text);
+            if (!plan.ok) {
+              this.reason(record, "plan:retry");
+              const retry = await runPlan(leadPlanRetryPrompt(plan.errors));
+              plan = parsePlan(retry.text);
+            }
+          }
+        } catch (error) {
+          if (signal.aborted) throw error;
+          readAttempted = false;
+          this.reason(record, "lead-read:unavailable");
+          record.fallbacks.push("lead-read:unavailable");
+          this.notice(live, "warning", `Lead reads failed: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+      if (!readAttempted) {
+        const leadPlanSystem = this.stageSystem(input.system, LEAD_PLAN_INSTRUCTIONS);
+        const first = await this.leadTurn({
           live,
           signal,
           routeId: input.routeId,
           record,
-          role: "lead",
           stage: "lead-plan",
           model: lead,
           effort: decision.efforts.lead ?? "high",
           system: leadPlanSystem,
-          messages: planMessages,
+          user: leadPlanPrompt(planBrief),
+          ...(planImages.length ? { images: planImages } : {}),
         });
-        plan = parsePlan(raw);
+        plan = parsePlan(first.text);
+        if (!plan.ok) {
+          this.reason(record, "plan:retry");
+          const retry = await this.leadTurn({
+            live,
+            signal,
+            routeId: input.routeId,
+            record,
+            stage: "lead-plan",
+            model: lead,
+            effort: decision.efforts.lead ?? "high",
+            system: leadPlanSystem,
+            user: leadPlanRetryPrompt(plan.errors),
+          });
+          plan = parsePlan(retry.text);
+        }
       }
     }
 
     // Two rejected plans: the Lead does the work itself, as the plan specifies.
+    if (!plan) throw new Error("The Lead plan stage did not produce a result.");
     if (!plan.ok) {
       live.activeModelId = lead.modelId;
       const run = await stage({ role: "lead", stage: "lead", model: lead, effort: "highest", system: this.stageSystem(input.system, leadExecutionNote("plan-invalid")) });
@@ -1786,11 +2083,11 @@ export class HarnessHost {
       return { text: run.text, capped, asked: run.asked };
     }
     const validPlan = plan.value;
-    if (!approved) record.references.plan = this.emitHandoff(live, "orchestratorPlan", this.planSummary(validPlan));
+    if (!approved && !resumed) record.references.plan = this.emitHandoff(live, "orchestratorPlan", this.planSummary(validPlan));
 
     // Plan mode stops at the Lead's plan: the Builder starts only after the
     // user approves the same card a model's exit_plan_mode call produces.
-    if (live.meta.mode === "plan" && !approved) {
+    if (live.meta.mode === "plan" && !approved && !resumed) {
       const markdown = planMarkdown(validPlan);
       const call: ToolCall = { id: `plan-${randomUUID()}`, name: "exit_plan_mode", input: { plan: markdown, orchestratorPlan: validPlan } };
       const message: ChatMessage = { role: "assistant", text: "", toolCalls: [call], modelId: lead.modelId };
@@ -1819,85 +2116,125 @@ export class HarnessHost {
       if (!question) return refuse("ask_lead needs a question.");
       if (question.length > 4_000) return refuse("The question is too long; keep it under 4,000 characters.");
       if (excerpt.length > 20_000) return refuse("The excerpt is too long; keep it under 20,000 characters.");
-      if (consultsLeft <= 0) return refuse("No Lead consults remain for this turn. Continue with the plan, or finish and explain what is blocked.");
+      if (consultsLeft <= 0) {
+        this.reason(record, "consult:budget-exhausted");
+        return refuse("No Lead consults remain for this turn. Continue with the plan, or finish and explain what is blocked.");
+      }
       consultsLeft -= 1;
       record.consultCount += 1;
+      this.reason(record, "consult:explicit");
       this.emitItem(live, { ...base, status: "inProgress" });
       try {
-        const answer = await this.auxiliaryCall({
+        const answer = await this.leadTurn({
           live,
           signal,
           routeId: input.routeId,
           record,
-          role: "lead",
           stage: "consult",
           model: lead,
           effort: decision.efforts.lead ?? "high",
           system: consultSystem,
-          messages: [{ role: "user", content: [{ type: "text", text: leadConsultPrompt({ plan: validPlan, question, ...(excerpt ? { excerpt } : {}) }) }] }],
+          user: leadConsultPrompt({ plan: validPlan, question, ...(excerpt ? { excerpt } : {}) }),
         });
-        const guidance = answer.trim().slice(0, 8_000) || "The Lead returned no guidance.";
+        const guidance = answer.text.trim().slice(0, 8_000) || "The Lead returned no guidance.";
         this.emitItem(live, { ...base, status: "completed", visibleOutput: guidance }, true);
         return { id: call.id, name: call.name, output: guidance };
       } catch (error) {
         if (signal.aborted) throw error;
+        this.reason(record, "consult:unavailable");
         record.fallbacks.push("consult:unavailable");
         return refuse(`The Lead could not answer: ${error instanceof Error ? error.message : String(error)}`);
       }
     };
     const stuckState = createStuckState();
     const builderTools = () => [...input.offered(), ASK_LEAD_TOOL];
-    const afterTools = async (results: readonly CallResult[], context: { step: number; stepsLeft: number }) => {
+    const afterTools = async (results: readonly CallResult[], context: { step: number; stepsLeft: number; calls: readonly ToolCall[] }) => {
       const asked = results.some((result) => result.name === ASK_LEAD_TOOL.name);
       let stuck: StuckSignal | undefined;
-      for (const result of results) {
-        if (!result.observation) continue;
-        const found = observeStuck(stuckState, result.observation);
+      for (const [index, result] of results.entries()) {
+        if (result.name === ASK_LEAD_TOOL.name) continue;
+        const call = context.calls[index];
+        const observation: StuckObservation = {
+          ...(result.observation ?? {}),
+          ...(call ? { tool: call.name, inputKey: JSON.stringify(canonicalize(call.input)) } : {}),
+          ...(result.isError ? { failed: true, detail: (result.output.split("\n")[0] ?? result.output).slice(0, 300) } : {}),
+          ...(call && typeof call.input.path === "string" && !result.observation?.path ? { path: call.input.path } : {}),
+        };
+        const found = observeStuck(stuckState, observation, this.tuning.stuck, context.step);
         if (!stuck && found) stuck = found;
       }
       if (asked) return;
       if (context.stepsLeft <= 0) return;
-      stuck ??= stepLimitSignal(stuckState, context.stepsLeft);
-      if (!stuck || consultsLeft <= 0) return;
+      stuck ??= planChecksSignal(stuckState, validPlan.checks, context.stepsLeft, this.tuning.stuck);
+      stuck ??= stepLimitSignal(stuckState, context.stepsLeft, this.tuning.stuck.stepLimitStepsLeft);
+      if (!stuck) return;
+      this.reason(record, `stuck:${stuck.code}`);
+      if (consultsLeft <= 0) return;
       consultsLeft -= 1;
       record.consultCount += 1;
-      const evidence = results.filter((result) => result.isError).map((result) => `${result.name}: ${result.output.slice(0, 600)}`).join("\n\n");
+      this.reason(record, `consult:auto:${stuck.code}`);
+      const evidence = [
+        ...stuckState.recentFailures,
+        ...(stuckState.editedPaths.size ? [`Edited: ${[...stuckState.editedPaths].slice(-6).join(", ")}`] : []),
+      ].join("\n");
       this.notice(live, "info", `The Builder looks stuck (${stuck.code}); the Lead was consulted.`);
       try {
-        const answer = await this.auxiliaryCall({
+        const answer = await this.leadTurn({
           live,
           signal,
           routeId: input.routeId,
           record,
-          role: "lead",
           stage: "consult",
           model: lead,
           effort: decision.efforts.lead ?? "high",
           system: consultSystem,
-          messages: [{ role: "user", content: [{ type: "text", text: stuckConsultPrompt({ plan: validPlan, reason: stuck.detail, ...(evidence ? { evidence } : {}) }) }] }],
+          user: stuckConsultPrompt({ plan: validPlan, reason: stuck.detail, ...(evidence ? { evidence } : {}) }),
         });
-        const guidance = answer.trim();
+        const guidance = answer.text.trim();
         if (!guidance) {
           this.notice(live, "warning", "The Lead returned no guidance for the stuck check.");
           return;
         }
         this.emitHandoff(live, "orchestratorConsult", `Automatic consult · ${stuck.code}\n${guidance.slice(0, 8_000)}`);
         const message: ChatMessage = { role: "user", content: [{ type: "text", text: `Lead guidance (automatic consult · ${stuck.code}):\n${guidance.slice(0, 8_000)}` }] };
-        live.messages.push(message);
-        await this.store.append(live.meta.sessionId, [{ type: "message", message }]);
+        if (live.builder) await this.appendBuilderMessage(live, message);
+        else {
+          live.messages.push(message);
+          await this.store.append(live.meta.sessionId, [{ type: "message", message }]);
+        }
+        // One further attempt may ask again; the first consult is never repeated without new work.
+        rearmStuck(stuckState, stuck.code);
       } catch (error) {
         if (signal.aborted) throw error;
+        this.reason(record, "consult:unavailable");
         record.fallbacks.push("consult:unavailable");
         this.notice(live, "warning", `The Lead could not answer the stuck check: ${error instanceof Error ? error.message : String(error)}`);
       }
     };
     const consult = { askLead, toolSchemas: builderTools, afterTools };
+    const planId = resumed ? resumed.planId : record.references.plan ?? `plan-${randomUUID()}`;
+    let builderTouched = Boolean(resumed);
+    let builderOpen = false;
+    if (!resumed) {
+      const seed: ChatMessage = {
+        role: "user",
+        content: [{ type: "text", text: `Execute the Lead's plan.\n\n${threadBrief({ ...(live.meta.title ? { title: live.meta.title } : {}), objective, transcript: neutralEntries(live.messages) })}` }],
+      };
+      await this.startBuilderSession(live, planId, validPlan, seed);
+      builderTouched = true;
+    }
+    const builderHistory = { messages: live.builder!.messages, push: (message: ChatMessage) => this.appendBuilderMessage(live, message) };
+    const closeBuilder = async () => {
+      if (builderTouched && !builderOpen) await this.endBuilderSession(live);
+    };
 
-    const observations: BuildObservations = { files: new Map(), checks: [] };
+    const observations: BuildObservations = { files: new Map(), checks: [], patches: [] };
     const takeOver = async (reason: string, builtText: string): Promise<{ text: string; capped: boolean; asked: boolean }> => {
       record.takeovers.push(`builder:${reason}`.slice(0, 300));
       record.reasonCodes.push("execution:takeover");
       live.activeModelId = lead.modelId;
+      await this.endBuilderSession(live);
+      builderOpen = false;
       const note = [
         builderInstructions(validPlan),
         `The Builder could not finish: ${reason}`,
@@ -1912,24 +2249,30 @@ export class HarnessHost {
     const builderSystem = this.stageSystem(input.system, builderInstructions(validPlan));
     let build: Awaited<ReturnType<typeof stage>>;
     try {
-      build = await stage({ role: "builder", stage: "builder", model: builder, effort: decision.efforts.builder ?? "highest", system: builderSystem, collect: observations, consult });
+      build = await stage({ role: "builder", stage: "builder", model: builder, effort: decision.efforts.builder ?? "highest", system: builderSystem, collect: observations, consult, history: builderHistory, questionTarget: "builder" });
     } catch (error) {
-      if (signal.aborted) throw error;
+      if (signal.aborted) { await closeBuilder(); throw error; }
       if (decision.builderFailure === "takeover") return takeOver(error instanceof Error ? error.message : String(error), text);
+      await closeBuilder();
       throw error;
     }
     text = build.text;
     if (build.cancelled) {
+      if (text.trim()) await this.appendThreadAnswer(live, text, builder.modelId);
+      await closeBuilder();
       record.executedShape = "lead-guided";
       return { text, capped, asked: false };
     }
     if (build.asked) {
+      builderOpen = true;
       record.executedShape = "lead-guided";
       return { text, capped, asked: true };
     }
     if (build.capped) {
       // The Builder spent the turn's step budget, so there is no budget left
       // for a takeover in this turn. Stop with the work that exists.
+      if (text.trim()) await this.appendThreadAnswer(live, text, builder.modelId);
+      await closeBuilder();
       this.notice(live, "warning", "The Builder hit the turn's step limit before finishing. Send a message to continue.");
       record.executedShape = "lead-guided";
       return { text, capped, asked: false };
@@ -1938,29 +2281,31 @@ export class HarnessHost {
     const review = async (answer: string, report: BuildReport): Promise<ReviewNotes | undefined> => {
       const reviewSystem = this.stageSystem(input.system, LEAD_REVIEW_INSTRUCTIONS);
       try {
-        const reviewRaw = await this.auxiliaryCall({
+        const reviewRaw = await this.leadTurn({
           live,
           signal,
           routeId: input.routeId,
           record,
-          role: "lead",
           stage: "review",
           model: lead,
           effort: decision.efforts.lead ?? "high",
           system: reviewSystem,
-          messages: [{ role: "user", content: [{ type: "text", text: leadReviewPrompt({ plan: validPlan, report, answer }) }] }],
+          user: leadReviewPrompt({ plan: validPlan, report, answer }),
         });
-        const notes = parseReviewNotes(reviewRaw);
+        const notes = parseReviewNotes(reviewRaw.text);
         if (!notes.ok) {
+          this.reason(record, "review:invalid");
           record.fallbacks.push("review:invalid");
           this.notice(live, "warning", "The Lead's review could not be read, so the build stands without review notes.");
           return undefined;
         }
         record.reviewCount += 1;
+        this.reason(record, `review:${notes.value.outcome}`);
         record.references.reviewNotes = this.emitHandoff(live, "orchestratorReview", this.reviewSummary(notes.value));
         return notes.value;
       } catch (error) {
         if (signal.aborted) throw error;
+        this.reason(record, "review:unavailable");
         record.fallbacks.push("review:unavailable");
         this.notice(live, "warning", `The Lead could not review the build: ${error instanceof Error ? error.message : String(error)}`);
         return undefined;
@@ -1975,13 +2320,16 @@ export class HarnessHost {
       if (notes?.outcome === "changes-required") {
         if (decision.repairBudget > 0 && remaining > 0) {
           try {
-            const repair = await stage({ role: "builder", stage: "repair", model: builder, effort: decision.efforts.builder ?? "highest", system: this.stageSystem(input.system, repairInstructions(validPlan, notes)), collect: observations, consult });
+            const repair = await stage({ role: "builder", stage: "repair", model: builder, effort: decision.efforts.builder ?? "highest", system: this.stageSystem(input.system, repairInstructions(validPlan, notes)), collect: observations, consult, history: builderHistory, questionTarget: "builder" });
             text = repair.text || text;
             if (repair.cancelled) {
+              if (text.trim()) await this.appendThreadAnswer(live, text, builder.modelId);
+              await closeBuilder();
               record.executedShape = "lead-guided";
               return { text, capped, asked: false };
             }
             if (repair.asked) {
+              builderOpen = true;
               record.executedShape = "lead-guided";
               return { text, capped, asked: true };
             }
@@ -1996,8 +2344,9 @@ export class HarnessHost {
               }
             }
           } catch (error) {
-            if (signal.aborted) throw error;
+            if (signal.aborted) { await closeBuilder(); throw error; }
             if (decision.builderFailure === "takeover") return takeOver(error instanceof Error ? error.message : String(error), text);
+            await closeBuilder();
             throw error;
           }
         } else {
@@ -2006,6 +2355,8 @@ export class HarnessHost {
       }
     }
 
+    if (text.trim()) await this.appendThreadAnswer(live, text, builder.modelId);
+    await closeBuilder();
     record.executedShape = "lead-guided";
     return { text, capped, asked: false };
   }
@@ -2022,7 +2373,7 @@ export class HarnessHost {
     effort: EffortTarget;
     system: SystemPrompt;
     messages: ChatMessage[];
-  }): Promise<string> {
+  }): Promise<{ text: string; message: AssistantMessage }> {
     const modelId = input.model.modelId;
     const { providerId, model } = splitModelId(modelId);
     const provider = resolveProvider(providerId, this.credentials);
@@ -2050,15 +2401,136 @@ export class HarnessHost {
       if (actual) row.effectiveEffort = actual;
       else delete row.effectiveEffort;
     }
-    return message.text;
+    return { text: message.text, message };
   }
 
   private stageSystem(base: SystemPrompt, addition: string): SystemPrompt {
     return { stable: base.stable, volatile: [base.volatile, addition].filter(Boolean).join("\n\n") };
   }
 
+  private lastAssistantModel(messages: readonly ChatMessage[]): string | undefined {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index];
+      if (message.role === "assistant" && message.modelId) return message.modelId;
+    }
+    return undefined;
+  }
+
+  /** Reset a role session when its model changed; provider-specific blocks must not cross models. */
+  private async ensureRoleSessions(live: Live) {
+    const settings = live.meta.orchestrator;
+    if (!settings) return;
+    const leadUsed = this.lastAssistantModel(live.leadMessages);
+    if (leadUsed && leadUsed !== settings.roles.lead.modelId) {
+      await this.resetLeadSession(live);
+      this.notice(live, "info", "The Lead model changed; its session starts fresh.");
+    }
+    if (live.builder) {
+      const builderUsed = this.lastAssistantModel(live.builder.messages);
+      if (builderUsed && builderUsed !== settings.roles.builder.modelId) {
+        await this.endBuilderSession(live);
+        this.notice(live, "info", "The Builder model changed; its plan session starts fresh.");
+      }
+    }
+  }
+
+  private async appendLeadMessage(live: Live, message: ChatMessage) {
+    live.leadMessages.push(message);
+    await this.store.append(live.meta.sessionId, [{ type: "leadMessage", message }]);
+    await this.trimLeadSession(live);
+  }
+
+  private async trimLeadSession(live: Live) {
+    const size = live.leadMessages.reduce((sum, message) => sum + messageWeight(message), 0);
+    if (live.leadMessages.length <= MAX_LEAD_SESSION_MESSAGES && size <= MAX_LEAD_SESSION_CHARS) return;
+    const keep = live.leadMessages.slice(-Math.floor(MAX_LEAD_SESSION_MESSAGES / 2));
+    const note: ChatMessage = { role: "user", content: [{ type: "text", text: "[Earlier Lead session compacted; keep the current plan and latest reports in mind.]" }] };
+    // Keep the same array: a read stage may be holding this reference while it appends.
+    live.leadMessages.splice(0, live.leadMessages.length, note, ...keep);
+    await this.store.append(live.meta.sessionId, [{ type: "leadReset" }, ...live.leadMessages.map((message) => ({ type: "leadMessage" as const, message }))]);
+  }
+
+  private async resetLeadSession(live: Live) {
+    if (!live.leadMessages.length) return;
+    live.leadMessages = [];
+    await this.store.append(live.meta.sessionId, [{ type: "leadReset" }]);
+  }
+
+  private async endBuilderSession(live: Live) {
+    const builder = live.builder;
+    if (!builder) return;
+    live.builder = undefined;
+    await this.store.append(live.meta.sessionId, [{ type: "builderEnd", planId: builder.planId }]).catch(() => {});
+  }
+
+  private async startBuilderSession(live: Live, planId: string, plan: OrchestratorPlan, seed: ChatMessage) {
+    if (live.builder) await this.endBuilderSession(live);
+    live.builder = { planId, plan, messages: [seed] };
+    await this.store.append(live.meta.sessionId, [{ type: "builderStart", planId, plan }, { type: "builderMessage", planId, message: seed }]);
+  }
+
+  private async appendBuilderMessage(live: Live, message: ChatMessage) {
+    if (!live.builder) return;
+    live.builder.messages.push(message);
+    await this.store.append(live.meta.sessionId, [{ type: "builderMessage", planId: live.builder.planId, message }]);
+  }
+
+  /** The thread stores only the neutral final answer, never the Builder's tool traffic. */
+  private async appendThreadAnswer(live: Live, text: string, modelId?: string) {
+    if (!text.trim()) return;
+    const message: ChatMessage = { role: "assistant", text, ...(modelId ? { modelId } : {}) };
+    live.messages.push(message);
+    await this.store.append(live.meta.sessionId, [{ type: "message", message }]);
+  }
+
+  private async leadTurn(input: {
+    live: Live;
+    signal: AbortSignal;
+    routeId: string;
+    record: RouteRecord;
+    stage: OrchestratorStage;
+    model: OrchestratorModel;
+    effort: EffortTarget;
+    system: SystemPrompt;
+    user: string;
+    images?: ImagePart[];
+  }): Promise<{ text: string; message: AssistantMessage }> {
+    await this.ensureRoleSessions(input.live);
+    const user: ChatMessage = { role: "user", content: [{ type: "text", text: input.user }, ...(input.images ?? [])] };
+    const result = await this.auxiliaryCall({
+      live: input.live,
+      signal: input.signal,
+      routeId: input.routeId,
+      record: input.record,
+      role: "lead",
+      stage: input.stage,
+      model: input.model,
+      effort: input.effort,
+      system: input.system,
+      messages: [...input.live.leadMessages, user],
+    });
+    await this.appendLeadMessage(input.live, user);
+    await this.appendLeadMessage(input.live, result.message);
+    return { text: result.message.text, message: result.message };
+  }
+
+  /**
+   * A model cannot see its own routing, so an identity question is answered from
+   * its training prior — a distilled model may name its teacher. The volatile
+   * half keeps the cached prefix intact, and the name is per call so a routed
+   * turn names the model that actually serves that stage.
+   */
+  private servingSystem(base: SystemPrompt, model: string, provider: ResolvedProvider): SystemPrompt {
+    return this.stageSystem(base, `Serving model: ${model} (provider: ${provider.name}). If the user asks about your identity, answer with this and do not claim another vendor's model or a training cutoff.`);
+  }
+
   private notice(live: Live, level: "info" | "warning", message: string) {
     if (!live.muted) this.emit("agentNotice", { sessionId: live.meta.sessionId, level, message });
+  }
+
+  /** Decision-grade route metadata: one copy of each reason code. */
+  private reason(record: RouteRecord, code: string) {
+    if (!record.reasonCodes.includes(code)) record.reasonCodes.push(code);
   }
 
   private stageCapNotice(live: Live, cap: number) {
@@ -2072,6 +2544,8 @@ export class HarnessHost {
       const delta = lineDelta(observation.oldText ?? "", observation.newText ?? "");
       const current = collect.files.get(observation.path) ?? { added: 0, removed: 0 };
       collect.files.set(observation.path, { added: current.added + delta.added, removed: current.removed + delta.removed });
+      const patch = linePatch(observation.path, observation.oldText ?? "", observation.newText ?? "");
+      if (patch) collect.patches.push(patch);
     }
     if (observation.command && observation.exitCode !== undefined) {
       collect.checks.push({
@@ -2090,12 +2564,14 @@ export class HarnessHost {
       removed += delta.removed;
     }
     const files = observations.files.size;
+    const patch = observations.patches.join("\n");
+    const diff = patch.length <= MAX_REPORT_DIFF_CHARS ? patch : `${patch.slice(0, MAX_REPORT_DIFF_CHARS - 100)}\n… (diff shortened)`;
     const report: BuildReport = {
       kind: "build-report",
       version: 1,
       summary: (answer.trim() || "The Builder finished without a final summary.").slice(0, 4_000),
       diffStat: files ? `${files} file${files === 1 ? "" : "s"} changed, +${added}/-${removed}` : "No file changes were recorded.",
-      diff: "",
+      diff,
       checks: observations.checks,
       deviations: [],
       openQuestions: [],
@@ -2112,8 +2588,18 @@ export class HarnessHost {
     return itemId;
   }
 
-  private planSummary(plan: OrchestratorPlan): string {
-    const lines = [
+  private validateScoutPack(pack: ContextPack, toolsUsed: readonly string[]): string[] {
+    const errors: string[] = [];
+    if (!toolsUsed.length) errors.push("The scout must read at least one file.");
+    const serialized = JSON.stringify(pack);
+    if (serialized.length > this.tuning.scout.maxPackChars) errors.push(`The context pack is too large; keep it under ${this.tuning.scout.maxPackChars} characters.`);
+    if (pack.excerpts.length > 20) errors.push("Use at most 20 excerpts.");
+    const long = pack.excerpts.find((excerpt) => excerpt.text.length > this.tuning.scout.maxExcerptChars);
+    if (long) errors.push(`The excerpt for ${long.path} is too long; keep each under ${this.tuning.scout.maxExcerptChars} characters.`);
+    return errors;
+  }
+
+  private planSummary(plan: OrchestratorPlan): string {    const lines = [
       `Goal: ${plan.goal}`,
       `Acceptance: ${plan.acceptanceCriteria.join("; ")}`,
       `Files: ${plan.fileTargets.map((target) => `${target.path}${target.intent ? ` — ${target.intent}` : ""}`).join("; ")}`,
@@ -2142,6 +2628,7 @@ export class HarnessHost {
 
   /** One model call, streamed into reasoning and message items, with retries for transient failures. */
   private async callModel(live: Live, provider: ResolvedProvider, modelId: string, model: string, system: SystemPrompt, tools: readonly ToolSchema[], signal: AbortSignal, window: number | null, listedReasoning?: boolean, listedEfforts?: readonly string[], route?: CallRoute, options: CallOptions = {}): Promise<{ message: AssistantMessage; stopReason: string; effort?: string }> {
+    const serving = this.servingSystem(system, model, provider);
     let effort = route ? route.effort : live.meta.effort && (live.meta.effort !== "none" || SENDS_NONE.has(provider.id)) ? live.meta.effort : undefined;
     const tiers = effortTiers(provider.id, model, provider.wire, listedReasoning, listedEfforts) as string[];
     if (effort && !tiers.includes(effort)) effort = undefined;
@@ -2152,7 +2639,7 @@ export class HarnessHost {
     // The window is only known for catalog and family-known models. Unknown means no fitting: current behaviour, unchanged.
     let budget = window ? contextBudget(window) : null;
     // System prompt and tool schemas never change within a call, so their cost is measured once.
-    let fixedTokens = budget ? estimateRequestTokens({ system, messages: [], tools }) : 0;
+    let fixedTokens = budget ? estimateRequestTokens({ system: serving, messages: [], tools }) : 0;
     let providerOverflow = false;
     // One tighter refit after a reported overflow. A second rejection stands.
     let overflowRetried = false;
@@ -2191,7 +2678,7 @@ export class HarnessHost {
         });
       }
       try {
-        for await (const event of streamChat({ provider, modelId, system, messages: fitted.messages, tools, effort, listedReasoning, listedEfforts, signal, timeouts: { idleMs: this.limits.idleMs, firstEventMs: this.limits.firstEventMs }, fetchImpl: this.fetchImpl })) {
+        for await (const event of streamChat({ provider, modelId, system: serving, messages: fitted.messages, tools, effort, listedReasoning, listedEfforts, signal, timeouts: { idleMs: this.limits.idleMs, firstEventMs: this.limits.firstEventMs }, fetchImpl: this.fetchImpl })) {
           if (event.type === "text" || event.type === "reasoning") {
             if (options.emitText === false) continue;
             const kind = event.type;
@@ -2420,7 +2907,7 @@ export class HarnessHost {
   }
 
   /** Record that a turn ended asking the user. Only the first ask in a batch stands. */
-  private async parkQuestion(live: Live, turnId: string, results: CallResult[]) {
+  private async parkQuestion(live: Live, turnId: string, results: CallResult[], target?: { builder?: { planId: string } }) {
     const asked = results.findIndex((result) => result.question);
     const refusal = "Only one set of questions can wait at a time. Ask them together in one ask_user call.";
     for (const [index, result] of results.entries()) {
@@ -2438,6 +2925,7 @@ export class HarnessHost {
       item: ask.item ?? {},
       questions: ask.question?.questions ?? [],
       ...(ask.question?.intent ? { intent: ask.question.intent } : {}),
+      ...(target?.builder ? { target: "builder" as const, planId: target.builder.planId } : {}),
       results: results.map(({ id, name, output, isError }) => ({ id, name, output, ...(isError ? { isError } : {}) })),
     };
     live.question = pending;
@@ -2456,13 +2944,25 @@ export class HarnessHost {
     if (pending.intent?.kind === "planReview" && live.pendingPlan) {
       // Approval hands the validated plan to the next Build turn; any other
       // answer drops it so the Lead plans again.
-      if (settled.leavePlanMode) live.approvedPlan = { plan: live.pendingPlan.plan, ...(live.pendingPlan.itemId ? { itemId: live.pendingPlan.itemId } : {}) };
+      if (settled.leavePlanMode) {
+        live.approvedPlan = { plan: live.pendingPlan.plan, ...(live.pendingPlan.itemId ? { itemId: live.pendingPlan.itemId } : {}) };
+        await this.appendLeadMessage(live, { role: "user", content: [{ type: "text", text: "The user approved the plan. Carry it out." }] });
+      }
       live.pendingPlan = undefined;
     }
     const message: ChatMessage = { role: "tool", results: pending.results.map((result) => (result.id === pending.callId ? { id: result.id, name: result.name, output: settled.output } : result)) };
     live.question = undefined;
-    live.messages.push(message);
-    await this.store.append(live.meta.sessionId, [{ type: "message", message }, { type: "questionSettled", userInputId: pending.userInputId }]);
+    if (pending.target === "builder") {
+      // The Builder continues in its own session; the thread keeps only a
+      // neutral note so a future plan can see what was decided.
+      if (live.builder && pending.planId === live.builder.planId) await this.appendBuilderMessage(live, message);
+      const neutral: ChatMessage = { role: "user", content: [{ type: "text", text: `The user answered the Builder's question: ${settled.summary}` }] };
+      live.messages.push(neutral);
+      await this.store.append(live.meta.sessionId, [{ type: "message", message: neutral }, { type: "questionSettled", userInputId: pending.userInputId }]);
+    } else {
+      live.messages.push(message);
+      await this.store.append(live.meta.sessionId, [{ type: "message", message }, { type: "questionSettled", userInputId: pending.userInputId }]);
+    }
     this.emitItem(live, { ...pending.item, status: "completed", visibleOutput: settled.summary }, true);
     this.emit("userInputs", { sessionId: live.meta.sessionId, requests: [] });
     return settled;
@@ -2593,6 +3093,92 @@ export class HarnessHost {
       .finally(() => { this.probeRuns.delete(key); });
     this.probeRuns.set(key, run);
     return run;
+  }
+
+  /**
+   * A read-tool capability check for a read-enabled role. It is internal (not a
+   * Settings probe): the caller falls back to no reads when it fails, never to
+   * another model. The result is cached for this host's lifetime.
+   */
+  async orchestratorReadProbe(options: { modelId: string; timeoutMs?: number; signal?: AbortSignal }): Promise<{ ok: boolean; detail: string }> {
+    const modelId = options.modelId.trim();
+    if (!modelId) throw new Error("A model is required for the read probe.");
+    const cached = this.readProbes.get(modelId);
+    if (cached) return cached;
+    const run = this.runReadProbe(modelId, options.timeoutMs, options.signal);
+    this.readProbes.set(modelId, run);
+    void run.then(() => { if (options.signal?.aborted) this.readProbes.delete(modelId); });
+    return run;
+  }
+
+  private async runReadProbe(modelId: string, timeoutMs?: number, signal?: AbortSignal): Promise<{ ok: boolean; detail: string }> {
+    const { providerId } = splitModelId(modelId);
+    const provider = resolveProvider(providerId, this.credentials);
+    if (!provider) return { ok: false, detail: `${providerSpec(providerId)?.name ?? providerId} has no key.` };
+    const budget = Math.min(120_000, Math.max(5_000, timeoutMs ?? 90_000));
+    const controller = new AbortController();
+    const forwardAbort = () => controller.abort();
+    if (signal) {
+      if (signal.aborted) controller.abort();
+      else signal.addEventListener("abort", forwardAbort, { once: true });
+    }
+    const timer = setTimeout(() => controller.abort(), budget);
+    timer.unref?.();
+    const scratch = await mkdtemp(join(tmpdir(), "glitter-read-probe-"));
+    const definitions = BUILTIN_TOOLS.filter((definition) => READ_ONLY_TOOL_NAMES.has(definition.schema.name));
+    const messages: ChatMessage[] = [{ role: "user", content: [{ type: "text", text: `Read ./${PROBE_FILE} with the read_file tool. Do not use any other tool. Reply with exactly: ${PROBE_DONE}` }] }];
+    let readProbeFile = false;
+    try {
+      await writeFile(join(scratch, PROBE_FILE), PROBE_CONTENT, "utf8");
+      for (let step = 0; step < 3; step += 1) {
+        if (controller.signal.aborted) return { ok: false, detail: "The read probe was interrupted." };
+        let reply: AssistantMessage | undefined;
+        for await (const event of streamChat({
+          provider,
+          modelId,
+          system: { stable: "You are running a fixed read-only capability check. Follow the instructions exactly, do not ask questions, and do not call tools that were not provided.", volatile: "" },
+          messages,
+          tools: definitions.map((definition) => definition.schema),
+          signal: controller.signal,
+          timeouts: { idleMs: this.limits.idleMs, firstEventMs: this.limits.firstEventMs },
+          fetchImpl: this.fetchImpl,
+        })) {
+          if (event.type === "done") reply = event.message;
+        }
+        if (!reply) return { ok: false, detail: `${provider.name} ended the read probe without a reply.` };
+        messages.push(reply);
+        if (!reply.toolCalls?.length) {
+          const ok = readProbeFile && reply.text.trim() === PROBE_DONE;
+          return { ok, detail: ok ? "Read tool use verified." : "The read probe must read the probe file and reply probe-ok." };
+        }
+        const results: Array<{ id: string; name: string; output: string; isError?: boolean }> = [];
+        for (const call of reply.toolCalls) {
+          const definition = definitions.find((tool) => tool.schema.name === call.name);
+          if (!definition) {
+            results.push({ id: call.id, name: call.name, output: `Unknown tool: ${call.name}. Only read_file, list_files and grep are available.`, isError: true });
+            continue;
+          }
+          const prepared = await prepareTool(definition, scratch, call.input);
+          if (prepared.error) {
+            results.push({ id: call.id, name: call.name, output: prepared.error, isError: true });
+            continue;
+          }
+          const outcome = await executeTool(definition, scratch, prepared.input, controller.signal);
+          const path = typeof call.input.path === "string" ? call.input.path.replace(/^\.\//, "") : "";
+          if (call.name === "read_file" && path === PROBE_FILE && !outcome.isError && outcome.output.includes(PROBE_CONTENT)) readProbeFile = true;
+          results.push({ id: call.id, name: call.name, output: outcome.output, ...(outcome.isError ? { isError: true } : {}) });
+        }
+        messages.push({ role: "tool", results });
+      }
+      return { ok: false, detail: "The read probe did not finish within three model turns." };
+    } catch (error) {
+      if (controller.signal.aborted) return { ok: false, detail: `The read probe did not finish within ${Math.round(budget / 1000)} seconds.` };
+      return { ok: false, detail: error instanceof Error ? error.message.slice(0, 500) : "The read probe failed." };
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", forwardAbort);
+      await rm(scratch, { recursive: true, force: true }).catch(() => {});
+    }
   }
 
   private async runOrchestratorProbe(target: { role: ProbeRole; providerId: string; modelId: string }, timeoutMs?: number, signal?: AbortSignal): Promise<ProbeResult> {

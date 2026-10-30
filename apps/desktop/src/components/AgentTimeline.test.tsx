@@ -426,6 +426,7 @@ describe("AgentTimeline", () => {
       routes: {
         t1: route({
           stages: [
+            { stage: "scout", providerId: "anthropic", modelId: "anthropic/claude-haiku-4-5" },
             { stage: "lead-plan", providerId: "anthropic", modelId: "anthropic/claude-opus-4-1" },
             { stage: "builder", providerId: "deepseek", modelId: "deepseek/deepseek-v4" },
             { stage: "consult", providerId: "anthropic", modelId: "anthropic/claude-opus-4-1" },
@@ -437,11 +438,25 @@ describe("AgentTimeline", () => {
       },
     }));
     const facts = screen.getByLabelText("Route details");
+    expect(facts).toHaveTextContent("Scout · claude-haiku-4-5");
     expect(facts).toHaveTextContent("Lead plan · claude-opus-4-1 → Builder · deepseek-v4");
     expect(facts).toHaveTextContent("Builder asked the Lead · 1 of 2");
     expect(facts).toHaveTextContent("Reviewed by claude-opus-4-1");
     expect(screen.getByText("Lead plan")).toBeInTheDocument();
     expect(screen.getByText(/Make it fit/)).toBeInTheDocument();
+  });
+
+  it("shows a Scout context pack as a handoff step", () => {
+    mount(thread({
+      lastTurnId: "t1",
+      lastOutcome: "completed",
+      items: [
+        item({ itemId: "pack1", kind: "orchestratorContextPack", status: "completed", turnId: "t1", text: "1 file · 1 excerpt\n- hello.txt" }),
+        item({ itemId: "a1", kind: "agentMessage", turnId: "t1", text: "done" }),
+      ],
+      routes: { t1: route({ stages: [{ stage: "scout", providerId: "anthropic", modelId: "anthropic/claude-haiku-4-5" }] }) },
+    }));
+    expect(screen.getByText("Context pack")).toBeInTheDocument();
   });
 
   it("marks a floor that raised the per-message shape, and names what was asked for", () => {

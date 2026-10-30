@@ -29,7 +29,8 @@
     "check:contrast": "node scripts/check-contrast.mjs",
     "verify": "npm run check:versions && npm run typecheck && npm test && npm run test:ui && npm run check:a11y && npm run check:contrast && npm audit --audit-level=high && npm run check:notices && npm run build:bridge && npm run build:ui && node scripts/check-chunks.mjs && npm run build:website && npm run test:native",
     "clean": "node -e \"for (const d of ['apps/desktop/dist','apps/website/dist','packages/glitter-bridge/dist']) require('fs').rmSync(d, { recursive: true, force: true })\"",
-    "icons": "node scripts/generate-icons.mjs"
+    "icons": "node scripts/generate-icons.mjs",
+    "eval:orchestrator": "node evals/orchestrator/run.mjs"
   },
   "engines": {
     "node": "^22.22.2 || ^24.15.0 || >=26.0.0"
