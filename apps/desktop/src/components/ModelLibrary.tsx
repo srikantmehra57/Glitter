@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Activity, Check, ChevronDown, KeyRound, LoaderCircle, Search, TriangleAlert, X } from "lucide-react";
 import { describeError } from "../lib/errors";
+import { modelPriceParts } from "../lib/cost";
 import { humanizeModelLabel } from "../lib/format";
 import { modelVisibilityKey, withModelsHidden } from "../lib/modelVisibility";
 import { providerIds, providerName, type ProviderEntry } from "../lib/providers";
@@ -170,7 +171,8 @@ export function ModelLibrary({ agents, customProviders: customs = [], hidden, on
                     const off = isHidden(group.agentId, model);
                     const name = humanizeModelLabel(model.modelId, model.displayLabel);
                     const test = tests[key];
-                    const meta = [contextLabel(model.contextLimit), model.cost && (Number(model.cost.input) || Number(model.cost.output)) ? `$${model.cost.input} / $${model.cost.output} per 1M` : null].filter(Boolean).join(" · ");
+                    const price = modelPriceParts(model.cost);
+                    const meta = [contextLabel(model.contextLimit), price ? `${price[0]} / ${price[1]} per 1M` : null].filter(Boolean).join(" · ");
                     return (
                       <li key={key} className={off ? "off" : ""}>
                         <ModelIcon modelId={model.modelId} providerId={model.providerId} size={20} hostName={providerName(model.providerId, customs)} fallback={<AgentMark id={group.agentId} size={20} />} />

@@ -387,7 +387,7 @@ export type OrchestratorRoute = {
   references: { plan?: string; contextPack?: string; buildReport?: string; reviewNotes?: string };
 };
 
-export type Model = { modelId: string; displayLabel?: string; providerId?: string; isActive?: boolean; isDefault?: boolean; unavailable?: boolean; /** Named by a thread or the saved default, but absent from the agent's catalog. */ unlisted?: boolean; description?: string | null; contextLimit?: number | null; releaseDate?: string | null; cost?: { input: string; output: string; cached?: string; currency?: string | null } | null; reasoningEfforts?: ReasoningEffort[]; defaultReasoningEffort?: ReasoningEffort; effortSource?: "host" | "vocabulary"; /** Cline's current free promotion. Absent for other agents. */ free?: boolean };
+export type Model = { modelId: string; displayLabel?: string; providerId?: string; isActive?: boolean; isDefault?: boolean; unavailable?: boolean; /** Named by a thread or the saved default, but absent from the agent's catalog. */ unlisted?: boolean; description?: string | null; contextLimit?: number | null; releaseDate?: string | null; cost?: { input?: string; output?: string; cached?: string; cacheWrite?: string; currency?: string | null } | null; reasoningEfforts?: ReasoningEffort[]; defaultReasoningEffort?: ReasoningEffort; effortSource?: "host" | "vocabulary"; /** Cline's current free promotion. Absent for other agents. */ free?: boolean };
 export type SessionMetadata = { sessionId: string; name?: string | null; title?: string | null; workspaceRoot?: string | null; updatedAt?: string; status?: string; activeTurnId?: string | null; modelId?: string | null; providerId?: string | null; approvalMode?: { mode: ApprovalMode } };
 export type SessionOpening = { sessionId: string; alreadyOpen?: boolean; userInputs?: UserInputRequest[]; opening?: { result: { session: SessionMetadata } } };
 
@@ -516,6 +516,9 @@ export type ModelCall = {
   inputTokens: number;
   /** The part of the input read from or written to a provider's prompt cache. */
   cachedTokens: number;
+  /** A provider-reported breakdown. Absent on older or other-agent calls. */
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
   outputTokens: number;
   /** The provider's own finish reason: `end_turn`, `tool_use`, `max_tokens`, `stop`. */
   stopReason?: string;
@@ -844,7 +847,7 @@ export const APPROVAL_DESCRIPTIONS: Record<ApprovalMode, string> = {
   denyUnmatched: "Reads files. Changes nothing.",
   promptUnmatched: "Edits run, commands ask.",
   onRequest: "Edits run, commands ask.",
-  guarded: "Risky commands still ask.",
+  guarded: "Commands may read outside the workspace.",
   allowAll: "No approval prompts.",
 };
 

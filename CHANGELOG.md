@@ -12,6 +12,30 @@ licence terms.
 
 ### Fixed
 
+- **Evaluation reports preserve cache accounting and identify their source.**
+  Orchestrator comparisons price cache reads and writes separately and mark
+  unknown cache charges as partial. Reports retain the cache breakdown, role
+  assignments, effort levels, source revision and source/corpus hashes.
+  Fixtures use an empty personal configuration so local instructions, skills
+  and MCP servers cannot change their setup. Rate limits, billing blocks and
+  credential failures now stop the batch, preserve completed evidence and mark
+  remaining cases skipped with the reason; comparisons display error counts.
+- **Plan and Ask protect shell permissions.** The built-in agent no longer
+  assumes shell commands are safe from their names: Ask requests approval in
+  the built-in agent and for commands reported by Muse or ACP agents. Plan
+  refuses shell and MCP calls and does not start MCP servers for the turn.
+  Thread grants no longer let unrelated commands or redirects ride along.
+- **Incomplete replies and summaries stay incomplete.** Provider context-limit
+  stops cannot execute truncated tool calls or replace a history with a partial
+  summary. A cut-off final reply is reported as incomplete.
+- **Thread recovery preserves work.** Compaction budgets recent progress after
+  shortening a long opening request and commits the summary before changing the
+  live history. Missing or damaged session indexes now stop with a recovery
+  error instead of hiding logs and overwriting the index.
+- **Model information and estimates retain unknowns.** Listed input limits
+  are honoured; unknown prices no longer become free output. Cache reads and
+  writes are counted separately, and an unpriced or ambiguous cache leg makes
+  an estimate partial. Approval and extension copy now matches the decision.
 - **Grok threads list newly released models.** An open Grok session names only
   the models the CLI knew when it started, so a newer release (Grok 4.7 in an
   older thread) never reached the picker. The picker now takes the live catalog
@@ -67,6 +91,19 @@ licence terms.
   instead of falling through to Muse and leaving the tool call waiting.
 
 ### Added
+
+- **Context compaction for the built-in agent.** Long histories can be
+  summarized automatically or with `/compact` and the context card. The
+  latest request and its images survive compaction and thread reopening; the
+  full transcript stays available. Pending questions and plans are protected,
+  and a failed or cancelled summary leaves model history intact.
+- **The built-in agent can fetch and search the web.** `web_fetch` reads one
+  http(s) page as bounded, paged text, and `web_search` is offered only once a
+  search key is saved. Settings → Providers gains a **Web search** card for
+  Tavily, Brave Search and Exa; the first key saved is the one used, and a key
+  only ever goes to its own provider. Both meet the permission policy as web
+  calls — a fetch asks per origin in Ask and Auto, a search asks in Ask — and
+  every page is labelled untrusted evidence, never instructions.
 
 - **Settings gains an Orchestrator page.** Assign a Lead, Builder and Small-task
   model from any connected provider, choose a cost, balanced or output goal, and

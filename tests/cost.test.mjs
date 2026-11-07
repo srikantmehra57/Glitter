@@ -14,7 +14,18 @@ async function bundle(entry) {
   return import(pathToFileURL(outfile).href);
 }
 
-const { estimateCost, formatCost } = await bundle('apps/desktop/src/lib/cost.ts');
+const { estimateCost, estimateCallCost, formatCost } = await bundle('apps/desktop/src/lib/cost.ts');
+
+test('partial and ambiguous catalog rates never make unknown usage free', () => {
+  const usage = { inputTokens: 1_000_000, cachedTokens: 0, outputTokens: 1_000_000 };
+  assert.deepEqual(estimateCallCost(usage, { input: '3', currency: 'USD' }), { amount: 3, currency: 'USD', partial: true });
+  assert.deepEqual(estimateCallCost(usage, { input: '0', output: '0', currency: 'USD' }), { amount: 0, currency: 'USD', partial: false });
+  const cached = { inputTokens: 1_000_000, cachedTokens: 600_000, cacheReadTokens: 200_000, cacheWriteTokens: 400_000, outputTokens: 1_000_000 };
+  assert.deepEqual(estimateCallCost(cached, { input: '3', output: '15', cached: '0.3', cacheWrite: '3.75' }), { amount: 17.76, currency: 'USD', partial: false });
+  assert.deepEqual(estimateCallCost(cached, { input: '3', output: '15', cached: '0.3' }), { amount: 16.26, currency: 'USD', partial: true });
+  const legacy = { inputTokens: 1_000_000, cachedTokens: 600_000, outputTokens: 1_000_000 };
+  assert.deepEqual(estimateCallCost(legacy, { input: '3', output: '15', cached: '0.3' }), { amount: 16.2, currency: 'USD', partial: true });
+});
 
 test('catalog rates price tokens per one million', () => {
   assert.equal(estimateCost({ promptTokens: 1_000_000, outputTokens: 1_000_000 }, { input: '1.25', output: '4.25', currency: 'USD' }), 5.5);

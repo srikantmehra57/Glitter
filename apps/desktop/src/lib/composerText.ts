@@ -208,11 +208,11 @@ export const SLASH_COMMANDS: SlashCommand[] = [
  * exception: it drafts a prompt for the review scope in view.
  * `needs` says what has to be open for the command to mean anything.
  */
-export type BuiltinCommand = { name: string; hint: string; needs?: "thread" | "muse" | "museThread" | "liveMuseThread" };
+export type BuiltinCommand = { name: string; hint: string; needs?: "thread" | "muse" | "museThread" | "liveMuseThread" | "liveCompactableThread" };
 
 export const BUILTIN_COMMANDS: BuiltinCommand[] = [
   { name: "new", hint: "Start a new thread" },
-  { name: "compact", hint: "Compact this thread's context", needs: "liveMuseThread" },
+  { name: "compact", hint: "Compact this thread's context", needs: "liveCompactableThread" },
   { name: "fork", hint: "Fork this thread", needs: "museThread" },
   { name: "rename", hint: "Rename this thread", needs: "thread" },
   { name: "model", hint: "Choose a model" },
@@ -227,8 +227,10 @@ export const BUILTIN_COMMANDS: BuiltinCommand[] = [
 ];
 
 /** The built-ins that apply to what is open. Commands that could do nothing are left out, not disabled. */
-export function availableBuiltins(context: { thread: boolean; muse: boolean; live: boolean }): BuiltinCommand[] {
+export function availableBuiltins(context: { thread: boolean; muse: boolean; live: boolean; harness?: boolean }): BuiltinCommand[] {
   return BUILTIN_COMMANDS.filter((command) => {
+    // Muse compacts in its CLI; the built-in agent summarizes its own history.
+    if (command.needs === "liveCompactableThread") return context.thread && (context.muse || context.harness === true) && context.live;
     if (command.needs === "thread") return context.thread;
     if (command.needs === "muse") return context.muse;
     if (command.needs === "museThread") return context.thread && context.muse;

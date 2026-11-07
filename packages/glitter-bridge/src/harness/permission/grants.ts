@@ -1,5 +1,4 @@
-import { isReadOnlyCommand } from "./classify.js";
-import { commandsOf, parseScript, programName, writesFile, type SimpleCommand } from "./shell.js";
+import { commandsOf, parseScript, programName, type SimpleCommand } from "./shell.js";
 
 /**
  * What a call acts on, and the thread grants that can cover it. A grant names
@@ -11,23 +10,31 @@ import { commandsOf, parseScript, programName, writesFile, type SimpleCommand } 
  */
 
 export type Subject =
-  | { kind: "command"; command: string }
+  /** `network` marks a command that asked for internet access; the shell runs offline otherwise. */
+  | { kind: "command"; command: string; network?: boolean }
   /** Workspace-relative, `/`-separated. */
   | { kind: "path"; path: string }
   /** One tool on one external MCP server. */
   | { kind: "mcp"; server: string; tool: string }
   /** Read-only browser work, or control on the current/target web origin. */
   | { kind: "browser"; control: boolean; origin: string }
+  /** A web fetch from one origin, or (`search`) a query to the configured search provider. */
+  | { kind: "web"; origin: string; search?: boolean }
   | { kind: "none" };
 
 export type Grant =
-  | { kind: "command"; match: "exact"; command: string }
+  /** `network` extends an exact grant to the internet access that command asked for. */
+  | { kind: "command"; match: "exact"; command: string; network?: boolean }
   | { kind: "command"; match: "prefix"; argv: readonly string[] }
   /** `folder` with an empty path is the whole workspace. */
   | { kind: "path"; match: "file" | "folder"; path: string }
   | { kind: "mcp"; match: "tool"; server: string; tool: string }
   | { kind: "mcp"; match: "server"; server: string }
-  | { kind: "browser"; origin: string };
+  | { kind: "browser"; origin: string }
+  /** Internet access for any command the thread already runs; the command itself still needs its own permission. */
+  | { kind: "network" }
+  /** Web fetches from one origin, or `search` for the search provider. */
+  | { kind: "web"; origin: string; search?: boolean };
 
 export type GrantScope = {
   choiceId: string;
@@ -47,9 +54,9 @@ const SUBCOMMAND = /^[A-Za-z][A-Za-z0-9:_-]*$/;
 const normalize = (command: string) => command.trim();
 const code = (text: string) => `\`${text}\``;
 
-/** A command a prefix grant may cover: plain words only, no assignments and no file writes. */
+/** A command a prefix grant may cover: plain words only, with no redirections. */
 function plain(command: SimpleCommand): boolean {
-  return !command.dynamic && !command.assignments.length && !command.globbed.length && !command.redirects.some(writesFile);
+  return !command.dynamic && !command.assignments.length && !command.globbed.length && !command.redirects.length;
 }
 
 function prefixCovers(prefix: readonly string[], argv: readonly string[]): boolean {
@@ -58,8 +65,8 @@ function prefixCovers(prefix: readonly string[], argv: readonly string[]): boole
 
 /**
  * Whether the grants cover this subject. A prefix grant covers a script only
- * when every command in it is read-only or starts with a granted prefix, so
- * `npm test && curl …` is not covered by a grant for `npm test`.
+ * when every command in it starts with a granted prefix, so an apparently
+ * read-only helper cannot ride along with an unrelated grant.
  */
 export function covers(grants: readonly Grant[], subject: Subject): boolean {
   if (subject.kind === "none") return false;
@@ -72,6 +79,9 @@ export function covers(grants: readonly Grant[], subject: Subject): boolean {
   if (subject.kind === "browser") {
     return Boolean(subject.origin) && grants.some((grant) => grant.kind === "browser" && grant.origin === subject.origin);
   }
+  if (subject.kind === "web") {
+    return grants.some((grant) => grant.kind === "web" && (subject.search ? grant.search === true : !grant.search && grant.origin === subject.origin));
+  }
   const command = normalize(subject.command);
   if (grants.some((grant) => grant.kind === "command" && grant.match === "exact" && grant.command === command)) return true;
   const prefixes = grants.flatMap((grant) => (grant.kind === "command" && grant.match === "prefix" ? [grant.argv] : []));
@@ -80,11 +90,25 @@ export function covers(grants: readonly Grant[], subject: Subject): boolean {
   if (!script) return false;
   let granted = false;
   for (const part of commandsOf(script)) {
-    if (isReadOnlyCommand(part)) continue;
     if (!plain(part) || !prefixes.some((prefix) => prefixCovers(prefix, part.argv))) return false;
     granted = true;
   }
   return granted;
+}
+
+/** Whether the thread lets this command go online: an exact grant that included the network, or the thread-wide network grant. */
+export function coversNetwork(grants: readonly Grant[], subject: Subject): boolean {
+  if (subject.kind !== "command" || !subject.network) return true;
+  const command = normalize(subject.command);
+  return grants.some((grant) => grant.kind === "network" || (grant.kind === "command" && grant.match === "exact" && grant.network === true && grant.command === command));
+}
+
+/** The grants to offer for a command that asked for the network. `commandAllowed` says the command alone would already run. */
+export function networkScopes(subject: Extract<Subject, { kind: "command" }>, commandAllowed: boolean): GrantScope[] {
+  const command = normalize(subject.command);
+  const scopes: GrantScope[] = [{ choiceId: "allow-session", label: "Allow this command, online, in this thread", scopeLabel: "This exact command, online", grant: { kind: "command", match: "exact", command, network: true } }];
+  if (commandAllowed) scopes.push({ choiceId: "allow-session-network", label: "Allow internet access for commands in this thread", scopeLabel: "Internet for any command", grant: { kind: "network" } });
+  return scopes;
 }
 
 /** The thread grants to offer for a subject, narrowest first. */
@@ -95,6 +119,10 @@ export function scopesFor(subject: Subject): GrantScope[] {
       { choiceId: "allow-session", label: `Allow ${code(subject.tool)} on ${code(subject.server)} in this thread`, scopeLabel: "This tool", grant: { kind: "mcp", match: "tool", server: subject.server, tool: subject.tool } },
       { choiceId: "allow-session-server", label: `Allow every tool on ${code(subject.server)} in this thread`, scopeLabel: `Any tool on ${subject.server}`, grant: { kind: "mcp", match: "server", server: subject.server } },
     ];
+  }
+  if (subject.kind === "web") {
+    if (subject.search) return [{ choiceId: "allow-session", label: "Allow web searches in this thread", scopeLabel: "Web search", grant: { kind: "web", origin: "", search: true } }];
+    return [{ choiceId: "allow-session", label: `Allow fetching from ${code(subject.origin)} in this thread`, scopeLabel: `Fetches from ${subject.origin}`, grant: { kind: "web", origin: subject.origin } }];
   }
   if (subject.kind === "browser") {
     if (!subject.origin) return [];
@@ -111,10 +139,11 @@ export function scopesFor(subject: Subject): GrantScope[] {
   const scopes: GrantScope[] = [{ choiceId: "allow-session", label: "Allow this command in this thread", scopeLabel: "This exact command", grant: { kind: "command", match: "exact", command } }];
   const script = parseScript(command);
   if (!script) return scopes;
-  // A prefix is offered only when one command in the script needs approval: the rest must be read-only.
-  const needs = commandsOf(script).filter((part) => !isReadOnlyCommand(part));
-  if (needs.length !== 1 || !plain(needs[0])) return scopes;
-  const argv = needs[0].argv;
+  // Compound scripts get an exact grant: any part may execute a helper or read
+  // outside the workspace even when its command name looks read-only.
+  const parts = commandsOf(script);
+  if (parts.length !== 1 || !plain(parts[0])) return scopes;
+  const argv = parts[0].argv;
   const program = programName(argv[0]);
   if (WRAPPERS.has(program)) return scopes;
   if (argv.length > 2 && SUBCOMMAND.test(argv[1])) {

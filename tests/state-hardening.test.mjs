@@ -1440,6 +1440,22 @@ test('a worktree is removed with its last thread, not while a fork still uses it
   globalThis.removeWorktree = undefined;
 });
 
+test('a built-in session listing error is visible and does not remove existing threads', async () => {
+  const store = await frontendStore(); workspace(store);
+  store.setState({
+    agents: [{ id: 'harness', name: 'Harness', protocol: 'harness', found: true, authenticated: true }],
+    threads: [{ sessionId: 'existing', workspacePath: '/repo', title: 'Existing', status: 'idle', items: [] }],
+  });
+  globalThis.readGit = () => git([]);
+  globalThis.storeBridge = async (method) => {
+    if (method === 'listSessions') throw new Error('The session index is corrupt. The logs have not been changed.');
+    return {};
+  };
+  await store.getState().selectWorkspace('w');
+  assert.match(store.getState().error, /Could not load built-in agent threads.*session index is corrupt/i);
+  assert.ok(store.getState().threads.some((thread) => thread.sessionId === 'existing'));
+});
+
 test('worktree threads are listed again through their own grant after a relaunch', async () => {
   const store = await frontendStore(); workspace(store); musePresent(store);
   const worktree = { grantId: 'wt1', path: '/worktrees/one', branch: 'muse/one', base: 'main', workspaceId: 'w' };

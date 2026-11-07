@@ -68,7 +68,7 @@ export function ExtensionsStore() {
       const where = entry.scope === "workspace" ? "this workspace" : entry.scope === "mixed" ? "this workspace and your home folder" : "your home folder";
       const ok = await s.confirm({
         title: `Install ${entry.name}?`,
-        body: `This adds ${entry.servers.length === 1 ? "an MCP server" : "MCP servers"} to ${where}'s .glitter/mcp.json: ${entry.servers.join(", ")}. Every tool call still asks for approval.`,
+        body: `This adds ${entry.servers.length === 1 ? "an MCP server" : "MCP servers"} to ${where}'s .glitter/mcp.json: ${entry.servers.join(", ")}. Tool calls follow the thread's permissions and grants.${entry.commands.some((command) => /\bnpx\b/.test(command)) ? " Starting an npx server may require a runtime and a network download." : ""}`,
         confirmLabel: "Install",
       });
       if (!ok) return;

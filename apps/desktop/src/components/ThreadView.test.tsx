@@ -451,6 +451,12 @@ describe("completion usage", () => {
     expect(speed.getAttribute("title")).toContain("no provider or CLI usage data");
   });
 
+  it("labels the receipt estimate partial when cached usage has no price", () => {
+    seedStore({ threads: useAppStore.getState().threads.map((thread) => ({ ...thread, turnStats: { ...thread.turnStats!, cachedTokens: 1000 } })) });
+    render(<ThreadView />);
+    expect(screen.getByTitle("Partial estimated cost; unpriced tokens are excluded")).toHaveTextContent("partial");
+  });
+
   it("leaves turn stats alone when the model is unpriced", () => {
     seedStore({ models: [{ modelId: "muse-spark-1.3", isActive: true, cost: null }] });
     render(<ThreadView />);

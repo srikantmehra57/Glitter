@@ -43,6 +43,15 @@ test('the OpenCode catalog keeps every Zen model the workspace has not turned of
   assert.deepEqual(mergeOpencodeModels([{ modelId: 'zen/a' }], []).map((model) => model.modelId), ['zen/a']);
 });
 
+test('OpenCode catalog does not price unknown output as free', () => {
+  const rows = opencodeModelsFromCatalog({ opencode: { models: {
+    partial: { cost: { input: 3 } },
+    outputOnly: { cost: { input: -1, output: 12 } },
+  } } });
+  assert.deepEqual(rows[0].cost, { input: '3', currency: 'USD' });
+  assert.deepEqual(rows[1].cost, { output: '12', currency: 'USD' });
+});
+
 test('OpenCode Free Zen models fall back to Big Pickle instead of another gated Free row', () => {
   assert.equal(zenFreeModel('opencode/nemotron-3.5-lightning-free'), true);
   assert.equal(zenFreeModel('opencode/muse-spark-1.2-contributor-free'), true);
@@ -401,7 +410,8 @@ test('a model rescan returns the freshly probed catalog and keeps the session ro
 
 test('the app answers an agent permission request with the same three modes', () => {
   assert.equal(acpPermissionDecision('onRequest', { kind: 'edit', rawInput: { path: 'a.ts' } }), 'allow');
-  assert.equal(acpPermissionDecision('onRequest', { kind: 'execute', rawInput: { command: 'ls' } }), 'allow');
+  assert.equal(acpPermissionDecision('onRequest', { kind: 'execute', rawInput: { command: 'ls' } }), 'ask');
+  assert.equal(acpPermissionDecision('onRequest', { kind: 'read', rawInput: { command: 'cat outside-link' } }), 'ask', 'a command does not become safe because the agent calls it a read');
   assert.equal(acpPermissionDecision('onRequest', { kind: 'execute', rawInput: { command: 'npm test' } }), 'ask');
   assert.equal(acpPermissionDecision('guarded', { kind: 'execute', rawInput: { command: 'npm test' } }), 'allow');
   assert.equal(acpPermissionDecision('guarded', { kind: 'execute', rawInput: { command: 'rm -rf src' } }), 'ask');
@@ -410,7 +420,7 @@ test('the app answers an agent permission request with the same three modes', ()
 });
 
 test('an agent CLI thread answers permission requests by its mode, and audits each automatic answer', async () => {
-  for (const [mode, expected] of [['allowAll', { status: 'completed', choice: 'yes', outcome: 'auto-approved' }], ['onRequest', { status: 'completed', choice: 'yes', outcome: 'auto-approved' }], ['guarded', { status: 'completed', choice: 'yes', outcome: 'auto-approved' }], ['denyUnmatched', { status: 'failed', choice: 'no', outcome: 'auto-denied' }]]) {
+  for (const [mode, expected] of [['allowAll', { status: 'completed', choice: 'yes', outcome: 'auto-approved' }], ['guarded', { status: 'completed', choice: 'yes', outcome: 'auto-approved' }], ['denyUnmatched', { status: 'failed', choice: 'no', outcome: 'auto-denied' }]]) {
     const events = [];
     const spec = { id: 'fake', name: 'Fake', protocol: 'acp', bins: [], acpArgs: [resolve('tests/fixtures/fake-acp-agent.mjs')], verified: true, signIn: '' };
     const host = new AcpAgentHost(spec, process.execPath, (event, payload) => events.push({ event, payload }));
@@ -431,5 +441,22 @@ test('an agent CLI thread answers permission requests by its mode, and audits ea
     assert.deepEqual(host.setApprovalMode('s1', 'onRequest').effectiveMode, { mode: 'onRequest' });
     assert.deepEqual(host.setApprovalMode('s1', 'guarded').effectiveMode, { mode: 'guarded' });
     assert.throws(() => host.setApprovalMode('nope', 'allowAll'), /Unknown Fake session/);
+  } finally { await host.stop(); }
+});
+
+test('Ask shows an ACP shell approval and respects the user decision', async () => {
+  const events = [];
+  const spec = { id: 'fake', name: 'Fake', protocol: 'acp', bins: [], acpArgs: [resolve('tests/fixtures/fake-acp-agent.mjs')], verified: true, signIn: '' };
+  const host = new AcpAgentHost(spec, process.execPath, (event, payload) => events.push({ event, payload }));
+  try {
+    await host.startSession({ workspaceRoot: '/tmp/ws', approvalMode: 'onRequest' });
+    await host.sendTurn({ sessionId: 's1', text: 'list files' });
+    const approval = await until(events, ({ event }) => event === 'approval');
+    assert.ok(approval, 'the command waits for the user');
+    host.decideApproval({ approvalId: approval.payload.approvalId, choiceId: 'no' });
+    await until(events, ({ event }) => event === 'turnCompleted');
+    const tool = events.filter((event) => event.event === 'item' && event.payload.item.itemId === 't1').at(-1).payload.item;
+    assert.equal(tool.status, 'failed');
+    assert.equal(events.some(({ event, payload }) => event === 'approvalAudit' && payload.outcome === 'auto-approved'), false);
   } finally { await host.stop(); }
 });

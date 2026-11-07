@@ -1,4 +1,4 @@
-import { THINKING_BUDGET, effortTiers, isCustomProvider, splitModelId, type ResolvedProvider, type Tier } from "./providers.js";
+import { THINKING_BUDGET, claudeThinking, effortTiers, isCustomProvider, splitModelId, type ResolvedProvider, type Tier } from "./providers.js";
 
 /**
  * One streaming chat call against a provider, in the harness's own message
@@ -8,10 +8,19 @@ import { THINKING_BUDGET, effortTiers, isCustomProvider, splitModelId, type Reso
 
 export type ImagePart = { type: "image"; mediaType: string; data: string };
 export type ContentPart = { type: "text"; text: string } | ImagePart;
-/** `started` is harness bookkeeping: set once execution begins, never sent to a provider. */
-export type ToolCall = { id: string; name: string; input: Record<string, unknown>; started?: boolean };
-/** Anthropic thinking blocks must be sent back verbatim (with their signature) inside a tool loop. */
-export type ThinkingBlock = { text: string; signature?: string; redacted?: string };
+/**
+ * `started` is harness bookkeeping: set once execution begins, never sent to a
+ * provider. `signature` is a provider's opaque thought signature for the call
+ * (Gemini), sent back only to the model that produced it.
+ */
+export type ToolCall = { id: string; name: string; input: Record<string, unknown>; started?: boolean; signature?: string };
+/**
+ * A reply's reasoning, sent back to the model that produced it. Anthropic
+ * thinking blocks carry their signature; an OpenAI Responses reasoning item
+ * carries its id and its encrypted content in `signature`; a Chat Completions
+ * `reasoning_content` is text only.
+ */
+export type ThinkingBlock = { text: string; signature?: string; redacted?: string; id?: string };
 /** `modelId` is harness bookkeeping for cross-model routing; never sent to a provider. */
 export type AssistantMessage = { role: "assistant"; text: string; thinking?: ThinkingBlock[]; toolCalls?: ToolCall[]; modelId?: string };
 export type ToolResultMessage = { role: "tool"; results: Array<{ id: string; name: string; output: string; isError?: boolean; images?: ImagePart[] }> };
@@ -102,13 +111,13 @@ const IDLE_MS = 180_000;
 /** No complete frame for this long after the provider accepts ends the call. A separate clock from the idle one: accepting and then hanging is not the same as going quiet mid-stream. */
 const FIRST_EVENT_MS = 60_000;
 
-/** A reply cut off by the output limit. Streamed tool arguments can be valid JSON and still incomplete. */
+/** A reply cut off by a provider limit. Streamed tool arguments can be valid JSON and still incomplete. */
 export function isTruncatedStop(stopReason: string): boolean {
-  return stopReason === "length" || stopReason === "max_tokens" || stopReason === "max_output_tokens";
+  return stopReason === "length" || stopReason === "max_tokens" || stopReason === "max_output_tokens" || stopReason === "model_context_window_exceeded" || stopReason === "incomplete" || stopReason.startsWith("incomplete:");
 }
 
 export function truncatedToolResult(name: string): string {
-  return `Tool call "${name}" was not executed: the response hit the output token limit, so its arguments may be truncated. Re-issue the tool call with complete arguments.`;
+  return `Tool call "${name}" was not executed: the response was cut off by a provider limit, so its arguments may be truncated. Re-issue the tool call with complete arguments.`;
 }
 
 /** Interrupted before the harness recorded the call as started. Safe to retry. */
@@ -122,6 +131,8 @@ const SMALL_MAX_TOKENS = 8_192;
 export async function* streamChat(request: ChatRequest): AsyncGenerator<StreamEvent> {
   const repaired = repairHistory(request.messages);
   if (request.provider.wire === "anthropic") yield* streamAnthropic({ ...request, messages: repaired });
+  // OpenAI's own API takes the Responses API, which carries reasoning across tool calls.
+  else if (request.provider.id === "openai") yield* streamResponses({ ...request, messages: repaired });
   else yield* streamOpenAi({ ...request, messages: repaired });
 }
 
@@ -273,6 +284,30 @@ function closedEarly(request: ChatRequest, opened: boolean, finished: boolean) {
 
 // ─── Anthropic Messages ─────────────────────────────────────────────────────
 
+function withoutThinking(message: ChatMessage): ChatMessage {
+  return message.role === "assistant" && message.thinking?.length ? { ...message, thinking: undefined } : message;
+}
+
+/**
+ * Prompt-cache breakpoints on the history. The last message writes the prefix
+ * the next call reads; the message that ended the previous call is marked too,
+ * so the read hits even when a step adds more blocks than the cache looks back
+ * over. With the system breakpoint that is three of the four allowed.
+ */
+export function cacheHistory(messages: Array<{ role: string; content: unknown[] }>): Array<{ role: string; content: unknown[] }> {
+  const marks = new Set([messages.length - 1, messages.length - 3].filter((index) => index >= 0));
+  return messages.map((message, index) => {
+    if (!marks.has(index)) return message;
+    let last = message.content.length - 1;
+    // A thinking block cannot carry a breakpoint; mark the block before it.
+    while (last >= 0 && /thinking/.test(String((message.content[last] as { type?: unknown }).type))) last -= 1;
+    if (last < 0) return message;
+    const content = [...message.content];
+    content[last] = { ...(content[last] as Record<string, unknown>), cache_control: { type: "ephemeral" } };
+    return { ...message, content };
+  });
+}
+
 export function anthropicMessages(messages: ChatMessage[]) {
   const out: Array<{ role: string; content: unknown[] }> = [];
   for (const message of messages) {
@@ -300,6 +335,8 @@ export function anthropicMessages(messages: ChatMessage[]) {
     } else {
       const content: unknown[] = [];
       for (const block of message.thinking ?? []) {
+        // An OpenAI reasoning item is not a Claude thinking block.
+        if (block.id) continue;
         if (block.redacted) content.push({ type: "redacted_thinking", data: block.redacted });
         else if (block.signature) content.push({ type: "thinking", thinking: block.text, signature: block.signature });
       }
@@ -316,22 +353,61 @@ export function anthropicMessages(messages: ChatMessage[]) {
   return out;
 }
 
+/**
+ * The request fields that carry a Claude model's reasoning. Claude 4.6 and
+ * later take adaptive thinking with `output_config.effort` and reject a token
+ * budget; older families keep the budget. First-party models that check a
+ * replayed thinking block against its history drop a mismatched block instead
+ * of failing the call, as a backstop to the append-only history.
+ */
+export function anthropicReasoning(providerId: string, model: string, effort: string | undefined, listedEfforts?: readonly string[]): { fields: Record<string, unknown>; beta?: string; thinkingOff: boolean } {
+  const thinking = claudeThinking(model);
+  if (!thinking) return { fields: {}, thinkingOff: true };
+  const tiers = effortTiers(providerId, model, "anthropic", undefined, listedEfforts) as string[];
+  const tier = effort && tiers.includes(effort) ? effort as Tier : undefined;
+  if (thinking.mode === "budget") {
+    const budget = tier && tier !== "none" ? THINKING_BUDGET[tier] : undefined;
+    return budget ? { fields: { thinking: { type: "enabled", budget_tokens: Math.min(budget, MAX_TOKENS - 4_000) } }, thinkingOff: false } : { fields: {}, thinkingOff: true };
+  }
+  if (tier === "none") {
+    return thinking.off === "disabled" ? { fields: { thinking: { type: "disabled" } }, thinkingOff: true } : { fields: {}, thinkingOff: true };
+  }
+  if (!tier && !thinking.defaultOn) return { fields: {}, thinkingOff: true };
+  const bound = thinking.binding && providerId === "anthropic";
+  return {
+    fields: {
+      thinking: {
+        type: "adaptive",
+        ...(thinking.display ? { display: "summarized" } : {}),
+        ...(bound ? { block_binding: { prefix_mismatch_behavior: "drop_block" } } : {}),
+      },
+      ...(tier ? { output_config: { effort: tier } } : {}),
+    },
+    ...(bound ? { beta: THINKING_BINDING_BETA } : {}),
+    thinkingOff: false,
+  };
+}
+
+const THINKING_BINDING_BETA = "thinking-binding-controls-2026-08-01";
+
 async function* streamAnthropic(request: ChatRequest): AsyncGenerator<StreamEvent> {
   const { model } = splitModelId(request.modelId);
-  const tiers = effortTiers(request.provider.id, model, "anthropic", request.listedReasoning, request.listedEfforts);
-  const tier = request.effort as Tier | undefined;
-  const budget = tier && tier !== "none" && tiers.includes(tier) ? THINKING_BUDGET[tier] : undefined;
+  const reasoning = anthropicReasoning(request.provider.id, model, request.effort, request.listedEfforts);
   const small = /claude-3-(?!7)/i.test(model);
+  // A thinking-off request carries no thinking blocks: a model with thinking
+  // disabled rejects a replayed block whose history has changed.
+  const messages = reasoning.thinkingOff && claudeThinking(model)?.mode === "adaptive" ? request.messages.map(withoutThinking) : request.messages;
   const body: Record<string, unknown> = {
     model,
     max_tokens: small ? SMALL_MAX_TOKENS : MAX_TOKENS,
     system: anthropicSystem(request.system),
-    messages: anthropicMessages(request.messages),
+    messages: cacheHistory(anthropicMessages(messages)),
     stream: true,
     ...(request.tools.length ? { tools: request.tools.map((tool) => ({ name: tool.name, description: tool.description, input_schema: tool.parameters })) } : {}),
-    ...(budget ? { thinking: { type: "enabled", budget_tokens: Math.min(budget, MAX_TOKENS - 4_000) } } : {}),
+    ...reasoning.fields,
   };
-  const response = await post(request, `${request.provider.root}/messages`, { "x-api-key": request.provider.apiKey, "anthropic-version": "2023-06-01" }, body);
+  const headers: Record<string, string> = { "x-api-key": request.provider.apiKey, "anthropic-version": "2023-06-01", ...(reasoning.beta ? { "anthropic-beta": reasoning.beta } : {}) };
+  const response = await post(request, `${request.provider.root}/messages`, headers, body);
   type Usage = { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number };
   type Block = { type: string; text: string; signature?: string; data?: string; id?: string; name?: string; json: string };
   const blocks: Block[] = [];
@@ -400,10 +476,27 @@ function anthropicSystem(system: SystemPrompt) {
   return blocks;
 }
 
-export function openAiMessages(system: SystemPrompt, messages: ChatMessage[]) {
+/**
+ * Providers whose thinking models must see their own `reasoning_content` again
+ * inside a tool loop. Only the current turn's replies carry it: the reasoning
+ * of earlier turns is not part of the next request.
+ */
+export function sendsReasoningBack(providerId: string, model: string): boolean {
+  if (providerId === "deepseek") return true;
+  return (isCustomProvider(providerId) || providerId === "nvidia") && /deepseek|kimi|glm|qwen3|minimax/i.test(model);
+}
+
+export function openAiMessages(system: SystemPrompt, messages: ChatMessage[], providerId = "", model = "") {
   const out: unknown[] = [{ role: "system", content: system.stable }];
   if (system.volatile.trim()) out.push({ role: "system", content: system.volatile });
-  for (const message of messages) {
+  const reasoningBack = sendsReasoningBack(providerId, model);
+  const signatures = providerId === "google";
+  // The current turn starts after the last user message that is not a tool result.
+  let turnStart = 0;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index].role === "user") { turnStart = index; break; }
+  }
+  messages.forEach((message, index) => {
     if (message.role === "user") {
       const images = message.content.some((part) => part.type === "image");
       out.push({
@@ -426,13 +519,22 @@ export function openAiMessages(system: SystemPrompt, messages: ChatMessage[]) {
         ],
       });
     } else {
+      const reasoning = reasoningBack && index > turnStart ? (message.thinking ?? []).filter((block) => !block.signature).map((block) => block.text).join("") : "";
       out.push({
         role: "assistant",
         content: message.text || null,
-        ...(message.toolCalls?.length ? { tool_calls: message.toolCalls.map((call) => ({ id: call.id, type: "function", function: { name: call.name, arguments: JSON.stringify(call.input) } })) } : {}),
+        ...(reasoning ? { reasoning_content: reasoning } : {}),
+        ...(message.toolCalls?.length ? {
+          tool_calls: message.toolCalls.map((call) => ({
+            id: call.id,
+            type: "function",
+            function: { name: call.name, arguments: JSON.stringify(call.input) },
+            ...(signatures && call.signature ? { extra_content: { google: { thought_signature: call.signature } } } : {}),
+          })),
+        } : {}),
       });
     }
-  }
+  });
   return out;
 }
 
@@ -465,7 +567,7 @@ async function* streamOpenAi(request: ChatRequest): AsyncGenerator<StreamEvent> 
   const askUsage = USAGE_IN_STREAM.has(providerId) || isCustomProvider(providerId);
   const body: Record<string, unknown> = {
     model,
-    messages: openAiMessages(request.system, request.messages),
+    messages: openAiMessages(request.system, request.messages, providerId, model),
     stream: true,
     ...(askUsage ? { stream_options: { include_usage: true } } : {}),
     ...(request.tools.length ? { tools: request.tools.map((tool) => ({ type: "function", function: { name: tool.name, description: tool.description, parameters: tool.parameters } })) } : {}),
@@ -490,7 +592,7 @@ async function* streamOpenAi(request: ChatRequest): AsyncGenerator<StreamEvent> 
   let stopReason = "stop";
   let opened = false;
   let finished = false;
-  const calls: Array<{ id: string; name: string; json: string }> = [];
+  const calls: Array<{ id: string; name: string; json: string; signature?: string }> = [];
   for await (const { data } of sse(response, request.signal, request.timeouts)) {
     opened = true;
     if (data === "[DONE]") { finished = true; break; }
@@ -523,6 +625,9 @@ async function* streamOpenAi(request: ChatRequest): AsyncGenerator<StreamEvent> 
       if (typeof call.id === "string" && call.id) calls[index].id = call.id;
       if (fn.name) calls[index].name += fn.name;
       if (fn.arguments) calls[index].json += fn.arguments;
+      // Gemini signs a function call; the signature must come back with it.
+      const signature = (call.extra_content as { google?: { thought_signature?: unknown } } | undefined)?.google?.thought_signature;
+      if (typeof signature === "string" && signature) calls[index].signature = signature;
     }
     if (typeof choice.finish_reason === "string") { stopReason = choice.finish_reason; finished = true; }
   }
@@ -532,7 +637,139 @@ async function* streamOpenAi(request: ChatRequest): AsyncGenerator<StreamEvent> 
     role: "assistant",
     text,
     ...(reasoning ? { thinking: [{ text: reasoning }] } : {}),
-    toolCalls: calls.filter((call) => call && call.name).map((call, index) => ({ id: call.id || `call_${index}_${Date.now().toString(36)}`, name: call.name, input: parseArgs(call.json) })),
+    toolCalls: calls.filter((call) => call && call.name).map((call, index) => ({ id: call.id || `call_${index}_${Date.now().toString(36)}`, name: call.name, input: parseArgs(call.json), ...(call.signature ? { signature: call.signature } : {}) })),
+  };
+  yield { type: "done", message, stopReason };
+}
+
+// ─── OpenAI Responses ───────────────────────────────────────────────────────
+
+/** Models whose organization cannot receive reasoning summaries; they are asked once, then not again. */
+const NO_SUMMARY = new Set<string>();
+
+/**
+ * The Responses API input. A reply's reasoning items go back verbatim (their
+ * encrypted content, with `store: false`), so a reasoning model keeps its
+ * chain of thought across tool calls.
+ */
+export function responsesInput(messages: ChatMessage[]): unknown[] {
+  const out: unknown[] = [];
+  for (const message of messages) {
+    if (message.role === "user") {
+      out.push({
+        role: "user",
+        content: message.content.map((part) => part.type === "text" ? { type: "input_text", text: part.text } : { type: "input_image", image_url: `data:${part.mediaType};base64,${part.data}` }),
+      });
+    } else if (message.role === "tool") {
+      const images = message.results.flatMap((result) => result.images ?? []);
+      for (const result of message.results) out.push({ type: "function_call_output", call_id: result.id, output: result.output || "(no output)" });
+      if (images.length) out.push({
+        role: "user",
+        content: [
+          { type: "input_text", text: `Image output from the preceding tool result${images.length === 1 ? "" : "s"}.` },
+          ...images.map((image) => ({ type: "input_image", image_url: `data:${image.mediaType};base64,${image.data}` })),
+        ],
+      });
+    } else {
+      for (const block of message.thinking ?? []) {
+        if (block.id && block.signature) out.push({ type: "reasoning", id: block.id, encrypted_content: block.signature, summary: block.text ? [{ type: "summary_text", text: block.text }] : [] });
+      }
+      if (message.text) out.push({ role: "assistant", content: message.text });
+      for (const call of message.toolCalls ?? []) out.push({ type: "function_call", call_id: call.id, name: call.name, arguments: JSON.stringify(call.input) });
+    }
+  }
+  return out;
+}
+
+async function* streamResponses(request: ChatRequest): AsyncGenerator<StreamEvent> {
+  const { providerId, model } = splitModelId(request.modelId);
+  const tiers = effortTiers(providerId, model, "openai", request.listedReasoning, request.listedEfforts) as string[];
+  const reasoner = tiers.length > 0;
+  const effort = request.effort && tiers.includes(request.effort) ? request.effort : undefined;
+  const summaryKey = `${request.provider.root} ${model}`;
+  const body: Record<string, unknown> = {
+    model,
+    instructions: [request.system.stable, request.system.volatile].filter((part) => part.trim()).join("\n\n"),
+    input: responsesInput(request.messages),
+    stream: true,
+    store: false,
+    ...(request.tools.length ? { tools: request.tools.map((tool) => ({ type: "function", name: tool.name, description: tool.description, parameters: tool.parameters, strict: false })), parallel_tool_calls: true } : {}),
+    ...(reasoner ? { include: ["reasoning.encrypted_content"], reasoning: { ...(effort ? { effort } : {}), ...(NO_SUMMARY.has(summaryKey) ? {} : { summary: "auto" }) } } : {}),
+  };
+  const headers: Record<string, string> = request.provider.apiKey ? { authorization: `Bearer ${request.provider.apiKey}` } : {};
+  const url = `${request.provider.root}/responses`;
+  let response: Response;
+  try {
+    response = await post(request, url, headers, body);
+  } catch (error) {
+    // An unverified organization cannot receive reasoning summaries. The reasoning still runs; ask without them.
+    const rejected = reasoner && error instanceof ProviderError && error.status === 400 && /summar|verif/i.test(error.message);
+    if (!rejected) throw error;
+    NO_SUMMARY.add(summaryKey);
+    const reasoning = body.reasoning as Record<string, unknown>;
+    delete reasoning.summary;
+    response = await post(request, url, headers, body);
+  }
+  let text = "";
+  let stopReason = "stop";
+  let opened = false;
+  let finished = false;
+  const thinking: ThinkingBlock[] = [];
+  const calls: ToolCall[] = [];
+  const pendingArgs = new Map<string, { callId: string; name: string; json: string }>();
+  for await (const { data } of sse(response, request.signal, request.timeouts)) {
+    opened = true;
+    if (data === "[DONE]") break;
+    const frame = json(data);
+    if (!frame) continue;
+    const type = String(frame.type ?? "");
+    if (type === "error" || type === "response.failed") {
+      const failure = (type === "error" ? frame : (frame.response as Record<string, unknown> | undefined)?.error) as { message?: string; code?: string } | undefined;
+      throw new ProviderError(`${request.provider.name}: ${failure?.message ?? "stream error"}`, undefined, failure?.code === "context_length_exceeded" ? "CONTEXT_WINDOW_EXCEEDED" : undefined);
+    }
+    if (type === "response.output_text.delta" && typeof frame.delta === "string") {
+      text += frame.delta;
+      yield { type: "text", delta: frame.delta };
+    } else if ((type === "response.reasoning_summary_text.delta" || type === "response.reasoning_text.delta") && typeof frame.delta === "string") {
+      yield { type: "reasoning", delta: frame.delta };
+    } else if (type === "response.output_item.added") {
+      const item = frame.item as Record<string, unknown> | undefined;
+      if (item?.type === "function_call" && typeof item.id === "string") pendingArgs.set(item.id, { callId: String(item.call_id ?? item.id), name: String(item.name ?? ""), json: "" });
+    } else if (type === "response.function_call_arguments.delta" && typeof frame.item_id === "string" && typeof frame.delta === "string") {
+      const pending = pendingArgs.get(frame.item_id);
+      if (pending) pending.json += frame.delta;
+    } else if (type === "response.output_item.done") {
+      const item = frame.item as Record<string, unknown> | undefined;
+      if (item?.type === "reasoning" && typeof item.id === "string") {
+        const summary = Array.isArray(item.summary) ? (item.summary as Array<{ text?: unknown }>).map((part) => typeof part.text === "string" ? part.text : "").join("\n\n") : "";
+        thinking.push({ text: summary, id: item.id, ...(typeof item.encrypted_content === "string" ? { signature: item.encrypted_content } : {}) });
+      } else if (item?.type === "function_call") {
+        const pending = typeof item.id === "string" ? pendingArgs.get(item.id) : undefined;
+        const raw = typeof item.arguments === "string" ? item.arguments : pending?.json ?? "";
+        calls.push({ id: String(item.call_id ?? pending?.callId ?? item.id), name: String(item.name ?? pending?.name ?? ""), input: parseArgs(raw) });
+      }
+    } else if (type === "response.completed" || type === "response.incomplete") {
+      finished = true;
+      const result = (frame.response ?? {}) as { usage?: { input_tokens?: number; output_tokens?: number; input_tokens_details?: { cached_tokens?: number } }; incomplete_details?: { reason?: string } };
+      const usage = result.usage;
+      if (usage) {
+        const cached = usage.input_tokens_details?.cached_tokens ?? 0;
+        yield {
+          type: "usage",
+          ...(usage.input_tokens != null ? { inputTokens: Math.max(0, usage.input_tokens - cached), ...(cached ? { cacheReadTokens: cached } : {}) } : {}),
+          ...(usage.output_tokens != null ? { outputTokens: usage.output_tokens } : {}),
+        };
+      }
+      stopReason = type === "response.incomplete" ? `incomplete:${result.incomplete_details?.reason ?? "unknown"}` : calls.length ? "tool_calls" : "stop";
+      break;
+    }
+  }
+  if (!request.signal?.aborted) closedEarly(request, opened, finished);
+  const message: AssistantMessage = {
+    role: "assistant",
+    text,
+    ...(thinking.length ? { thinking } : {}),
+    toolCalls: calls.filter((call) => call.name),
   };
   yield { type: "done", message, stopReason };
 }

@@ -180,6 +180,7 @@ const BRIDGE_METHODS: &[&str] = &[
     "harnessMcpAddServer",
     "harnessMcpRemoveServer",
     "testModel",
+    "harnessRules",
     "orchestratorProbe",
     "mcpServers",
     "userShell",

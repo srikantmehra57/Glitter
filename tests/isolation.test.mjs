@@ -13,8 +13,33 @@ const outfile = join(temporary, 'isolation.mjs');
 await build({ entryPoints: [resolve('packages/glitter-bridge/src/isolation.ts')], bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'silent' });
 const {
   filterChildEnv, confinedCwd, approvalAlive, approvalExpiry, approvalExpiryMono, describeIsolation, HOST_QUEUE_LIMIT,
-  buildSeatbeltProfile, wrapSandboxedCommand, sandboxBackend, ensureDirectories, terminateTree,
+  buildSeatbeltProfile, wrapSandboxedCommand, sandboxBackend, ensureDirectories, terminateTree, credentialRoots,
 } = await import(pathToFileURL(outfile).href);
+
+test('an offline profile keeps outbound traffic on this Mac, and the default stays online', () => {
+  const offline = buildSeatbeltProfile('agent', 'harness', ['/work'], [], false);
+  assert.match(offline, /\(deny network-outbound\)/);
+  assert.match(offline, /\(allow network-outbound \(remote ip "localhost:\*"\)\)/, 'local dev servers stay reachable');
+  assert.match(offline, /\(allow network-outbound \(remote unix-socket\)\)/, 'name lookup still works');
+  assert.doesNotMatch(buildSeatbeltProfile('agent', 'harness', ['/work']), /network-outbound/, 'agents and online commands are unchanged');
+  const roots = credentialRoots('/Users/someone');
+  assert.ok(roots.includes('/Users/someone/.aws'));
+  assert.ok(roots.includes('/Users/someone/Library/Keychains'));
+  assert.ok(!roots.includes('/Users/someone/.ssh'), 'SSH keys stay readable for signed commits');
+});
+
+test('an offline sandbox refuses a remote connection and allows loopback', { skip: sandboxBackend() !== 'seatbelt' }, async () => {
+  const { createServer } = await import('node:http');
+  const server = createServer((_request, response) => response.end('ok'));
+  await new Promise((done) => server.listen(0, '127.0.0.1', done));
+  const port = server.address().port;
+  const profile = buildSeatbeltProfile('agent', 'harness', [tmpdir()], [], false);
+  const probe = (host) => spawnSync('/usr/bin/sandbox-exec', ['-p', profile, process.execPath, '-e', `require('net').connect(${port}, '${host}').on('connect', () => { console.log('connected'); process.exit(0); }).on('error', (error) => { console.log(error.code); process.exit(0); })`], { encoding: 'utf8', timeout: 10_000 });
+  assert.equal(probe('127.0.0.1').stdout.trim(), 'connected', 'loopback is allowed');
+  // A documentation-range address: refused by the sandbox before any packet leaves.
+  assert.equal(probe('192.0.2.1').stdout.trim(), 'EPERM');
+  server.close();
+});
 
 test('child env keeps PATH/HOME and strips unrelated secrets', () => {
   const env = filterChildEnv({

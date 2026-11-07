@@ -28,7 +28,7 @@ async function bundle(entry, replacements = {}) {
   return import(pathToFileURL(outfile).href);
 }
 
-const { MuseHost } = await bundle('packages/glitter-bridge/src/host.ts', {
+const { MuseHost, musePermissionChoice } = await bundle('packages/glitter-bridge/src/host.ts', {
   '@muse-code/sdk': `export const spawnMspConnection=(...args)=>globalThis.fakeWorld.spawn(...args);
     export class MuseClient { constructor(connection, options) { return globalThis.fakeWorld.makeClient(connection, options); } }
     export const readSessionDurability=()=>({kind:'durable'});
@@ -36,6 +36,13 @@ const { MuseHost } = await bundle('packages/glitter-bridge/src/host.ts', {
   './detect.js': `export * from ${JSON.stringify(resolve('packages/glitter-bridge/src/detect.ts'))}; export const resolveMuseBin=()=>"/fake/muse";`,
 });
 const { factsFromSession, isSessionFactNotification } = await bundle('packages/glitter-bridge/src/session-facts.ts');
+
+test('Muse Ask requests approval for a command even if it looks read-only', () => {
+  const choices = [{ choiceId: 'allow', decision: 'approved' }, { choiceId: 'deny', decision: 'denied' }];
+  assert.equal(musePermissionChoice('onRequest', { toolName: 'bash', rawArgs: JSON.stringify({ command: 'git diff' }) }, choices), null);
+  assert.equal(musePermissionChoice('onRequest', { toolName: 'bash', rawArgs: JSON.stringify({ command: 'cat outside-link' }) }, choices), null);
+  assert.equal(musePermissionChoice('guarded', { toolName: 'bash', rawArgs: JSON.stringify({ command: 'git diff' }) }, choices), 'allow');
+});
 
 /** A controllable stand-in for the MSP server behind `@muse-code/sdk`. */
 function makeWorld() {

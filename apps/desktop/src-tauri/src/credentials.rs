@@ -212,6 +212,15 @@ pub async fn credential_set(value: String) -> Result<(), String> {
 /// renderer may store, so a forged id can never mint a new entry. Custom
 /// endpoints live outside it, under minted `custom-N` ids.
 pub const PROVIDER_IDS: &[&str] = &["anthropic", "openai", "google", "openrouter", "cline", "kilo", "xai", "deepseek", "groq", "mistral", "nvidia", "ollama", "lmstudio"];
+/// Web search providers the harness's `web_search` tool may hold a key for
+/// (`harness/web.ts`). Stored and masked like model provider keys; each key
+/// only ever goes to its own provider's fixed address.
+pub const SEARCH_PROVIDER_IDS: &[&str] = &["tavily", "brave", "exa"];
+
+/// A fixed id this app stores a key for: a model provider or a search provider.
+fn known_provider(id: &str) -> bool {
+    PROVIDER_IDS.contains(&id) || SEARCH_PROVIDER_IDS.contains(&id)
+}
 /// The id the renderer sends to create a custom provider; the stored id is
 /// minted here, so the renderer can never choose one.
 const CUSTOM_CREATE_ID: &str = "custom";
@@ -352,7 +361,7 @@ fn migrate_legacy_custom(keys: &mut std::collections::BTreeMap<String, ProviderC
 /// included, until the migration below carries it into the minted scheme) and
 /// return whether the map changed and should be persisted.
 fn retain_known_and_migrate(keys: &mut std::collections::BTreeMap<String, ProviderCredential>) -> Result<bool, String> {
-    keys.retain(|id, _| PROVIDER_IDS.contains(&id.as_str()) || is_custom_provider(id) || id == CUSTOM_CREATE_ID);
+    keys.retain(|id, _| known_provider(id) || is_custom_provider(id) || id == CUSTOM_CREATE_ID);
     migrate_legacy_custom(keys)
 }
 
@@ -424,7 +433,7 @@ fn provider_status(keys: &std::collections::BTreeMap<String, ProviderCredential>
         name: saved.and_then(|credential| credential.name.clone()),
         wire: saved.and_then(|credential| credential.wire.clone()),
     };
-    let mut rows: Vec<ProviderStatus> = PROVIDER_IDS.iter().map(|id| row(id, keys.get(*id))).collect();
+    let mut rows: Vec<ProviderStatus> = PROVIDER_IDS.iter().chain(SEARCH_PROVIDER_IDS.iter()).map(|id| row(id, keys.get(*id))).collect();
     // Custom endpoints exist only while configured, in minted-id order.
     for id in keys.keys().filter(|id| is_custom_provider(id)) {
         rows.push(row(id, keys.get(id)));
@@ -456,7 +465,7 @@ fn check_provider_wire(raw: &str) -> Result<String, String> {
 fn apply_provider_change(keys: &mut std::collections::BTreeMap<String, ProviderCredential>, provider: &str, key: Option<String>, base_url: Option<String>, name: Option<String>, wire: Option<String>, clear: bool) -> Result<(), String> {
     let create = provider == CUSTOM_CREATE_ID;
     let custom = create || is_custom_provider(provider);
-    if !custom && !PROVIDER_IDS.contains(&provider) {
+    if !custom && !known_provider(provider) {
         return Err("Unknown provider.".into());
     }
     if custom && !create && !keys.contains_key(provider) {
@@ -641,6 +650,11 @@ mod tests {
         let mut keys = std::collections::BTreeMap::new();
         assert!(apply_provider_change(&mut keys, "nope", Some("k".into()), None, None, None, false).is_err(), "unknown ids are refused");
         assert!(apply_provider_change(&mut keys, "custom-1", Some("k".into()), Some("https://llm.example/v1".into()), Some("Gateway".into()), Some("openai".into()), false).is_err(), "an unset custom id cannot be written directly");
+        assert!(apply_provider_change(&mut keys, "tavily", None, Some("https://evil.example".into()), None, None, false).is_err(), "a search provider's address is fixed");
+        apply_provider_change(&mut keys, "tavily", Some("tvly-abcd1234".into()), None, None, None, false).expect("save a search key");
+        assert!(provider_status(&keys).iter().any(|row| row.id == "tavily" && row.configured), "a search key is listed, masked");
+        assert!(apply_provider_change(&mut keys, "bing", Some("k".into()), None, None, None, false).is_err(), "an unknown search provider is refused");
+        keys.remove("tavily");
         assert!(apply_provider_change(&mut keys, "anthropic", None, None, None, None, false).is_err(), "a hosted provider needs a key");
         apply_provider_change(&mut keys, "anthropic", Some("sk-ant-abcd1234".into()), None, None, None, false).expect("save");
         assert!(apply_provider_change(&mut keys, "anthropic", None, Some("https://evil.example".into()), None, None, false).is_err(), "a hosted provider's address is fixed");

@@ -137,6 +137,49 @@ const NIM_THINKING_SWITCH = /nemotron-(nano-9b-v2|[3-9])|qwen3|deepseek-v3\.[1-9
 export const SENDS_NONE = new Set(["nvidia", "cline", "openrouter", "kilo"]);
 
 /**
+ * How a Claude model takes reasoning, by its published family rules.
+ *
+ * - `budget`: Claude 3.7 through 4.5 take `thinking.budget_tokens`.
+ * - `adaptive`: Claude 4.6 and later take `thinking: {type: "adaptive"}` plus
+ *   `output_config.effort`, and reject a token budget with a 400.
+ *
+ * `off` says how None is expressed: by omitting `thinking` (the model then
+ * does not think), by `{type: "disabled"}` (the model would otherwise think),
+ * or not at all (the model always thinks, so None is not a level).
+ * `display` asks for summarized thinking text, which these models otherwise
+ * omit. `binding` marks models that check a replayed thinking block against
+ * the history that produced it.
+ */
+export type ClaudeThinking =
+  | { mode: "budget" }
+  | { mode: "adaptive"; off: "omit" | "disabled" | "never"; defaultOn: boolean; display: boolean; binding: boolean; tiers: Tier[] };
+
+const CLAUDE_VERSION = /claude-(opus|sonnet|haiku|fable|mythos)-(\d+)(?:[-.](\d{1,2})(?!\d))?/;
+
+export function claudeThinking(model: string): ClaudeThinking | null {
+  const id = model.toLowerCase();
+  // 3.0 and 3.5 have no thinking; 3.7 is the first family with a budget.
+  if (/claude-3-(?!7)|claude-instant|claude-2/.test(id)) return null;
+  if (/claude-3-7/.test(id)) return { mode: "budget" };
+  // Another vendor's model behind an Anthropic-compatible endpoint keeps the
+  // budget shape those endpoints implement.
+  if (!id.includes("claude")) return { mode: "budget" };
+  const match = CLAUDE_VERSION.exec(id);
+  const family = match?.[1];
+  const version = match ? Number(match[2]) + Number(match[3] ?? 0) / 10 : Infinity;
+  const all: Tier[] = ["none", "low", "medium", "high", "xhigh", "max"];
+  const always: Tier[] = ["low", "medium", "high", "xhigh", "max"];
+  if (family === "fable" || family === "mythos" || !family) return { mode: "adaptive", off: "never", defaultOn: true, display: true, binding: true, tiers: always };
+  if (version <= 4.5) return { mode: "budget" };
+  if (version < 4.7) return { mode: "adaptive", off: "omit", defaultOn: false, display: false, binding: false, tiers: ["none", "low", "medium", "high", "max"] };
+  if (version < 5) return { mode: "adaptive", off: "omit", defaultOn: false, display: true, binding: false, tiers: all };
+  // Haiku 5.5 thinks by default and still accepts `disabled`; it checks replayed blocks.
+  if (family === "haiku" && version < 6) return { mode: "adaptive", off: "disabled", defaultOn: true, display: true, binding: version >= 5.5, tiers: all };
+  if (version < 5.5) return { mode: "adaptive", off: "disabled", defaultOn: true, display: true, binding: false, tiers: all };
+  return { mode: "adaptive", off: "never", defaultOn: true, display: true, binding: true, tiers: always };
+}
+
+/**
  * The effort tiers a model takes, or none when it has no reasoning control.
  * A catalog that names the accepted levels (OpenRouter does) is authoritative.
  * Otherwise providers do not report this, so it follows their published model
@@ -147,7 +190,9 @@ export function effortTiers(providerId: string, model: string, wire: "anthropic"
   const id = model.toLowerCase();
   if (wire === "anthropic") {
     // Extended thinking: Claude 3.7 and every later family. 3.0 and 3.5 lack it.
-    return /claude-3-(?!7)|claude-instant|claude-2/.test(id) ? [] : ["none", "low", "medium", "high", "xhigh", "max"];
+    const thinking = claudeThinking(id);
+    if (!thinking) return [];
+    return thinking.mode === "budget" ? ["none", "low", "medium", "high", "xhigh", "max"] : thinking.tiers;
   }
   if (providerId === "openai") return /^(o\d|gpt-5|codex)/.test(id) ? ["minimal", "low", "medium", "high"] : [];
   if (providerId === "xai") return /grok-3-mini/.test(id) ? ["low", "high"] : [];

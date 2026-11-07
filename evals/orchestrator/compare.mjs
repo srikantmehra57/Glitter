@@ -41,7 +41,7 @@ export function normalizeScores(input, label = "scores") {
 export function scoreTemplate(results) {
   return {
     version: 1,
-    scores: results.filter((result) => !result.skipped && result.success === null).map((result) => ({
+    scores: results.filter((result) => !result.skipped && !result.error && result.success === null).map((result) => ({
       config: result.config,
       split: result.split ?? "tune",
       task: result.task,
@@ -185,6 +185,7 @@ export function summarizeReport(report, label = "report", scores) {
     label,
     startedAt: report.startedAt,
     split: report.split,
+    stop: report.stop,
     groups: [...groups.values()].map(finalize).sort((left, right) => left.config.localeCompare(right.config) || left.split.localeCompare(right.split)),
   };
 }
@@ -208,16 +209,17 @@ export function formatComparison(summaries) {
     "# Orchestrator report comparison",
     "",
     ...summaries.map((summary) => `- **${summary.label}**${summary.startedAt ? ` — started ${summary.startedAt}` : ""}${summary.split ? ` · split ${summary.split}` : ""}`),
+    ...summaries.filter((summary) => summary.stop).map((summary) => `- **${summary.label}** stopped: ${summary.stop.reason}. Its results are incomplete.`),
     "",
     "## Outcome and cost",
     "",
-    "| Report | Config · split | Cases | Automated | Passed | Manual | Manual score | Skipped | Success | Cost | Cost/success | Tokens | Calls | Avg latency | First edit |",
-    "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+    "| Report | Config · split | Cases | Automated | Passed | Manual | Manual score | Errors | Skipped | Success | Cost | Cost/success | Tokens | Calls | Avg latency | First edit |",
+    "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
   ];
   for (const summary of summaries) {
     for (const group of summary.groups) {
       const manualScore = group.manual ? `${group.manualAverage === null ? "—" : `${group.manualAverage.toFixed(1)}/2`} (${group.manualScored}/${group.manual})` : "—";
-      lines.push(`| ${summary.label} | ${group.config} · ${group.split} | ${group.cases} | ${group.automated} | ${group.passed} | ${group.manual} | ${manualScore} | ${group.skipped} | ${pct(group.successRate)} | ${money(group.costUsd)}${group.partial ? " (partial)" : ""} | ${money(group.costPerSuccess)} | ${tokens(group.inputTokens + group.outputTokens)} | ${group.calls} | ${duration(group.avgDurationMs)} | ${duration(group.avgTimeToFirstEditMs)} |`);
+      lines.push(`| ${summary.label} | ${group.config} · ${group.split} | ${group.cases} | ${group.automated} | ${group.passed} | ${group.manual} | ${manualScore} | ${group.errors} | ${group.skipped} | ${pct(group.successRate)} | ${money(group.costUsd)}${group.partial ? " (partial)" : ""} | ${money(group.costPerSuccess)} | ${tokens(group.inputTokens + group.outputTokens)} | ${group.calls} | ${duration(group.avgDurationMs)} | ${duration(group.avgTimeToFirstEditMs)} |`);
     }
   }
   lines.push("", "## Routing, consults and review", "", "| Report | Config · split | Router skip | Consult routes (explicit/auto) | Consults | Takeover routes | Plan retries/fallbacks | Reviews pass/changes/invalid/unavailable |", "|---|---|---:|---:|---:|---:|---:|---:|");

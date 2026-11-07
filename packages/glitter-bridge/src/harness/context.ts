@@ -18,8 +18,14 @@ export type TrimRung = "full" | "head_tail" | "skeleton";
 
 export type ContextBudget = { input: number; output: number };
 
-/** How many messages keep their tool output verbatim. */
+/** How many messages keep their tool output verbatim, at least. */
 const RECENT_MESSAGES = 8;
+/**
+ * The clip boundary moves in steps of this many messages, so the shortened
+ * prefix stays byte-identical for several calls and a provider's prompt cache
+ * keeps hitting it. Between RECENT_MESSAGES and twice that stay verbatim.
+ */
+const CLIP_STEP = 8;
 /** Older tool output beyond this is shortened, even in a roomy window. */
 const OLD_OUTPUT_CHARS = 4_000;
 
@@ -29,7 +35,7 @@ const OLD_OUTPUT_CHARS = 4_000;
  * budget pressure, and a result already past it enters the ladder at head_tail.
  */
 export function clipRecency(messages: readonly ChatMessage[]): ChatMessage[] {
-  const keepFrom = Math.max(0, messages.length - RECENT_MESSAGES);
+  const keepFrom = Math.max(0, Math.floor((messages.length - RECENT_MESSAGES) / CLIP_STEP) * CLIP_STEP);
   return messages.map((message, index) => {
     if (index >= keepFrom || message.role !== "tool") return message;
     return {

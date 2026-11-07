@@ -919,6 +919,10 @@ async function dispatchHarness(method: string, params: Record<string, unknown>) 
         modelId: String(params.modelId ?? ""),
         refresh: params.refresh === true,
       });
+    case "harnessRules":
+      return harness.setPermissionRules(Array.isArray(params.rules) ? (params.rules as Array<{ effect?: unknown; rule?: unknown }>).filter((entry) => (entry.effect === "allow" || entry.effect === "deny") && typeof entry.rule === "string").map((entry) => ({ effect: entry.effect as "allow" | "deny", rule: entry.rule as string })) : []);
+    case "compactSession":
+      return harness.compactSession({ sessionId });
     case "closeSession": {
       const closed = await harness.closeSession({ sessionId });
       release(sessionId);

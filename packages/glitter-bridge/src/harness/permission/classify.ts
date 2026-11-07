@@ -1,16 +1,10 @@
 import { commandsOf, innerScript, parseScript, writesFile, type SimpleCommand } from "./shell.js";
 
 /**
- * Known read-only commands, after OpenAI Codex's `is_safe_command.rs` (the
- * list MiniMax Code ported). A command this accepts reads and prints, and can
- * run without asking in any permission mode. It is an allow-list: anything not
- * recognised, or recognised with a flag that can write or execute, is not
- * read-only, and the normal permission mode decides.
- *
- * Stricter than Codex in one way: the shell can read outside the workspace,
- * while the harness's read tools cannot. So an argument that is an absolute
- * path, starts with `~`, or has a `..` segment makes the command ask instead.
- * A symlink inside the workspace that points out of it is not detected here.
+ * A syntactic classifier derived from OpenAI Codex's `is_safe_command.rs`.
+ * It is not a security boundary: a command can follow a workspace symlink,
+ * run a repository-configured helper, or otherwise have effects that syntax
+ * alone cannot reveal. Permission policy must never auto-approve based on it.
  */
 
 const ALWAYS_SAFE = new Set(["cat", "cd", "cut", "echo", "expr", "false", "grep", "head", "id", "ls", "nl", "paste", "pwd", "rev", "seq", "stat", "tail", "tr", "true", "uname", "uniq", "wc", "which", "whoami"]);

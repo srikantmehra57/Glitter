@@ -7,6 +7,27 @@ must respect. Don't log routine changes here; they belong in git history and
 
 ---
 
+### The built-in agent compacts its own model history
+
+- **Date:** 2026-11-07
+- **Decision:** A known model window and a request estimated above 80% of its
+  input budget trigger a tool-less summary between tool rounds, after at least
+  six history messages. `/compact` and the context card offer the same action
+  while the thread is idle. The thread's model writes the summary with a
+  two-minute limit; the latest user request remains separate and retains its
+  image parts. A bounded transcript gives the summary the original request and
+  recent work, and says when older entries were omitted.
+- **Recovery:** Save the compacted model projection before replacing live
+  history; the append-only transcript remains the source of truth. A failed,
+  truncated or cancelled summary leaves the previous projection intact. Do not
+  compact while an unanswered question or staged plan depends on model history.
+  Automatic failures fall back to request fitting, which either fits safely or
+  stops with a context error. Clear the old reported context count until a
+  provider reports the next request's usage.
+- **Scope:** Muse delegates compaction to its CLI. Third-party ACP adapters do
+  not expose it. Summaries can miss details, and no automated test establishes
+  coding quality with a live provider under long-session pressure.
+
 ### Orchestrator separates judgement from execution in the built-in harness
 
 - **Date:** 2026-10-26
@@ -883,18 +904,20 @@ must respect. Don't log routine changes here; they belong in git history and
 - **Grants:** "Allow in thread" records a grant for the subject the user picked
   on the card: an exact command, an argv prefix (`git push …`), one program,
   a file, a folder or the workspace. A prefix grant covers a script only when
-  every command in it is read-only or starts with a granted prefix, with no
-  expansion, assignment or file write. Interpreters get no program-wide grant,
+  every command starts with a granted prefix, with no expansion, assignment or
+  redirection; compound scripts are offered exact grants only. Interpreters get no program-wide grant,
   and wrappers such as `env`, `sudo` or `xargs` get the exact command only,
   because either would cover any command. A risky command is asked about every
   time and offered no grant.
-- **Read-only commands:** A script the shell reader parses, in which every
-  command is on the Codex-derived read-only list, runs without asking in every
-  mode. Arguments that are absolute, start with `~` or contain `..` disqualify
-  it, because the shell can read where the read tools cannot; a symlink inside
-  the workspace that points out is not detected. The reader refuses anything it
-  does not model, and an unparsed script is never read-only and gets only the
-  exact-command grant.
+- **Shell boundary (updated 2026-11-06):** A command name cannot establish a
+  read-only operation: commands can follow symlinks or invoke helpers from
+  repository configuration. Ask requests approval for shell calls, and Plan
+  refuses shell and MCP calls and uses the confined workspace read tools. Auto
+  still runs ordinary shell calls; its OS sandbox restricts writes and selected
+  credential reads, but is not a general workspace-only read boundary.
+  Existing MCP servers and background shells are not terminated by entering
+  Plan; the Plan turn does not start a server, issue a new MCP call, or read
+  or control an earlier shell.
 - **Outcomes:** An approval ends as allowed, rejected, cancelled, expired or
   unavailable, each with its own message to the model. With no approval
   channel the request is refused at once instead of waiting.
@@ -1014,8 +1037,8 @@ must respect. Don't log routine changes here; they belong in git history and
   edits and runs commands without asking, but a command the danger catalog
   rates ask-level (`rm -r`, `git push --force`, `git reset --hard`, `chmod -R`,
   a download piped into a shell…) still asks every time. The deny-only guards
-  run first, as in every mode, so nothing they block can run; Plan mode still
-  refuses edits. A risky call is offered no thread grant: the card allows it
+  run first, as in every mode, so nothing they block can run; Plan mode refuses
+  edits, shell commands and MCP calls. A risky call is offered no thread grant: the card allows it
   once or denies it, and says why.
 - **Why:** The four CLI modes keep their exact Muse CLI meanings, and
   Auto-review is a review policy, not "run everything harmless". A separate
@@ -1040,10 +1063,11 @@ must respect. Don't log routine changes here; they belong in git history and
   Muse, the built-in harness and each agent CLI, and the long lines were the
   Muse CLI's own sentences. Other harnesses offer three. The permission is a
   property of the app, so switching model or provider does not change it.
-- **Enforcement:** The built-in harness already decides with `decide`. An ACP
-  permission request is answered by the same rules (`acpPermissionDecision`):
-  edits and read-only commands run in Ask, ordinary commands run in Auto, a
-  risky command asks, and a blocked command is refused in every mode. Muse's
+- **Enforcement:** The built-in harness decides with `decide`: edits run in
+  Ask, shell commands ask, ordinary commands run in Auto, a risky command asks,
+  and a blocked command is refused in every mode. ACP permission requests are
+  answered by `acpPermissionDecision`; its classification depends on what the
+  external agent reports. Muse's
   CLI has no Auto mode, so Ask and Auto are sent as its prompt mode and the
   app answers the approvals that come back. A provider echo of its own mode
   does not replace the mode the app stored.

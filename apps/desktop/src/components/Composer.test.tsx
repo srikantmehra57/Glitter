@@ -388,6 +388,19 @@ describe("built-in slash commands", () => {
     expect(sendPrompt).not.toHaveBeenCalled();
   });
 
+  it("offers Compact now on built-in agent threads", async () => {
+    seedWorkspace({ agentId: "harness", context: { usedTokens: 1000, windowTokens: 4000 } });
+    const compactThread = vi.fn(async () => {});
+    useAppStore.setState({ compactThread });
+    const user = userEvent.setup();
+    render(<Composer />);
+    await user.click(screen.getByRole("button", { name: /Context window/ }));
+    await user.click(screen.getByRole("button", { name: "Compact now" }));
+    expect(compactThread).toHaveBeenCalledTimes(1);
+    await user.type(screen.getByRole("combobox"), "/compact{Enter}");
+    expect(compactThread).toHaveBeenCalledTimes(2);
+  });
+
   it("drafts the review prompt for the scope in view, and lists each name once", async () => {
     seedWorkspace({ skills: [{ selector: "/plan", description: "Planner skill", argumentHint: "<goal>" }] as Thread["skills"] });
     useAppStore.setState({ reviewScope: "staged" });
@@ -439,6 +452,15 @@ describe("cost estimate", () => {
     seedStore({ models: priced, modelsAgentId: "muse" });
     render(<Composer />);
     expect(screen.queryByText("Est. cost")).toBeNull();
+  });
+
+  it("labels an estimate partial when cache writes have no reported price", async () => {
+    seedWorkspace({ context: { usedTokens: 1000, windowTokens: 4000 }, usage: { promptTokens: 1000, cacheReadTokens: 500, cacheWriteTokens: 200, outputTokens: 100 } });
+    seedStore({ models: priced, modelsAgentId: "muse" });
+    render(<Composer />);
+    await userEvent.setup().click(screen.getByRole("button", { name: /Context window/ }));
+    expect(screen.getByText("Partial est. cost").parentElement).toHaveTextContent("$0.0017");
+    expect(screen.getByTitle(/unpriced tokens are excluded/)).toBeInTheDocument();
   });
 
   it("shows cached tokens when the provider reported them", async () => {

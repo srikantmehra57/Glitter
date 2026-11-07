@@ -87,6 +87,15 @@ export function missingCredentials(configs, credentials) {
   return [...requiredProviders(configs)].filter((providerId) => !isLocalProvider(providerId) && !credentials[providerId]?.key);
 }
 
+/** Exhausted retries or account problems block a batch, rather than measuring task quality. */
+export function providerBlock(error) {
+  if (!error || typeof error !== "object") return undefined;
+  if (error.status === 429 || error.code === "RATE_LIMIT") return "provider rate limit";
+  if (error.status === 402) return "provider billing";
+  if (error.status === 401 || error.status === 403 || error.code === "MISSING_CREDENTIAL" || error.code === "INVALID_CREDENTIAL") return "provider credentials";
+  return undefined;
+}
+
 function validPrice(value) {
   return value && typeof value === "object" && Number.isFinite(value.input) && value.input >= 0 && Number.isFinite(value.output) && value.output >= 0;
 }
@@ -103,7 +112,12 @@ export function loadPrices(env = process.env) {
   try { parsed = JSON.parse(raw); } catch { throw new Error("EVAL_PRICES must be a JSON object or a path to one."); }
   const prices = {};
   for (const [modelId, price] of Object.entries(parsed)) {
-    if (validPrice(price)) prices[modelId] = { input: price.input, output: price.output, ...(Number.isFinite(price.cached) ? { cached: price.cached } : {}) };
+    if (validPrice(price)) prices[modelId] = {
+      input: price.input,
+      output: price.output,
+      ...(Number.isFinite(price.cached) && price.cached >= 0 ? { cached: price.cached } : {}),
+      ...(Number.isFinite(price.cacheWrite) && price.cacheWrite >= 0 ? { cacheWrite: price.cacheWrite } : {}),
+    };
   }
   return prices;
 }
@@ -118,7 +132,33 @@ export function costOf(calls, prices) {
       if (!isLocalProvider(providerOf(call.modelId))) partial = true;
       continue;
     }
-    usd += ((call.inputTokens ?? 0) / 1_000_000) * price.input + ((call.outputTokens ?? 0) / 1_000_000) * price.output;
+    const input = call.inputTokens ?? 0;
+    const output = call.outputTokens ?? 0;
+    const cached = call.cachedTokens ?? 0;
+    if (call.inputTokens == null || call.outputTokens == null) partial = true;
+    if (![input, output, cached].every((value) => Number.isFinite(value) && value >= 0) || cached > input) {
+      partial = true;
+      continue;
+    }
+    const hasBreakdown = call.cacheReadTokens != null && call.cacheWriteTokens != null;
+    if (hasBreakdown && (![call.cacheReadTokens, call.cacheWriteTokens].every((value) => Number.isFinite(value) && value >= 0) || call.cacheReadTokens + call.cacheWriteTokens > cached)) {
+      partial = true;
+      continue;
+    }
+    const legs = [
+      [input - cached, price.input],
+      [output, price.output],
+      ...(hasBreakdown ? [
+        [call.cacheReadTokens, price.cached],
+        [call.cacheWriteTokens, price.cacheWrite],
+        [cached - call.cacheReadTokens - call.cacheWriteTokens, undefined],
+      ] : [[cached, undefined]]),
+    ];
+    for (const [tokens, rate] of legs) {
+      if (!tokens) continue;
+      if (!Number.isFinite(rate) || rate < 0) { partial = true; continue; }
+      usd += (tokens / 1_000_000) * rate;
+    }
   }
   return { usd, partial };
 }

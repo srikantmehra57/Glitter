@@ -181,7 +181,29 @@ export function ensureDirectories(paths: string[]): void {
  * denies system locations instead of an allow-list of one folder. ACP agents
  * stay write-scoped to the workspace plus their config roots.
  */
-export function buildSeatbeltProfile(kind: SandboxKind, agentId = "", extraRoots: string[] = [], denyReadRoots: string[] = []): string {
+/**
+ * Outbound network stays on this Mac: loopback (local dev servers, test
+ * databases) and Unix sockets (name lookup) only. Binding a local port is
+ * unaffected, so a dev server still starts.
+ */
+const NETWORK_OFF = `(deny network-outbound)\n(allow network-outbound (remote ip "localhost:*"))\n(allow network-outbound (remote unix-socket))\n`;
+
+/**
+ * Cloud and registry tokens that offline work never reads. A command without
+ * the network cannot read them either, so injected text cannot print a token
+ * into the model's context. SSH and GPG keys, `.npmrc`, Docker and kube config
+ * stay readable: signed commits, installs from a local cache and local
+ * clusters read them without going online.
+ */
+export function credentialRoots(home = homedir()): string[] {
+  return [
+    ".aws", ".azure", ".config/gcloud", ".config/gh", ".config/hub", ".netrc", ".git-credentials", ".pypirc",
+    ".gem/credentials", ".cargo/credentials", ".cargo/credentials.toml", ".terraform.d", "Library/Keychains",
+  ].map((path) => join(home, path));
+}
+
+export function buildSeatbeltProfile(kind: SandboxKind, agentId = "", extraRoots: string[] = [], denyReadRoots: string[] = [], network = true): string {
+  const networkRule = network ? "" : NETWORK_OFF;
   const deniedReads = canonicalRoots(denyReadRoots.filter(safeDenyRoot));
   const readDeny = deniedReads.map(seatbeltPath).join(" ");
   // Last matching rule wins. Re-allowing config *after* the deny keeps the
@@ -198,10 +220,10 @@ export function buildSeatbeltProfile(kind: SandboxKind, agentId = "", extraRoots
       .map(seatbeltPath).join(" ");
     const reallowed = canonicalRoots(["/usr/local", "/tmp", "/private/tmp", "/var/folders", "/private/var/folders", "/var/tmp", "/private/var/tmp", tmpdir(), ...extraRoots])
       .map(seatbeltPath).join(" ");
-    return `(version 1)\n(allow default)\n(deny file-write* ${denied})\n(allow file-write* ${reallowed})\n(allow file-write-data (regex #"^/dev/"))\n${readRule}`;
+    return `(version 1)\n(allow default)\n(deny file-write* ${denied})\n(allow file-write* ${reallowed})\n(allow file-write-data (regex #"^/dev/"))\n${readRule}${networkRule}`;
   }
   const writes = canonicalRoots(agentWriteRoots(agentId, extraRoots)).map(seatbeltPath).join(" ");
-  return `(version 1)\n(allow default)\n(deny file-write*)\n(allow file-write-data (regex #"^/dev/"))\n(allow file-write* ${writes})\n${readRule}`;
+  return `(version 1)\n(allow default)\n(deny file-write*)\n(allow file-write-data (regex #"^/dev/"))\n(allow file-write* ${writes})\n${readRule}${networkRule}`;
 }
 
 export type WrappedCommand = { command: string; args: string[]; sandboxed: boolean };
@@ -210,7 +232,7 @@ export type WrappedCommand = { command: string; args: string[]; sandboxed: boole
 export function wrapSandboxedCommand(
   bin: string,
   args: string[],
-  options: { kind?: SandboxKind; agentId?: string; extraRoots?: string[]; denyReadRoots?: string[]; backend?: SandboxBackend } = {},
+  options: { kind?: SandboxKind; agentId?: string; extraRoots?: string[]; denyReadRoots?: string[]; backend?: SandboxBackend; network?: boolean } = {},
 ): WrappedCommand {
   const kind = options.kind ?? "agent";
   const backend = options.backend ?? sandboxBackend();
@@ -223,7 +245,7 @@ export function wrapSandboxedCommand(
   if (backend === "seatbelt") {
     return {
       command: "/usr/bin/sandbox-exec",
-      args: ["-p", buildSeatbeltProfile(kind, agentId, extra, denyReadRoots), bin, ...args],
+      args: ["-p", buildSeatbeltProfile(kind, agentId, extra, denyReadRoots, options.network !== false), bin, ...args],
       sandboxed: true,
     };
   }
@@ -260,7 +282,7 @@ export type IsolatedSpawn = {
 export function spawnIsolated(
   bin: string,
   args: string[],
-  options: { agentId?: string; workspace?: string; sandbox?: boolean; env?: NodeJS.ProcessEnv; extraEnv?: NodeJS.ProcessEnv; denyReadRoots?: string[]; cwd?: string } = {},
+  options: { agentId?: string; workspace?: string; sandbox?: boolean; env?: NodeJS.ProcessEnv; extraEnv?: NodeJS.ProcessEnv; denyReadRoots?: string[]; cwd?: string; network?: boolean } = {},
 ): IsolatedSpawn {
   const cwd = options.cwd ?? confinedCwd(options.workspace);
   // `extraEnv` is configuration the user wrote for this child (an MCP server's
@@ -282,6 +304,7 @@ export function spawnIsolated(
       agentId: options.agentId,
       extraRoots: options.workspace ? [options.workspace] : [],
       denyReadRoots: options.denyReadRoots,
+      network: options.network,
     })
     : { command: bin, args, sandboxed: false };
   const spawnOpts: SpawnOptions = {

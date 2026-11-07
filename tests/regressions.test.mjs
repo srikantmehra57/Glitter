@@ -591,6 +591,17 @@ test('compactThread reports noop reasons and clears its notice at terminal', asy
   assert.equal(store.getState().threads[0].notice.key, 'compacting');
   globalThis.storeEvent('item', { sessionId: 's1', item: { itemId: 'c1', kind: 'compaction', status: 'completed' } });
   assert.equal(store.getState().threads[0].notice, null);
+  store.setState({ threads: [{ ...store.getState().threads[0], agentId: 'harness', context: { usedTokens: 100, windowTokens: 200 } }] });
+  globalThis.storeBridge = async (method, params) => {
+    assert.equal(method, 'compactSession');
+    assert.deepEqual(params, { sessionId: 's1', agentId: 'harness' });
+    globalThis.storeEvent('item', { sessionId: 's1', item: { itemId: 'c2', kind: 'compaction', status: 'completed' } });
+    return { status: 'compacting' };
+  };
+  await store.getState().compactThread();
+  assert.equal(store.getState().threads[0].notice, null, 'a fast completion cannot leave the progress notice stuck');
+  globalThis.storeEvent('sessionFacts', { sessionId: 's1', context: null });
+  assert.equal(store.getState().threads[0].context, null, 'the old context count is cleared');
 });
 
 test('openPreview reads without attaching and closePreview clears', async () => {
@@ -963,7 +974,7 @@ async function settingsComponent() {
     'zustand/react/shallow': 'export const useShallow=(selector)=>selector;',
     '../lib/store': 'export const useAppStore=()=>globalThis.componentState;useAppStore.getState=()=>globalThis.componentState;export const applyTheme=()=>{};export const hasWindowMaterial=()=>false;export const currentThread=()=>undefined;export const currentWorkspace=()=>undefined;export const preferredAgent=()=>"muse";',
     '../lib/bridge': 'export const openLogFolder=async()=>"/preview/logs/app.log";export const diagnosticsSnapshot=async()=>({os:"browser-preview",arch:"",logTail:[]});export const providerKeysGet=async(ids)=>ids.map((id)=>({id,configured:false,keyHint:null,baseUrl:null}));export const providerKeySet=async()=>[];export const openUrl=async()=>{};',
-    'lucide-react': 'const I=()=>null;export const Activity=I,Archive=I,ArchiveRestore=I,ArrowLeft=I,Bot=I,ChartNoAxesColumn=I,Check=I,ChevronDown=I,Command=I,Cpu=I,Eye=I,EyeOff=I,ExternalLink=I,FilePlus=I,FolderOpen=I,Info=I,KeyRound=I,LoaderCircle=I,Lock=I,MessagesSquare=I,Minus=I,Monitor=I,Moon=I,Palette=I,PanelLeft=I,Plug=I,Plus=I,Puzzle=I,RefreshCw=I,Search=I,Settings2=I,ShieldAlert=I,ShieldCheck=I,Sun=I,Trash2=I,TriangleAlert=I,Workflow=I,X=I;',
+    'lucide-react': 'const I=()=>null;export const Activity=I,Archive=I,ArchiveRestore=I,ArrowLeft=I,Bot=I,ChartNoAxesColumn=I,Check=I,ChevronDown=I,Command=I,Cpu=I,Eye=I,EyeOff=I,ExternalLink=I,FilePlus=I,FolderOpen=I,Globe=I,Info=I,KeyRound=I,LoaderCircle=I,Lock=I,MessagesSquare=I,Minus=I,Monitor=I,Moon=I,Palette=I,PanelLeft=I,Plug=I,Plus=I,Puzzle=I,RefreshCw=I,Search=I,Settings2=I,ShieldAlert=I,ShieldCheck=I,Sun=I,Trash2=I,TriangleAlert=I,Workflow=I,X=I;',
     './SelectMenu': 'export const SelectMenu=()=>null;',
     './OrchestratorPanel': 'export const OrchestratorPanel=()=>null;',
     './AgentPicker': 'export const AgentMark=()=>null;export const ProviderMark=()=>null;export const ModelIcon=()=>null;',

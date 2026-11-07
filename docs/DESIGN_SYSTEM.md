@@ -469,8 +469,8 @@ window, and the figure beside it is used/window and that share. When cache
 reads and writes add up to the used count, the bar splits into Prompt, Cached
 and Cache write, and the card shows the average cache hit rate. Estimated cost
 stays when the model has a price. Today lists the models used on this Mac
-today, each with its share of that total. Compact stays on a Muse thread that
-can compact. The Muse subscription meter lives on the Usage page while Muse
+today, each with its share of that total. Compact stays on a Muse or built-in
+agent thread that can compact. The Muse subscription meter lives on the Usage page while Muse
 is enabled. The selectors are one family of 28px borderless
 controls (`.picker-trigger`, and `.select-trigger` inside `.composer-foot`)
 that fill a capsule on hover; short 16px hairlines separate model, effort and
@@ -480,8 +480,10 @@ On a built-in agent thread the model control may instead read **Orchestrator**
 with an Activity mark, and the effort control becomes the goal control in the
 same footprint (see Goal below). Every agent has the same permissions control,
 headed Permissions. The app
-decides for every model: **Ask** (edits run, commands ask), **Auto** (risky
-commands still ask) and **Full access** (no approval prompts). A thread already
+decides for every model: **Ask** (edits run, commands ask), **Auto** (ordinary
+commands run and can read outside the workspace; risky commands still ask) and
+**Full access** (no approval prompts). The Auto description names the outside
+read boundary. A thread already
 on Read only keeps that choice until it is changed. Each description is one
 line, and the menu is wide enough to show it without a break. A mode never changes its shape, only its tone: Full access takes the warning
 colour for as long as it is selected. When the composer
@@ -532,6 +534,11 @@ switch closes the picker. Turning it on or off reaches the live session at once,
 and turning it off restores the manual model and effort from before. Picking a
 model row, including the selected one, leaves Orchestrator for that thread or
 draft without changing the new-thread default in Settings.
+
+Model prices show the known input and output rates per million tokens. When a
+catalog supplies only one rate, the other is shown as `—`; an unknown rate is
+never called free. The model library uses the same convention. A cost estimate
+that excludes unpriced tokens is visibly labelled partial.
 
 **Select menus** (`SelectMenu`: permissions, mode, effort, every select in
 Settings) share one anatomy. The popover has a 6px inset. A row is a grid: a
@@ -668,6 +675,13 @@ and the navigation, search and the command palette all read those names.
   name's initials on the custom tile. Any number can coexist, each as its own
   row and its own provider in the model picker; changing an endpoint's address
   asks for its key again, so a saved key is never sent to a new server.
+  The page is two cards, each under its own heading: **Model providers**, whose
+  line counts the connected ones, and **Web search**. Web search is optional —
+  Tavily, Brave Search and Exa, in that order — and reuses the provider row with
+  a Globe mark in place of the provider tile, a key form with no address, and a
+  **Get a key at** link. Its heading names the provider the agent searches with
+  once one is keyed, and otherwise says the agent can still fetch pages the user
+  or it names. The first key saved is the one used.
 - **Agents**: the default agent, the built-in agent, the agent CLIs, and the
   Muse connection (credential, API key, binary, Contributor mode) while Muse is
   shown. There is no Account page: Muse is one agent among others.
@@ -784,6 +798,9 @@ The Store is a grid of cards (two columns, one under 720px): the thumbnail,
 the name and kind with its tags, one summary line (the full description is its
 tooltip), what a bundle installs, the command a server adds, and Install or
 Remove at the card's foot, aligned across a row.
+An MCP installation confirmation names the configuration destination and says
+that tool calls follow the thread's permissions and grants. If it starts via
+`npx`, it also says a runtime and network download may be needed at startup.
 
 ### Prompt rail
 

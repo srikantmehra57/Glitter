@@ -47,6 +47,7 @@ describe("ApprovalCard", () => {
     expect(screen.getByText("ls -la")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Allow once/ })).toBeEnabled();
     expect(screen.getByRole("button", { name: /^Deny(?! and)/ })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /^Deny(?! and)/ })).not.toHaveAttribute("title", "Allows this call only.");
     fireEvent.click(screen.getByRole("button", { name: /Allow once/ }));
     expect(decide).toHaveBeenCalledWith("a1", "allow-once");
   });

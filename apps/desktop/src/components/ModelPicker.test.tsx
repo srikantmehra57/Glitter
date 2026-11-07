@@ -47,6 +47,16 @@ const AGENTS: AgentInfo[] = [
   { id: "gemini", name: "Gemini CLI", protocol: "acp", found: false, path: null, version: null, verified: false, signIn: "" },
 ];
 
+it("shows an unknown output price without treating the model as free", () => {
+  const models: Model[] = [{ modelId: "partial-price", cost: { input: "0" } }];
+  render(<ModelPicker models={models} agentId="grok" loading={false} disabled={false} onChange={vi.fn()} value={modelKey(models[0])} />);
+  fireEvent.click(screen.getByRole("button", { name: "Model" }));
+  const option = screen.getByRole("option");
+  expect(option).toHaveTextContent("$0 in");
+  expect(option).toHaveTextContent("— out");
+  expect(option).not.toHaveTextContent("Free");
+});
+
 it("opens straight to the models in one click, and one click on a row picks it and closes", () => {
   const models: Model[] = [{ modelId: "grok-4.7", reasoningEfforts: ["low", "high"] }, { modelId: "grok-4.6" }];
   const onChange = vi.fn();

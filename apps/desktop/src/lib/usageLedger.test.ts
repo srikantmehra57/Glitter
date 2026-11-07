@@ -144,6 +144,11 @@ describe("ledger", () => {
     expect(storedCalls(ledger)[0]).not.toHaveProperty("stage");
   });
 
+  it("retains the cache read and write breakdown across reloads", () => {
+    const ledger = asLedger({ version: 2, turns: [turn()], days: [], calls: [usageCall({ cachedTokens: 600, cacheReadTokens: 200, cacheWriteTokens: 400 })] });
+    expect(storedCalls(ledger)[0]).toMatchObject({ cachedTokens: 600, cacheReadTokens: 200, cacheWriteTokens: 400 });
+  });
+
   it("counts a late turn update once, with its newest calls", () => {
     const first = recordTurn(EMPTY_LEDGER, turn({ calls: [call()] }), NOW);
     const second = recordTurn(first, turn({ calls: [call({ outputTokens: 999 })] }), NOW);

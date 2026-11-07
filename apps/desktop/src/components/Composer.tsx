@@ -9,9 +9,9 @@ import { fuzzyScore } from "../lib/fuzzy";
 import { listen } from "@tauri-apps/api/event";
 import { acceptsBusySend, activeAgentId, activeConfig, currentThread, currentWorkspace, useAppStore } from "../lib/store";
 import { runBuiltinCommand } from "../lib/commands";
-import { estimateCost, formatCost } from "../lib/cost";
+import { estimateUsageCost, formatCost } from "../lib/cost";
 import { groupUsage, ledgerSlices } from "../lib/usageLedger";
-import { customProviders, providerName } from "../lib/providers";
+import { customProviders, isSearchProviderId, providerName } from "../lib/providers";
 import { orchestratorFromSettings } from "../lib/orchestrator";
 import { ModelPicker, modelKey } from "./ModelPicker";
 import { EffortPicker } from "./EffortPicker";
@@ -199,7 +199,7 @@ function ComposerView({ above }: { above?: ReactNode }) {
   // The built-in agent is addressed by its model, the way the picker shows it.
   // Before any model resolves, the connected provider names it; with none
   // connected it is "the built-in agent" — never the code name.
-  const connectedProvider = s.providerStatus?.find((row) => row.configured);
+  const connectedProvider = s.providerStatus?.find((row) => row.configured && !isSearchProviderId(row.id));
   const fallbackSpeaker = agentId === "harness"
     ? connectedProvider ? providerName(connectedProvider.id, customProviderList) : "the built-in agent"
     : agentName;
@@ -255,7 +255,7 @@ function ComposerView({ above }: { above?: ReactNode }) {
   const context = thread?.context;
   const contextPercent = context?.windowTokens && context.usedTokens != null ? Math.min(100, Math.round((context.usedTokens / context.windowTokens) * 100)) : null;
   const composition = context ? contextComposition(context) : null;
-  const threadCost = thread?.usage && model ? estimateCost(thread.usage, model.cost) : undefined;
+  const threadCost = thread?.usage && model ? estimateUsageCost(thread.usage, model.cost) : undefined;
   const todayModels = useMemo(() => {
     const now = Date.now();
     const start = new Date(now);
@@ -303,7 +303,7 @@ function ComposerView({ above }: { above?: ReactNode }) {
   const slash = slashQuery(s.composer, caret);
   const slashKey = slash ? slash.query : null;
   const sessionSkills = useMemo(() => thread?.skills ?? [], [thread?.skills]);
-  const builtins = useMemo(() => availableBuiltins({ thread: Boolean(thread), muse: agentId === "muse", live: !s.preview }), [Boolean(thread), agentId, s.preview]);
+  const builtins = useMemo(() => availableBuiltins({ thread: Boolean(thread), muse: agentId === "muse", harness: agentId === "harness", live: !s.preview }), [Boolean(thread), agentId, s.preview]);
   const slashOptions = useMemo(() => (slashKey == null ? [] : filterSlashCommands(slashKey, sessionSkills, builtins, s.customCommands)), [slashKey, sessionSkills, builtins, s.customCommands]);
   const slashOpen = slash != null && !slashDismissed && slashOptions.length > 0 && !mention && Boolean(workspace);
   // Both popups leave with a short fade, drawing the list they last showed.
@@ -944,7 +944,7 @@ function ComposerView({ above }: { above?: ReactNode }) {
                   </ul> : null}
                   {composition?.hitRate != null || (threadCost != null && model) ? <div className="context-group">
                     {composition?.hitRate != null ? <div className="context-rate"><span>Average cache hit rate</span><strong>{formatShare(composition.hitRate, 1)}</strong></div> : null}
-                    {threadCost != null && model ? <div className="context-rate"><span>Est. cost</span><strong title={`Estimated from reported usage at ${humanizeModelLabel(model.modelId, model.displayLabel)} rates`}>{formatCost(threadCost, model.cost?.currency)}</strong></div> : null}
+                    {threadCost != null && model ? <div className="context-rate"><span>{threadCost.partial ? "Partial est. cost" : "Est. cost"}</span><strong title={`Estimated from reported usage at ${humanizeModelLabel(model.modelId, model.displayLabel)} rates${threadCost.partial ? "; unpriced tokens are excluded" : ""}`}>{formatCost(threadCost.amount, threadCost.currency)}</strong></div> : null}
                   </div> : null}
                   {todayModels.length ? <div className="context-group">
                     <div className="context-pop-head"><span>Today</span></div>
@@ -959,7 +959,7 @@ function ComposerView({ above }: { above?: ReactNode }) {
                     </div>
                   </div> : null}
                   {contextLevel ? <span className={`context-pressure ${contextLevel}`}><TriangleAlert size={12} aria-hidden="true" />{contextLevel === "blocked" ? "Context limit reached. Compact or start a new thread to continue." : "Context is getting full. Older turns may be compacted."}</span> : null}
-                  {thread && !thread.agentId && !s.preview ? <button type="button" className="ghost-btn small context-compact" disabled={thread.status === "running"} title={thread.status === "running" ? "Compact when the turn finishes" : "Compact this thread's context now"} onClick={() => { setContextOpen(false); void s.compactThread(); }}>Compact now</button> : null}
+                  {thread && (!thread.agentId || thread.agentId === "harness") && !s.preview ? <button type="button" className="ghost-btn small context-compact" disabled={thread.status === "running"} title={thread.status === "running" ? "Compact when the turn finishes" : "Compact this thread's context now"} onClick={() => { setContextOpen(false); void s.compactThread(); }}>Compact now</button> : null}
                 </div>
               </div>
             ) : null}

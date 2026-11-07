@@ -2,7 +2,9 @@ import { createHash } from "node:crypto";
 import { existsSync, realpathSync } from "node:fs";
 import { chmod, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { spawnIsolated, terminateTree } from "../isolation.js";
+import { StringDecoder } from "node:string_decoder";
+import { credentialRoots, spawnIsolated, terminateTree } from "../isolation.js";
+import { killShell, readShell, startShell } from "./shells.js";
 import type { Subject } from "./permission/grants.js";
 import type { UserInputIntent } from "../protocol.js";
 import type { Asked, Question } from "./questions.js";
@@ -17,7 +19,7 @@ import type { ImagePart, ToolSchema } from "./wire.js";
  * never sees provider keys and cannot write outside the workspace and temp.
  */
 
-export type ToolKind = "read" | "edit" | "shell" | "plan" | "mcp" | "delegate" | "browser";
+export type ToolKind = "read" | "edit" | "shell" | "plan" | "mcp" | "delegate" | "browser" | "web";
 export type OffsetUnit = "line" | "match" | "file";
 
 /** The truth a tool produced. Frozen by `runTool` before anyone renders it. */
@@ -27,6 +29,8 @@ export type ToolValue =
   | { kind: "grep"; path: string; pattern: string; matches: string[]; nextOffset?: number }
   | { kind: "diff"; path: string; oldText: string; newText: string; created?: boolean; replacements?: number }
   | { kind: "terminal"; command: string; stdout: string; exitCode: number; note?: string }
+  /** A background shell: what it printed since the last read, and whether it still runs. */
+  | { kind: "process"; shellId: string; command: string; output: string; running: boolean; exitCode?: number; missed?: number; started?: boolean; stopped?: boolean }
   | { kind: "plan"; plan: Array<{ content: string; status: string }> }
   /** Questions for the user: the call waits for their answer, which ends the turn. */
   | { kind: "question"; questions: Question[]; intent?: UserInputIntent }
@@ -36,6 +40,8 @@ export type ToolValue =
   | { kind: "task"; childSessionId: string; summary: string; text: string; failed?: boolean }
   /** The shared browser's current page and a receipt for the requested action. */
   | { kind: "browser"; path: string; text: string }
+  /** A fetched page or a search, as text the model reads. */
+  | { kind: "web"; url: string; status: number; text: string }
   | { kind: "error"; message: string };
 
 /** Replayable card state. Pure: no I/O, no clock, no session. */
@@ -123,7 +129,15 @@ export type ToolDefinition = {
   deferred?: boolean;
   /** Why the frozen arguments are refused before any approval card, or undefined. May throw a ToolError. */
   validate?: (root: string, input: Readonly<Record<string, unknown>>) => Promise<string | undefined> | string | undefined;
-  run: (root: string, input: Readonly<Record<string, unknown>>, signal?: AbortSignal) => Promise<ToolProduced> | ToolProduced;
+  run: (root: string, input: Readonly<Record<string, unknown>>, signal?: AbortSignal, context?: ToolContext) => Promise<ToolProduced> | ToolProduced;
+};
+
+/** What a handler may know about the call beyond its arguments. */
+export type ToolContext = {
+  /** The thread is in Full access: the shell is not kept offline. */
+  fullAccess?: boolean;
+  /** The session the call belongs to, for state that outlives the call (background shells). */
+  sessionId?: string;
 };
 
 export const BUILTIN_TOOLS: readonly ToolDefinition[] = [
@@ -200,14 +214,74 @@ export const BUILTIN_TOOLS: readonly ToolDefinition[] = [
   },
   {
     schema: {
+      name: "multi_edit",
+      description: "Make several exact-string replacements in one file, in order, as one change: either every edit applies or none does. Each old_string is matched against the file as the earlier edits left it, and must match exactly once unless replace_all is true. Prefer it to several edit_file calls on the same file.",
+      parameters: {
+        type: "object",
+        properties: {
+          path: { type: "string" },
+          edits: {
+            type: "array",
+            minItems: 1,
+            items: { type: "object", properties: { old_string: { type: "string" }, new_string: { type: "string" }, replace_all: { type: "boolean" } }, required: ["old_string", "new_string"] },
+          },
+        },
+        required: ["path", "edits"],
+      },
+    },
+    kind: "edit",
+    subject: (root, input) => editSubject(root, input),
+    validate: async (root, input) => (await multiEditPlan(root, input)).problem,
+    run: (root, input) => multiEditTool(root, input),
+  },
+  {
+    schema: {
       name: "bash",
-      description: "Run a shell command in the workspace root. Writes outside the workspace and temp are blocked. Use for builds, tests, git and other CLI work.",
-      parameters: { type: "object", properties: { command: { type: "string" }, timeout_ms: { type: "integer", minimum: 1000, maximum: SHELL_MAX_MS } }, required: ["command"] },
+      description: "Run a shell command in the workspace root. Use for builds, tests, git and other CLI work. Writes outside the workspace and temp are blocked. The command runs without internet access unless you set network: true, which the user may be asked to approve; set it only for commands that must go online (installing packages, fetching, git push or pull). Set run_in_background: true for a command that keeps running, such as a dev server or a watcher: it returns a shell id at once, and bash_output reads what it has printed.",
+      parameters: {
+        type: "object",
+        properties: {
+          command: { type: "string" },
+          timeout_ms: { type: "integer", minimum: 1000, maximum: SHELL_MAX_MS },
+          network: { type: "boolean", description: "The command needs the internet." },
+          run_in_background: { type: "boolean", description: "Start the command and return without waiting for it to exit." },
+        },
+        required: ["command"],
+      },
     },
     kind: "shell",
-    subject: (_root, input) => ({ kind: "command", command: str(input.command) }),
+    subject: (_root, input) => ({ kind: "command", command: str(input.command), ...(input.network === true ? { network: true } : {}) }),
     validate: (_root, input) => (str(input.command).trim() ? undefined : "A command is required."),
-    run: (root, input, signal) => shellTool(root, input, signal),
+    run: (root, input, signal, context) => input.run_in_background === true ? startBackground(root, input, context) : shellTool(root, input, signal, context),
+  },
+  {
+    schema: {
+      name: "bash_output",
+      description: "Read what a background shell (started with bash run_in_background: true) has printed since the last read, and whether it is still running.",
+      parameters: { type: "object", properties: { shell_id: { type: "string" } }, required: ["shell_id"] },
+    },
+    // Reading an approved process's output acts on nothing new.
+    kind: "read",
+    concurrencySafe: true,
+    validate: (_root, input) => (str(input.shell_id).trim() ? undefined : "A shell_id is required."),
+    run: (_root, input, _signal, context) => {
+      const read = readShell(str(input.shell_id), context?.sessionId ?? "");
+      return { value: { kind: "process", shellId: read.id, command: read.command, output: read.output, running: read.running, ...(read.exitCode !== undefined ? { exitCode: read.exitCode } : {}), ...(read.missed ? { missed: read.missed } : {}) } };
+    },
+  },
+  {
+    schema: {
+      name: "kill_shell",
+      description: "Stop a background shell this thread started, and return its last output.",
+      parameters: { type: "object", properties: { shell_id: { type: "string" } }, required: ["shell_id"] },
+    },
+    // Stopping the agent's own background process needs no approval.
+    kind: "read",
+    validate: (_root, input) => (str(input.shell_id).trim() ? undefined : "A shell_id is required."),
+    run: async (_root, input, _signal, context) => {
+      const read = await killShell(str(input.shell_id), context?.sessionId ?? "");
+      return { value: { kind: "process", shellId: read.id, command: read.command, output: read.output, running: false, ...(read.exitCode !== undefined ? { exitCode: read.exitCode } : {}), stopped: true } };
+    },
   },
   {
     schema: {
@@ -228,8 +302,8 @@ export const BUILTIN_EXTENSION: Extension = {
   // extensions a child must not touch: skills, MCP, questions and plan review.
   // `delegate` can still hand off once more; the leaf profile cannot.
   profiles: {
-    delegate: ["read_file", "list_files", "grep", "write_file", "edit_file", "bash", "todo_write", "task"],
-    "delegate-leaf": ["read_file", "list_files", "grep", "write_file", "edit_file", "bash", "todo_write"],
+    delegate: ["read_file", "list_files", "grep", "write_file", "edit_file", "multi_edit", "bash", "bash_output", "kill_shell", "web_fetch?", "web_search?", "todo_write", "task"],
+    "delegate-leaf": ["read_file", "list_files", "grep", "write_file", "edit_file", "multi_edit", "bash", "bash_output", "kill_shell", "web_fetch?", "web_search?", "todo_write"],
   },
   guards: [dangerGuard],
   prompt: [{
@@ -238,7 +312,7 @@ export const BUILTIN_EXTENSION: Extension = {
   }],
 };
 
-class ToolError extends Error {}
+export class ToolError extends Error {}
 
 const str = (value: unknown) => (typeof value === "string" ? value : "");
 const int = (value: unknown) => (typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : undefined);
@@ -381,8 +455,24 @@ export function render(value: ToolValue, continuation?: Continuation): string {
       text = value.text;
       break;
     case "browser":
+    case "web":
       text = value.text;
       break;
+    case "process": {
+      const status = value.running ? `Shell ${value.shellId} is running.` : `Shell ${value.shellId} exited with code ${value.exitCode ?? 1}.`;
+      if (value.started) {
+        text = `Started shell ${value.shellId} in the background: ${value.command}\nRead its output with bash_output({ shell_id: "${value.shellId}" }) and stop it with kill_shell when it is no longer needed.`;
+        break;
+      }
+      let body = value.output.trimEnd();
+      if (body.length > BASH_BUDGET) {
+        const fitted = headTail(body, BASH_BUDGET);
+        body = `${fitted.text}\n… output truncated (${fitted.omitted} more characters)`;
+      }
+      const missed = value.missed ? `… ${value.missed} earlier characters were dropped before they were read.\n` : "";
+      text = `${missed}${body || "(no new output)"}\n\n${value.stopped ? `Stopped shell ${value.shellId}.` : status}`;
+      break;
+    }
     case "error":
       text = value.message;
       break;
@@ -402,6 +492,8 @@ export function presentationMeta(value: ToolValue): PresentationMeta {
       return { kind: "diff", path: value.path, oldText: value.oldText, newText: value.newText };
     case "terminal":
       return { kind: "terminal", command: value.command, exitCode: value.exitCode };
+    case "process":
+      return { kind: "terminal", command: value.command, ...(value.exitCode !== undefined ? { exitCode: value.exitCode } : {}) };
     case "plan":
       return { kind: "plan" };
     case "question":
@@ -412,6 +504,8 @@ export function presentationMeta(value: ToolValue): PresentationMeta {
       return { kind: "task" };
     case "browser":
       return { kind: "browser", path: value.path };
+    case "web":
+      return { kind: "web", path: value.url };
     case "error":
       return { kind: "error" };
   }
@@ -746,6 +840,36 @@ export async function prepareTool(definition: ToolDefinition, root: string, inpu
   return { input: frozen };
 }
 
+const MULTI_EDIT_MAX = 100;
+
+/** Apply every edit to the text in memory, or say which one fails and why. Nothing is written. */
+async function multiEditPlan(root: string, input: Readonly<Record<string, unknown>>): Promise<{ problem?: string; before?: string; after?: string; count?: number; path?: string }> {
+  if (!str(input.path).trim()) return { problem: "A path is required." };
+  const path = confine(root, str(input.path));
+  const edits = Array.isArray(input.edits) ? input.edits as Array<Record<string, unknown>> : null;
+  if (!edits?.length) return { problem: "edits must be a non-empty list of { old_string, new_string }." };
+  if (edits.length > MULTI_EDIT_MAX) return { problem: `At most ${MULTI_EDIT_MAX} edits in one call.` };
+  const before = await readFile(path, "utf8").catch(() => null);
+  let text = before;
+  let count = 0;
+  for (const [index, edit] of edits.entries()) {
+    const problem = editProblemText(str(input.path), text, edit ?? {});
+    if (problem) return { problem: `Edit ${index + 1} of ${edits.length}: ${problem}` };
+    const oldText = str(edit.old_string);
+    const newText = str(edit.new_string);
+    count += edit.replace_all === true ? text!.split(oldText).length - 1 : 1;
+    text = edit.replace_all === true ? text!.split(oldText).join(newText) : text!.replace(oldText, () => newText);
+  }
+  return { before: before ?? "", after: text ?? "", count, path };
+}
+
+async function multiEditTool(root: string, input: Readonly<Record<string, unknown>>): Promise<{ value: ToolValue }> {
+  const plan = await multiEditPlan(root, input);
+  if (plan.problem || plan.path == null) throw new ToolError(plan.problem ?? "The edits could not be applied.");
+  await writeFile(plan.path, plan.after!, "utf8");
+  return { value: { kind: "diff", path: display(root, plan.path), oldText: plan.before!, newText: plan.after!, replacements: plan.count } };
+}
+
 async function editTool(root: string, input: Record<string, unknown>): Promise<{ value: ToolValue }> {
   const path = confine(root, str(input.path));
   const before = await readFile(path, "utf8").catch(() => null);
@@ -759,17 +883,29 @@ async function editTool(root: string, input: Record<string, unknown>): Promise<{
   return { value: { kind: "diff", path: display(root, path), oldText: before ?? "", newText: after, replacements: count } };
 }
 
-async function shellTool(root: string, input: Record<string, unknown>, signal?: AbortSignal): Promise<{ value: ToolValue }> {
+/**
+ * The harness shell: the workspace write sandbox, and offline unless the call
+ * asked for the network (and was allowed it) or the thread is in Full access.
+ * An offline command cannot read cloud and registry tokens either.
+ */
+export function spawnShell(root: string, command: string, online: boolean) {
+  const workspace = realpathSync(root);
+  return spawnIsolated("/bin/sh", ["-c", command], { agentId: "harness", workspace, cwd: workspace, network: online, ...(online ? {} : { denyReadRoots: credentialRoots() }) });
+}
+
+async function shellTool(root: string, input: Readonly<Record<string, unknown>>, signal?: AbortSignal, context?: ToolContext): Promise<{ value: ToolValue }> {
   const command = str(input.command);
   if (!command.trim()) throw new ToolError("A command is required.");
   const timeout = Math.min(SHELL_MAX_MS, Math.max(1000, int(input.timeout_ms) ?? SHELL_DEFAULT_MS));
-  const { child } = spawnIsolated("/bin/sh", ["-c", command], { agentId: "harness", workspace: realpathSync(root), cwd: realpathSync(root) });
+  const { child } = spawnShell(root, command, input.network === true || context?.fullAccess === true);
   child.stdin.end();
   let stdout = "";
   let capped = false;
+  // A multi-byte character split across two chunks must not turn into replacement characters.
+  const decoder = new StringDecoder("utf8");
   const take = (chunk: Buffer) => {
     if (stdout.length >= SHELL_CAPTURE_MAX) { capped = true; return; }
-    stdout += chunk.toString("utf8");
+    stdout += decoder.write(chunk);
     if (stdout.length > SHELL_CAPTURE_MAX) { stdout = stdout.slice(0, SHELL_CAPTURE_MAX); capped = true; }
   };
   child.stdout.on("data", take);
@@ -786,6 +922,15 @@ async function shellTool(root: string, input: Record<string, unknown>, signal?: 
   signal?.removeEventListener("abort", abort);
   const note = timedOut ? `\n… stopped after ${Math.round(timeout / 1000)}s.` : signal?.aborted ? "\n… stopped by the user." : capped ? "\n… capture stopped; the command kept writing." : "";
   return { value: { kind: "terminal", command, stdout, exitCode, ...(note ? { note } : {}) } };
+}
+
+function startBackground(root: string, input: Readonly<Record<string, unknown>>, context?: ToolContext): { value: ToolValue } {
+  const command = str(input.command);
+  if (!command.trim()) throw new ToolError("A command is required.");
+  if (!context?.sessionId) throw new ToolError("Background shells need a thread.");
+  const online = input.network === true || context.fullAccess === true;
+  const shell = startShell(context.sessionId, command, () => spawnShell(root, command, online).child);
+  return { value: { kind: "process", shellId: shell.id, command, output: "", running: true, started: true } };
 }
 
 function planTool(input: Record<string, unknown>): { value: ToolValue } {
@@ -813,7 +958,14 @@ function pack(produced: ToolProduced): ToolOutcome {
     if (value.isError) outcome.isError = true;
   } else if (value.kind === "task") {
     if (value.failed) outcome.isError = true;
-  } else if (value.kind !== "error") outcome.path = value.path;
+  } else if (value.kind === "process") {
+    outcome.command = value.command;
+    if (value.exitCode !== undefined) {
+      outcome.exitCode = value.exitCode;
+      if (value.exitCode !== 0 && !value.stopped) outcome.isError = true;
+    }
+  } else if (value.kind === "web") outcome.path = value.url;
+  else if (value.kind !== "error") outcome.path = value.path;
   return outcome;
 }
 
@@ -839,12 +991,12 @@ async function externalize(root: string, name: string, input: Record<string, unk
   };
 }
 
-export type RunToolOptions = { canRead?: boolean };
+export type RunToolOptions = { canRead?: boolean } & ToolContext;
 
 /** Run one tool. Failures come back as error results the model can read and correct, never as exceptions. */
 export async function executeTool(definition: ToolDefinition, root: string, input: Record<string, unknown>, signal?: AbortSignal, options?: RunToolOptions): Promise<ToolOutcome> {
   try {
-    const produced = await definition.run(root, input, signal);
+    const produced = await definition.run(root, input, signal, { ...(options?.fullAccess ? { fullAccess: true } : {}), ...(options?.sessionId ? { sessionId: options.sessionId } : {}) });
     if (produced.value.kind === "error") return failure(produced.value.message);
     return await externalize(root, definition.schema.name, input, pack(produced), options?.canRead === true);
   } catch (error) {

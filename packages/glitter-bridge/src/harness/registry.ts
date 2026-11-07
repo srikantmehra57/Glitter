@@ -123,9 +123,15 @@ export class ExtensionRegistry {
       const names = extensions.find((extension) => extension.profiles && Object.hasOwn(extension.profiles, profileId))?.profiles?.[profileId];
       if (!names) throw new Error(`Unknown tool profile: ${profileId}.`);
       tools = new Map();
-      for (const name of names) {
+      for (const entry of names) {
+        // A trailing `?` names a tool a factory may leave out of this turn (web search without a key).
+        const optional = entry.endsWith("?");
+        const name = optional ? entry.slice(0, -1) : entry;
         const definition = all.get(name);
-        if (!definition) throw new Error(`Tool profile ${profileId} names ${name}, which this turn does not have.`);
+        if (!definition) {
+          if (optional) continue;
+          throw new Error(`Tool profile ${profileId} names ${name}, which this turn does not have.`);
+        }
         tools.set(name, definition);
       }
     }

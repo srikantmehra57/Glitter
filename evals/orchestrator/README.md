@@ -100,6 +100,26 @@ manual-score tables used by the Phase 3 exit report. `small-alone` requires
 `EVAL_SMALL_MODEL`. The cost cap still applies per run; `--runs=2` is the minimum
 repetition the plan asks for.
 
+Each report records the role assignments, standalone effort levels, turn
+timeout, git revision and whether the evaluated source has uncommitted changes.
+The source SHA-256 covers the bridge's TypeScript and the evaluator's JavaScript;
+the corpus has its own SHA-256. Per-call records retain the effort actually used
+and separate cache reads and writes, so comparisons can identify their setup
+and recalculate estimates.
+
+Live runs give Harness an empty temporary home configuration. Personal
+instructions, skills and MCP servers on the maintainer's Mac do not participate
+in the fixture, and the report records this isolation.
+
+An exhausted rate limit, rejected/missing credential, or billing block stops the
+batch after the failing case. That case retains its error, provider code and
+HTTP status; remaining cases are marked skipped with the reason. Both report
+formats and comparisons identify the block. The command exits with status 1 so
+a script cannot silently start its next split. Resolve the account issue or wait
+for the provider limit to clear, then explicitly start a new run in a new report
+directory. Task-specific errors, including context overflows, do not skip other
+cases. A blocked report cannot establish a model-quality or cost comparison.
+
 ## Prices and cost cap
 
 Costs are USD per 1M tokens. Set `EVAL_PRICES` to a JSON object or a path:
@@ -116,6 +136,12 @@ Without prices, costs are marked partial; the token cap
 (`--max-tokens`, default 5,000,000) is still enforced. `--max-usd` (default 5)
 is checked **between** cases, so a single expensive turn can carry the run past
 the cap.
+
+Optional `cached` and `cacheWrite` rates price cache reads and writes per 1M
+tokens. These tokens are removed from the normal input charge. An unknown rate
+or a combined cache count without a read/write breakdown makes the estimate
+partial; the known charges are still reported. Partial totals cannot establish
+a cost saving or enforce the dollar cap for unpriced usage.
 
 ## Tuning
 

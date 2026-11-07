@@ -102,7 +102,8 @@ describe("ExtensionsStore", () => {
     expect(asked[0]?.title).toBe("Install Daily driver?");
     expect(asked[0]?.body).toContain("sequential-thinking");
     expect(asked[0]?.body).toContain(".glitter/mcp.json");
-    expect(asked[0]?.body).toContain("asks for approval");
+    expect(asked[0]?.body).toContain("permissions and grants");
+    expect(asked[0]?.body).toContain("network download");
   });
 
   it("installs nothing when the confirmation is declined", async () => {

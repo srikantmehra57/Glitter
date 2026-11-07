@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { realpathSync, statSync } from "node:fs";
+import { dirname, join, relative, sep } from "node:path";
 import { homedir, platform, tmpdir } from "node:os";
 import { approvalAlive, approvalExpiry, approvalExpiryMono, APPROVAL_TTL_MS, describeIsolation, osSandboxAvailable, type IsolationReport } from "../isolation.js";
 import { clipRecency, contextBudget, estimateRequestTokens, fitHistory } from "./context.js";
@@ -16,6 +17,10 @@ import { ASK_USER_TOOL, EXIT_PLAN_TOOL, planReviewQuestion, questionRequest, set
 import { discoverSkills, expandInvocation, skillsExtension } from "./skills.js";
 import { SessionStore, type BuilderSessionRecord, type DelegationPolicy, type PendingSteer, type SessionMeta } from "./store.js";
 import { BUILTIN_EXTENSION, BUILTIN_TOOLS, canonicalize, confine, executeTool, executionMode, prepareTool, repeatReminder, scheduleToolCalls, type PresentationMeta, type ToolKind } from "./tools.js";
+import { stopAllShells, stopSessionShells } from "./shells.js";
+import { webExtension } from "./web.js";
+import { COMPACT_AT, COMPACTION_TIMEOUT_MS, SUMMARY_SYSTEM, compactable, compactedHistory, lastUserContent, summaryRequest } from "./compaction.js";
+import { compileRules, type CompiledRules, type PermissionRule } from "./permission/rules.js";
 import { CONTEXT_WINDOW, ProviderError, isTransientProviderError, isTruncatedStop, streamChat, truncatedToolResult, type AssistantMessage, type ChatMessage, type ContentPart, type ImagePart, type SystemPrompt, type ToolCall, type ToolSchema } from "./wire.js";
 import { PROBE_CONTENT, PROBE_DONE, PROBE_FILE, PROBE_VERSION, createProbeStore, findProbe, isProbeRole, probeNeeded, recordProbe, roleCapabilitiesFromProbes, runProbe, type ProbeRequest, type ProbeResponse, type ProbeResult, type ProbeRole, type ProbeStore } from "./orchestrator/probes.js";
 import { parseRouterAssessment } from "./orchestrator/assessment.js";
@@ -69,7 +74,7 @@ export type HarnessModel = {
   providerId: string;
   description?: string | null;
   contextLimit?: number | null;
-  cost?: { input: string; output: string; currency?: string | null } | null;
+  cost?: { input?: string; output?: string; currency?: string | null } | null;
   reasoningEfforts?: string[];
   defaultReasoningEffort?: string;
   effortSource?: "host";
@@ -336,6 +341,14 @@ type Live = {
   leadMessages: ChatMessage[];
   /** The current plan's fresh Builder session, kept across a user question. */
   builder?: BuilderSessionRecord;
+  /** Models that rejected the reasoning setting this session: later calls skip it instead of failing first. */
+  effortRejected?: Set<string>;
+  /** A manual compaction in progress; new sends are refused until it finishes. */
+  compacting?: Promise<void>;
+  /** Manual compaction is cancelled when the session or host closes. */
+  compactionController?: AbortController;
+  /** Nested AGENTS.md files already shown to the model in this session. */
+  rulesLoaded?: Set<string>;
 };
 
 /** One call's result. A call that asks the user also carries its questions and its transcript item. */
@@ -358,6 +371,8 @@ type HostLimits = {
 export class HarnessHost {
   readonly spec = { id: HARNESS_ID, name: HARNESS_NAME };
   private credentials: ProviderCredentials = {};
+  /** The user's persistent allow and deny rules (Settings → Permissions), for every thread. */
+  private rules: CompiledRules = compileRules([]);
   private sessions = new Map<string, Live>();
   private approvals = new Map<string, Approval>();
   private catalog: { key: string; at: number; models: CatalogModel[] } | null = null;
@@ -381,6 +396,9 @@ export class HarnessHost {
     this.registry.register(BUILTIN_EXTENSION);
     this.registry.register(delegationExtension(this));
     this.registry.register(skillsExtension(this.homeDir));
+    this.registry.register(webExtension({ credentials: () => this.credentials, fetchImpl: () => this.fetchImpl }));
+    // Read at call time, so a rule the user adds applies to the very next call.
+    this.registry.register({ id: "rules", guards: [(input) => this.rules.guard(input)] });
     this.mcp = new McpManager(this.homeDir, emit);
     this.registry.register(mcpExtension(this.mcp));
     // With no one to answer, the model is not offered a way to ask, nor a plan review to leave Plan mode by.
@@ -409,8 +427,12 @@ export class HarnessHost {
   async stop() {
     for (const approval of this.approvals.values()) approval.resolve({ kind: "cancelled" });
     this.approvals.clear();
-    for (const live of this.sessions.values()) live.controller?.abort();
+    for (const live of this.sessions.values()) {
+      live.controller?.abort();
+      live.compactionController?.abort();
+    }
     this.sessions.clear();
+    await stopAllShells();
     await this.mcp.close();
   }
 
@@ -470,18 +492,25 @@ export class HarnessHost {
       // A negative price is a sentinel (Kilo's auto routers), not a rate.
       const perMillion = (value?: string) => {
         const amount = Number(value);
-        return value != null && Number.isFinite(amount) && amount >= 0 ? String(Math.round(amount * 1_000_000 * 1000) / 1000) : null;
+        if (typeof value !== "string" || value.trim() === "" || !Number.isFinite(amount) || amount < 0) return null;
+        const scaled = amount * 1_000_000;
+        return Number.isFinite(scaled) ? String(Number(scaled.toPrecision(12))) : null;
       };
+      const inputPrice = perMillion(pricing?.prompt);
+      const outputPrice = perMillion(pricing?.completion);
       const tiers = effortTiers(provider.id, raw, provider.wire, listedReasoning, listedEfforts);
       const listedDefault = typeof reasoning?.default_effort === "string" && (tiers as string[]).includes(reasoning.default_effort) ? reasoning.default_effort : undefined;
-      const listedWindow = typeof row.context_length === "number" ? row.context_length : null;
+      const positiveLimit = (value: unknown): number | null => typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
+      // Anthropic reports a maximum input size instead of a total context window.
+      // Treating it as the window keeps the output reserve conservative.
+      const listedWindow = positiveLimit(row.context_length) ?? positiveLimit(row.max_input_tokens);
       return {
         modelId: `${provider.id}/${raw}`,
         displayLabel: typeof row.display_name === "string" ? row.display_name : typeof row.name === "string" ? row.name : raw,
         providerId: provider.id,
         description: provider.name,
         contextLimit: contextWindow(provider.id, raw, listedWindow),
-        cost: pricing && perMillion(pricing.prompt) != null ? { input: perMillion(pricing.prompt)!, output: perMillion(pricing.completion) ?? "0", currency: "USD" } : null,
+        cost: inputPrice != null || outputPrice != null ? { ...(inputPrice != null ? { input: inputPrice } : {}), ...(outputPrice != null ? { output: outputPrice } : {}), currency: "USD" } : null,
         reasoningEfforts: TIERS.filter((tier) => (tiers as string[]).includes(tier)),
         ...(tiers.length ? { defaultReasoningEffort: listedDefault ?? defaultEffortTier(raw, tiers) } : {}),
         effortSource: "host",
@@ -643,9 +672,71 @@ export class HarnessHost {
   async closeSession(options: { sessionId: string }) {
     const live = this.sessions.get(options.sessionId);
     live?.controller?.abort();
+    live?.compactionController?.abort();
     this.sessions.delete(options.sessionId);
+    // A thread's dev servers and watchers stop with it.
+    await stopSessionShells(options.sessionId);
     await this.mcp.closeSession(options.sessionId);
     return { closed: true };
+  }
+
+  /** Settings → Permissions' rules. Answers with the ones that could not be read, so the app can say so. */
+  setPermissionRules(rules: readonly PermissionRule[]) {
+    this.rules = compileRules(rules);
+    return { problems: this.rules.problems };
+  }
+
+  /** /compact returns immediately; the compaction item reports the result. */
+  async compactSession(options: { sessionId: string }) {
+    const live = this.requireLive(options.sessionId);
+    if (live.prompting || live.compacting) throw new Error("The thread is busy. Wait for the turn to finish, or stop it, then compact.");
+    if (live.question || live.pendingPlan || live.approvedPlan || live.builder) throw new Error("Finish the pending question or plan before compacting this thread.");
+    if (!compactable(live.messages)) return { status: "noop", reason: "no_compactable_history" };
+    const controller = new AbortController();
+    live.compactionController = controller;
+    live.compacting = this.compactLive(live, "manual", controller.signal).catch((error) => {
+      if (!live.muted && this.sessions.get(live.meta.sessionId) === live) this.emit("agentNotice", { sessionId: live.meta.sessionId, level: "warning", message: `Could not compact the thread: ${error instanceof Error ? error.message : String(error)}` });
+    }).finally(() => { live.compacting = undefined; live.compactionController = undefined; });
+    return { status: "compacting" };
+  }
+
+  /**
+   * Replace the model history with a summary written by the thread's own
+   * model. The summary call is off the history and off the transcript; the
+   * compaction item says what happened, and the session log records the new
+   * history so a resumed thread starts from the same place.
+   */
+  private async compactLive(live: Live, trigger: "auto" | "manual", signal?: AbortSignal): Promise<void> {
+    const compactSignal = AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(COMPACTION_TIMEOUT_MS)]);
+    const count = live.messages.length;
+    const itemId = this.itemId(live, "compaction");
+    const reason = trigger === "auto" ? `Summarizing ${count} earlier messages to fit the context window` : `Summarizing ${count} earlier messages`;
+    this.emitItem(live, { itemId, kind: "compaction", status: "inProgress", turnId: live.turnId, reason });
+    try {
+      const modelId = live.meta.modelId ?? await this.defaultModel();
+      if (!modelId) throw new Error(`${HARNESS_NAME} has no model to use. Add a provider key in Settings → Providers.`);
+      const { providerId, model } = splitModelId(modelId);
+      const provider = resolveProvider(providerId, this.credentials);
+      if (!provider) throw new ProviderError(`${providerSpec(providerId)?.name ?? providerId} has no key. Add it in Settings → Providers, or pick another model.`, undefined, "MISSING_CREDENTIAL");
+      const listed = (await this.loadCatalog(false).catch(() => [])).find((row) => row.modelId === modelId);
+      const window = listed?.contextLimit ?? contextWindow(provider.id, model);
+      compactSignal.throwIfAborted();
+      const { message, stopReason } = await this.callModel(live, provider, modelId, model, { stable: SUMMARY_SYSTEM, volatile: "" }, [], compactSignal, window, listed?.listedReasoning, listed?.reasoningEfforts, undefined, { messages: summaryRequest(live.messages, window), emitText: false, emitContext: false });
+      if (isTruncatedStop(stopReason)) throw new Error("the model's summary was cut off by a provider limit");
+      const summary = message.text.trim();
+      if (!summary) throw new Error("the model returned an empty summary");
+      compactSignal.throwIfAborted();
+      const next = compactedHistory(summary, lastUserContent(live.messages));
+      await this.store.append(live.meta.sessionId, [{ type: "compaction", messages: next }]);
+      live.messages.splice(0, live.messages.length, ...next);
+      live.contextNotified = false;
+      this.resetRepeat(live);
+      if (!live.muted) this.emit("sessionFacts", { sessionId: live.meta.sessionId, context: null });
+      this.emitItem(live, { itemId, kind: "compaction", status: "completed", turnId: live.turnId, reason: `${trigger === "auto" ? "Compacted to fit the context window" : "Compacted"}: ${count} messages became a summary. The full transcript is kept.`, text: summary }, true);
+    } catch (error) {
+      this.emitItem(live, { itemId, kind: "compaction", status: "failed", turnId: live.turnId, reason: `Compaction failed: ${error instanceof Error ? error.message : String(error)}` }, true);
+      throw error;
+    }
   }
 
   private requireLive(sessionId: string) {
@@ -965,6 +1056,9 @@ export class HarnessHost {
 
   async sendTurn(options: { sessionId: string; text: string; reasoningEffort?: string; images?: Array<{ mediaType: string; base64Data: string }>; ifBusy?: "queue" | "steer" | "replace"; skill?: SkillInvocation; forcedShape?: OrchestratorShape }) {
     const live = this.requireLive(options.sessionId);
+    // Waiting here would hold the session's bridge queue and prevent Stop from
+    // reaching it. The composer restores an unaccepted draft for a retry.
+    if (live.compacting) throw new Error("Context is still being compacted. Wait for it to finish before sending.");
     // A typed `/skill` is expanded now, so a queued turn runs the skill as it was when sent.
     const expanded = options.skill ? expandInvocation(live.meta.workspaceRoot, this.homeDir, options.skill, options.text) : undefined;
     const text = expanded?.content ?? options.text;
@@ -1051,7 +1145,7 @@ export class HarnessHost {
       if (fromQueue) this.emit("turnStarted", { sessionId: live.meta.sessionId, turnId: request.turnId });
       // Sync before the snapshot, so this turn sees the config as it is now. A
       // broken config reports and retires the previous generation for future turns.
-      await this.mcp.ensure(live.meta.workspaceRoot, this.mcpAuthorization(live), live.meta.sessionId);
+      if (live.meta.mode !== "plan") await this.mcp.ensure(live.meta.workspaceRoot, this.mcpAuthorization(live), live.meta.sessionId);
       void this.runTurn(live, request.turnId, { prompt: request.display ?? request.text, ...(request.forcedShape ? { forcedShape: request.forcedShape } : {}) });
     } catch (error) {
       if (!durable) {
@@ -1102,7 +1196,14 @@ export class HarnessHost {
    */
   private async systemPrompt(live: Live, turn: TurnContributions): Promise<SystemPrompt> {
     let rules = "";
-    try { rules = (await readFile(confine(live.meta.workspaceRoot, "AGENTS.md"), "utf8")).slice(0, 20_000); } catch { /* no readable in-workspace project rules */ }
+    let rulesFile = "AGENTS.md";
+    // AGENTS.md first; a project that only has CLAUDE.md gets that instead.
+    for (const name of ["AGENTS.md", "CLAUDE.md"]) {
+      try { rules = (await readFile(confine(live.meta.workspaceRoot, name), "utf8")).slice(0, 20_000); rulesFile = name; break; } catch { /* no readable in-workspace project rules */ }
+    }
+    // The user's own rules for every project: written by them, outside any workspace.
+    let personal = "";
+    try { personal = (await readFile(join(this.homeDir, ".glitter", "AGENTS.md"), "utf8")).slice(0, 20_000); } catch { /* none */ }
     const stable = [
       `You are ${HARNESS_NAME}, a coding agent working in the user's local workspace through tools. You are running inside a desktop app; the user sees your tool calls and replies as they happen.`,
       `Workspace root: ${live.meta.workspaceRoot}. Platform: ${platform()}.`,
@@ -1110,11 +1211,13 @@ export class HarnessHost {
       "Paths are relative to the workspace root. Tools cannot reach outside it, and the shell cannot write outside it.",
       "The user may refuse a tool call; if so, adjust instead of retrying the same call. Never claim to have run or changed something you did not.",
       "Reply in concise Markdown. When you finish, summarise what changed and anything left to do.",
-      rules ? `Project rules from AGENTS.md:\n\n${rules}` : "",
+      personal.trim() ? `The user's own rules, for every project (from ~/.glitter/AGENTS.md):\n\n${personal}` : "",
+      rules ? `Project rules from ${rulesFile}:\n\n${rules}` : "",
+      "A folder inside the workspace can have its own AGENTS.md; when you first touch a file there, its rules are added to that tool result. Follow them for files under that folder.",
     ].filter(Boolean).join("\n\n");
     const volatile = [
       `Date: ${new Date().toISOString().slice(0, 10)}.`,
-      live.meta.mode === "plan" ? "PLAN MODE: do not edit files. Investigate, then reply with a concrete plan the user can approve. Read-only commands are fine." : "",
+      live.meta.mode === "plan" ? "PLAN MODE: do not edit files. Investigate with the workspace read tools, then present a concrete plan the user can approve. Shell commands and MCP tools cannot run in Plan mode." : "",
       ...turn.prompt.volatile,
     ].filter(Boolean).join("\n\n");
     return { stable, volatile };
@@ -1171,9 +1274,14 @@ export class HarnessHost {
     return out;
   }
 
-  /** Long threads keep their recent tool output in full and shorten older output. */
-  private history(live: Live): ChatMessage[] {
-    return clipRecency(live.messages);
+  /**
+   * Long threads keep their recent tool output in full and shorten older
+   * output. Claude's history stays append-only instead: its prompt cache and
+   * its thinking blocks are bound to the exact earlier messages, and a fitted
+   * view or a compaction handles a full window.
+   */
+  private history(live: Live, provider?: ResolvedProvider): ChatMessage[] {
+    return provider?.wire === "anthropic" ? live.messages : clipRecency(live.messages);
   }
 
   /**
@@ -1385,11 +1493,14 @@ export class HarnessHost {
             ...(effort ? { effort } : {}),
             inputTokens: spent.input + spent.cacheRead + spent.cacheWrite,
             cachedTokens: spent.cacheRead + spent.cacheWrite,
+            cacheReadTokens: spent.cacheRead,
+            cacheWriteTokens: spent.cacheWrite,
             outputTokens: spent.output,
             ...(event.stopReason ? { stopReason: event.stopReason } : {}),
             durationMs: Date.now() - at,
             toolCalls: 0,
           });
+          if (isTruncatedStop(event.stopReason)) throw new Error("The routing response was cut off by a provider limit.");
           return { text, ...(effort ? { effort } : {}) };
         }
       }
@@ -1599,7 +1710,10 @@ export class HarnessHost {
     } catch (error) {
       outcome = controller.signal.aborted
         ? { kind: "completed", params: { terminal: "cancelled" } }
-        : { kind: "failed", params: { terminal: "failed", error: { message: error instanceof Error ? error.message : String(error) } } };
+        : { kind: "failed", params: { terminal: "failed", error: {
+          message: error instanceof Error ? error.message : String(error),
+          ...(error instanceof ProviderError ? { code: error.code, ...(error.status != null ? { status: error.status } : {}) } : {}),
+        } } };
     } finally {
       // A staged turn's record grows after the early event; send the final rows
       // so the live receipt and Usage can name the review and takeover stages.
@@ -1694,7 +1808,18 @@ export class HarnessHost {
       const window = listed?.contextLimit ?? contextWindow(provider.id, model);
       const route = input.stage ? { routeId: input.stage.routeId, role: input.stage.role, stage: input.stage.stage, ...(input.stage.effort ? { effort: input.stage.effort } : {}) } : undefined;
       const schemas = input.toolSchemas?.() ?? input.offered();
-      const isolated = input.history ? clipRecency(history.messages) : undefined;
+      // Near the window, the thread's own history is summarized before the call rather than trimmed.
+      if (!input.history && !live.question && !live.pendingPlan && !live.approvedPlan && !live.builder && window && compactable(live.messages)) {
+        const estimate = estimateRequestTokens({ system: input.system, messages: this.history(live, provider), tools: schemas });
+        if (estimate > COMPACT_AT * contextBudget(window).input) {
+          try { await this.compactLive(live, "auto", input.signal); }
+          catch (error) {
+            if (input.signal.aborted) return { text, capped, asked, cancelled: true, steps };
+            if (!live.muted) this.emit("agentNotice", { sessionId, level: "warning", message: `Could not summarize the thread (${error instanceof Error ? error.message : String(error)}); shortening older output instead.` });
+          }
+        }
+      }
+      const isolated = input.history ? (provider.wire === "anthropic" ? [...history.messages] : clipRecency(history.messages)) : undefined;
       const callOptions = { ...(isolated ? { messages: isolated } : {}), ...(input.emitText === false ? { emitText: false } : {}) };
       const { message: reply, stopReason, effort } = await this.callModel(live, provider, modelId, model, input.system, schemas, input.signal, window, listed?.listedReasoning, listed?.reasoningEfforts, route, Object.keys(callOptions).length ? callOptions : undefined);
       // A provider that rejected the effort fell back for this call; the route record keeps what actually ran.
@@ -1720,6 +1845,7 @@ export class HarnessHost {
         continue;
       }
       if (!reply.toolCalls?.length) {
+        if (isTruncatedStop(stopReason)) throw new Error("The model's response was cut off by a provider limit and is incomplete. Retry the request or choose a model with more capacity.");
         // A steer that arrived while the model was writing should still be answered.
         if (live.steering.length) continue;
         text = reply.text;
@@ -2383,7 +2509,7 @@ export class HarnessHost {
     input.record.stages.push(row);
     const listed = (await this.loadCatalog(false).catch(() => [])).find((entry) => entry.modelId === modelId);
     const window = listed?.contextLimit ?? contextWindow(provider.id, model);
-    const { message, effort: actual } = await this.callModel(
+    const { message, stopReason, effort: actual } = await this.callModel(
       input.live,
       provider,
       modelId,
@@ -2401,6 +2527,7 @@ export class HarnessHost {
       if (actual) row.effectiveEffort = actual;
       else delete row.effectiveEffort;
     }
+    if (isTruncatedStop(stopReason)) throw new Error("The model's handoff was cut off by a provider limit.");
     return { text: message.text, message };
   }
 
@@ -2629,7 +2756,8 @@ export class HarnessHost {
   /** One model call, streamed into reasoning and message items, with retries for transient failures. */
   private async callModel(live: Live, provider: ResolvedProvider, modelId: string, model: string, system: SystemPrompt, tools: readonly ToolSchema[], signal: AbortSignal, window: number | null, listedReasoning?: boolean, listedEfforts?: readonly string[], route?: CallRoute, options: CallOptions = {}): Promise<{ message: AssistantMessage; stopReason: string; effort?: string }> {
     const serving = this.servingSystem(system, model, provider);
-    let effort = route ? route.effort : live.meta.effort && (live.meta.effort !== "none" || SENDS_NONE.has(provider.id)) ? live.meta.effort : undefined;
+    let effort = route ? route.effort : live.meta.effort && (live.meta.effort !== "none" || SENDS_NONE.has(provider.id) || provider.wire === "anthropic") ? live.meta.effort : undefined;
+    if (live.effortRejected?.has(modelId)) effort = undefined;
     const tiers = effortTiers(provider.id, model, provider.wire, listedReasoning, listedEfforts) as string[];
     if (effort && !tiers.includes(effort)) effort = undefined;
     // ZenMux fills an omitted effort with medium. Kimi K3 does not accept that, and its published default is max.
@@ -2664,7 +2792,7 @@ export class HarnessHost {
       // already-trimmed view again — each attempt strictly smaller than the last.
       // Thinking blocks carry the signature of the model that produced them, so
       // a routed turn strips any that came from another model before sending.
-      view ??= sanitizeHistory(options.messages ?? this.history(live), modelId, live.meta.modelId);
+      view ??= sanitizeHistory(options.messages ?? this.history(live, provider), modelId, live.meta.modelId);
       const fitted = fitHistory({ messages: view, budget: budget ? Math.max(1, budget.input - fixedTokens) : null, force: budget ? providerOverflow : false });
       if (fitted.outcome === "unfittable") throw unfittableContextError();
       providerOverflow = false;
@@ -2729,6 +2857,8 @@ export class HarnessHost {
               ...(effort ? { effort } : {}),
               inputTokens: spent.input + spent.cacheRead + spent.cacheWrite,
               cachedTokens: spent.cacheRead + spent.cacheWrite,
+              cacheReadTokens: spent.cacheRead,
+              cacheWriteTokens: spent.cacheWrite,
               outputTokens: spent.output,
               ...(event.stopReason ? { stopReason: event.stopReason } : {}),
               durationMs: Date.now() - attemptAt,
@@ -2751,6 +2881,8 @@ export class HarnessHost {
         // A model that rejects the reasoning setting gets one retry without it.
         if (effort && status === 400 && /thinking|reasoning|effort|budget/i.test(message)) {
           effort = undefined;
+          // Remembered for the session, so each later step does not fail first.
+          (live.effortRejected ??= new Set()).add(modelId);
           if (!live.muted) this.emit("agentNotice", { sessionId: live.meta.sessionId, level: "info", message: `${model} does not accept that effort level; continuing without it.` });
           continue;
         }
@@ -2760,7 +2892,7 @@ export class HarnessHost {
         const overflow = error instanceof ProviderError && (error.code === "CONTEXT_WINDOW_EXCEEDED" || (error.status === 400 && CONTEXT_WINDOW.test(message)));
         if (overflow) {
           if (!overflowRetried && budget) {
-            const original = sanitizeHistory(options.messages ?? this.history(live), modelId, live.meta.modelId);
+            const original = sanitizeHistory(options.messages ?? this.history(live, provider), modelId, live.meta.modelId);
             const input = Math.max(1, Math.floor(budget.input / 2));
             const fixed = estimateRequestTokens({ system, messages: [], tools });
             const tighter = fitHistory({ messages: original, budget: Math.max(1, input - fixed), force: true });
@@ -2818,7 +2950,7 @@ export class HarnessHost {
     try { subject = definition.subject?.(live.meta.workspaceRoot, frozen) ?? { kind: "none" }; } catch { /* refused below */ }
     // Guards first, in every mode: the policy below never sees a call they refused.
     const refusal = subject ? runGuards(turn.guards, { toolName: call.name, kind, subject }) : "A permission check failed, so this call was refused.";
-    const verdict: Verdict = refusal || !subject ? { kind: "deny", reason: refusal ?? "" } : decide({ kind, subject, mode: live.approvalMode, planMode: live.meta.mode === "plan", grants: live.grants });
+    const verdict: Verdict = refusal || !subject ? { kind: "deny", reason: refusal ?? "" } : decide({ kind, toolName: call.name, subject, mode: live.approvalMode, planMode: live.meta.mode === "plan", grants: [...live.grants, ...this.rules.grants] });
     if (verdict.kind === "deny") {
       const output = noted(verdict.reason);
       this.emitItem(live, { ...base, status: "failed", failureReason: output, visibleOutput: output }, true);
@@ -2844,7 +2976,7 @@ export class HarnessHost {
         return { id: call.id, name: call.name, output, isError: true };
       }
       if (latest.kind === "browser" && (latest.origin !== subject.origin || latest.control !== subject.control)) {
-        const refreshed = decide({ kind, subject: latest, mode: live.approvalMode, planMode: live.meta.mode === "plan", grants: live.grants });
+        const refreshed = decide({ kind, subject: latest, mode: live.approvalMode, planMode: live.meta.mode === "plan", grants: [...live.grants, ...this.rules.grants] });
         if (refreshed.kind === "deny") {
           const output = noted(refreshed.reason);
           this.emitItem(live, { ...base, status: "failed", failureReason: output, visibleOutput: output }, true);
@@ -2872,9 +3004,11 @@ export class HarnessHost {
     }
     await this.markStarted(live, call);
     // Frozen before observers see it: a hook cannot rewrite what the model or the card receives.
-    const result = Object.freeze(await executeTool(definition, live.meta.workspaceRoot, frozen, signal, { canRead: true }));
+    // Background shells belong to the visible thread, so a delegated task's dev server outlives the task but not the thread.
+    const result = Object.freeze(await executeTool(definition, live.meta.workspaceRoot, frozen, signal, { canRead: live.meta.mode !== "plan", sessionId: this.surface(live).meta.sessionId, ...(live.approvalMode === "allowAll" ? { fullAccess: true } : {}) }));
     await this.hook(turn, "toolFinished", { context: turn.context, call: observed, outcome: result });
-    const output = noted(result.output);
+    const rules = !result.isError && (kind === "read" || kind === "edit") && typeof frozen.path === "string" ? await this.nestedRules(live, frozen.path) : "";
+    const output = rules ? `${noted(result.output)}\n\n${rules}` : noted(result.output);
     const visible = noted(result.display ?? result.output);
     if (result.question) return { id: call.id, name: call.name, output: "", question: result.question, item: base };
     if (result.plan) {
@@ -2899,6 +3033,40 @@ export class HarnessHost {
       ...(result.isError ? { failureReason: visible.split("\n")[0].slice(0, 300) } : {}),
     }, true);
     return { id: call.id, name: call.name, output, ...(result.isError ? { isError: true } : {}), ...(result.activate?.length ? { activate: result.activate } : {}), ...(result.images?.length ? { images: result.images } : {}), ...(observation ? { observation } : {}) };
+  }
+
+  /**
+   * AGENTS.md files between the workspace root and a path the call touched,
+   * each shown to the model once per session. The root file is already in
+   * the system prompt. Appending them to a tool result keeps the history
+   * append-only, so the prompt cache and the stable prefix are untouched.
+   */
+  private async nestedRules(live: Live, raw: string): Promise<string> {
+    let root: string;
+    let target: string;
+    try {
+      root = realpathSync(live.meta.workspaceRoot);
+      target = confine(live.meta.workspaceRoot, raw || ".");
+    } catch { return ""; }
+    let dir = target;
+    try { if (!statSync(target).isDirectory()) dir = dirname(target); } catch { dir = dirname(target); }
+    const chain: string[] = [];
+    while (dir.startsWith(`${root}${sep}`)) {
+      chain.unshift(dir);
+      dir = dirname(dir);
+    }
+    const loaded = live.rulesLoaded ??= new Set();
+    const sections: string[] = [];
+    for (const folder of chain) {
+      const relativeDir = relative(root, folder).split(sep).join("/");
+      if (loaded.has(relativeDir)) continue;
+      loaded.add(relativeDir);
+      let text = "";
+      // Confined again: an AGENTS.md symlink must not disclose a file outside the workspace.
+      try { text = (await readFile(confine(live.meta.workspaceRoot, `${relativeDir}/AGENTS.md`), "utf8")).slice(0, 20_000); } catch { continue; }
+      if (text.trim()) sections.push(`Rules from ${relativeDir}/AGENTS.md, for files under ${relativeDir}/:\n\n${text.trim()}`);
+    }
+    return sections.join("\n\n");
   }
 
   /** The question this thread is waiting on, as the app's card renders it. */
@@ -3028,6 +3196,7 @@ export class HarnessHost {
     try {
       for await (const event of streamChat({ provider, modelId, system: { stable: "Answer exactly in the format requested. Do not use tools.", volatile: "" }, messages: [{ role: "user", content: [{ type: "text", text: options.prompt }] }], tools: [], signal: controller.signal, fetchImpl: this.fetchImpl })) {
         if (event.type === "text") text += event.delta;
+        else if (event.type === "done" && isTruncatedStop(event.stopReason)) throw new Error("The suggestion was cut off by a provider limit.");
       }
     } finally {
       clearTimeout(timer);
@@ -3055,6 +3224,7 @@ export class HarnessHost {
       for await (const event of streamChat({ provider, modelId: options.modelId, system: { stable: "Reply with one word.", volatile: "" }, messages: [{ role: "user", content: [{ type: "text", text: "Reply with the word: ready" }] }], tools: [], signal: controller.signal, fetchImpl: this.fetchImpl })) {
         if ((event.type === "text" || event.type === "reasoning") && firstTokenMs === null) firstTokenMs = Date.now() - started;
         if (event.type === "text") text += event.delta;
+        else if (event.type === "done" && isTruncatedStop(event.stopReason)) throw new Error("The test reply was cut off by a provider limit.");
       }
     } catch (error) {
       if (controller.signal.aborted) throw new ProviderError(`No reply within ${Math.round((options.timeoutMs ?? 30_000) / 1000)} seconds.`, undefined, "TIMEOUT");
@@ -3143,7 +3313,10 @@ export class HarnessHost {
           timeouts: { idleMs: this.limits.idleMs, firstEventMs: this.limits.firstEventMs },
           fetchImpl: this.fetchImpl,
         })) {
-          if (event.type === "done") reply = event.message;
+          if (event.type === "done") {
+            if (isTruncatedStop(event.stopReason)) return { ok: false, detail: "The read probe response was cut off by a provider limit." };
+            reply = event.message;
+          }
         }
         if (!reply) return { ok: false, detail: `${provider.name} ended the read probe without a reply.` };
         messages.push(reply);
@@ -3235,7 +3408,10 @@ export class HarnessHost {
         timeouts: { idleMs: this.limits.idleMs, firstEventMs: this.limits.firstEventMs },
         fetchImpl: this.fetchImpl,
       })) {
-        if (event.type === "done") reply = event.message;
+        if (event.type === "done") {
+          if (isTruncatedStop(event.stopReason)) throw new Error("The probe response was cut off by a provider limit.");
+          reply = event.message;
+        }
       }
       if (!reply) throw new ProviderError(`${provider.name} ended the probe without a reply.`);
       if (request.kind !== "builder-tool-edit" || !scratch) return { text: reply.text, toolCalls: [] };

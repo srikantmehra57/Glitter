@@ -11,7 +11,14 @@ import type { ChatMessage } from "../wire.js";
 export function sanitizeHistory(messages: readonly ChatMessage[], targetModelId: string, fallbackModelId?: string): ChatMessage[] {
   return messages.map((message) => {
     if (message.role !== "assistant") return message;
+    const producer = message.modelId ?? fallbackModelId;
+    const sameModel = producer === targetModelId;
     const toolCalls = message.toolCalls?.map((call) => {
+      // A thought signature is bound to the model that signed the call.
+      if (!sameModel && call.signature) {
+        const { signature: _signature, ...unsigned } = call;
+        call = unsigned;
+      }
       if (call.input.orchestratorPlan === undefined) return call;
       // A staged plan is carried in the call for restart recovery; the model
       // gets it in its stage prompt and the plan card, not again in history.
@@ -21,8 +28,7 @@ export function sanitizeHistory(messages: readonly ChatMessage[], targetModelId:
       return { ...call, input };
     });
     const changedCalls = Boolean(toolCalls && toolCalls.some((call, index) => call !== message.toolCalls![index]));
-    const producer = message.modelId ?? fallbackModelId;
-    const keepThinking = Boolean(message.thinking?.length && producer === targetModelId);
+    const keepThinking = Boolean(message.thinking?.length && sameModel);
     const stripThinking = Boolean(message.thinking?.length && !keepThinking);
     if (!changedCalls && !stripThinking) return message;
     const { role, text, modelId } = message;

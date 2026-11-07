@@ -98,6 +98,7 @@ export class HarnessHost {
   orchestratorProbe(options) { return { probe: options, providers: Object.keys(this.credentials ?? {}).sort() }; }
   async startSession(options) { return { sessionId: 'h-owned', options }; }
   async sendTurn(options) { return { turnId: 'h-turn', via: 'harness', ...(options.forcedShape ? { forcedShape: options.forcedShape } : {}) }; }
+  async compactSession(options) { return { status: 'compacting', via: 'harness', sessionId: options.sessionId }; }
   async setOrchestrator(options) { return { status: 'accepted', via: 'harness', orchestrator: options.orchestrator }; }
 }`;
 
@@ -315,6 +316,14 @@ test('a Harness start forwards the Orchestrator role settings intact', async () 
     assert.equal(started.result.sessionId, 'h-owned');
     assert.deepEqual(started.result.options.orchestrator, orchestrator, 'goal and role models reach the harness unchanged');
     assert.equal(started.result.options.modelId, undefined, 'Orchestrator chooses the models, not the manual picker');
+  });
+});
+
+test('a Harness compaction is routed to its host', async () => {
+  await withBridge(async (bridge) => {
+    await bridge.request('startSession', { agentId: 'harness', workspaceRoot: '/repo' });
+    const compacted = await bridge.request('compactSession', { agentId: 'harness', sessionId: 'h-owned' });
+    assert.deepEqual(compacted.result, { status: 'compacting', via: 'harness', sessionId: 'h-owned' });
   });
 });
 

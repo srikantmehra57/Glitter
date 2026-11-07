@@ -45,6 +45,26 @@ export const PROVIDERS: ProviderEntry[] = [
 
 export const PROVIDER_IDS = PROVIDERS.map((provider) => provider.id);
 
+/**
+ * Web search providers for the built-in agent's `web_search` tool. Keys are
+ * stored like model keys and sent only to their own provider; the first one
+ * saved, in this order, is the one the agent uses.
+ */
+export const SEARCH_PROVIDERS: ProviderEntry[] = [
+  { id: "tavily", name: "Tavily", detail: "Search built for agents, with page summaries.", placeholder: "tvly-…", keyUrl: "https://app.tavily.com/home" },
+  { id: "brave", name: "Brave Search", detail: "Brave's independent web index.", keyUrl: "https://api-dashboard.search.brave.com/app/keys" },
+  { id: "exa", name: "Exa", detail: "Neural search with page text.", keyUrl: "https://dashboard.exa.ai/api-keys" },
+];
+
+export const SEARCH_PROVIDER_IDS = SEARCH_PROVIDERS.map((provider) => provider.id);
+
+/** Every fixed id the keychain stores a key for: model providers, then search providers. */
+export const KEYED_PROVIDER_IDS = [...PROVIDER_IDS, ...SEARCH_PROVIDER_IDS];
+
+export function isSearchProviderId(id: string): boolean {
+  return SEARCH_PROVIDER_IDS.includes(id);
+}
+
 /** A minted custom-endpoint id, as the native keychain stores it. */
 export function isCustomProviderId(id: string): boolean {
   return /^custom-\d{1,4}$/.test(id);

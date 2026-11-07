@@ -8,7 +8,6 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { AgentSpec } from "./agents.js";
 import type { ApprovalMode } from "./protocol.js";
-import { isReadOnly } from "./harness/permission/classify.js";
 import { assessCommand } from "./harness/permission/danger.js";
 import {
   approvalAlive,
@@ -211,8 +210,8 @@ export function acpPermissionDecision(mode: string, toolCall: { kind?: unknown; 
   if (risks.some((risk) => risk.level === "ask")) return "ask";
   if (known === "guarded") return "allow";
   if (known === "onRequest") {
+    if (command) return "ask";
     if (READ_KINDS.has(kind) || WRITE_KINDS.has(kind)) return "allow";
-    if (command && isReadOnly(command)) return "allow";
     return "ask";
   }
   return "ask";
@@ -234,7 +233,7 @@ export type AcpModel = {
   providerId?: string;
   description?: string | null;
   contextLimit?: number | null;
-  cost?: { input: string; output: string; currency?: string | null } | null;
+  cost?: { input?: string; output?: string; currency?: string | null } | null;
   reasoningEfforts?: string[];
   defaultReasoningEffort?: string;
   effortSource?: "host" | "vocabulary";
@@ -1419,8 +1418,8 @@ export function opencodeModelsFromCatalog(body: unknown, disabled: ReadonlySet<s
     const row = asRecord(raw);
     const cost = asRecord(row.cost);
     const limit = asRecord(row.limit);
-    const input = typeof cost.input === "number" ? cost.input : undefined;
-    const output = typeof cost.output === "number" ? cost.output : undefined;
+    const input = typeof cost.input === "number" && Number.isFinite(cost.input) && cost.input >= 0 ? cost.input : undefined;
+    const output = typeof cost.output === "number" && Number.isFinite(cost.output) && cost.output >= 0 ? cost.output : undefined;
     const free = /-free$|:free$/i.test(id) || (input === 0 && output === 0);
     const efforts = reasoningTiers(row.reasoning_options);
     rows.push({
@@ -1429,7 +1428,7 @@ export function opencodeModelsFromCatalog(body: unknown, disabled: ReadonlySet<s
       providerId: "opencode",
       description: free ? "Free" : null,
       contextLimit: typeof limit.context === "number" ? limit.context : null,
-      cost: input != null ? { input: String(input), output: String(output ?? 0), currency: "USD" } : null,
+      cost: input != null || output != null ? { ...(input != null ? { input: String(input) } : {}), ...(output != null ? { output: String(output) } : {}), currency: "USD" } : null,
       ...(efforts.length ? { reasoningEfforts: efforts, effortSource: "host" as const } : { reasoningEfforts: [] }),
     });
   }
@@ -1555,14 +1554,16 @@ async function opencodeCatalog(bin: string): Promise<AcpModel[]> {
     const cost = asRecord(row.cost);
     const limit = asRecord(row.limit);
     const variants = Object.keys(asRecord(row.variants)).map(tierOf).filter((tier): tier is string => Boolean(tier));
-    const free = /-free$|:free$/.test(String(row.id)) || (cost.input === 0 && cost.output === 0);
+    const input = typeof cost.input === "number" && Number.isFinite(cost.input) && cost.input >= 0 ? cost.input : undefined;
+    const output = typeof cost.output === "number" && Number.isFinite(cost.output) && cost.output >= 0 ? cost.output : undefined;
+    const free = /-free$|:free$/.test(String(row.id)) || (input === 0 && output === 0);
     models.push({
       modelId: `${provider}/${String(row.id)}`,
       displayLabel: str(row.name),
       providerId: provider,
       description: free ? "Free" : null,
       contextLimit: typeof limit.context === "number" ? limit.context : null,
-      cost: typeof cost.input === "number" ? { input: String(cost.input), output: String(cost.output ?? 0), currency: "USD" } : null,
+      cost: input != null || output != null ? { ...(input != null ? { input: String(input) } : {}), ...(output != null ? { output: String(output) } : {}), currency: "USD" } : null,
       ...(variants.length ? { reasoningEfforts: TIERS.filter((tier) => variants.includes(tier)), effortSource: "host" as const } : { reasoningEfforts: [] }),
     });
   }

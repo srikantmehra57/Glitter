@@ -17,7 +17,6 @@ import { observeNotifications, UserInputRelay } from "./user-input.js";
 import { factsFromSession, isSessionFactNotification } from "./session-facts.js";
 import { annotateEfforts, TIER_ORDER, vocabularyTiers } from "./efforts.js";
 import { approvalAlive, approvalExpiry, approvalExpiryMono, APPROVAL_TTL_MS, describeIsolation, confinedCwd, wrapSandboxedCommand, type IsolationReport } from "./isolation.js";
-import { isReadOnly } from "./harness/permission/classify.js";
 import { assessCommand } from "./harness/permission/danger.js";
 
 type ApprovalWaiter = {
@@ -280,7 +279,6 @@ export function musePermissionChoice(mode: ApprovalMode, request: { toolName?: s
   if (mode === "allowAll") return offeredChoice(offered, true);
   if (risks.some((risk) => risk.level === "ask")) return null;
   if (mode === "guarded") return offeredChoice(offered, true);
-  if (command && isReadOnly(command)) return offeredChoice(offered, true);
   if (!command && /edit|write|patch|str_replace|create_file|apply_patch/i.test(request.toolName ?? "")) return offeredChoice(offered, true);
   return null;
 }

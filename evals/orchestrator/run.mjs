@@ -1,13 +1,15 @@
 #!/usr/bin/env node
 import { build } from "esbuild";
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { compareReports, formatComparison, scoreTemplate } from "./compare.mjs";
 import { CORPUS_SPLITS, TASKS, imagesForTurn, selectTasks, taskSplit, validateCorpus } from "./corpus.mjs";
 import { checksSummary, runChecks, setupTask } from "./checks.mjs";
-import { buildConfigs, costOf, credentialsFromEnv, loadPrices, missingCredentials } from "./configs.mjs";
+import { buildConfigs, costOf, credentialsFromEnv, loadPrices, missingCredentials, providerBlock } from "./configs.mjs";
 import { PRE_ROUTE_CASES, formatPreRouteReport, measurePreRoute, validatePreRouteCases } from "./pre-route.mjs";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
@@ -117,6 +119,23 @@ async function loadPolicy() {
   return { ...(await import(pathToFileURL(outfile).href)), dir };
 }
 
+async function sourceIdentity() {
+  const hash = createHash("sha256");
+  for (const folder of ["packages/glitter-bridge/src", "evals/orchestrator"]) {
+    const files = (await readdir(join(ROOT, folder), { recursive: true })).filter((file) => /\.(?:ts|mjs)$/.test(file)).sort();
+    for (const file of files) hash.update(`${folder}/${file}\0`).update(await readFile(join(ROOT, folder, file))).update("\0");
+  }
+  let revision = null;
+  let dirty = null;
+  try {
+    revision = execFileSync("git", ["rev-parse", "HEAD"], { cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 10_000 }).trim();
+    dirty = Boolean(execFileSync("git", ["status", "--porcelain", "--", "packages/glitter-bridge/src", "evals/orchestrator"], { cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 10_000 }).trim());
+  } catch {
+    // A source archive can still identify its contents without git metadata.
+  }
+  return { revision, dirty, sourceSha256: hash.digest("hex"), corpusSha256: createHash("sha256").update(JSON.stringify(TASKS)).digest("hex") };
+}
+
 function makeLog() {
   const events = [];
   return {
@@ -201,31 +220,50 @@ async function writeReport(dir, report, results) {
     `Split: ${report.split}`,
     `Runs per task: ${report.runs}`,
     `Caps: $${report.maxUsd} · ${report.maxTokens.toLocaleString()} tokens`,
+    `Turn timeout: ${report.turnTimeoutMs} ms`,
+    `Revision: ${report.source.revision ?? "unavailable"}${report.source.dirty ? " (working tree)" : ""}`,
+    `Source SHA-256: ${report.source.sourceSha256}`,
+    `Corpus SHA-256: ${report.source.corpusSha256}`,
     `Prices: ${report.priced ? "provided" : "missing (costs are partial)"}`,
+    ...(report.stop ? [`Stopped: ${report.stop.reason}`] : []),
+    "",
+    "## Models",
+    "",
+    "| Config | Role | Model | Effort |",
+    "|---|---|---|---|",
+  ];
+  for (const [name, config] of Object.entries(report.configurations)) {
+    if (config.kind === "manual") lines.push(`| ${name} | manual | ${config.modelId} | ${config.effort} |`);
+    else for (const [role, model] of Object.entries(config.models)) lines.push(`| ${name} | ${role} | ${model.modelId} | goal policy; recorded per call |`);
+  }
+  lines.push(
+    "",
+    "## Results",
     "",
     "| Config | Split | Task | Run | Result | Checks | Cost | Calls | Notes |",
     "|---|---|---|---:|---|---|---:|---:|---|",
-  ];
+  );
   for (const result of results) {
     const status = result.skipped ? "skipped" : result.error ? "error" : result.success === null ? "manual" : result.success ? "pass" : "fail";
     const cost = result.cost?.partial ? `≈$${result.cost.usd.toFixed(4)} (partial)` : result.cost ? `$${result.cost.usd.toFixed(4)}` : "—";
     const checks = result.checks?.length ? checksSummary(result.checks) : result.checkCount ? `${result.checkCount}` : "—";
-    lines.push(`| ${result.config} | ${result.split ?? "tune"} | ${result.task} | ${result.run} | ${status} | ${checks} | ${cost} | ${result.calls?.length ?? 0} | ${(result.error ?? result.manual ?? "").replaceAll("|", "\\|").slice(0, 120)} |`);
+    lines.push(`| ${result.config} | ${result.split ?? "tune"} | ${result.task} | ${result.run} | ${status} | ${checks} | ${cost} | ${result.calls?.length ?? 0} | ${(result.error ?? result.reason ?? result.manual ?? "").replaceAll("|", "\\|").slice(0, 120)} |`);
   }
   const byConfig = new Map();
   for (const result of results) {
     if (result.skipped) continue;
     const key = `${result.config} · ${result.split ?? "tune"}`;
-    const row = byConfig.get(key) ?? { total: 0, passed: 0, manual: 0, cost: 0, partial: false };
+    const row = byConfig.get(key) ?? { total: 0, passed: 0, manual: 0, errors: 0, cost: 0, partial: false };
     row.total += 1;
     if (result.success === true) row.passed += 1;
     if (result.success === null) row.manual += 1;
+    if (result.error) row.errors += 1;
     row.cost += result.cost?.usd ?? 0;
     row.partial ||= Boolean(result.cost?.partial);
     byConfig.set(key, row);
   }
-  lines.push("", "## Summary", "", "| Config · split | Automated pass | Manual | Estimated cost |", "|---|---:|---:|---:|");
-  for (const [config, row] of byConfig) lines.push(`| ${config} | ${row.passed}/${row.total - row.manual} | ${row.manual} | ${row.partial ? "partial " : ""}$${row.cost.toFixed(4)} |`);
+  lines.push("", "## Summary", "", "| Config · split | Automated pass | Manual | Errors | Estimated cost |", "|---|---:|---:|---:|---:|");
+  for (const [config, row] of byConfig) lines.push(`| ${config} | ${row.passed}/${row.total - row.manual} | ${row.manual} | ${row.errors} | ${row.partial ? "partial " : ""}$${row.cost.toFixed(4)} |`);
   const routes = results.flatMap((result) => result.routes ?? []);
   if (routes.length) {
     const preRouted = routes.filter((route) => route.preRouteRule);
@@ -233,7 +271,7 @@ async function writeReport(dir, report, results) {
     for (const route of preRouted) counts.set(route.preRouteRule, (counts.get(route.preRouteRule) ?? 0) + 1);
     lines.push("", `Pre-routed turns: ${preRouted.length}/${routes.length}${preRouted.length ? ` · ${[...counts].map(([rule, count]) => `${rule} (${count})`).join(", ")}` : ""}`);
   }
-  const manual = results.filter((result) => result.manual);
+  const manual = results.filter((result) => result.manual && !result.error);
   if (manual.length) {
     lines.push("", "## Manual review", "", "| Config | Task | Run | Prompt | Score (0-2) | Notes |", "|---|---|---:|---|---:|---|");
     for (const result of manual) lines.push(`| ${result.config} | ${result.task} | ${result.run} | ${(result.prompt ?? "").replaceAll("|", "\\|")} |  |  |`);
@@ -338,9 +376,11 @@ async function runLive(options) {
   const hostBundle = await loadHost();
   const workspaceRoot = await mkdtemp(join(tmpdir(), "glitter-eval-work-"));
   const storeRoot = join(workspaceRoot, "sessions");
+  const homeDir = join(workspaceRoot, "home");
   await mkdir(storeRoot, { recursive: true });
+  await mkdir(homeDir, { recursive: true });
   const log = makeLog();
-  const host = new hostBundle.HarnessHost(log.emit, new hostBundle.SessionStore(storeRoot), globalThis.fetch, { idleMs: 120_000, firstEventMs: 60_000, ...(tuning ? { tuning } : {}) });
+  const host = new hostBundle.HarnessHost(log.emit, new hostBundle.SessionStore(storeRoot), globalThis.fetch, { homeDir, idleMs: 120_000, firstEventMs: 60_000, ...(tuning ? { tuning } : {}) });
   host.setCredentials(credentials);
   const catalog = await host.listModels(undefined, true).catch((error) => {
     console.warn(`Could not load the model catalog; baseline effort will be the provider default: ${error.message}`);
@@ -356,16 +396,20 @@ async function runLive(options) {
   let spentUsd = 0;
   let spentTokens = 0;
   let partialCost = false;
-  let stopped = false;
+  let stopReason;
   const outDir = options.out ? options.out : join(ROOT, "evals/orchestrator/reports", startedAt.replaceAll(":", "-").replace(/\.\d+Z$/, "Z"));
   const report = {
     startedAt,
     configs: configNames.map((config) => config.name),
+    configurations: Object.fromEntries(configNames.map(({ name, ...config }) => [name, config.kind === "manual" ? { ...config, effort: highestEffort(config.modelId) ?? "provider-default" } : config])),
+    source: await sourceIdentity(),
+    personalConfiguration: "empty",
     tasks: tasks.map((task) => task.id),
     split: options.split,
     runs: options.runs,
     maxUsd: options.maxUsd,
     maxTokens: options.maxTokens,
+    turnTimeoutMs: options.turnTimeoutMs,
     priced: Object.keys(prices).length > 0,
     prices: Object.keys(prices).length ? prices : null,
     tuning: tuning ?? null,
@@ -375,13 +419,12 @@ async function runLive(options) {
     for (const config of configNames) {
       for (const task of tasks) {
         for (let run = 1; run <= options.runs; run += 1) {
-          if (stopped) {
-            results.push({ config: config.name, split: taskSplit(task), task: task.id, run, skipped: true, reason: "cost cap" });
-            continue;
+          if (!stopReason && (spentUsd >= options.maxUsd || spentTokens >= options.maxTokens)) {
+            stopReason = "cost cap";
+            report.stop = { reason: stopReason };
           }
-          if (spentUsd >= options.maxUsd || spentTokens >= options.maxTokens) {
-            stopped = true;
-            results.push({ config: config.name, split: taskSplit(task), task: task.id, run, skipped: true, reason: "cost cap" });
+          if (stopReason) {
+            results.push({ config: config.name, split: taskSplit(task), task: task.id, run, skipped: true, reason: stopReason });
             continue;
           }
           const workspace = join(workspaceRoot, `${config.name}-${task.id}-${run}`);
@@ -390,6 +433,8 @@ async function runLive(options) {
           const started = Date.now();
           let sessionId;
           let error;
+          let errorCode;
+          let errorStatus;
           let question;
           let firstTurnAt;
           try {
@@ -433,6 +478,8 @@ async function runLive(options) {
               const terminal = outcome?.params?.terminal;
               if (outcome?.kind === "failed" || terminal === "failed") {
                 error = outcome?.params?.error?.message ?? "The turn failed.";
+                errorCode = outcome?.params?.error?.code;
+                errorStatus = outcome?.params?.error?.status;
                 break;
               }
               if (terminal === "cancelled") {
@@ -442,6 +489,8 @@ async function runLive(options) {
             }
           } catch (caught) {
             error = caught instanceof Error ? caught.message : String(caught);
+            errorCode = typeof caught?.code === "string" ? caught.code : undefined;
+            errorStatus = typeof caught?.status === "number" ? caught.status : undefined;
           }
           if (sessionId) await host.closeSession({ sessionId }).catch(() => {});
           const checks = error ? [] : await runChecks(workspace, task);
@@ -466,16 +515,24 @@ async function runLive(options) {
             finalText: finalText(items).slice(0, 8_000),
             ...(question ? { question } : {}),
             routes: sessionId ? collectRoutes(log, sessionId) : [],
-            calls: calls.map((call) => ({ modelId: call.modelId, role: call.role, stage: call.stage, effort: call.effort, inputTokens: call.inputTokens, cachedTokens: call.cachedTokens, outputTokens: call.outputTokens, durationMs: call.durationMs })),
+            calls: calls.map((call) => ({ modelId: call.modelId, role: call.role, stage: call.stage, effort: call.effort, inputTokens: call.inputTokens, cachedTokens: call.cachedTokens, cacheReadTokens: call.cacheReadTokens, cacheWriteTokens: call.cacheWriteTokens, outputTokens: call.outputTokens, durationMs: call.durationMs })),
             cost,
             error,
+            ...(errorCode ? { errorCode } : {}),
+            ...(errorStatus != null ? { errorStatus } : {}),
             ...(firstEdit ? { timeToFirstEditMs: Math.max(0, firstEdit.at - (firstTurnAt ?? started)) } : {}),
             durationMs: Date.now() - started,
           };
           results.push(result);
+          const block = error ? providerBlock({ code: errorCode, status: errorStatus }) : undefined;
+          if (block) {
+            stopReason = block;
+            report.stop = { reason: block, config: config.name, task: task.id, run, ...(errorCode ? { code: errorCode } : {}), ...(errorStatus != null ? { status: errorStatus } : {}) };
+            console.warn(`Stopped: ${block}. Remaining cases will be skipped; retry explicitly after resolving the provider block.`);
+            process.exitCode = 1;
+          }
           await writeReport(outDir, report, results);
-          console.log(`${config.name} · ${task.id} · run ${run}: ${result.success === null ? "manual" : result.success ? "pass" : "fail"}${error ? ` (${error.slice(0, 120)})` : ""}`);
-          if (spentUsd >= options.maxUsd || spentTokens >= options.maxTokens) stopped = true;
+          console.log(`${config.name} · ${task.id} · run ${run}: ${error ? "error" : result.success === null ? "manual" : result.success ? "pass" : "fail"}${error ? ` (${error.slice(0, 120)})` : ""}`);
         }
       }
     }

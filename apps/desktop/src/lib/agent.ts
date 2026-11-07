@@ -44,9 +44,9 @@ export type AgentRun = {
 };
 
 const READ = /^(read_file|read|cat|get_file|view)$/i;
-const EDIT = /^(edit_file|write_file|write|str_replace|apply_patch|create_file)$/i;
+const EDIT = /^(edit_file|multi_edit|write_file|write|str_replace|apply_patch|create_file)$/i;
 const SEARCH = /^(grep|search|codebase_search|glob|find|list_files)$/i;
-const SHELL = /^(bash|shell|userShell)$/i;
+const SHELL = /^(bash|bash_output|kill_shell|shell|userShell)$/i;
 const WEB = /^(web_search|web_fetch|web_lookup|fetch|browser)$/i;
 
 export function classifyTool(tool?: string, kind?: string): AgentStepKind {

@@ -172,7 +172,7 @@ const SERVERS: &[CatalogServer] = &[
         id: "filesystem",
         name: "Filesystem",
         summary: "Read and write files inside this workspace.",
-        description: "The reference filesystem server. It can only touch the workspace it was installed for, and every call still asks for approval in the Harness.",
+        description: "The reference filesystem server, configured for this workspace. Tool calls follow the thread's permissions and grants.",
         tags: &["files", "workspace"],
         scope: ServerScope::Workspace,
         transport: "stdio",

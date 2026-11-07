@@ -247,6 +247,8 @@ function asCall(value: unknown): ModelCall | null {
     ...(typeof value.effort === "string" ? { effort: value.effort } : {}),
     inputTokens: num(value.inputTokens),
     cachedTokens: num(value.cachedTokens),
+    ...(typeof value.cacheReadTokens === "number" && Number.isFinite(value.cacheReadTokens) && value.cacheReadTokens >= 0 ? { cacheReadTokens: value.cacheReadTokens } : {}),
+    ...(typeof value.cacheWriteTokens === "number" && Number.isFinite(value.cacheWriteTokens) && value.cacheWriteTokens >= 0 ? { cacheWriteTokens: value.cacheWriteTokens } : {}),
     outputTokens: num(value.outputTokens),
     ...(typeof value.stopReason === "string" ? { stopReason: value.stopReason } : {}),
     durationMs: num(value.durationMs),

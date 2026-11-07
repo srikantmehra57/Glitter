@@ -80,7 +80,7 @@ export function CommandPalette() {
   const searching = Boolean(query.trim());
   const commands = useMemo<Command[]>(() => {
     const agentId = thread ? thread.agentId ?? "muse" : s.drafts[`project:${s.selectedWorkspaceId}`]?.config?.agentId ?? s.defaultAgentId ?? "muse";
-    const builtin = new Set(availableBuiltins({ thread: Boolean(thread), muse: agentId === "muse", live: !s.preview }).map((command) => command.name));
+    const builtin = new Set(availableBuiltins({ thread: Boolean(thread), muse: agentId === "muse", harness: agentId === "harness", live: !s.preview }).map((command) => command.name));
     const act = (name: string) => () => { runBuiltinCommand(name); };
     const actions: Command[] = [
       { id: "new", label: "New thread", icon: <SquarePen size={14} />, shortcut: shortcutText("new-thread"), run: () => void s.newThread() },

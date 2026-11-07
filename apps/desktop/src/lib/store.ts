@@ -12,7 +12,7 @@ import { asLedger, compact, EMPTY_LEDGER, recordTurn, turnEntry, type UsageLedge
 import { persistableDrafts, rememberPrompt, NewerSessionMemoryError, SessionMemoryPersistence, SESSION_MEMORY_VERSION, type Draft, type SessionMemory, type ThreadMeta } from "./sessionMemory";
 import { acpConsentGet, acpConsentSet, agentIdentities, bridge, catalogInstall, catalogList, catalogRemove, cliLogout, confirmAgentBin, credentialGet, credentialSet, enterpriseStatus, gitCommit, gitDiscardAll, gitDiscardFiles, gitDiscardHunk, gitGraph as readGitGraph, gitInit, gitReview, gitBranches, gitPull, gitPullRequest, gitPush, gitSnapshot, gitStage, gitSwitch, gitWorktreeCreate, gitWorktreeHandoff, gitWorktreeRemove, turnSnapshots, restoreTurnSnapshot, forgetTurnSnapshots, listWorkspaceFiles, MOCK_FILES, mockThreads, mockWorkspaceFile, mockWorktree, providerKeysGet, readWorkspaceFile, onBridgeEvent, onWindowCloseRequested, persistStoreDocument, pickFolder, pickPluginBundle, pickSkillSource, pluginInstall, pluginList, projectInit, readDroppedPaths, removeGrant, repairStoreDocument, setInterfaceZoom, setWindowAppearance, setMenuShortcuts, skillImport, skillInstall, skillList, skillUninstall, trustPreview, verifyGrants, type BridgeEventPayloads } from "./bridge";
 import { MOCK_AGENT_MODELS, MOCK_AGENTS, MOCK_GIT, MOCK_GIT_GRAPH, MOCK_MODELS, mockGitReview } from "./mock";
-import { PROVIDER_IDS, type ProviderStatus } from "./providers";
+import { KEYED_PROVIDER_IDS, type ProviderStatus } from "./providers";
 import { clampTier, modelFor, tiersFor } from "./effort";
 import { orchestratorStart } from "./orchestrator";
 import { dropHunk, parseUnifiedDiff, reviewTarget } from "./diff";
@@ -1089,6 +1089,7 @@ async function listWorkspaceThreads(
   for (const [index, listing] of listings.entries()) {
     if (listing.status === "rejected") {
       if (ready[index].id === "muse") fail(describeError("Could not load workspace", listing.reason));
+      else if (ready[index].id === "harness") fail(describeError("Could not load built-in agent threads", listing.reason));
       else log.warn("agent.sessions.unavailable", { agent: ready[index].id, error: message(listing.reason) });
       continue;
     }
@@ -1589,7 +1590,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
   refreshProviders: async () => {
     try {
-      set({ providerStatus: await providerKeysGet(PROVIDER_IDS), providerStatusError: null });
+      set({ providerStatus: await providerKeysGet(KEYED_PROVIDER_IDS), providerStatusError: null });
     } catch (error) {
       // Pickers fall back to ids alone; the Providers page shows the error.
       set({ providerStatusError: describeError("Could not read saved providers", error) });
@@ -2191,17 +2192,17 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
   compactThread: async () => {
     const thread = currentThread(get());
-    if (!thread || thread.agentId || get().preview || thread.status === "running") return;
+    if (!thread || (thread.agentId && thread.agentId !== "harness") || get().preview || thread.status === "running") return;
+    set({ threads: get().threads.map((item) => item.sessionId === thread.sessionId ? { ...item, notice: { level: "info", message: "Compacting context…", key: "compacting" } } : item) });
     try {
-      const result = await bridge<{ status: string; reason?: string }>("compactSession", { sessionId: thread.sessionId });
+      const result = await bridge<{ status: string; reason?: string }>("compactSession", { sessionId: thread.sessionId, ...(thread.agentId ? { agentId: thread.agentId } : {}) });
       if (result.status === "noop") {
         const reason = result.reason === "no_compactable_history" ? "no compactable history yet" : result.reason ?? "nothing to do";
         set({ threads: get().threads.map((item) => item.sessionId === thread.sessionId ? { ...item, notice: { level: "info", message: `Already compact: ${reason}.` } } : item) });
         return;
       }
-      set({ threads: get().threads.map((item) => item.sessionId === thread.sessionId ? { ...item, notice: { level: "info", message: "Compacting context…", key: "compacting" } } : item) });
     } catch (error) {
-      set({ threads: get().threads.map((item) => item.sessionId === thread.sessionId ? { ...item, error: describeError("Could not compact the thread", error) } : item) });
+      set({ threads: get().threads.map((item) => item.sessionId === thread.sessionId ? { ...item, ...(item.notice?.key === "compacting" ? { notice: null } : {}), error: describeError("Could not compact the thread", error) } : item) });
     }
   },
 
@@ -4576,7 +4577,7 @@ export function bindBridgeEvents() {
     }
     if (event === "sessionFacts" || event === "usage") {
       const data = payload as BridgeEventPayloads["sessionFacts"];
-      update(data.sessionId, (thread) => withLateUsage({ ...thread, plan: data.plan ?? thread.plan, planAnchor: data.plan ? planAnchorFor(thread, data.plan) : thread.planAnchor, goal: data.goal ?? thread.goal, context: data.context ?? thread.context, usage: data.usage ?? thread.usage, hostBranch: data.branch ?? thread.hostBranch }));
+      update(data.sessionId, (thread) => withLateUsage({ ...thread, plan: data.plan ?? thread.plan, planAnchor: data.plan ? planAnchorFor(thread, data.plan) : thread.planAnchor, goal: data.goal ?? thread.goal, context: data.context !== undefined ? data.context : thread.context, usage: data.usage ?? thread.usage, hostBranch: data.branch ?? thread.hostBranch }));
       // Usage reported after the turn ended replaces that turn's estimate in the ledger.
       if (data.usage) recordUsage(useAppStore.getState, useAppStore.setState, data.sessionId);
     }

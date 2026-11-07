@@ -35,7 +35,7 @@ test('permission labels are the app modes, the same for every agent', () => {
     allowAll: 'Full access',
   });
   assert.equal(types.APPROVAL_DESCRIPTIONS.onRequest, 'Edits run, commands ask.');
-  assert.equal(types.APPROVAL_DESCRIPTIONS.guarded, 'Risky commands still ask.');
+  assert.equal(types.APPROVAL_DESCRIPTIONS.guarded, 'Commands may read outside the workspace.');
   assert.equal(types.APPROVAL_DESCRIPTIONS.allowAll, 'No approval prompts.');
   assert.equal(types.approvalModeForAgent('harness', 'guarded'), 'guarded');
   assert.equal(types.approvalModeForAgent('muse', 'guarded'), 'guarded');

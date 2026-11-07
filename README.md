@@ -84,10 +84,11 @@ are no Windows or Linux versions. No signed build has been published yet; see [K
 - **Undo.** Every turn keeps a file snapshot, so Undo returns the workspace to
   how it was before the turn and Reapply puts the work back.
 - **Context that fits.** Before a call, Harness estimates the request against the
-  model's window and, when it must, shortens old tool output — head and tail
-  first, then a skeleton — so a long thread keeps working instead of dying on
-  the limit. The stored transcript keeps the full output, and every shortened
-  result says what it is.
+  model's window and summarizes long histories as they approach the input limit.
+  You can also use `/compact` or **Compact now** in the context card. The latest
+  request, including its images, stays in context and the full transcript stays
+  on disk. If summarization fails, Harness can still shorten old tool output to
+  fit, with a notice when it does so.
 - **Usage.** A local token and cost ledger: today's total, a year of activity,
   a 7- or 30-day trend per model, provider share, streaks and the longest turn,
   and a per-call trajectory for each turn. Days and legend entries answer on
@@ -243,9 +244,10 @@ Coding agents should start with [AGENTS.md](AGENTS.md).
 - **macOS only.** There are no Windows or Linux builds, and the app CI runs on
   macOS. Some platform code for them remains in the source but is not built or
   tested.
-- **Long threads are trimmed, not summarized.** Harness fits an oversized request
-  by shortening old tool output; it does not yet run a summarising compaction
-  turn, so a very long thread loses detail the model would otherwise read.
+- **Summaries are lossy.** Compaction asks the thread's model to summarize its
+  history. A very long transcript may need to omit older middle entries from
+  that request, and a summary can miss details. The full transcript remains
+  available in the thread.
 - **Harness threads are local.** They live in this Mac's app data folder, with no
   sync and no shared session storage with the CLI agents.
 - **Coverage gaps.** Native dialogs (folder picker, save panel) and a live,

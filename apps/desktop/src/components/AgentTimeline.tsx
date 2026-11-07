@@ -7,7 +7,7 @@ import {
 import { Orb } from "./Orb";
 import { ACTIVITY_KINDS, activitySummary, activityTitle, agentCounts, backgroundAgents, computeVirtualWindow, estimateRunHeight, groupAgentRuns, messageRewindBoundary, parseWorkflowMessage, relativeToWorkspace, runSummary, showTerminalReceipt, stabilizeRuns, type AgentState, type AgentRun, type AgentStep, type AgentStepKind } from "../lib/agent";
 import { copyText, formatArgs, formatBytes, formatDuration, formatTokens, humanizeModelLabel, humanizeProvider, humanizeToolName, shortcutLabel, summarizeArgs } from "../lib/format";
-import { estimateCost, formatCost } from "../lib/cost";
+import { estimateCallCost, formatCost } from "../lib/cost";
 import { formatTokenSpeed, readTokenSpeed, TOKEN_SPEED_ESTIMATE } from "../lib/tokenSpeed";
 import { modelFor } from "../lib/effort";
 import { orchestratorRouteCallFact, orchestratorRouteExecution, orchestratorRouteFacts, orchestratorRouteFallback, orchestratorRouteFloor, orchestratorRouteLabel, orchestratorRouteTitle } from "../lib/orchestrator";
@@ -779,7 +779,7 @@ function ReceiptView({ run, isLast }: { run: AgentRun; isLast: boolean }) {
     : undefined));
   const turnCalls = useAppStore((state) => currentThread(state)?.turnCalls);
   // A routed turn's cost spans the models it used, so the single-model estimate would be wrong.
-  const turnCost = !route && stats && costModel ? estimateCost({ promptTokens: stats.inputTokens, outputTokens: stats.outputTokens }, costModel.cost) : undefined;
+  const turnCost = !route && stats && costModel ? estimateCallCost({ inputTokens: (stats.inputTokens ?? 0) + (stats.cachedTokens ?? 0), cachedTokens: stats.cachedTokens ?? 0, outputTokens: stats.outputTokens ?? 0 }, costModel.cost) : undefined;
   // Hosts that report no per-turn usage still reported each step's time; their
   // sum, marked ~, fills the receipt's otherwise-empty metrics row.
   const derivedMs = run.steps.reduce((sum, step) => sum + (step.durationMs ?? 0), 0);
@@ -801,7 +801,7 @@ function ReceiptView({ run, isLast }: { run: AgentRun; isLast: boolean }) {
     {stats ? <span className="turn-duration" title="Time spent on this turn">{formatDuration(stats.durationMs)}</span> : derivedMs > 0 ? <span className="turn-duration" title="Sum of the step times the agent reported">~{formatDuration(derivedMs)}</span> : null}
     {stats?.tokensPerSecond != null ? <span title={TOKEN_SPEED_ESTIMATE}>{formatTokenSpeed(stats.tokensPerSecond)}</span> : null}
     {stats ? tokenFact(stats) : null}
-    {turnCost != null && costModel ? <span title="Estimated cost for this turn">≈{formatCost(turnCost, costModel.cost?.currency)}</span> : null}
+    {turnCost != null && costModel ? <span title={turnCost.partial ? "Partial estimated cost; unpriced tokens are excluded" : "Estimated cost for this turn"}>≈{formatCost(turnCost.amount, turnCost.currency)}{turnCost.partial ? " partial" : ""}</span> : null}
     {route ? <span className="turn-route" title={orchestratorRouteTitle(route)}>{orchestratorRouteLabel(route)}{routeFloor ? " · floor" : routeFallback ? " · fallback" : ""}</span> : null}
     {routeCallFact ? <span className="turn-route-calls" title="Model calls this turn made">{routeCallFact}</span> : null}
     {receiptModel && receiptModelLabel ? <span className="turn-model" title={receiptModelTitle}><ModelIcon modelId={receiptModel.modelId} providerId={receiptModel.providerId} size={12} fallback={<ProductAgentMark id={agentId} size={12} />} />{receiptModelLabel}</span> : null}

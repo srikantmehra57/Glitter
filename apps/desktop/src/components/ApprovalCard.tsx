@@ -120,7 +120,7 @@ export function ApprovalCard() {
       {expired ? <p className="muted approval-expiry" role="status">This approval expired. Stop or re-run the turn.</p> : null}
       <div className="choices">
         {deny.map((choice, index) => (
-          <button key={choice.choiceId} disabled={disabled} title={describeApprovalScope(choice.scope) || undefined} className="secondary" onClick={() => void decide(shown.approvalId, choice.choiceId)}>{choice.label}{index === 0 ? <kbd>{shortcutLabel("⌫")}</kbd> : null}</button>
+          <button key={choice.choiceId} disabled={disabled} className="secondary" onClick={() => void decide(shown.approvalId, choice.choiceId)}>{choice.label}{index === 0 ? <kbd>{shortcutLabel("⌫")}</kbd> : null}</button>
         ))}
         {feedbackChoice && !explaining ? <button type="button" className="secondary" disabled={disabled} onClick={() => setFeedback({ approvalId: shown.approvalId, text: "" })}>Deny and explain…</button> : null}
         <span className="grow" />

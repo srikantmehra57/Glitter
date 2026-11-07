@@ -1,8 +1,8 @@
-import { useEffect, useId, useRef, useState } from "react";
-import { ExternalLink, KeyRound, LoaderCircle, Plus } from "lucide-react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { ExternalLink, Globe, KeyRound, LoaderCircle, Plus } from "lucide-react";
 import { openUrl, providerKeySet } from "../lib/bridge";
 import { describeError } from "../lib/errors";
-import { PROVIDER_IDS, PROVIDERS, customProviders, providerWireLabel, type ProviderEntry, type ProviderWire } from "../lib/providers";
+import { KEYED_PROVIDER_IDS, PROVIDER_IDS, PROVIDERS, SEARCH_PROVIDERS, customProviders, isCustomProviderId, providerWireLabel, type ProviderEntry, type ProviderWire } from "../lib/providers";
 import { useAppStore } from "../lib/store";
 import { ProviderMark } from "./AgentPicker";
 import { Collapse } from "./Presence";
@@ -21,10 +21,11 @@ export function ProvidersPanel({ onChanged }: { onChanged: () => void }) {
   const [editing, setEditing] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   useEffect(() => { if (!status) void refreshProviders(); }, [status, refreshProviders]);
-  const configured = status?.filter((row) => row.configured).length ?? 0;
+  const configured = status?.filter((row) => row.configured && (PROVIDER_IDS.includes(row.id) || isCustomProviderId(row.id))).length ?? 0;
+  const searchKey = SEARCH_PROVIDERS.find((provider) => status?.some((row) => row.id === provider.id && row.configured));
   const customs = customProviders(status ?? []);
   const save = async (provider: string, change: { key?: string; baseUrl?: string; name?: string; wire?: string; clear?: boolean }) => {
-    const rows = await providerKeySet(PROVIDER_IDS, provider, change);
+    const rows = await providerKeySet(KEYED_PROVIDER_IDS, provider, change);
     useAppStore.setState({ providerStatus: rows });
     setEditing(null);
     setAdding(false);
@@ -71,6 +72,20 @@ export function ProvidersPanel({ onChanged }: { onChanged: () => void }) {
           </button>
         )}
       </div>
+      <div className="settings-card-heading"><h4>Web search</h4><p>{searchKey ? `The built-in agent searches with ${searchKey.name}. Each search goes to that provider with your key.` : "Optional. Add a key and the built-in agent can search the web. Without one it can still fetch pages you or it name."}</p></div>
+      <div className="settings-card provider-list">
+        {SEARCH_PROVIDERS.map((provider) => (
+          <ProviderRow
+            key={provider.id}
+            provider={provider}
+            icon={<Globe size={16} aria-hidden="true" />}
+            status={status?.find((row) => row.id === provider.id)}
+            editing={editing === provider.id}
+            onEdit={(open) => { setEditing(open ? provider.id : null); setAdding(false); }}
+            onSave={(change) => save(provider.id, change)}
+          />
+        ))}
+      </div>
     </div>
   );
 }
@@ -78,7 +93,7 @@ export function ProvidersPanel({ onChanged }: { onChanged: () => void }) {
 /** What a row's open form carries to the keychain. */
 type SaveChange = { key?: string; baseUrl?: string; name?: string; wire?: string; clear?: boolean };
 
-function ProviderRow({ provider, status, editing, onEdit, onSave }: { provider: ProviderEntry; status?: { configured: boolean; keyHint: string | null; baseUrl: string | null }; editing: boolean; onEdit: (open: boolean) => void; onSave: (change: SaveChange) => Promise<void> }) {
+function ProviderRow({ provider, icon, status, editing, onEdit, onSave }: { provider: ProviderEntry; icon?: ReactNode; status?: { configured: boolean; keyHint: string | null; baseUrl: string | null }; editing: boolean; onEdit: (open: boolean) => void; onSave: (change: SaveChange) => Promise<void> }) {
   const id = useId();
   const row = useRef<HTMLDivElement>(null);
   const [key, setKey] = useState("");
@@ -121,7 +136,7 @@ function ProviderRow({ provider, status, editing, onEdit, onSave }: { provider: 
     <div ref={row} className={`provider-row${configured ? " configured" : ""}`}>
       <div className="setting-row">
         <div className="setting-copy">
-          <span className="setting-label"><ProviderMark id={provider.id} size={16} name={provider.custom ? provider.name : undefined} />{provider.name}{configured ? <span className="provider-badge">Connected</span> : null}</span>
+          <span className="setting-label">{icon ?? <ProviderMark id={provider.id} size={16} name={provider.custom ? provider.name : undefined} />}{provider.name}{configured ? <span className="provider-badge">Connected</span> : null}</span>
           <span className="field-help">{provider.custom && provider.wire ? [providerWireLabel(provider.wire), summary].filter(Boolean).join(" · ") : summary}</span>
         </div>
         <div className="setting-control">

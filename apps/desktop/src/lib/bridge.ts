@@ -56,7 +56,7 @@ export interface BridgeEventPayloads {
   browserFrame: BrowserFrame;
   /** `cause: "userInput"`: the agent continued on its own after a question was answered, not from the queue. */
   turnStarted: { sessionId: string; turnId: string; cause?: "userInput" };
-  turnCompleted: { sessionId: string; turnId: string; outcome: { kind: string; params?: { terminal?: string; reason?: string; error?: { kind?: string; message: string } } }; viewCursor?: string };
+  turnCompleted: { sessionId: string; turnId: string; outcome: { kind: string; params?: { terminal?: string; reason?: string; error?: { kind?: string; message: string; code?: string; status?: number } } }; viewCursor?: string };
 }
 
 type Pending = {

@@ -10,6 +10,21 @@ function rate(value: string | undefined): number | undefined {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
 }
 
+/** Only two explicitly reported zero prices make a model free. */
+export function freeModelCost(cost: Model["cost"]): boolean {
+  return rate(cost?.input) === 0 && rate(cost?.output) === 0;
+}
+
+/** A missing price is unknown, including when the other leg is free. */
+export function modelPriceParts(cost: Model["cost"]): [string, string] | null {
+  if (!cost || freeModelCost(cost)) return null;
+  const input = rate(cost.input);
+  const output = rate(cost.output);
+  if (input == null && output == null) return null;
+  const sign = !cost.currency || cost.currency === "USD" ? "$" : `${cost.currency} `;
+  return [input == null ? "—" : `${sign}${cost.input}`, output == null ? "—" : `${sign}${cost.output}`];
+}
+
 /**
  * Estimated cost of counted tokens at the model's catalog rates. Client-local
  * view math over reported usage — the wire schema leaves cost arithmetic to
@@ -39,15 +54,22 @@ export function estimateCost(
  * separate when the ledger aggregates these estimates.
  */
 export function estimateCallCost(
-  call: Pick<ModelCall, "inputTokens" | "cachedTokens" | "outputTokens">,
+  call: Pick<ModelCall, "inputTokens" | "cachedTokens" | "outputTokens" | "cacheReadTokens" | "cacheWriteTokens">,
   cost: Model["cost"],
 ): EstimatedCost | undefined {
   const { inputTokens, cachedTokens, outputTokens } = call;
   if (![inputTokens, cachedTokens, outputTokens].every((value) => Number.isFinite(value) && value >= 0) || cachedTokens > inputTokens) return undefined;
   if (!inputTokens && !outputTokens) return undefined;
+  const { cacheReadTokens, cacheWriteTokens } = call;
+  const hasBreakdown = cacheReadTokens != null && cacheWriteTokens != null;
+  if (hasBreakdown && (![cacheReadTokens, cacheWriteTokens].every((value) => Number.isFinite(value) && value >= 0) || cacheReadTokens + cacheWriteTokens > cachedTokens)) return undefined;
   const legs = [
     { tokens: inputTokens - cachedTokens, rate: rate(cost?.input) },
-    { tokens: cachedTokens, rate: rate(cost?.cached) },
+    ...(hasBreakdown ? [
+      { tokens: cacheReadTokens, rate: rate(cost?.cached) },
+      { tokens: cacheWriteTokens, rate: rate(cost?.cacheWrite) },
+      { tokens: cachedTokens - cacheReadTokens - cacheWriteTokens, rate: undefined },
+    ] : [{ tokens: cachedTokens, rate: undefined }]),
     { tokens: outputTokens, rate: rate(cost?.output) },
   ];
   let amount = 0;
@@ -62,6 +84,15 @@ export function estimateCallCost(
   if (!priced) return undefined;
   const currency = cost?.currency?.trim() || "USD";
   return { amount, currency, partial };
+}
+
+/** Price cumulative provider usage without silently dropping its cached tokens. */
+export function estimateUsageCost(usage: TokenUsage | null | undefined, cost: Model["cost"]): EstimatedCost | undefined {
+  if (!usage) return undefined;
+  const input = usage.promptTokens ?? 0;
+  const cacheReadTokens = usage.cacheReadTokens ?? 0;
+  const cacheWriteTokens = usage.cacheWriteTokens ?? 0;
+  return estimateCallCost({ inputTokens: input + cacheReadTokens + cacheWriteTokens, cachedTokens: cacheReadTokens + cacheWriteTokens, cacheReadTokens, cacheWriteTokens, outputTokens: usage.outputTokens ?? 0 }, cost);
 }
 
 /**

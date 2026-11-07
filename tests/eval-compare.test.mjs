@@ -82,6 +82,7 @@ test("manual scores are validated and averaged into the comparison", () => {
     version: 1,
     scores: [{ config: "orchestrator-balanced", split: "holdout", task: "b", run: 1, score: null, notes: "" }],
   });
+  assert.deepEqual(scoreTemplate([{ ...manualResult, error: "Provider rejected the call." }, { ...manualResult, skipped: true }]).scores, [], "provider failures and skipped cases have no response to score");
   assert.throws(() => normalizeScores({ version: 1, scores: [{ config: "orchestrator-balanced", split: "holdout", task: "b", run: 1, score: 3 }] }), /null or 0-2/);
   assert.throws(() => normalizeScores({ version: 1, scores: [
     { config: "orchestrator-balanced", split: "holdout", task: "b", run: 1, score: 1 },
@@ -110,6 +111,17 @@ test("the comparison renders the decision tables and flags partial costs", () =>
 test("invalid reports are refused", () => {
   assert.throws(() => summarizeReport(null, "x"), /not an evaluation report/);
   assert.throws(() => compareReports([]), /At least one report/);
+});
+
+test("comparison tables identify blocked runs and keep errors separate from skips", () => {
+  const summary = summarizeReport({ ...report, stop: { reason: "provider rate limit" }, results: [passResult, failResult, { config: passResult.config, split: "holdout", task: "d", run: 1, skipped: true, reason: "provider rate limit" }] }, "blocked");
+  assert.equal(summary.groups[0].errors, 1);
+  assert.equal(summary.groups[0].skipped, 1);
+  assert.equal(summary.groups[0].cases, 2);
+  const text = formatComparison([summary]);
+  assert.match(text, /blocked\*\* stopped: provider rate limit/);
+  assert.match(text, /Errors \| Skipped/);
+  assert.match(text, /results are incomplete/);
 });
 
 test("the compare command reads report files and writes comparison.md", async () => {

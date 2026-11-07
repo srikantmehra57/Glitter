@@ -151,6 +151,8 @@ test('built-ins that could do nothing are left out', () => {
   const acp = names({ thread: true, muse: false, live: true });
   assert.ok(acp.includes('rename') && acp.includes('status'));
   assert.ok(!acp.includes('fork') && !acp.includes('compact') && !acp.includes('permissions') && !acp.includes('export'));
+  const harness = names({ thread: true, muse: false, harness: true, live: true });
+  assert.ok(harness.includes('compact'), 'the built-in agent can compact');
   const preview = names({ thread: true, muse: true, live: false });
   assert.ok(preview.includes('fork') && !preview.includes('compact') && !preview.includes('export'));
 });

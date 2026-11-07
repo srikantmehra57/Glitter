@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { EXIT_FAST_MS, usePresence } from "../lib/presence";
 import { Activity, Check, ChevronDown, EyeOff, Info, KeyRound, Search, SlidersHorizontal, Sparkles, X, Zap } from "lucide-react";
 import { isFastModel } from "../lib/effort";
+import { freeModelCost, modelPriceParts } from "../lib/cost";
 import { humanizeModelLabel } from "../lib/format";
 import { menuPosition } from "../lib/menuPosition";
 import { leadingBrandSlug, modelBrand } from "../lib/brands";
@@ -39,7 +40,7 @@ function unlistedNote(names: string[]) {
 function isFree(model: Model, agentId: AgentId) {
   // Cline retires promotions without renaming the id, so only its live list counts.
   if (agentId === "cline") return model.free === true;
-  return model.description === "Free" || /[-:]free$/i.test(model.modelId) || (model.cost != null && Number(model.cost.input) === 0 && Number(model.cost.output) === 0);
+  return model.description === "Free" || /[-:]free$/i.test(model.modelId) || freeModelCost(model.cost);
 }
 
 /** Drop a retired "(free)" from what a search can match. The live free rows keep it. */
@@ -67,13 +68,6 @@ function sectionOf(model: Model, agentId: AgentId) {
 function contextLabel(limit?: number | null) {
   if (!limit) return null;
   return limit >= 1_000_000 ? `${Math.round(limit / 100_000) / 10}M context`.replace(".0M", "M") : `${Math.round(limit / 1000)}K context`;
-}
-
-/** Input and output price, or null when the model is free or unpriced. */
-function costParts(cost: Model["cost"]): [string, string] | null {
-  if (!cost || (Number(cost.input) === 0 && Number(cost.output) === 0)) return null;
-  const sign = !cost.currency || cost.currency === "USD" ? "$" : `${cost.currency} `;
-  return [`${sign}${cost.input}`, `${sign}${cost.output}`];
 }
 
 type Catalog = { models: Model[]; loading: boolean; error?: string | null };
@@ -446,7 +440,7 @@ export function ModelPicker({ models, agentId, agents = [], agentDisabled, custo
                 {rows.map((row, index) => {
                   const { model } = row;
                   const owner = row.source.agentId;
-                  const price = costParts(model.cost);
+                  const price = modelPriceParts(model.cost);
                   const contributor = CONTRIBUTOR.test(model.modelId);
                   const specs = [contextLabel(model.contextLimit), !contributor && model.description !== "Free" && model.description !== providerName(model.providerId, customs) ? model.description : null].filter(Boolean).join(" · ");
                   const free = isFree(model, owner);
@@ -497,7 +491,7 @@ export function ModelPicker({ models, agentId, agents = [], agentDisabled, custo
                   );
                 })}
               </div>
-              {listModels.some((model) => costParts(model.cost)) ? <p className="model-pricing-note">Prices per 1M tokens</p> : null}
+              {listModels.some((model) => modelPriceParts(model.cost)) ? <p className="model-pricing-note">Prices per 1M tokens</p> : null}
               {unlisted.length ? <p className="picker-note"><Info size={11} aria-hidden="true" />{unlistedNote(unlisted.map((model) => shownName(model, agentId)))}</p> : null}
               {listModels.some((model) => CONTRIBUTOR.test(model.modelId)) ? <p className="picker-note"><Info size={11} aria-hidden="true" />Contributor models are discounted because your content, including inter-session messages, may be used for product improvement.</p> : null}
             </div>

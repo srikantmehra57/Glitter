@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { appendFile, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { PendingQuestion } from "./questions.js";
@@ -79,7 +79,9 @@ type Record_ =
   /** A fresh Builder session for one plan, kept across a user question. */
   | { type: "builderStart"; planId: string; plan: OrchestratorPlan }
   | { type: "builderMessage"; planId: string; message: ChatMessage }
-  | { type: "builderEnd"; planId: string };
+  | { type: "builderEnd"; planId: string }
+  /** The model history was compacted: from here on it starts over from these messages. The transcript items stay. */
+  | { type: "compaction"; messages: ChatMessage[] };
 
 const SESSION_ID = /^h-[a-z0-9-]{8,64}$/;
 
@@ -110,10 +112,33 @@ export class SessionStore {
   private async load(): Promise<Map<string, SessionMeta>> {
     if (this.index) return this.index;
     const index = new Map<string, SessionMeta>();
+    let contents: string;
     try {
-      const raw = JSON.parse(await readFile(this.indexFile, "utf8")) as SessionMeta[];
-      for (const meta of Array.isArray(raw) ? raw : []) if (meta && SESSION_ID.test(meta.sessionId)) index.set(meta.sessionId, meta);
-    } catch { /* first run, or an unreadable index: start empty */ }
+      contents = await readFile(this.indexFile, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new Error(`Cannot read the session index at ${this.indexFile}; the session logs have not been changed.`, { cause: error });
+      let files: string[];
+      try { files = await readdir(this.sessionsDir); }
+      catch (directoryError) {
+        if ((directoryError as NodeJS.ErrnoException).code !== "ENOENT") throw new Error(`Cannot inspect session logs at ${this.sessionsDir}; the session index has not been changed.`, { cause: directoryError });
+        files = [];
+      }
+      if (files.some((file) => file.endsWith(".jsonl"))) throw new Error(`The session index is missing at ${this.indexFile}, but session logs still exist at ${this.sessionsDir}. Restore the index before creating threads.`);
+      this.index = index;
+      return index;
+    }
+    try {
+      const raw: unknown = JSON.parse(contents);
+      if (!Array.isArray(raw)) throw new Error("Expected an array of sessions.");
+      for (const meta of raw) {
+        if (!meta || typeof meta !== "object" || typeof meta.sessionId !== "string" || !SESSION_ID.test(meta.sessionId)
+          || typeof meta.workspaceRoot !== "string" || typeof meta.createdAt !== "string" || typeof meta.updatedAt !== "string"
+          || !(meta.title === null || typeof meta.title === "string") || index.has(meta.sessionId)) throw new Error("Invalid or duplicate session metadata.");
+        index.set(meta.sessionId, meta as SessionMeta);
+      }
+    } catch (error) {
+      throw new Error(`The session index at ${this.indexFile} is corrupt or invalid. It and the session logs have not been changed. Restore the index before creating threads.`, { cause: error });
+    }
     this.index = index;
     return index;
   }
@@ -203,6 +228,7 @@ export class SessionStore {
       let record: Record_;
       try { record = JSON.parse(line) as Record_; } catch { continue; }
       if (record.type === "message") messages.push(record.message);
+      else if (record.type === "compaction" && Array.isArray(record.messages)) messages.splice(0, messages.length, ...record.messages);
       else if (record.type === "leadMessage" && record.message) leadMessages.push(record.message);
       else if (record.type === "leadReset") leadMessages.length = 0;
       else if (record.type === "builderStart" && typeof record.planId === "string" && record.plan) builder = { planId: record.planId, plan: record.plan, messages: [] };

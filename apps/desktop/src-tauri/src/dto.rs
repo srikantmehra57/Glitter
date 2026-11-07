@@ -415,6 +415,32 @@ struct TestModelParams {
     model_id: String,
 }
 
+/// Settings → Permissions' rules for the built-in agent. The bridge parses the
+/// pattern; here only the effect is closed and the list and each rule bounded.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct HarnessRulesParams {
+    agent_id: AgentId,
+    rules: Vec<PermissionRuleParam>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+enum RuleEffect {
+    Allow,
+    Deny,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PermissionRuleParam {
+    effect: RuleEffect,
+    rule: String,
+}
+
+const RULES_LIMIT: usize = 200;
+const RULE_LIMIT: usize = 300;
+
 /// Settings → Orchestrator's role check: one probe against one Harness model.
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1277,6 +1303,23 @@ pub fn validate_params(method: &str, params: &Value) -> Result<Value, String> {
             let parsed: EmptyParams = parse(method, body)?;
             emit(method, &parsed)
         }
+        "harnessRules" => {
+            let parsed: HarnessRulesParams = parse(method, body)?;
+            if parsed.agent_id != AgentId::Harness {
+                return Err(format!("Invalid {method} parameters: rules apply to Harness only."));
+            }
+            if parsed.rules.len() > RULES_LIMIT {
+                return Err(format!("Invalid {method} parameters: at most {RULES_LIMIT} rules."));
+            }
+            for rule in &parsed.rules {
+                required(method, "rule", &rule.rule)?;
+                capped(method, "rule", &rule.rule, RULE_LIMIT)?;
+                if rule.rule.chars().any(char::is_control) {
+                    return Err(format!("Invalid {method} parameters: a rule cannot contain control characters."));
+                }
+            }
+            emit(method, &parsed)
+        }
         "testModel" => {
             let parsed: TestModelParams = parse(method, body)?;
             // Only the built-in agent calls a provider directly; a CLI agent would need a session.
@@ -1658,6 +1701,8 @@ mod tests {
             ("harnessMcp", json!({ "sessionId": "h-1", "refresh": true })),
             ("harnessMcpConfig", json!({ "agentId": "harness", "sessionId": "h-1" })),
             ("testModel", json!({ "agentId": "harness", "modelId": "anthropic/claude-sonnet-5" })),
+            ("harnessRules", json!({ "agentId": "harness", "rules": [{ "effect": "allow", "rule": "Bash(npm test)" }, { "effect": "deny", "rule": "Edit(.env)" }] })),
+            ("harnessRules", json!({ "agentId": "harness", "rules": [] })),
             ("orchestratorProbe", json!({ "agentId": "harness", "role": "builder", "providerId": "anthropic", "modelId": "anthropic/claude-sonnet-5" })),
             ("harnessMcpAddServer", json!({ "sessionId": "h-1", "scope": "workspace", "server": { "name": "docs", "transport": "stdio", "command": "npx", "args": ["-y", "server-filesystem", "."], "env": { "LOG_LEVEL": "warn" } } })),
             ("harnessMcpAddServer", json!({ "sessionId": "h-1", "scope": "home", "server": { "name": "docs", "transport": "http", "url": "https://example.com/mcp", "headers": { "Authorization": "Bearer token" }, "timeoutMs": 30000 } })),
@@ -1755,6 +1800,11 @@ mod tests {
         assert!(validate_params("harnessMcpAddServer", &json!({ "sessionId": "s", "scope": "workspace", "server": { "name": "x", "transport": "stdio", "command": "x", "env": { "TOKEN": "two\nlines" } } })).is_err());
         assert!(validate_params("harnessMcpAddServer", &json!({ "sessionId": "s", "scope": "workspace", "server": { "name": "x", "transport": "stdio", "command": "x", "timeoutMs": 100 } })).is_err());
         assert!(validate_params("harnessMcpAddServer", &json!({ "sessionId": "s", "scope": "workspace", "server": { "name": "x".repeat(65), "transport": "stdio", "command": "x" } })).is_err());
+        assert!(validate_params("harnessRules", &json!({ "agentId": "muse", "rules": [] })).is_err(), "rules are Harness-only");
+        assert!(validate_params("harnessRules", &json!({ "agentId": "harness", "rules": [{ "effect": "ask", "rule": "Bash(x)" }] })).is_err(), "the effect is closed");
+        assert!(validate_params("harnessRules", &json!({ "agentId": "harness", "rules": [{ "effect": "allow", "rule": "" }] })).is_err());
+        assert!(validate_params("harnessRules", &json!({ "agentId": "harness", "rules": [{ "effect": "allow", "rule": "x".repeat(301) }] })).is_err());
+        assert!(validate_params("harnessRules", &json!({ "agentId": "harness", "rules": (0..201).map(|_| json!({ "effect": "deny", "rule": "WebSearch" })).collect::<Vec<_>>() })).is_err());
         assert!(validate_params("testModel", &json!({ "agentId": "muse", "modelId": "m" })).is_err());
         assert!(validate_params("testModel", &json!({ "agentId": "harness", "modelId": "" })).is_err());
         assert!(validate_params("testModel", &json!({ "modelId": "anthropic/m" })).is_err());

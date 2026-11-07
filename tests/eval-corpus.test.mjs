@@ -1,14 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { CORPUS_IMAGE_TYPES, CORPUS_SPLITS, TASKS, imagesForTurn, selectTasks, taskSplit, validateCorpus } from "../evals/orchestrator/corpus.mjs";
 import { runChecks, safeRelative, setupTask } from "../evals/orchestrator/checks.mjs";
-import { buildConfigs, costOf, credentialsFromEnv, missingCredentials } from "../evals/orchestrator/configs.mjs";
+import { buildConfigs, costOf, credentialsFromEnv, loadPrices, missingCredentials, providerBlock } from "../evals/orchestrator/configs.mjs";
 
 const task = (id) => TASKS.find((entry) => entry.id === id);
 
@@ -282,4 +282,89 @@ test("file checks and baseline configs use the same rules as the runner", async 
   assert.equal(cost.usd, 18);
   assert.equal(cost.partial, true, "an unpriced hosted call makes the total partial");
   assert.equal(costOf([{ modelId: "ollama/qwen3-coder", inputTokens: 10, outputTokens: 10 }], {}).partial, false, "local calls are priced at zero explicitly");
+});
+
+test("evaluation costs separate cache reads, writes and unknown cache usage", () => {
+  const call = { modelId: "gateway/model", inputTokens: 1_000_000, cachedTokens: 600_000, cacheReadTokens: 400_000, cacheWriteTokens: 200_000, outputTokens: 1_000_000 };
+  const prices = loadPrices({ EVAL_PRICES: JSON.stringify({ "gateway/model": { input: 2, output: 10, cached: 0.2, cacheWrite: 2.5 } }) });
+  const complete = costOf([call], prices);
+  assert.ok(Math.abs(complete.usd - 11.38) < 1e-9);
+  assert.equal(complete.partial, false);
+
+  const unpricedWrite = costOf([call], { "gateway/model": { input: 2, output: 10, cached: 0.2 } });
+  assert.ok(Math.abs(unpricedWrite.usd - 10.88) < 1e-9);
+  assert.equal(unpricedWrite.partial, true, "an unknown cache-write rate is not a full-price input charge");
+
+  const ambiguous = { ...call, cacheReadTokens: undefined, cacheWriteTokens: undefined };
+  const unknownBreakdown = costOf([ambiguous], prices);
+  assert.ok(Math.abs(unknownBreakdown.usd - 10.8) < 1e-9);
+  assert.equal(unknownBreakdown.partial, true, "combined cache usage cannot be priced as a known read or write");
+  assert.equal(costOf([{ ...call, cacheReadTokens: 800_000 }], prices).partial, true, "an impossible cache breakdown cannot produce a complete estimate");
+  assert.equal(costOf([{ modelId: call.modelId }], prices).partial, true, "missing usage is not a known zero");
+});
+
+test("only rate limits and account failures block an evaluation batch", () => {
+  for (const error of [{ code: "RATE_LIMIT" }, { status: 429 }]) assert.equal(providerBlock(error), "provider rate limit");
+  for (const error of [{ code: "MISSING_CREDENTIAL" }, { code: "INVALID_CREDENTIAL" }, { status: 401 }, { status: 403 }]) assert.equal(providerBlock(error), "provider credentials");
+  assert.equal(providerBlock({ status: 402 }), "provider billing");
+  for (const error of [undefined, null, "RATE_LIMIT", { status: 400 }, { status: 500 }, { code: "CONTEXT_WINDOW_EXCEEDED" }, { message: "429 rate limit" }]) assert.equal(providerBlock(error), undefined);
+});
+
+test("live batches preserve completed cases and skip later calls after a provider block", async () => {
+  const root = fileURLToPath(new URL("..", import.meta.url));
+  const temporary = await mkdtemp(join(tmpdir(), "glitter-eval-block-"));
+  try {
+    const preload = join(temporary, "provider.mjs");
+    const countFile = join(temporary, "calls.json");
+    await writeFile(preload, `
+import { writeFileSync } from 'node:fs';
+let calls = 0;
+globalThis.fetch = async (url) => {
+  if (String(url).endsWith('/models')) return Response.json({ data: [{ id: 'fixture' }] });
+  if (!String(url).endsWith('/chat/completions')) throw new Error('Unexpected request');
+  calls += 1;
+  writeFileSync(${JSON.stringify(countFile)}, JSON.stringify(calls));
+  if (calls > 1) return Response.json({ error: { message: 'Provider blocked this batch.' } }, { status: Number(process.env.TEST_PROVIDER_STATUS) });
+  return new Response('data: ' + JSON.stringify({ choices: [{ delta: { content: 'Which improvement do you want?' }, finish_reason: 'stop' }], usage: { prompt_tokens: 10, completion_tokens: 5 } }) + '\\n\\ndata: [DONE]\\n\\n', { headers: { 'content-type': 'text/event-stream' } });
+};
+`, "utf8");
+    // Keep the real host and CLI while replacing every network call locally.
+    const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("EVAL_") && !key.endsWith("_API_KEY")));
+    for (const [status, reason] of [[402, "provider billing"], [401, "provider credentials"], [429, "provider rate limit"], [400, undefined]]) {
+      const out = join(temporary, String(status));
+      let exitCode = 0;
+      try {
+        await promisify(execFile)(process.execPath, ["--import", preload, "evals/orchestrator/run.mjs", "--configs=lead-alone,builder-alone", "--tasks=ambiguous", "--runs=2", `--out=${out}`, "--yes"], {
+          cwd: root,
+          env: { ...env, TEST_PROVIDER_STATUS: String(status), EVAL_LEAD_MODEL: "ollama/fixture", EVAL_BUILDER_MODEL: "ollama/fixture" },
+          timeout: 60_000,
+        });
+      } catch (error) {
+        exitCode = error.code;
+      }
+      assert.equal(exitCode, reason ? 1 : 0, "a provider block must stop a caller's next split");
+      const report = JSON.parse(await readFile(join(out, "report.json"), "utf8"));
+      assert.equal(report.results.length, 4);
+      assert.equal(report.personalConfiguration, "empty");
+      assert.match(report.source.sourceSha256, /^[a-f0-9]{64}$/);
+      assert.match(report.source.corpusSha256, /^[a-f0-9]{64}$/);
+      assert.equal(report.results[0].error, undefined);
+      assert.match(report.results[0].finalText, /Which improvement/);
+      assert.equal(report.results[1].errorStatus, status);
+      assert.ok(report.results[1].error);
+      const markdown = await readFile(join(out, "report.md"), "utf8");
+      if (reason) {
+        assert.equal(report.stop.reason, reason);
+        assert.deepEqual(report.results.slice(2).map((result) => [result.skipped, result.reason]), [[true, reason], [true, reason]]);
+        assert.match(markdown, new RegExp(`Stopped: ${reason}`));
+        assert.match(markdown, new RegExp(`skipped.*${reason}`));
+      } else {
+        assert.equal(report.stop, undefined, "a task-specific failure must not block unrelated cases");
+        assert.ok(report.results.slice(2).every((result) => !result.skipped && result.errorStatus === status));
+      }
+      assert.equal(JSON.parse(await readFile(countFile, "utf8")), status === 429 ? 5 : reason ? 2 : 4, "only the failed turn's bounded retries may run after the block");
+    }
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
 });
