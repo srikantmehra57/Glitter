@@ -92,6 +92,34 @@ licence terms.
 
 ### Added
 
+- **Plugins from GitHub.** Settings → Extensions has Discover, Installed and
+  Sources, and **Add from GitHub**: paste a repository link and Glitter fetches
+  it, shows what it holds — skills, commands, MCP servers with their command
+  lines, and the parts the built-in agent does not run — and installs only the
+  parts you keep checked. Claude Code and Codex plugins, plugin marketplaces and
+  plain skill repositories are all read. A marketplace is added as a source,
+  and its plugins list in Discover beside the bundled store, with paging,
+  search and a source filter. Installed plugins can be turned off without
+  losing their files, updated from newer commits, and removed, which takes back
+  only what was installed.
+- **Thumbnails for every extension.** A plugin shows its own logo or its
+  owner's GitHub avatar; a marketplace listing carries its source's avatar in
+  the corner; everything else gets a tinted tile chosen from its name and
+  category, from a much larger set of icons.
+
+- **A bounded Harness evaluation runner.** Maintainers can exercise synthetic
+  coding fixtures with an explicitly selected model and record sanitized
+  results, while unobserved provider behavior remains unclaimed.
+- **Persistent rules for the built-in agent.** Settings → Permissions has allow
+  and deny lists for commands, web calls and MCP tools, plus denies for edits.
+  They apply across built-in agent threads, report rules they cannot use, and
+  recheck denies before a waiting tool starts. Edit rules cover built-in edit
+  tools; shell commands can still change those paths, and commands executed
+  indirectly by other programs are not inspected.
+- **Google Sans joins the interface font choices.** The bundled variable face is
+  compiled into the app, so it works offline and looks the same on every Mac; it
+  sits beside Inter in Settings → Theme, and a retired or unknown saved value
+  still falls back to System.
 - **Context compaction for the built-in agent.** Long histories can be
   summarized automatically or with `/compact` and the context card. The
   latest request and its images survive compaction and thread reopening; the
@@ -247,6 +275,10 @@ licence terms.
 
 ### Changed
 
+- **Reasoning effort is available for every provider.** The picker no longer
+  hides when a model reports no levels: a model without declared effort falls
+  back to the default vocabulary, and the default effort setting is used when
+  the model names none. A model that does publish levels still wins.
 - **Title-bar pane controls are icon-only.** Browser, Terminal and Changes keep
   their names in tooltips, while new direct Files and Monitor icons open those
   inspector views without a menu. Clicking another view switches to it, clicking

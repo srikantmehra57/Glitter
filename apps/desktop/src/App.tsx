@@ -22,6 +22,7 @@ import { openPicker } from "./lib/commands";
 import { modalOpen } from "./lib/dialogFocus";
 import { actionFor, chordOf, menuOwned, shortcutForMenu, type ShortcutId } from "./lib/shortcuts";
 import "@fontsource-variable/inter";
+import "@fontsource-variable/google-sans";
 import "./styles.css";
 import "./settings.css";
 
@@ -190,7 +191,7 @@ export default function App() {
     const config = activeConfig(s);
     const agentId = activeAgentId(s);
     const model = s.modelsAgentId === agentId ? modelFor(s.models, config) : undefined;
-    const tiers = tiersFor(model, agentId);
+    const tiers = tiersFor(model);
     return isPeak(config.effort ?? defaultTier(model, tiers), tiers);
   });
   useDesktopShortcuts();

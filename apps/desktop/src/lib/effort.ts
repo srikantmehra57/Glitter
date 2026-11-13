@@ -42,21 +42,20 @@ export function withUnlistedModels(models: Model[], selections: Array<Pick<Sessi
 }
 
 /**
- * Effort tiers the model accepts. Tiers reported by the agent win; an agent that
- * reports none for a model (e.g. an OpenCode model without variants) gets no
- * effort control. Only Muse falls back to its documented vocabulary.
+ * Effort tiers the model accepts. Tiers reported by the provider or model win;
+ * if there is no data from the provider or model, it falls back to the default
+ * effort vocabulary so the effort picker stays available across all providers.
  */
-export function tiersFor(model: Model | undefined, agentId: string = "muse"): ReasoningEffort[] {
-  if (model?.reasoningEfforts && (model.effortSource === "host" || agentId !== "muse")) return TIER_ORDER.filter((tier) => model.reasoningEfforts!.includes(tier));
-  const tiers = model?.reasoningEfforts?.filter((tier) => TIER_ORDER.includes(tier));
-  if (tiers?.length) return TIER_ORDER.filter((tier) => tiers.includes(tier));
-  return agentId === "muse" ? VOCABULARY : [];
+export function tiersFor(model: Model | undefined): ReasoningEffort[] {
+  const declared = model?.reasoningEfforts?.filter((tier) => TIER_ORDER.includes(tier));
+  if (declared?.length) return TIER_ORDER.filter((tier) => declared.includes(tier));
+  return VOCABULARY;
 }
 
-export function defaultTier(model: Model | undefined, tiers = tiersFor(model)): ReasoningEffort | undefined {
+export function defaultTier(model: Model | undefined, tiers = tiersFor(model), userDefault?: ReasoningEffort): ReasoningEffort {
   const declared = model?.defaultReasoningEffort;
   if (declared && tiers.includes(declared)) return declared;
-  if (!tiers.length) return undefined;
+  if (userDefault && tiers.includes(userDefault)) return userDefault;
   return tiers.includes(HOST_DEFAULT) ? HOST_DEFAULT : tiers[Math.floor(tiers.length / 2)];
 }
 

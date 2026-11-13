@@ -84,6 +84,56 @@ must respect. Don't log routine changes here; they belong in git history and
   a search needs it, so opening the picker never starts an agent CLI by itself.
 
 
+### Plugins install from GitHub, reviewed before they run
+
+- **Date:** 2026-11-13
+- **Context:** The bundled store only grows with a release, and the plugins
+  people actually use live on GitHub: Claude Code plugins and marketplaces
+  (`.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`), Codex
+  plugins (`.codex-plugin/plugin.json`, `.agents/plugins/marketplace.json`) and
+  plain Agent Skills repositories. Extensions had no way to reach them.
+- **Decision:** `src-tauri/src/plugins.rs` fetches and installs them. The user
+  pastes a repository (`owner/repo`, a github.com or clone URL, or a `tree/`
+  link); the native side builds `https://github.com/<owner>/<repo>.git` from the
+  validated name and fetches one commit with the system `git` into
+  `~/.glitter/cache/github/<token>`. It reads a plugin (skills, commands, MCP
+  servers, plus the agents, hooks and LSP servers it cannot run), a marketplace
+  (each listing's source: this repository, another GitHub repository, pinned
+  or not), or a folder of skills, and returns a preview and the token.
+  Installing reads that same staged folder again, so what is installed is what
+  the user saw. A marketplace becomes a *source*: its listings show in
+  Discover, and each one is fetched and previewed before it installs.
+- **Where it lands:** the plugin's files are copied to
+  `~/.glitter/plugins/<id>/source` (regular files only, bounded in count and
+  size), its skills to `~/.agents/skills/<name>` with a marker naming the
+  plugin, its commands as skills there too (so `/name` calls them), and its
+  servers into `~/.glitter/mcp.json` with `${CLAUDE_PLUGIN_ROOT}` pointed at the
+  installed folder. `plugin.json` beside the files records the origin commit
+  and exactly what was written. Turning a plugin off takes the skills and
+  servers back and keeps the files, so turning it on needs no network.
+- **Trust:** the renderer sends a source string, a token and a list of names,
+  never a path or content. `git` runs with prompts off, `protocol.allow=never`
+  except https, `core.symlinks=false`, no hooks and no submodules, under the
+  network timeout; private repositories work through the user's own git
+  credentials. Thumbnails are a plugin's own logo from its manifest, or the
+  owner's GitHub avatar fetched with `curl --proto =https`, both sniffed by
+  their bytes and handed to the webview as data URLs, so the CSP stays
+  `img-src 'self' data: blob:`. Nothing runs at install: skills are text, and a
+  server only starts when a built-in agent thread starts MCP, where its tool
+  calls follow the thread's permissions as before. The preview lists every
+  server's command line and the variables it expects.
+- **Ownership:** as in the store, a skill folder is removed only when its marker
+  names this plugin (store markers never match a plugin's folder, and the other
+  way round), and a server only while its entry is still exactly what was
+  written. A skill or server name already taken is skipped and reported, never
+  overwritten. Two plugins with the same name from different repositories are
+  refused; reinstalling from the same repository is an update.
+- **Consequences:** Updates compare the recorded commit with `git ls-remote`
+  of the same branch; a plugin pinned to a commit has nothing to compare. An
+  update is a fresh preview of the latest commit that keeps the user's choice
+  of parts. Agents, hooks and LSP servers are shown and counted but not
+  installed until the built-in agent can run them.
+
 ### The extension store ships inside the app
 
 - **Date:** 2026-10-22
@@ -921,6 +971,15 @@ must respect. Don't log routine changes here; they belong in git history and
 - **Outcomes:** An approval ends as allowed, rejected, cancelled, expired or
   unavailable, each with its own message to the model. With no approval
   channel the request is refused at once instead of waiting.
+- **Persistent rules (2026-11-11):** Settings saves built-in-agent allow and
+  deny rules. Allows become ordinary grants; denies are guards in every mode.
+  Updates are serialized, reapplied after a bridge restart, and awaited before
+  starting or continuing a thread. Guards are checked again after approval and
+  the execution checkpoint so a deny added while a call waits takes effect.
+  An unparseable shell script is refused when a Bash deny is present. These
+  rules govern tool subjects, not everything an arbitrary program can do:
+  Edit denies do not confine a shell, and commands run indirectly by other
+  programs are outside the shell reader's view.
 - **Later:** Full access still runs ask-level risks without asking. The guarded
   mode added on 2026-10-22 ("Autonomous is the harness's guarded mode") is the
   one that stops at them.

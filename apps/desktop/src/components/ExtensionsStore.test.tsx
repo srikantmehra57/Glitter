@@ -63,7 +63,7 @@ describe("ExtensionsStore", () => {
     const refresh = vi.fn(async () => {});
     mount([entry(), server], { refreshCatalog: refresh });
     await waitFor(() => expect(refresh).toHaveBeenCalled());
-    const section = screen.getByRole("region", { name: "Store" });
+    const section = screen.getByRole("region", { name: "Discover" });
     expect(within(section).getByText("Code review")).toBeInTheDocument();
     expect(within(section).getByText("Filesystem")).toBeInTheDocument();
     expect(within(section).getByText("npx -y @modelcontextprotocol/server-filesystem .")).toBeInTheDocument();

@@ -2956,6 +2956,7 @@ export class HarnessHost {
       this.emitItem(live, { ...base, status: "failed", failureReason: output, visibleOutput: output }, true);
       return { id: call.id, name: call.name, output, isError: true };
     }
+    const approvedGrants: Grant[] = [];
     if (verdict.kind === "ask") {
       const outcome = await this.ask(live, call, kind, subject ?? { kind: "none" }, verdict);
       if (outcome.kind !== "allowed") {
@@ -2963,7 +2964,7 @@ export class HarnessHost {
         this.emitItem(live, { ...base, status: outcome.kind === "cancelled" ? "cancelled" : "failed", failureReason: output, visibleOutput: output }, true);
         return { id: call.id, name: call.name, output, isError: true };
       }
-      if (outcome.grant) live.grants.push(outcome.grant);
+      if (outcome.grant) approvedGrants.push(outcome.grant);
     }
     // A user can navigate the shared page while an approval waits. Do not let
     // the old origin's approval act on the new one: ask again before execution.
@@ -2976,7 +2977,7 @@ export class HarnessHost {
         return { id: call.id, name: call.name, output, isError: true };
       }
       if (latest.kind === "browser" && (latest.origin !== subject.origin || latest.control !== subject.control)) {
-        const refreshed = decide({ kind, subject: latest, mode: live.approvalMode, planMode: live.meta.mode === "plan", grants: [...live.grants, ...this.rules.grants] });
+        const refreshed = decide({ kind, subject: latest, mode: live.approvalMode, planMode: live.meta.mode === "plan", grants: [...live.grants, ...approvedGrants, ...this.rules.grants] });
         if (refreshed.kind === "deny") {
           const output = noted(refreshed.reason);
           this.emitItem(live, { ...base, status: "failed", failureReason: output, visibleOutput: output }, true);
@@ -2989,7 +2990,7 @@ export class HarnessHost {
             this.emitItem(live, { ...base, status: outcome.kind === "cancelled" ? "cancelled" : "failed", failureReason: output, visibleOutput: output }, true);
             return { id: call.id, name: call.name, output, isError: true };
           }
-          if (outcome.grant) live.grants.push(outcome.grant);
+          if (outcome.grant) approvedGrants.push(outcome.grant);
         }
         subject = latest;
       }
@@ -3003,6 +3004,16 @@ export class HarnessHost {
       return { id: call.id, name: call.name, output, isError: true };
     }
     await this.markStarted(live, call);
+    // A deny can be added while approval or a hook is waiting. Recheck the
+    // current guards immediately before execution, including after the async
+    // checkpoint, and do not retain an approval for a call that is now denied.
+    const finalRefusal = subject ? runGuards(turn.guards, { toolName: call.name, kind, subject }) : "A permission check failed, so this call was refused.";
+    if (finalRefusal) {
+      const output = noted(finalRefusal);
+      this.emitItem(live, { ...base, status: "failed", failureReason: output, visibleOutput: output }, true);
+      return { id: call.id, name: call.name, output, isError: true };
+    }
+    live.grants.push(...approvedGrants);
     // Frozen before observers see it: a hook cannot rewrite what the model or the card receives.
     // Background shells belong to the visible thread, so a delegated task's dev server outlives the task but not the thread.
     const result = Object.freeze(await executeTool(definition, live.meta.workspaceRoot, frozen, signal, { canRead: live.meta.mode !== "plan", sessionId: this.surface(live).meta.sessionId, ...(live.approvalMode === "allowAll" ? { fullAccess: true } : {}) }));

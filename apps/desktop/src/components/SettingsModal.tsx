@@ -25,6 +25,7 @@ const UsageView = lazy(() => import("./UsageView").then((module) => ({ default: 
 import { LoginPanel } from "./LoginPanel";
 import { ModelLibrary } from "./ModelLibrary";
 import { OrchestratorPanel } from "./OrchestratorPanel";
+import { PermissionRulesCard } from "./PermissionRulesCard";
 import { SelectMenu, type SelectMenuOption } from "./SelectMenu";
 import { Orb } from "./Orb";
 import { ProvidersPanel } from "./ProvidersPanel";
@@ -367,6 +368,8 @@ function ShortcutsPanel({ overrides, onChange }: { overrides: ShortcutOverrides;
 }
 
 function PermissionsPanel({ draft, onChange }: { draft: Settings; onChange: (patch: Partial<Settings>) => void }) {
+  const ruleProblems = useAppStore((state) => state.harnessRuleProblems);
+  const rulesError = useAppStore((state) => state.harnessRulesError);
   const offered: ApprovalMode[] = draft.defaultApprovalMode === "denyUnmatched" ? ["denyUnmatched", ...APPROVAL_ORDER] : [...APPROVAL_ORDER];
   const modes = offered.filter((mode) => mode !== "allowAll");
   return <div className="permissions-panel">
@@ -379,6 +382,7 @@ function PermissionsPanel({ draft, onChange }: { draft: Settings; onChange: (pat
       </button>)}
     </div>
     <p className="settings-note">The default for new threads. Full access is chosen on a thread, from the composer.</p>
+    <PermissionRulesCard rules={draft.harnessRules ?? []} onChange={(harnessRules) => onChange({ harnessRules })} problems={ruleProblems} syncError={rulesError} onRetry={() => { void useAppStore.getState().applyHarnessRules(true).catch(() => {}); }} />
     <SectionHead title="Muse host sandbox" help="Applied when the Muse connection starts; saving a change restarts it." />
     <div className="settings-card posture-list">
       {POSTURE_TOGGLES.map((item) => (

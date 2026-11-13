@@ -69,7 +69,7 @@ const replacements = {
     export const trustPreview=async()=>({ skills: [], rules: null });
     export const listWorkspaceFiles=async()=>[];
     export const cliLogout=async()=>{};export const pluginList=async()=>[];export const skillList=async()=>[];
-    export const catalogList=async()=>({entries:[],skillsRoot:'',error:null});export const catalogInstall=async()=>({installedSkills:[],installedServers:[],skipped:[],errors:[]});export const catalogRemove=async()=>({removed:[],skipped:[],errors:[]});
+    export const catalogList=async()=>({entries:[],skillsRoot:'',error:null});export const catalogInstall=async()=>({installedSkills:[],installedServers:[],skipped:[],errors:[]});export const catalogRemove=async()=>({removed:[],skipped:[],errors:[]});export const githubInstall=async()=>({id:'',skills:[],commands:[],servers:[],problems:[]});export const libraryList=async()=>({plugins:[],marketplaces:[],pluginsRoot:'',problems:[]});export const librarySetEnabled=async()=>({id:'',skills:[],commands:[],servers:[],problems:[]});export const libraryRemove=async()=>[];export const libraryCheckUpdates=async()=>[];export const marketplaceAdd=async()=>({});export const marketplaceRefresh=async()=>({});export const marketplaceRemove=async()=>{};
     export const projectInit=async()=>'';export const enterpriseStatus=async()=>({ generation: null, sources: [] });
     export const pickPluginBundle=async()=>null;export const pluginInstall=async()=>{};
     export const pickSkillSource=async()=>null;export const skillInstall=async()=>'';export const skillImport=async()=>'';export const skillUninstall=async()=>'';`,

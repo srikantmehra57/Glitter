@@ -1,7 +1,7 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { describeError } from "../lib/errors";
 import { useShallow } from "zustand/react/shallow";
-import { Check, KeyRound, LogOut, Package, Plus, Puzzle, RefreshCw, Server, WandSparkles, X } from "lucide-react";
+import { Check, FolderGit2, KeyRound, LogOut, Package, Plus, Puzzle, RefreshCw, Server, Trash2, WandSparkles, X } from "lucide-react";
 import { consentMcp, mcpLogin, mcpLogout, pluginInspect, pluginReview, reviewMcp, skillInspect, skillSet } from "../lib/bridge";
 import { skillSelectorText, skillUseText } from "../lib/composerText";
 import { ExtensionThumb } from "./ExtensionThumb";
@@ -9,6 +9,15 @@ import { mcpServerNameProblem, mcpServerSummary, parseMcpArguments, parseMcpKeyV
 import { activeWorkspace, currentThread, currentWorkspace, supportsSkills, useAppStore } from "../lib/store";
 import { skillScopeArg, type HarnessMcpConfigServer, type HarnessMcpReview, type HarnessMcpScope, type HarnessMcpServerInput, type PluginDetail, type SkillDetail, type SkillEntry, type SkillRow } from "../lib/types";
 import { ExtensionsStore } from "./ExtensionsStore";
+import { GithubInstallDialog, type GithubRequest } from "./GithubInstallDialog";
+import { InstalledPlugins, PluginSources, type OpenGithub } from "./PluginLibrary";
+
+type LibraryTab = "discover" | "installed" | "sources";
+const TABS: Array<{ id: LibraryTab; label: string }> = [
+  { id: "discover", label: "Discover" },
+  { id: "installed", label: "Installed" },
+  { id: "sources", label: "Sources" },
+];
 
 const selectorText = (row: SkillRow) => skillSelectorText(row.selector);
 
@@ -66,7 +75,32 @@ export function ExtensionsView({ onOpenThreads, embedded = false }: { onOpenThre
     setComposer: state.setComposer,
     setSettingsOpen: state.setSettingsOpen,
     confirm: state.confirm,
+    library: state.library,
+    libraryUpdates: state.libraryUpdates,
+    refreshLibrary: state.refreshLibrary,
+    checkLibraryUpdates: state.checkLibraryUpdates,
+    catalogEntries: state.catalogEntries,
+    removeCatalogEntry: state.removeCatalogEntry,
   })));
+  const [tab, setTab] = useState<LibraryTab>("discover");
+  const [discoverSource, setDiscoverSource] = useState("all");
+  const [github, setGithub] = useState<GithubRequest | null>(null);
+  const githubRequests = useRef(0);
+  const updatesChecked = useRef(false);
+  const [storeBusy, setStoreBusy] = useState<string | null>(null);
+  const [storeError, setStoreError] = useState<string | null>(null);
+  const openGithub: OpenGithub = (request) => setGithub({ ...request, id: ++githubRequests.current });
+  const bar = useRef<HTMLDivElement>(null);
+  /** A tab opens at its top: when the bar is stuck, scroll back to where it sits. */
+  const showTab = (next: LibraryTab) => {
+    setTab(next);
+    const node = bar.current;
+    let scroller = node?.parentElement ?? null;
+    while (scroller && !/(auto|scroll)/.test(getComputedStyle(scroller).overflowY)) scroller = scroller.parentElement;
+    if (!node || !scroller) return;
+    const stuck = node.getBoundingClientRect().top - scroller.getBoundingClientRect().top <= 1;
+    if (stuck && scroller.scrollTop > 0) scroller.scrollTo({ top: 0, behavior: "smooth" });
+  };
   const thread = currentThread(s);
   const [skillsBusy, setSkillsBusy] = useState(false);
   const [authBusy, setAuthBusy] = useState<string | null>(null);
@@ -105,6 +139,20 @@ export function ExtensionsView({ onOpenThreads, embedded = false }: { onOpenThre
   const [mcpApprovalError, setMcpApprovalError] = useState<string | null>(null);
   const [mcpApprovalVersion, setMcpApprovalVersion] = useState(0);
   const [mcpConsentBusy, setMcpConsentBusy] = useState(false);
+
+  useEffect(() => {
+    void s.refreshLibrary();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [s.preview]);
+
+  // Asking GitHub for newer commits waits until the user looks at what is installed.
+  useEffect(() => {
+    if (tab === "discover" || updatesChecked.current || !s.library) return;
+    if (!s.library.plugins.length && !s.library.marketplaces.length) return;
+    updatesChecked.current = true;
+    void s.checkLibraryUpdates().catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, s.library]);
 
   useEffect(() => {
     if (!s.preview) void s.refreshMcpServers();
@@ -305,6 +353,23 @@ export function ExtensionsView({ onOpenThreads, embedded = false }: { onOpenThre
     }
   };
 
+  const storeInstalled = s.catalogEntries.filter((entry) => entry.installed || entry.installedParts > 0);
+  const installedCount = (s.library?.plugins.length ?? 0) + storeInstalled.length;
+
+  const removeStoreEntry = async (id: string, name: string) => {
+    const ok = await s.confirm({ title: `Remove ${name}?`, body: "Its store-installed skills and server entries are removed. Anything you changed or added yourself is kept.", confirmLabel: "Remove", danger: true });
+    if (!ok) return;
+    setStoreBusy(id); setStoreError(null);
+    try {
+      const result = await s.removeCatalogEntry(id, harnessThread?.sessionId);
+      if (result.errors.length) setStoreError(`${name}: ${result.errors.join(" ")}`);
+    } catch (error) {
+      setStoreError(describeError(`Could not remove ${name}`, error));
+    } finally {
+      setStoreBusy(null);
+    }
+  };
+
   const Shell = embedded ? "div" : "main";
   const shellProps = embedded
     ? { className: "extensions-embed" }
@@ -321,7 +386,50 @@ export function ExtensionsView({ onOpenThreads, embedded = false }: { onOpenThre
         </header>
       )}
       <div className="extensions-scroll">
-        <ExtensionsStore />
+        <div className="plugins-bar" ref={bar}>
+          <span className="plugins-tabs" role="tablist" aria-label="Extensions">
+            {TABS.map((option) => {
+              const count = option.id === "installed" ? installedCount : option.id === "sources" ? s.library?.marketplaces.length ?? 0 : 0;
+              const updates = option.id === "installed" ? s.libraryUpdates.filter((update) => update.kind === "plugin").length : 0;
+              return (
+                <button key={option.id} type="button" role="tab" id={`library-tab-${option.id}`} aria-controls={`library-panel-${option.id}`} aria-selected={tab === option.id} onClick={() => showTab(option.id)}>
+                  {option.label}
+                  {count ? <span className="plugins-tab-count">{count}</span> : null}
+                  {updates ? <span className="plugins-tab-dot" aria-label={`${updates} update${updates === 1 ? "" : "s"}`} /> : null}
+                </button>
+              );
+            })}
+          </span>
+          <button type="button" className="primary plugins-add" onClick={() => openGithub({})}><FolderGit2 size={13} aria-hidden="true" />Add from GitHub</button>
+        </div>
+        <div className="plugins-panel" role="tabpanel" id="library-panel-discover" aria-labelledby="library-tab-discover" hidden={tab !== "discover"}>
+          <ExtensionsStore source={discoverSource} onSource={setDiscoverSource} onOpen={openGithub} />
+        </div>
+        <div className="plugins-panel" role="tabpanel" id="library-panel-sources" aria-labelledby="library-tab-sources" hidden={tab !== "sources"}>
+          <PluginSources onOpen={openGithub} onBrowse={(id) => { setDiscoverSource(id); showTab("discover"); }} />
+        </div>
+        <div className="plugins-panel" role="tabpanel" id="library-panel-installed" aria-labelledby="library-tab-installed" hidden={tab !== "installed"}>
+        <InstalledPlugins onOpen={openGithub} />
+        {storeInstalled.length ? <section className="extensions-section" aria-labelledby="extensions-bundled-title">
+          <div className="extensions-section-head">
+            <h2 id="extensions-bundled-title"><Package size={15} aria-hidden="true" />From the store<span className="section-count">{storeInstalled.length}</span></h2>
+          </div>
+          {storeError ? <p className="permission-note" role="alert">{storeError}</p> : null}
+          <ul className="extension-list">
+            {storeInstalled.map((entry) => (
+              <li key={entry.id} className="extension-card">
+                <ExtensionThumb kind={entry.kind} id={entry.id} name={entry.name} size={32} />
+                <span className="extension-copy">
+                  <span className="plugins-name">{entry.name}{entry.installed ? null : <span className="picker-tag warm">{entry.installedParts}/{entry.totalParts} installed</span>}</span>
+                  <span className="extension-meta plugins-description">{entry.summary}</span>
+                </span>
+                <span className="extension-actions">
+                  <button type="button" className="ghost-btn small" disabled={storeBusy === entry.id} title={`Remove ${entry.name}`} onClick={() => void removeStoreEntry(entry.id, entry.name)}><Trash2 size={11} />{storeBusy === entry.id ? "Working…" : "Remove"}</button>
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section> : null}
         <section className="extensions-section" aria-labelledby="extensions-skills-title">
           <div className="extensions-section-head">
             <h2 id="extensions-skills-title"><Puzzle size={15} aria-hidden="true" />Skills</h2>
@@ -333,7 +441,7 @@ export function ExtensionsView({ onOpenThreads, embedded = false }: { onOpenThre
           {skillsState === "foreign" ? <p className="permission-note">Skills work with Muse and Harness; this thread runs on another agent.</p> : null}
           {harness ? <p className="permission-note">Harness loads skills from <code>.glitter/skills</code> and <code>.agents/skills</code>, in the workspace and in your home folder. A workspace skill wins over a home one with the same name.</p> : null}
           {skillsState === "unloaded" ? <p className="permission-note">The skill catalog has not loaded yet. Refresh to fetch it.</p> : null}
-          {skillsState === "empty" ? <p className="permission-note">{harness ? "No skills yet. Install one from the Store above, or add a folder with a SKILL.md to one of those places, then refresh." : "No skills are available for this session. Workspace skills load only from trusted workspaces."}</p> : null}
+          {skillsState === "empty" ? <p className="permission-note">{harness ? "No skills yet. Install one from Discover, or add a folder with a SKILL.md to one of those places, then refresh." : "No skills are available for this session. Workspace skills load only from trusted workspaces."}</p> : null}
           {skillsState === "ready" ? <ul className="extension-list">
             {(skills ?? []).map((row) => <SkillCard key={`${row.source ?? ""}:${row.selector}`} row={row} onUse={useSkill} />)}
           </ul> : null}
@@ -558,7 +666,7 @@ export function ExtensionsView({ onOpenThreads, embedded = false }: { onOpenThre
                 );
               })}
             </ul> : null}
-            {!s.harnessMcpConfig?.servers.length && !s.harnessMcpConfigLoading && !mcpFormOpen ? <p className="permission-note extension-empty">No MCP servers are configured. Install one from the Store above, add one here, or write .glitter/mcp.json yourself.</p> : null}
+            {!s.harnessMcpConfig?.servers.length && !s.harnessMcpConfigLoading && !mcpFormOpen ? <p className="permission-note extension-empty">No MCP servers are configured. Install one from Discover, add one here, or write .glitter/mcp.json yourself.</p> : null}
           </> : <>
             <p className="permission-note">Servers configured for the Muse CLI. OAuth servers need a sign-in before their tools work.</p>
             {s.mcpError ? <p className="permission-note" role="alert">{s.mcpError}</p> : null}
@@ -588,7 +696,7 @@ export function ExtensionsView({ onOpenThreads, embedded = false }: { onOpenThre
         </section>
         <section className="extensions-section" aria-labelledby="extensions-plugins-title">
           <div className="extensions-section-head">
-            <h2 id="extensions-plugins-title"><Package size={15} aria-hidden="true" />Plugins</h2>
+            <h2 id="extensions-plugins-title"><Package size={15} aria-hidden="true" />Muse CLI plugins</h2>
             <span className="extension-actions">
               <span className="usage-periods" role="tablist" aria-label="Plugin inventory">
                 <button type="button" role="tab" aria-selected={!s.pluginsAvailableShown} onClick={() => void s.refreshPlugins(false)}>Installed</button>
@@ -605,7 +713,7 @@ export function ExtensionsView({ onOpenThreads, embedded = false }: { onOpenThre
           <p className="permission-note">Inspect a plugin's runtime capabilities before approving it. Per-capability review and marketplace management still need the CLI.</p>
           {s.pluginsError ? <p className="permission-note" role="alert">{s.pluginsError}</p> : null}
           {reviewError ? <p className="permission-note" role="alert">{reviewError}</p> : null}
-          {!s.pluginEntries.length && !s.pluginsLoading ? <p className="permission-note extension-empty">{s.pluginsAvailableShown ? "No marketplace plugins are available." : "No CLI plugins are installed. The Store above has skill bundles that install without a CLI."}</p> : null}
+          {!s.pluginEntries.length && !s.pluginsLoading ? <p className="permission-note extension-empty">{s.pluginsAvailableShown ? "No marketplace plugins are available." : "No Muse CLI plugins are installed. Plugins from GitHub and the store install without a CLI."}</p> : null}
           {s.pluginEntries.length ? <ul className="extension-list">
             {s.pluginEntries.map((plugin) => (
               <li key={plugin.id}>
@@ -645,7 +753,9 @@ export function ExtensionsView({ onOpenThreads, embedded = false }: { onOpenThre
             ))}
           </ul> : null}
         </section>
+        </div>
       </div>
+      <GithubInstallDialog request={github} onClose={() => setGithub(null)} onAddedSource={(id) => { setDiscoverSource(id); showTab("discover"); }} />
     </Shell>
   );
 }

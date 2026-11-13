@@ -10,7 +10,8 @@ import type { ToolGuard } from "./guards.js";
  * - `Bash(npm test)` — exactly this command; `Bash(npm run *)` — commands
  *   that start with `npm run`.
  * - `Edit(README.md)` — one file; `Edit(src/**)` — files under a folder;
- *   `Edit(**)` — any file in the workspace.
+ *   `Edit(**)` — any file in the workspace. Deny only: edits already run in
+ *   Ask and Auto, so an allow rule for a path would change nothing.
  * - `WebFetch(docs.example.com)` — fetches from that host; `WebSearch`.
  * - `Mcp(server)` or `Mcp(server/tool)`.
  * - `Network` (allow only) — internet access for commands that may already run.
@@ -44,6 +45,7 @@ export function parseRule(text: string): Parsed | string {
     if (/\s\*$|:\*$/.test(pattern)) {
       const words = pattern.replace(/\s*:?\*$/, "").trim().split(/\s+/).filter(Boolean);
       if (!words.length) return "Bash(*) would allow every command; use Full access on a thread instead.";
+      if (words.some((word) => word.includes("*"))) return "A Bash rule may only end with *.";
       return { tool: "bash", prefix: words };
     }
     if (pattern.includes("*")) return "A Bash rule may only end with *.";
@@ -63,13 +65,14 @@ export function parseRule(text: string): Parsed | string {
     if (!host || !/^[a-z0-9.-]+(?::\d+)?$/.test(host)) return "WebFetch needs a host, such as WebFetch(docs.example.com).";
     return { tool: "webfetch", host };
   }
-  if (tool === "websearch") return { tool: "websearch" };
+  if (tool === "websearch") return pattern ? "WebSearch does not take a pattern." : { tool: "websearch" };
   if (tool === "mcp") {
-    const [server, mcpTool] = pattern.split("/");
-    if (!server) return "Mcp needs a server, such as Mcp(github) or Mcp(github/create_issue).";
+    const parts = pattern.split("/");
+    const [server, mcpTool] = parts;
+    if (!server || parts.length > 2 || (parts.length === 2 && !mcpTool)) return "Mcp needs a server or one server/tool, such as Mcp(github) or Mcp(github/create_issue).";
     return { tool: "mcp", server, ...(mcpTool ? { tool_: mcpTool } : {}) };
   }
-  if (tool === "network") return { tool: "network" };
+  if (tool === "network") return pattern ? "Network does not take a pattern." : { tool: "network" };
   return `Unknown rule tool "${match[1]}". Use Bash, Edit, WebFetch, WebSearch, Mcp or Network.`;
 }
 
@@ -96,9 +99,11 @@ function allCommands(source: string, depth = 0): SimpleCommand[] | null {
   if (!script) return null;
   const out: SimpleCommand[] = [];
   for (const command of commandsOf(script)) {
+    if (command.dynamic) return null;
     out.push(command);
     const inner = innerScript(command);
-    if (inner !== undefined && depth < 2) {
+    if (inner !== undefined) {
+      if (depth >= 2) return null;
       const nested = allCommands(inner, depth + 1);
       if (!nested) return null;
       out.push(...nested);
@@ -110,8 +115,8 @@ function allCommands(source: string, depth = 0): SimpleCommand[] | null {
 function denies(parsed: Parsed, subject: Subject): boolean {
   if (parsed.tool === "bash" && subject.kind === "command") {
     const commands = allCommands(subject.command);
-    // A script the reader cannot model is matched on its text, so a deny fails closed.
-    if (!commands) return parsed.exact ? subject.command.includes(parsed.exact) : subject.command.includes(parsed.prefix!.join(" "));
+    // An unreadable script could hide the denied command behind syntax or expansion.
+    if (!commands) return true;
     if (parsed.exact) return subject.command.trim() === parsed.exact || commands.some((command) => command.argv.join(" ") === parsed.exact);
     return commands.some((command) => parsed.prefix!.every((word, index) => command.argv[index] === word));
   }
@@ -137,7 +142,8 @@ export function compileRules(rules: readonly PermissionRule[]): CompiledRules {
   for (const { effect, rule } of rules) {
     const parsed = parseRule(rule);
     if (typeof parsed === "string") { problems.push(parsed); continue; }
-    if (effect === "allow") grants.push(...grantsFor(parsed));
+    if (effect === "allow" && parsed.tool === "edit") problems.push(`Edits already run in Ask and Auto, so allow ${rule.trim()} changes nothing. Write it as a deny rule to protect the path.`);
+    else if (effect === "allow") grants.push(...grantsFor(parsed));
     else if (parsed.tool === "network") problems.push("Network is an allow rule; to keep commands offline, leave it out.");
     else deny.push({ parsed, text: rule.trim() });
   }

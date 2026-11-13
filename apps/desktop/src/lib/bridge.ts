@@ -3,11 +3,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { isTauri } from "./format";
 import { log } from "./logger";
-import { MOCK_FILES, MOCK_GIT, MOCK_GIT_GRAPH, MOCK_MODELS, MOCK_THREADS, mockGitReview, mockThreads, mockWorkspaceFile, mockWorktree } from "./mock";
+import { MOCK_FILES, MOCK_GIT, MOCK_GIT_GRAPH, MOCK_MODELS, MOCK_THREADS, mockAddMarketplace, mockGitReview, mockGithubInspect, mockGithubInstall, mockLibraryList, mockRefreshMarketplace, mockRemoveMarketplace, mockRemovePlugin, mockSetPluginEnabled, mockThreads, mockWorkspaceFile, mockWorktree } from "./mock";
 import type { ProviderStatus } from "./providers";
 export type { ProviderStatus } from "./providers";
 import type { DiagnosticsSnapshot, EditorChoice, SupportPaths, ThemeMode, BrowserControlResult, BrowserFrame, BrowserStateEvent } from "./types";
-import type { AgentId, AgentIdentity, AgentSessionConfig, ApprovalRequest, CatalogEntry, CatalogInstallResult, CatalogList, CatalogRemoveResult, CliUpdateOutcome, CliUpdateStatus, ContextUsage, Detection, DroppedFile, EnterpriseStatus, GitBranch, GitGraph, GoalState, HarnessMcpConfig, HarnessMcpConfigServer, HarnessMcpReview, HarnessMcpScope, HarnessMcpServerInput, ModelCall, PlanItem, PullRequest, GitReview, GitReviewRequest, GitSnapshot, SessionConfig, SessionMetadata, SnapshotRestore, ThreadWorktree, TokenUsage, TranscriptItem, TurnSnapshot, UserInputRequest, WorkspaceFile, WorktreeRemoval, PluginDetail, PluginEntry, SkillDetail, SkillEntry, OrchestratorProbeResult, OrchestratorRole, OrchestratorRoute } from "./types";
+import type { AgentId, AgentIdentity, AgentSessionConfig, ApprovalRequest, CatalogEntry, CatalogInstallResult, CatalogList, CatalogRemoveResult, GithubPreview, MarketplaceSource, PluginInstallOutcome, PluginLibrary, PluginUpdate, CliUpdateOutcome, CliUpdateStatus, ContextUsage, Detection, DroppedFile, EnterpriseStatus, GitBranch, GitGraph, GoalState, HarnessMcpConfig, HarnessMcpConfigServer, HarnessMcpReview, HarnessMcpScope, HarnessMcpServerInput, ModelCall, PlanItem, PullRequest, GitReview, GitReviewRequest, GitSnapshot, SessionConfig, SessionMetadata, SnapshotRestore, ThreadWorktree, TokenUsage, TranscriptItem, TurnSnapshot, UserInputRequest, WorkspaceFile, WorktreeRemoval, PluginDetail, PluginEntry, SkillDetail, SkillEntry, OrchestratorProbeResult, OrchestratorRole, OrchestratorRoute } from "./types";
 
 /**
  * The payload each bridge event carries, declared once here instead of being
@@ -312,6 +312,8 @@ function mockBridge(method: string, params: Record<string, unknown>): unknown {
       return { servers: previewMcpConfig.servers.map(({ name, transport }) => ({ name, transport, tools: 3 })), error: previewMcpConfig.error };
     case "harnessMcpConfig":
       return previewMcpConfig;
+    case "harnessRules":
+      return { problems: [] };
     case "testModel": {
       // A preview model answers after a short, varied wait; a "busy" one shows the failure path.
       const modelId = String(params.modelId ?? "");
@@ -920,6 +922,61 @@ export async function catalogInstall(entryId: string, grantId: string | undefine
 export async function catalogRemove(entryId: string, grantId: string | undefined): Promise<CatalogRemoveResult> {
   if (!isTauri()) return mockBridge("catalogRemove", { entryId, grantId: grantId ?? "" }) as CatalogRemoveResult;
   return invoke<CatalogRemoveResult>("catalog_remove", { entryId, grantId: grantId ?? "" });
+}
+
+/**
+ * Plugins and marketplaces from GitHub. The native side builds the clone URL,
+ * fetches one commit and reads it; install uses what that preview fetched.
+ */
+export async function githubInspect(source: string, plugin?: string | null): Promise<GithubPreview> {
+  if (!isTauri()) return mockGithubInspect(source, plugin);
+  return invoke<GithubPreview>("github_inspect", { source, plugin: plugin ?? null });
+}
+
+export async function githubInstall(token: string, selected?: string[] | null): Promise<PluginInstallOutcome> {
+  if (!isTauri()) return mockGithubInstall(token, selected);
+  return invoke<PluginInstallOutcome>("github_install", { token, selected: selected ?? null });
+}
+
+/** Drop a preview the user closed without installing. */
+export async function githubDiscard(token: string): Promise<void> {
+  if (!isTauri()) return;
+  await invoke("github_discard", { token });
+}
+
+export async function libraryList(): Promise<PluginLibrary> {
+  if (!isTauri()) return mockLibraryList();
+  return invoke<PluginLibrary>("library_list", {});
+}
+
+export async function librarySetEnabled(id: string, enabled: boolean): Promise<PluginInstallOutcome> {
+  if (!isTauri()) return mockSetPluginEnabled(id, enabled);
+  return invoke<PluginInstallOutcome>("library_set_enabled", { id, enabled });
+}
+
+export async function libraryRemove(id: string): Promise<string[]> {
+  if (!isTauri()) return mockRemovePlugin(id);
+  return invoke<string[]>("library_remove", { id });
+}
+
+export async function libraryCheckUpdates(): Promise<PluginUpdate[]> {
+  if (!isTauri()) return [];
+  return invoke<PluginUpdate[]>("library_check_updates", {});
+}
+
+export async function marketplaceAdd(token: string): Promise<MarketplaceSource> {
+  if (!isTauri()) return mockAddMarketplace(token);
+  return invoke<MarketplaceSource>("marketplace_add", { token });
+}
+
+export async function marketplaceRefresh(id: string): Promise<MarketplaceSource> {
+  if (!isTauri()) return mockRefreshMarketplace(id);
+  return invoke<MarketplaceSource>("marketplace_refresh", { id });
+}
+
+export async function marketplaceRemove(id: string): Promise<void> {
+  if (!isTauri()) { mockRemoveMarketplace(id); return; }
+  await invoke("marketplace_remove", { id });
 }
 
 export async function trustPreview(grantId: string, museBin?: string): Promise<import("./types").TrustPreview> {

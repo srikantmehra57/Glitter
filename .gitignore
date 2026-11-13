@@ -33,3 +33,4 @@ playwright-report/
 .zcode/
 brag-output/
 evals/orchestrator/reports/
+evals/harness/reports/

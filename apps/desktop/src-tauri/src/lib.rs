@@ -22,6 +22,7 @@ mod export_markdown;
 mod framing;
 mod legacy;
 mod mcp_consent;
+mod plugins;
 mod process;
 mod snapshots;
 mod terminal;
@@ -3915,6 +3916,140 @@ async fn catalog_remove(state: State<'_, AppState>, entry_id: String, grant_id: 
     blocking(move || catalog::remove(&home, workspace.as_deref(), &entry_id)).await
 }
 
+/// `git` for plugin downloads: https only, no prompts, no hooks, no symlinks
+/// checked out, no submodules, and a timeout. The URL is always one
+/// `plugins.rs` built from a validated owner and repository name.
+fn plugin_git(dir: &Path, args: &[String]) -> Result<String, String> {
+    let mut cmd = command("git");
+    strip_ambient_git_env(&mut cmd);
+    cmd.current_dir(dir).env("GIT_TERMINAL_PROMPT", "0").env("GCM_INTERACTIVE", "never");
+    if std::env::var_os("GIT_SSH_COMMAND").is_none() {
+        cmd.env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes");
+    }
+    cmd.args([
+        "-c", "protocol.allow=never",
+        "-c", "protocol.https.allow=always",
+        "-c", "core.symlinks=false",
+        "-c", "core.hooksPath=/dev/null",
+        "-c", "core.fsmonitor=false",
+        "-c", "submodule.recurse=false",
+        "-c", "init.defaultBranch=main",
+    ]);
+    cmd.args(args);
+    let output = run_bounded(cmd, "git", NETWORK_TIMEOUT)?;
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr);
+        let detail = detail.lines().map(str::trim).filter(|line| !line.is_empty()).last().unwrap_or("no details").to_string();
+        return Err(redact_log_detail(&detail));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// The repository owner's GitHub avatar, for the thumbnail. Best effort.
+fn plugin_avatar(owner: &str, dest: &Path) {
+    if owner.is_empty() || !owner.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-') {
+        return;
+    }
+    let mut cmd = command("curl");
+    cmd.args(["-fsSL", "--proto", "=https", "--proto-redir", "=https", "--max-time", "15", "--max-filesize", "524288", "-o"])
+        .arg(dest)
+        .arg(format!("https://github.com/{owner}.png?size=128"));
+    let fetched = run_bounded(cmd, "curl", Duration::from_secs(20)).map(|output| output.status.success()).unwrap_or(false);
+    if !fetched {
+        let _ = std::fs::remove_file(dest);
+    }
+}
+
+fn home_folder() -> Result<PathBuf, String> {
+    dirs::home_dir().ok_or_else(|| "Could not find your home folder.".to_string())
+}
+
+/// Fetch a GitHub repository and read the plugin, marketplace or skills in it.
+/// Nothing is installed; the preview's token names what was fetched.
+#[tauri::command]
+async fn github_inspect(source: String, plugin: Option<String>) -> Result<plugins::Preview, String> {
+    let home = home_folder()?;
+    blocking(move || {
+        let preview = plugins::inspect(&home, &source, plugin.as_deref(), &plugin_git, &plugin_avatar)?;
+        native_log("info", "plugins.inspect", &format!("{} {}", preview.kind, preview.origin.spec));
+        Ok(preview)
+    })
+    .await
+}
+
+/// Install the plugin a preview showed, optionally limited to the chosen parts.
+#[tauri::command]
+async fn github_install(token: String, selected: Option<Vec<String>>) -> Result<plugins::InstallOutcome, String> {
+    if selected.as_ref().is_some_and(|names| names.len() > 1000 || names.iter().any(|name| name.len() > 64)) {
+        return Err("That selection is too large.".into());
+    }
+    let home = home_folder()?;
+    blocking(move || {
+        let outcome = plugins::install(&home, &token, selected)?;
+        native_log("info", "plugins.install", &format!("{}: {} skills, {} commands, {} servers", outcome.id, outcome.skills.len(), outcome.commands.len(), outcome.servers.len()));
+        Ok(outcome)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn github_discard(token: String) -> Result<(), String> {
+    let home = home_folder()?;
+    blocking(move || {
+        plugins::discard(&home, &token);
+        Ok(())
+    })
+    .await
+}
+
+/// Installed GitHub plugins and added marketplaces.
+#[tauri::command]
+async fn library_list() -> Result<plugins::Library, String> {
+    let home = home_folder()?;
+    blocking(move || Ok(plugins::library(&home))).await
+}
+
+#[tauri::command]
+async fn library_set_enabled(id: String, enabled: bool) -> Result<plugins::InstallOutcome, String> {
+    let home = home_folder()?;
+    blocking(move || plugins::set_enabled(&home, &id, enabled)).await
+}
+
+#[tauri::command]
+async fn library_remove(id: String) -> Result<Vec<String>, String> {
+    let home = home_folder()?;
+    blocking(move || {
+        let problems = plugins::remove(&home, &id)?;
+        native_log("info", "plugins.remove", &id);
+        Ok(problems)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn library_check_updates() -> Result<Vec<plugins::UpdateInfo>, String> {
+    let home = home_folder()?;
+    blocking(move || Ok(plugins::check_updates(&home, &plugin_git))).await
+}
+
+#[tauri::command]
+async fn marketplace_add(token: String) -> Result<plugins::MarketplaceView, String> {
+    let home = home_folder()?;
+    blocking(move || plugins::add_marketplace(&home, &token)).await
+}
+
+#[tauri::command]
+async fn marketplace_refresh(id: String) -> Result<plugins::MarketplaceView, String> {
+    let home = home_folder()?;
+    blocking(move || plugins::refresh_marketplace(&home, &id, &plugin_git, &plugin_avatar)).await
+}
+
+#[tauri::command]
+async fn marketplace_remove(id: String) -> Result<(), String> {
+    let home = home_folder()?;
+    blocking(move || plugins::remove_marketplace(&home, &id)).await
+}
+
 /// Ask the native folder picker for a plugin bundle directory. The choice is
 /// recorded natively as a one-time install authorization (see
 /// `take_picked_install`), so `plugin_install` accepts only this folder.
@@ -5136,6 +5271,16 @@ pub fn run() {
                 catalog_list,
                 catalog_install,
                 catalog_remove,
+                github_inspect,
+                github_install,
+                github_discard,
+                library_list,
+                library_set_enabled,
+                library_remove,
+                library_check_updates,
+                marketplace_add,
+                marketplace_refresh,
+                marketplace_remove,
                 read_dropped_files,
                 open_path,
                 open_url,

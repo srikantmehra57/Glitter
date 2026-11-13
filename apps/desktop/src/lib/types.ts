@@ -1,6 +1,9 @@
 export type ApprovalMode = "allowAll" | "promptUnmatched" | "onRequest" | "denyUnmatched" | "guarded";
 /** The modes the Muse CLI accepts. Auto (`guarded`) is translated before it is sent. */
 export type CliApprovalMode = Exclude<ApprovalMode, "guarded">;
+/** A persistent built-in-agent rule, written `Tool(pattern)`. Allow grants, deny refuses in every mode. */
+export type PermissionRuleEffect = "allow" | "deny";
+export type PermissionRule = { effect: PermissionRuleEffect; rule: string };
 export type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 export type ThemeMode = "system" | "dark" | "light";
 export type AccentColor = "ember" | "mono" | "blue" | "violet" | "pink" | "orange" | "yellow" | "green" | "teal";
@@ -8,7 +11,7 @@ export type AccentColor = "ember" | "mono" | "blue" | "violet" | "pink" | "orang
 export const DARK_INTENSITIES = ["subtle", "mid", "black"] as const;
 export type DarkIntensity = (typeof DARK_INTENSITIES)[number];
 /** Interface typeface. `system` is the face in styles.css; Inter is bundled and the rest ship with macOS. */
-export const UI_FONTS = ["system", "inter", "helvetica", "avenir", "gill", "futura"] as const;
+export const UI_FONTS = ["system", "inter", "googleSans", "helvetica", "avenir", "gill", "futura"] as const;
 export type UiFont = (typeof UI_FONTS)[number];
 /** Vertical rhythm for workspace and thread rows; standard preserves the original 28px rows. */
 export const SIDEBAR_DENSITIES = ["standard", "comfortable", "compact"] as const;
@@ -292,6 +295,106 @@ export type CatalogEntry = {
 export type CatalogList = { entries: CatalogEntry[]; skillsRoot: string; error: string | null };
 export type CatalogInstallResult = { installedSkills: string[]; installedServers: string[]; skipped: string[]; errors: string[] };
 export type CatalogRemoveResult = { removed: string[]; skipped: string[]; errors: string[] };
+
+/** Where a plugin or marketplace came from on GitHub, as the native side fetched it. */
+export type PluginOrigin = {
+  owner: string;
+  repo: string;
+  ref: string | null;
+  path: string;
+  /** The commit that was fetched. */
+  commit: string;
+  /** The plugin's name in its marketplace, when it came from one. */
+  plugin: string | null;
+  /** What to inspect again to update: `owner/repo[@ref][:path]`. */
+  spec: string;
+  url: string;
+};
+export type PluginSkillInfo = { name: string; description: string; folder: string };
+export type PluginCommandInfo = { name: string; description: string; file: string };
+export type PluginServerInfo = { name: string; transport: string; display: string; needsEnv: string[] };
+/** What a plugin folder holds, read natively from its manifest and files. */
+export type PluginAnalysis = {
+  name: string;
+  displayName: string | null;
+  description: string | null;
+  longDescription: string | null;
+  version: string | null;
+  author: string | null;
+  homepage: string | null;
+  license: string | null;
+  category: string | null;
+  keywords: string[];
+  brandColor: string | null;
+  /** "Claude Code", "Codex", "Agent Skills", "MCP". */
+  formats: string[];
+  skills: PluginSkillInfo[];
+  commands: PluginCommandInfo[];
+  servers: PluginServerInfo[];
+  /** Parts the built-in agent cannot run, reported rather than dropped. */
+  agents: string[];
+  hooks: boolean;
+  lsp: boolean;
+  notes: string[];
+};
+export type MarketplacePlugin = {
+  name: string;
+  description: string | null;
+  version: string | null;
+  category: string | null;
+  author: string | null;
+  homepage: string | null;
+  keywords: string[];
+  /** "This repository", `owner/repo`, or "Not on GitHub". */
+  location: string;
+  supported: boolean;
+};
+export type MarketplaceAnalysis = { name: string; description: string | null; owner: string | null; plugins: MarketplacePlugin[] };
+/** A fetched repository, ready to install (a plugin) or add (a marketplace). */
+export type GithubPreview = {
+  token: string;
+  kind: "plugin" | "marketplace";
+  origin: PluginOrigin;
+  plugin: PluginAnalysis | null;
+  marketplace: MarketplaceAnalysis | null;
+  /** Data URLs: the plugin's own logo, and its owner's avatar. */
+  icon: string | null;
+  avatar: string | null;
+  pluginId: string | null;
+  installed: boolean;
+  conflicts: string[];
+};
+export type PluginInstallOutcome = { id: string; skills: string[]; commands: string[]; servers: string[]; problems: string[] };
+export type InstalledPlugin = Omit<PluginAnalysis, "skills" | "commands" | "servers" | "notes"> & {
+  id: string;
+  icon: string | null;
+  avatar: string | null;
+  origin: PluginOrigin;
+  enabled: boolean;
+  installedAt: number;
+  updatedAt: number;
+  /** Every skill and command it offers; `skills`/`commands`/`servers` are what is installed now. */
+  availableSkills: PluginSkillInfo[];
+  skills: string[];
+  commands: string[];
+  servers: string[];
+  serverDetails: PluginServerInfo[];
+  notes: string[];
+  folder: string;
+};
+export type MarketplaceSource = {
+  id: string;
+  name: string;
+  description: string | null;
+  owner: string | null;
+  origin: PluginOrigin;
+  addedAt: number;
+  refreshedAt: number;
+  avatar: string | null;
+  plugins: MarketplacePlugin[];
+};
+export type PluginLibrary = { plugins: InstalledPlugin[]; marketplaces: MarketplaceSource[]; pluginsRoot: string; problems: string[] };
+export type PluginUpdate = { id: string; kind: "plugin" | "marketplace"; commit: string; latest: string };
 
 export type PluginEntry = { id: string; version?: string | null; description: string; enabled?: boolean | null };
 /** One CLI skill row (`skills list`): `activation` is `on`/`off`, `scope` is user/project/bundled/plugin. */
@@ -755,6 +858,8 @@ export type Settings = {
   defaultProviderId?: string;
   defaultEffort: ReasoningEffort | undefined;
   defaultApprovalMode: ApprovalMode | undefined;
+  /** Persistent allow and deny rules for every built-in agent thread. Syntax is checked by the harness. */
+  harnessRules?: PermissionRule[];
   /** Agent new threads start with; absent means the first ready agent. */
   defaultAgentId?: AgentId;
   /** Per-provider on/off. Missing keys use DEFAULT_ENABLED_AGENTS (ACP agents off). */
@@ -813,6 +918,7 @@ export const DEFAULT_SETTINGS: Settings = {
   defaultProviderId: undefined,
   defaultEffort: undefined,
   defaultApprovalMode: "onRequest",
+  harnessRules: [],
   enabledAgents: { ...DEFAULT_ENABLED_AGENTS },
   acpUnisolatedConsent: false,
   hideAgentCapabilities: false,

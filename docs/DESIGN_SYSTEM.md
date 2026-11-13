@@ -42,6 +42,7 @@ document should be corrected.
 | Provider | Where models come from, as the model picker and Settings → Models list them: a provider the built-in agent calls with your key (Anthropic, OpenRouter…), or an agent CLI (Muse, Cline CLI…). Not “source”, “lab” or “backend” |
 | Built-in agent | Glitter’s own agent (`harness` in code). In copy it is “the built-in agent”; the composer addresses it by its model (“Ask Claude Sonnet 5…”), and before one resolves by the connected provider’s name (“Ask Anthropic to…”) — never by the code name |
 | Custom endpoint | A provider the user adds in Settings → Providers: their own name for it, its API type (OpenAI-compatible or Anthropic), its address, and a key only when the endpoint needs one. Not “custom provider” in copy |
+| Source | A plugin marketplace added from GitHub in Extensions → Sources; its plugins list in Discover. “Marketplace” only tags the kind of repository in a preview |
 | Allow in thread | An approval that reaches past this one call, for the rest of the thread. Its scope names what it covers (this exact command, a command prefix, one program, a file, a folder, the workspace). Not “session”, “rule” or “whitelist” |
 
 Copy: short, present tense, no “successfully been executed.”
@@ -128,12 +129,13 @@ WCAG AA (4.5:1). It must not carry a second hardcoded color palette.
 |---|---|
 | System | SF Pro on this Mac (the default) |
 | Inter | Inter Variable, bundled locally with weights 100–900 |
+| Google Sans | Google Sans Variable, bundled locally with weights 400–700 |
 | Helvetica | Helvetica Neue, then Helvetica |
 | Avenir | Avenir Next |
 | Gill Sans | Gill Sans |
 | Futura | Futura |
 
-Inter comes from `@fontsource-variable/inter` and is compiled into the app, so it works offline and looks the same on every Mac. Each other optional stack names a face that ships with macOS and then a relative that ships more widely, so a missing face still resolves. There are no remote font requests and no serif interface choice; a retired or unknown saved value falls back to System.
+Inter and Google Sans come from `@fontsource-variable/*` and are compiled into the app, so they work offline and look the same on every Mac. Each other optional stack names a face that ships with macOS and then a relative that ships more widely, so a missing face still resolves. There are no remote font requests and no serif interface choice; a retired or unknown saved value falls back to System.
 
 **Interface zoom is native window scaling, not a second type scale.** Appearance →
 Display & accessibility has Zoom out, the current percentage, Zoom in and Reset.
@@ -244,12 +246,19 @@ in `--tertiary`; the current row uses `--accent-text` in the sidebar and `--ink`
 in Settings. There are no icon wells.
 
 **Extension thumbnails.** Every skill, plugin and MCP server shows a thumbnail
-(`ExtensionThumb`, art from `lib/extensionArt.ts`): a rounded `--r-md` tile
-tinted with one of eight tones, holding the Lucide icon for what it does. Store
-entries are mapped by id; anything else is matched on its name, then falls back
-to its kind (wand, package, server) with a tint hashed from its name so it never
-changes between renders. 40px on Store cards, 32px in installed lists. Never
-repeat one generic glyph down a list of extensions.
+(`ExtensionThumb`, art from `lib/extensionArt.ts`): a rounded `--r-md` tile.
+A plugin from GitHub shows its own logo (a Codex `interface.logo` or a
+conventional `assets/icon.png`) or, without one, its owner's GitHub avatar,
+filling the tile. A marketplace listing keeps its generated tile and carries
+the source's avatar as a small corner badge, ringed in `--surface`; a plugin
+with a logo carries its owner's avatar the same way. Everything else is tinted
+with one of eight tones and holds the Lucide icon for what it does: store
+entries and featured repositories are mapped by id; anything else is matched on
+its name, then its marketplace category, then falls back to its kind (wand,
+package, server) with a tint hashed from its name so it never changes between
+renders. 56px in the Add from GitHub preview, 40px on Discover cards, 36px in
+the Installed and Sources lists, 32px in other installed lists, 24–28px in
+dialog lists. Never repeat one generic glyph down a list of extensions.
 
 ---
 
@@ -559,12 +568,15 @@ including its border, at its final width and sizes to its content up to
 
 Reasoning effort (`EffortPicker`) is the shared select menu: the chip names
 the level, and the menu lists the model's levels from least to most, each with
-its dial and the model's own default tagged Default. Levels are not described.
-One click picks a level and closes; the left and right arrows on the closed
-chip step it without opening anything. No level gets its own colour, bars or
-effect. A pick stays drawn while it applies, and a rejected pick returns to
-the session's applied value. The model and effort commands open these two
-controls.
+its dial and the model's own default tagged Default. The effort picker is
+visible always across providers; when a provider or model reports effort
+levels, those levels are used, and when there is no data from the provider or
+model, it falls back to the default effort vocabulary and default level.
+Levels are not described. One click picks a level and closes; the left and
+right arrows on the closed chip step it without opening anything. No level gets
+its own colour, bars or effect. A pick stays drawn while it applies, and a
+rejected pick returns to the session's applied value. The model and effort
+commands open these two controls.
 
 **Goal** (`GoalPicker`) takes the effort control's place while Orchestrator
 runs on a built-in thread, in the same select menu and chip. The chip names the
@@ -685,17 +697,29 @@ and the navigation, search and the command palette all read those names.
 - **Agents**: the default agent, the built-in agent, the agent CLIs, and the
   Muse connection (credential, API key, binary, Contributor mode) while Muse is
   shown. There is no Account page: Muse is one agent among others.
-- **Extensions**: skills, MCP servers and plugins use the existing compact cards.
-  Harness MCP keeps redacted workspace rows visible while startup is denied. An
-  inline approval card lets the user approve the exact reviewed workspace/home
-  configuration, keep it disabled, or revoke approval. Changes invalidate the
-  old approval; secret values and raw argument text never enter the review.
+- **Extensions**: a bar of three tabs — **Discover**, **Installed** and
+  **Sources**, each with a count — and **Add from GitHub** (primary) at its
+  right; the bar sticks to the top of the page while it scrolls, and a tab
+  opens at its top. Discover is the store grid (see Extension library);
+  Installed lists **Plugins** (from GitHub), **From the store**, then the
+  thread's Skills, Skill lifecycle, MCP servers and Muse CLI plugins; Sources
+  lists added marketplaces and **Featured on GitHub**. Harness MCP keeps
+  redacted workspace rows visible while startup is denied. An inline approval
+  card lets the user approve the exact reviewed workspace/home configuration,
+  keep it disabled, or revoke approval. Changes invalidate the old approval;
+  secret values and raw argument text never enter the review.
 - **Appearance**: Interface theme, Display & accessibility (native interface
   zoom and Reduce interface motion), Font, Accent color, Sidebar (row density,
   translucency where supported, and tint), then Thinking orb. Density and motion
   save with the other settings; zoom uses the same session-memory preference as
   the View menu. Standard density and Reduce motion off preserve the original look.
-- **Permissions**: approvals for new threads, then the Muse host sandbox.
+- **Permissions**: approvals for new threads, then built-in agent rules, then
+  the Muse host sandbox. Rules use separate **Always allow** and **Never allow**
+  cards, with a monospace rule list, an input and an Add rule button in each.
+  Invalid rules and failed application are explained beside the cards, with a
+  retry for a failed application. Copy states that Edit rules cover built-in
+  edits, while shell commands can still change those files, and that commands
+  executed indirectly by other programs cannot be inspected.
 - Muse-only content (the subscription meter, the CLI updater, Muse diagnostics)
   appears only while Muse is shown, and after the app's own content.
 - **Usage**: the heading reads **Usage stats**, with an **App usage** pill beside
@@ -792,15 +816,51 @@ categories become one scrolling row above the page, group labels and the version
 line hide, the scroller uses 20px top, 16px horizontal and 56px bottom padding,
 and setting rows wrap their controls instead of overflowing.
 
-### Extension store
+### Extension library
 
-The Store is a grid of cards (two columns, one under 720px): the thumbnail,
-the name and kind with its tags, one summary line (the full description is its
-tooltip), what a bundle installs, the command a server adds, and Install or
-Remove at the card's foot, aligned across a row.
-An MCP installation confirmation names the configuration destination and says
-that tool calls follow the thread's permissions and grants. If it starts via
-`npx`, it also says a runtime and network download may be needed at startup.
+**Discover** is a grid of cards (two columns, one under 720px): the thumbnail,
+the name and kind with its tags (or, for a marketplace listing, its category
+and author), one summary line (the full description is its tooltip), what a
+bundle installs, the command a server adds or the repository a listing lives
+in, and at the card's foot where it comes from (**Bundled with Glitter** or
+**from** a source) and Install or Remove, aligned across a row. The toolbar is
+the search field, the kind filter (All · Plugins · Skills · MCP servers), a
+source menu once a source is added, and a refresh icon button. A count line
+sits above the grid; past 36 cards a **Show more** row pages in the rest.
+Before any source is added, **Featured on GitHub** shows four compact cards
+above the grid.
+An MCP installation confirmation from the bundled store names the
+configuration destination and says that tool calls follow the thread's
+permissions and grants. If it starts via `npx`, it also says a runtime and
+network download may be needed at startup.
+
+**Add from GitHub** is a 640px dialog with a fixed header, a scrolling body and
+a fixed footer. Without a request it opens on a mono repository field with
+**Fetch** and a **Try one** list of featured repositories; a link that is not
+on github.com is explained under the field before anything is fetched. While
+fetching, a skeleton of the preview sweeps and a status line names the
+repository. A plugin preview leads with a 56px thumbnail, the name, version and
+Installed tags, the author, the `owner/repo` link and the short commit, the
+description and format tags; then one line counting what it holds and a group
+each for **Skills**, **Commands** (installed as skills called with `/name`) and
+**MCP servers** (each command line in mono, and the variables it expects in
+`--warning`), every row a checkbox, with Select all/none past one row. What the
+built-in agent will not run (agents, hooks, language servers), name clashes and
+other notes sit in one `--fog` note list. The footer says where files go, then
+Cancel and **Install** (**Install N** for a partial choice, **Update** when it
+is installed). A marketplace preview lists its first twelve plugins and offers
+**Add source**. After installing, the body becomes a centred confirmation with
+a success mark and **Done**.
+
+**Installed → Plugins** rows show the thumbnail, the name with version,
+**Update** and **Off** tags, the description (two lines), and a facts line
+(`owner/repo` · what is installed · Updated …), with **Update** and the switch
+at the right; turning a plugin off dims the row. The row opens to its long
+description, its skills and commands as mono chips (not-installed ones dimmed),
+its servers, notes, an Author/Source/Commit/License/Folder list, and **View on
+GitHub**, **Fetch latest** and **Remove** (`danger-text`). **Sources** rows use
+the same facts line (plugins · Refreshed …) with Browse and refresh and remove
+icon buttons.
 
 ### Prompt rail
 

@@ -50,6 +50,7 @@ The macOS DMG target shells out to `create-dmg` (`brew install create-dmg`). Wit
 | `npm run test:native` | `cargo test`, including the mock-app native end-to-end tests |
 | `npm run check:a11y` / `check:contrast` / `check:versions` | Accessibility sweep, WCAG AA contrast of every theme and accent pair, version-manifest agreement |
 | `npm run verify` | Every gate above plus `npm audit`, in order. Run before a PR. |
+| `npm run eval:harness -- --validate` / `--dry` | Validate or exercise the synthetic Harness evaluation fixtures without provider calls. See [Harness evaluation](../evals/harness/README.md) for bounded live runs. |
 | `npm run clean` | Remove the three `dist/` folders (`cargo clean` for Rust output) |
 | `npm run icons` | Regenerate app icons from `apps/desktop/public/spark.svg` |
 

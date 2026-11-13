@@ -1,4 +1,4 @@
-import type { AgentInfo, Model, ModelCall } from "./types";
+import type { AgentInfo, GithubPreview, InstalledPlugin, MarketplaceAnalysis, MarketplacePlugin, MarketplaceSource, Model, ModelCall, PluginAnalysis, PluginInstallOutcome, PluginLibrary, PluginOrigin } from "./types";
 import type { GitGraph, GitReview, GitReviewRequest, GitSnapshot, Thread, ThreadWorktree, TranscriptItem, WorkspaceFile } from "./types";
 import { parseUnifiedDiff } from "./diff";
 import { dayKey, type UsageDay, type UsageLedger, type UsageTurn } from "./usageLedger";
@@ -664,4 +664,173 @@ export function mockUsageLedger(at = Date.now()): UsageLedger {
     days.push({ day: dayKey(date.getTime() + 12 * 3_600_000), agentId: mix.agentId, providerId: mix.providerId, modelId: mix.modelId, turns: count, estimatedTurns: 0, inputTokens: mix.input * count, cachedTokens: Math.round(mix.input * count * mix.cached), outputTokens: mix.output * count, durationMs: count * 240_000, tools: { bash: count, read_file: Math.ceil(count / 2) } });
   }
   return { version: 1, turns, days: days.reverse() };
+}
+
+/*
+ * The plugin library in the browser preview: GitHub fetches are simulated with
+ * a short delay and canned repositories, and installs live in memory, so the
+ * Add from GitHub flow, sources and the Installed list can all be exercised.
+ */
+const avatarSvg = (initials: string, hue: number) =>
+  `data:image/svg+xml;base64,${btoa(`<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96"><rect width="96" height="96" fill="hsl(${hue} 42% 34%)"/><text x="48" y="60" font-family="-apple-system,Helvetica" font-size="38" font-weight="600" fill="#fff" text-anchor="middle">${initials}</text></svg>`)}`;
+const logoSvg = (color: string) =>
+  `data:image/svg+xml;base64,${btoa(`<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96"><rect width="96" height="96" rx="22" fill="${color}"/><path d="M52 18 30 54h16l-4 24 24-38H50z" fill="#fff"/></svg>`)}`;
+
+type MockRepo = { avatar: string; plugin?: PluginAnalysis & { icon?: string }; marketplace?: MarketplaceAnalysis; pluginsByName?: Record<string, PluginAnalysis> };
+const analysis = (partial: Partial<PluginAnalysis> & { name: string }): PluginAnalysis => ({
+  displayName: null, description: null, longDescription: null, version: null, author: null, homepage: null, license: null, category: null, keywords: [], brandColor: null,
+  formats: ["Claude Code", "Agent Skills"], skills: [], commands: [], servers: [], agents: [], hooks: false, lsp: false, notes: [], ...partial,
+});
+const skill = (name: string, description: string) => ({ name, description, folder: `skills/${name}` });
+const listing = (name: string, description: string, category: string, location = "This repository"): MarketplacePlugin => ({ name, description, version: null, category, author: null, homepage: null, keywords: [], location, supported: location !== "Not on GitHub" });
+
+const MOCK_REPOS: Record<string, MockRepo> = {
+  "obra/superpowers": {
+    avatar: avatarSvg("JV", 32),
+    plugin: {
+      ...analysis({
+        name: "superpowers", displayName: "Superpowers", version: "7.0.2", author: "Jesse Vincent", license: "MIT", category: "Developer Tools", brandColor: "#F59E0B",
+        description: "Planning, TDD, debugging, and delivery workflows for coding agents",
+        longDescription: "Guide agent work through brainstorming, implementation planning, test-driven development, systematic debugging, parallel execution, code review and finish-the-branch workflows.",
+        formats: ["Claude Code", "Codex", "Agent Skills"], keywords: ["tdd", "debugging", "planning"], hooks: true,
+        skills: [skill("brainstorming", "Turn a rough idea into a design before writing code."), skill("writing-plans", "Write a step-by-step implementation plan."), skill("test-driven-development", "Red, green, refactor for every change."), skill("systematic-debugging", "Four-phase root cause analysis."), skill("verification-before-completion", "Prove it works before saying it does."), skill("using-git-worktrees", "Isolate work in a git worktree.")],
+      }),
+      icon: logoSvg("#F59E0B"),
+    },
+  },
+  "anthropics/claude-plugins-official": {
+    avatar: avatarSvg("A", 18),
+    marketplace: {
+      name: "claude-plugins-official", owner: "Anthropic", description: "Directory of popular Claude Code extensions including development tools, productivity plugins, and MCP integrations",
+      plugins: [
+        listing("code-review", "Automated code review for pull requests using multiple specialized agents.", "development"),
+        listing("commit-commands", "Commands for git commit workflows: commit, push, and create a PR.", "productivity"),
+        listing("frontend-design", "Create distinctive, production-grade frontend interfaces.", "development"),
+        listing("security-guidance", "Warns about potential security issues when editing files.", "security"),
+        listing("playwright", "Browser automation and end-to-end testing.", "testing", "microsoft/playwright-mcp"),
+        listing("sentry", "Error monitoring: inspect issues and fix production bugs.", "monitoring", "getsentry/sentry-mcp"),
+        listing("supabase", "Manage your Supabase projects and query your database.", "database", "supabase-community/supabase-mcp"),
+        listing("vercel", "Deploy and manage projects on Vercel.", "deployment", "vercel/vercel-plugin"),
+        listing("figma", "Bring design context from Figma into code.", "design", "figma/mcp-server-guide"),
+        listing("linear", "Linear issue tracking: create, update and search issues.", "productivity", "linear/linear-mcp"),
+        listing("stripe", "Stripe development: payments, billing and webhooks.", "development", "stripe/ai"),
+        listing("notion", "Search and update your Notion workspace.", "productivity", "makenotion/notion-mcp"),
+        listing("pdf-tools", "Hosted outside GitHub.", "productivity", "Not on GitHub"),
+      ],
+    },
+    pluginsByName: {
+      "code-review": analysis({ name: "code-review", description: "Automated code review for pull requests using multiple specialized agents.", author: "Anthropic", category: "development", commands: [{ name: "code-review", description: "Review the current pull request", file: "commands/code-review.md" }], agents: ["reviewer", "security-auditor"] }),
+      playwright: analysis({ name: "playwright", description: "Browser automation and end-to-end testing.", author: "Microsoft", category: "testing", formats: ["Claude Code", "MCP"], servers: [{ name: "playwright", transport: "stdio", display: "npx @playwright/mcp@latest", needsEnv: [] }] }),
+      sentry: analysis({ name: "sentry", description: "Error monitoring: inspect issues and fix production bugs.", author: "Sentry", category: "monitoring", formats: ["Claude Code", "Agent Skills", "MCP"], skills: [skill("sentry-fix-issues", "Find and fix a Sentry issue.")], servers: [{ name: "sentry", transport: "http", display: "https://mcp.sentry.dev/mcp", needsEnv: [] }] }),
+    },
+  },
+  "anthropics/skills": {
+    avatar: avatarSvg("A", 18),
+    marketplace: {
+      name: "anthropic-agent-skills", owner: "Anthropic", description: "Anthropic example skills",
+      plugins: [listing("document-skills", "Excel, Word, PowerPoint and PDF processing.", "productivity"), listing("example-skills", "Skill creation, MCP building, visual design, web testing and more.", "development")],
+    },
+    pluginsByName: {
+      "document-skills": analysis({ name: "document-skills", description: "Excel, Word, PowerPoint and PDF processing.", author: "Anthropic", skills: [skill("xlsx", "Spreadsheets with formulas and charts."), skill("docx", "Word documents with tracked changes."), skill("pptx", "PowerPoint decks."), skill("pdf", "Read, fill and merge PDFs.")] }),
+    },
+  },
+};
+
+let mockLibrary: PluginLibrary = { plugins: [], marketplaces: [], pluginsRoot: "~/.glitter/plugins", problems: [] };
+const mockStaged = new Map<string, { preview: GithubPreview; repo: string }>();
+const SHA = "4f2c8e1a9b7d6c5e3f1a2b4c6d8e0f1a2b3c4d5e";
+
+function mockRepoKey(source: string): string {
+  const cleaned = source.trim().replace(/^https?:\/\/(www\.)?github\.com\//i, "").replace(/^github\.com\//i, "").replace(/\.git$/, "");
+  const [owner = "", repo = ""] = cleaned.split(/[/@:]/);
+  if (!/^[A-Za-z0-9-]+$/.test(owner) || !/^[A-Za-z0-9._-]+$/.test(repo)) throw new Error("Name the repository as owner/repo.");
+  return `${owner}/${repo}`.toLowerCase();
+}
+
+function mockOrigin(repoKey: string, plugin: string | null): PluginOrigin {
+  const [owner, repo] = repoKey.split("/");
+  return { owner, repo, ref: null, path: "", commit: SHA, plugin, spec: repoKey, url: `https://github.com/${repoKey}` };
+}
+
+export async function mockGithubInspect(source: string, plugin?: string | null): Promise<GithubPreview> {
+  const key = mockRepoKey(source);
+  await new Promise((resolve) => setTimeout(resolve, 650));
+  const repo = MOCK_REPOS[key];
+  if (!repo) {
+    if (key.endsWith("/nope")) throw new Error(`Could not reach ${key} on GitHub. Check the name; a private repository needs git credentials for github.com on this Mac.`);
+    const name = key.split("/")[1];
+    MOCK_REPOS[key] = { avatar: avatarSvg(key.slice(0, 1).toUpperCase(), 210), plugin: analysis({ name, description: `Skills from ${key}.`, formats: ["Agent Skills"], skills: [skill(`${name}-guide`, "A sample skill from this repository.")] }) };
+  }
+  const found = MOCK_REPOS[key];
+  const token = Math.random().toString(16).slice(2).padEnd(32, "0").slice(0, 32);
+  let preview: GithubPreview;
+  if (plugin) {
+    const listed = found.pluginsByName?.[plugin] ?? analysis({ name: plugin, description: found.marketplace?.plugins.find((row) => row.name === plugin)?.description ?? null, skills: [skill(plugin, "The plugin's main skill.")] });
+    preview = { token, kind: "plugin", origin: mockOrigin(key, plugin), plugin: listed, marketplace: null, icon: null, avatar: found.avatar, pluginId: listed.name, installed: mockLibrary.plugins.some((row) => row.id === listed.name), conflicts: [] };
+  } else if (found.marketplace) {
+    preview = { token, kind: "marketplace", origin: mockOrigin(key, null), plugin: null, marketplace: found.marketplace, icon: null, avatar: found.avatar, pluginId: null, installed: false, conflicts: [] };
+  } else {
+    const { icon, ...rest } = found.plugin!;
+    preview = { token, kind: "plugin", origin: mockOrigin(key, null), plugin: rest, marketplace: null, icon: icon ?? null, avatar: found.avatar, pluginId: rest.name, installed: mockLibrary.plugins.some((row) => row.id === rest.name), conflicts: [] };
+  }
+  mockStaged.set(token, { preview, repo: key });
+  return preview;
+}
+
+export async function mockGithubInstall(token: string, selected?: string[] | null): Promise<PluginInstallOutcome> {
+  const staged = mockStaged.get(token);
+  if (!staged?.preview.plugin) throw new Error("That preview has expired. Inspect the repository again.");
+  await new Promise((resolve) => setTimeout(resolve, 450));
+  const plugin = staged.preview.plugin;
+  const wanted = (name: string) => !selected?.length || selected.includes(name);
+  const skills = plugin.skills.map((row) => row.name).filter(wanted);
+  const commands = plugin.commands.map((row) => row.name).filter(wanted);
+  const servers = plugin.servers.map((row) => row.name).filter(wanted);
+  const at = Date.now();
+  const installed: InstalledPlugin = {
+    ...plugin, id: plugin.name, icon: staged.preview.icon, avatar: staged.preview.avatar, origin: staged.preview.origin, enabled: true, installedAt: at, updatedAt: at,
+    availableSkills: [...plugin.skills, ...plugin.commands.map((row) => ({ name: row.name, description: row.description, folder: row.file }))],
+    skills, commands, servers, serverDetails: plugin.servers, notes: plugin.notes, folder: `~/.glitter/plugins/${plugin.name}`,
+  };
+  mockLibrary = { ...mockLibrary, plugins: [...mockLibrary.plugins.filter((row) => row.id !== installed.id), installed] };
+  mockStaged.delete(token);
+  return { id: installed.id, skills, commands, servers, problems: [] };
+}
+
+export function mockLibraryList(): PluginLibrary {
+  return mockLibrary;
+}
+
+export function mockSetPluginEnabled(id: string, enabled: boolean): PluginInstallOutcome {
+  const plugin = mockLibrary.plugins.find((row) => row.id === id);
+  if (!plugin) throw new Error("That plugin is not installed.");
+  mockLibrary = { ...mockLibrary, plugins: mockLibrary.plugins.map((row) => row.id === id ? { ...row, enabled } : row) };
+  return { id, skills: enabled ? plugin.skills : [], commands: enabled ? plugin.commands : [], servers: enabled ? plugin.servers : [], problems: [] };
+}
+
+export function mockRemovePlugin(id: string): string[] {
+  mockLibrary = { ...mockLibrary, plugins: mockLibrary.plugins.filter((row) => row.id !== id) };
+  return [];
+}
+
+export function mockAddMarketplace(token: string): MarketplaceSource {
+  const staged = mockStaged.get(token);
+  if (!staged?.preview.marketplace) throw new Error("That preview is a plugin. Install it instead.");
+  const market = staged.preview.marketplace;
+  const source: MarketplaceSource = { id: market.name, name: market.name, description: market.description, owner: market.owner, origin: staged.preview.origin, addedAt: Date.now(), refreshedAt: Date.now(), avatar: staged.preview.avatar, plugins: market.plugins };
+  mockLibrary = { ...mockLibrary, marketplaces: [...mockLibrary.marketplaces.filter((row) => row.id !== source.id), source] };
+  mockStaged.delete(token);
+  return source;
+}
+
+export function mockRemoveMarketplace(id: string) {
+  mockLibrary = { ...mockLibrary, marketplaces: mockLibrary.marketplaces.filter((row) => row.id !== id) };
+}
+
+export function mockRefreshMarketplace(id: string): MarketplaceSource {
+  const source = mockLibrary.marketplaces.find((row) => row.id === id);
+  if (!source) throw new Error("That source is not added.");
+  const refreshed = { ...source, refreshedAt: Date.now() };
+  mockLibrary = { ...mockLibrary, marketplaces: mockLibrary.marketplaces.map((row) => row.id === id ? refreshed : row) };
+  return refreshed;
 }

@@ -3,6 +3,7 @@ import { estimateTurnTokens, mergeHistoryItems, messageRewindBoundary, planAncho
 import { readTokenSpeed, recordTokenSpeed } from "./tokenSpeed";
 import { LazyStore } from "@tauri-apps/plugin-store";
 import { SettingsPersistence, settingsFields } from "./settingsPersistence";
+import { normalizeHarnessRules } from "./permissionRules";
 import { composeLineComments, LINE_COMMENT_LIMIT, type LineComment } from "./lineComments";
 import { rememberCommand } from "./palette";
 import { menuAccelerators } from "./shortcuts";
@@ -10,7 +11,7 @@ import { buildSuggestionPrompt, cheapestModel, parseSuggestions, suggestionSigna
 import { stepZoom } from "./zoom";
 import { asLedger, compact, EMPTY_LEDGER, recordTurn, turnEntry, type UsageLedger } from "./usageLedger";
 import { persistableDrafts, rememberPrompt, NewerSessionMemoryError, SessionMemoryPersistence, SESSION_MEMORY_VERSION, type Draft, type SessionMemory, type ThreadMeta } from "./sessionMemory";
-import { acpConsentGet, acpConsentSet, agentIdentities, bridge, catalogInstall, catalogList, catalogRemove, cliLogout, confirmAgentBin, credentialGet, credentialSet, enterpriseStatus, gitCommit, gitDiscardAll, gitDiscardFiles, gitDiscardHunk, gitGraph as readGitGraph, gitInit, gitReview, gitBranches, gitPull, gitPullRequest, gitPush, gitSnapshot, gitStage, gitSwitch, gitWorktreeCreate, gitWorktreeHandoff, gitWorktreeRemove, turnSnapshots, restoreTurnSnapshot, forgetTurnSnapshots, listWorkspaceFiles, MOCK_FILES, mockThreads, mockWorkspaceFile, mockWorktree, providerKeysGet, readWorkspaceFile, onBridgeEvent, onWindowCloseRequested, persistStoreDocument, pickFolder, pickPluginBundle, pickSkillSource, pluginInstall, pluginList, projectInit, readDroppedPaths, removeGrant, repairStoreDocument, setInterfaceZoom, setWindowAppearance, setMenuShortcuts, skillImport, skillInstall, skillList, skillUninstall, trustPreview, verifyGrants, type BridgeEventPayloads } from "./bridge";
+import { acpConsentGet, acpConsentSet, agentIdentities, bridge, catalogInstall, catalogList, catalogRemove, githubInstall, libraryCheckUpdates, libraryList, libraryRemove, librarySetEnabled, marketplaceAdd, marketplaceRefresh, marketplaceRemove, cliLogout, confirmAgentBin, credentialGet, credentialSet, enterpriseStatus, gitCommit, gitDiscardAll, gitDiscardFiles, gitDiscardHunk, gitGraph as readGitGraph, gitInit, gitReview, gitBranches, gitPull, gitPullRequest, gitPush, gitSnapshot, gitStage, gitSwitch, gitWorktreeCreate, gitWorktreeHandoff, gitWorktreeRemove, turnSnapshots, restoreTurnSnapshot, forgetTurnSnapshots, listWorkspaceFiles, MOCK_FILES, mockThreads, mockWorkspaceFile, mockWorktree, providerKeysGet, readWorkspaceFile, onBridgeEvent, onWindowCloseRequested, persistStoreDocument, pickFolder, pickPluginBundle, pickSkillSource, pluginInstall, pluginList, projectInit, readDroppedPaths, removeGrant, repairStoreDocument, setInterfaceZoom, setWindowAppearance, setMenuShortcuts, skillImport, skillInstall, skillList, skillUninstall, trustPreview, verifyGrants, type BridgeEventPayloads } from "./bridge";
 import { MOCK_AGENT_MODELS, MOCK_AGENTS, MOCK_GIT, MOCK_GIT_GRAPH, MOCK_MODELS, mockGitReview } from "./mock";
 import { KEYED_PROVIDER_IDS, type ProviderStatus } from "./providers";
 import { clampTier, modelFor, tiersFor } from "./effort";
@@ -51,7 +52,7 @@ import {
   type WorkspaceFile,
   type Workspace,
   type CliUpdateOutcome, type CliUpdateStatus, type ComposerImage, type ContextRef, type HostCompat, type HostInfo, type Model, type ModelTestResult, type SessionConfig, type SessionMetadata, type SessionOpening, type SessionPreview,
-  type UserInputResponse, type GoalState, type ContextUsage, type TokenUsage, type SubscriptionUsage, type SubagentResult, type Suggestion, type TrustPreview, type SkillRow, type McpServer, type HarnessMcpStatus, type HarnessMcpConfig, type HarnessMcpScope, type HarnessMcpServerInput, type CatalogEntry, type CatalogInstallResult, type CatalogRemoveResult, type PluginEntry, type SkillEntry, type HostPosture, type EnterpriseStatus, type SettingsTab, type BrowserControlInput, type BrowserControlResult, type BrowserFrame, type BrowserState, type BrowserStateEvent, type OrchestratorModel, type OrchestratorProbeResult, type OrchestratorRole, type OrchestratorShape,
+  type UserInputResponse, type GoalState, type ContextUsage, type TokenUsage, type SubscriptionUsage, type SubagentResult, type Suggestion, type TrustPreview, type SkillRow, type McpServer, type HarnessMcpStatus, type HarnessMcpConfig, type HarnessMcpScope, type HarnessMcpServerInput, type CatalogEntry, type CatalogInstallResult, type CatalogRemoveResult, type MarketplaceSource, type PluginInstallOutcome, type PluginLibrary, type PluginUpdate, type PluginEntry, type SkillEntry, type HostPosture, type EnterpriseStatus, type SettingsTab, type BrowserControlInput, type BrowserControlResult, type BrowserFrame, type BrowserState, type BrowserStateEvent, type OrchestratorModel, type OrchestratorProbeResult, type OrchestratorRole, type OrchestratorShape,
 } from "./types";
 
 const persist = isTauri() ? new LazyStore("glitter.json", { autoSave: false, defaults: {} }) : null;
@@ -82,6 +83,10 @@ let memoryTimer: ReturnType<typeof setTimeout> | null = null;
 const previewTimers = new Map<string, number>();
 let hostStart: Promise<boolean> | null = null;
 let hydration: Promise<void> | null = null;
+/** The rules the running bridge was last told. A new process starts with none, so an exit clears this. */
+let harnessRulesApplied: string | null = null;
+let harnessRulesGeneration = 0;
+let harnessRulesQueue: Promise<void> = Promise.resolve();
 /**
  * The newest agent detection still running. The UI no longer waits for it at
  * launch, so anything that needs to know which agents exist (listing threads,
@@ -394,6 +399,21 @@ type AppStore = Settings & {
   /** Install one entry, then refresh the store and, when a Harness thread is open, its skills and MCP generation. */
   installCatalogEntry: (id: string, sessionId?: string) => Promise<CatalogInstallResult>;
   removeCatalogEntry: (id: string, sessionId?: string) => Promise<CatalogRemoveResult>;
+  /** Plugins installed from GitHub and the marketplaces added as sources (`library_list`). */
+  library: PluginLibrary | null;
+  libraryLoading: boolean;
+  libraryError: string | null;
+  /** Installed plugins and sources whose branch on GitHub has moved on. */
+  libraryUpdates: PluginUpdate[];
+  refreshLibrary: () => Promise<void>;
+  /** Install what a GitHub preview fetched, then refresh the library, the store and an open Harness thread. */
+  installLibraryPlugin: (token: string, selected?: string[] | null, sessionId?: string) => Promise<PluginInstallOutcome>;
+  setLibraryPluginEnabled: (id: string, enabled: boolean, sessionId?: string) => Promise<PluginInstallOutcome>;
+  removeLibraryPlugin: (id: string, sessionId?: string) => Promise<string[]>;
+  addMarketplace: (token: string) => Promise<MarketplaceSource>;
+  refreshMarketplace: (id: string) => Promise<MarketplaceSource>;
+  removeMarketplace: (id: string) => Promise<void>;
+  checkLibraryUpdates: () => Promise<PluginUpdate[]>;
   /** Plugin inventory (`plugin_list`); `availableShown` selects marketplace-available rows. */
   pluginEntries: PluginEntry[];
   pluginsAvailableShown: boolean;
@@ -515,6 +535,11 @@ type AppStore = Settings & {
   hydrate: () => Promise<void>;
   save: () => Promise<void>;
   commitSettings: (patch: Partial<Settings>) => Promise<void>;
+  /** Rules the harness could not read at the last apply. It ignores them and says why. */
+  harnessRuleProblems: string[];
+  harnessRulesError: string | null;
+  /** Tell the harness host the saved rules. Rejects so a thread cannot run without them. */
+  applyHarnessRules: (force?: boolean) => Promise<void>;
   refreshDetection: () => Promise<void>;
   /** Compare the installed CLI against its release channel (hourly unless forced). */
   refreshCliUpdate: (force?: boolean) => Promise<void>;
@@ -1296,6 +1321,19 @@ async function applyThreadConfig(get: () => AppStore, set: (patch: Partial<AppSt
   }
 }
 
+/**
+ * After plugins change on disk: the store's installed marks, the library, and
+ * an open Harness thread's skills and MCP servers all read those files again.
+ */
+async function afterExtensionChange(get: () => AppStore, sessionId?: string) {
+  await Promise.all([get().refreshLibrary(), get().refreshCatalog()]);
+  const thread = sessionId ? get().threads.find((item) => item.sessionId === sessionId) : undefined;
+  if (sessionId && thread?.agentId === "harness") {
+    await get().refreshSkills(sessionId);
+    await get().refreshHarnessMcp(sessionId, true);
+  }
+}
+
 export const useAppStore = create<AppStore>((set, get) => ({
   ...DEFAULT_SETTINGS,
   ready: false,
@@ -1327,10 +1365,16 @@ export const useAppStore = create<AppStore>((set, get) => ({
   harnessMcpConfig: null,
   harnessMcpConfigLoading: null,
   harnessMcpConfigError: null,
+  harnessRuleProblems: [],
+  harnessRulesError: null,
   catalogEntries: [],
   catalogSkillsRoot: null,
   catalogLoading: false,
   catalogError: null,
+  library: null,
+  libraryLoading: false,
+  libraryError: null,
+  libraryUpdates: [],
   pluginEntries: [],
   pluginsAvailableShown: false,
   pluginsLoading: false,
@@ -1554,6 +1598,11 @@ export const useAppStore = create<AppStore>((set, get) => ({
     // Apply before the first await: a later change must build its complete
     // settings document from this patch, not from the pre-change state.
     set({ ...patch });
+    // Begin applying a rule change before persistence yields: a concurrent send
+    // must wait for this change, even while the settings file is being saved.
+    const rulesUpdate = "harnessRules" in patch
+      ? get().applyHarnessRules(true).catch((error) => { set({ error: describeError("Could not apply the permission rules", error) }); })
+      : null;
     const settings = settingsFields(get());
     set({ enabledAgents: settings.enabledAgents, acpUnisolatedConsent: settings.acpUnisolatedConsent === true });
     applyTheme(settings);
@@ -1570,6 +1619,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     }
     // The native menu holds its own copy of the accelerators.
     if ("shortcutOverrides" in patch) void setMenuShortcuts(menuAccelerators(settings.shortcutOverrides ?? {})).catch((error) => log.warn("shortcuts.menu_failed", { error: message(error) }));
+    if (rulesUpdate) await rulesUpdate;
     const next = get();
     if (next.defaultAgentId && !agentEnabled(next, next.defaultAgentId)) set({ defaultAgentId: undefined });
     // A disabled agent is "hidden from the composer", not deleted: the open
@@ -1586,6 +1636,36 @@ export const useAppStore = create<AppStore>((set, get) => ({
     if (project?.config?.agentId && !agentEnabled(get(), project.config.agentId)) {
       set({ drafts: { ...get().drafts, [projectKey]: { ...project, config: { ...project.config, agentId: undefined } } } });
     }
+  },
+
+  applyHarnessRules: async (force = false) => {
+    if (get().preview) return;
+    if (force) harnessRulesApplied = null;
+    const apply = async () => {
+      try {
+        for (;;) {
+          const generation = harnessRulesGeneration;
+          const rules = normalizeHarnessRules(get().harnessRules);
+          const signature = JSON.stringify(rules);
+          if (harnessRulesApplied === signature) return;
+          const result = await bridge<{ problems?: string[] }>("harnessRules", { agentId: "harness", rules });
+          if (generation !== harnessRulesGeneration) throw new Error("The agent connection restarted while applying rules.");
+          harnessRulesApplied = signature;
+          // Settings may have changed while the bridge was answering. Install
+          // the newest snapshot before releasing any waiting session or send.
+          if (JSON.stringify(normalizeHarnessRules(get().harnessRules)) !== signature) continue;
+          set({ harnessRuleProblems: result.problems ?? [], harnessRulesError: null });
+          return;
+        }
+      } catch (error) {
+        harnessRulesApplied = null;
+        set({ harnessRulesError: sentenceAfter(describeError("Could not apply permission rules", error), "Open threads may still use the previous rules. Stop a running turn or retry.") });
+        throw error;
+      }
+    };
+    const operation = harnessRulesQueue.then(apply);
+    harnessRulesQueue = operation.catch(() => {});
+    await operation;
   },
 
   refreshProviders: async () => {
@@ -2694,6 +2774,63 @@ export const useAppStore = create<AppStore>((set, get) => ({
     return result;
   },
 
+  refreshLibrary: async () => {
+    if (get().libraryLoading) return;
+    set({ libraryLoading: true, libraryError: null });
+    try {
+      const library = await libraryList();
+      set({ library, libraryError: library.problems.length ? library.problems.join(" ") : null });
+    } catch (error) {
+      set({ libraryError: describeError("Could not read your plugins", error) });
+    } finally {
+      set({ libraryLoading: false });
+    }
+  },
+
+  installLibraryPlugin: async (token, selected, sessionId) => {
+    const outcome = await githubInstall(token, selected);
+    await afterExtensionChange(get, sessionId);
+    set({ libraryUpdates: get().libraryUpdates.filter((update) => update.id !== outcome.id) });
+    return outcome;
+  },
+
+  setLibraryPluginEnabled: async (id, enabled, sessionId) => {
+    const outcome = await librarySetEnabled(id, enabled);
+    await afterExtensionChange(get, sessionId);
+    return outcome;
+  },
+
+  removeLibraryPlugin: async (id, sessionId) => {
+    const problems = await libraryRemove(id);
+    set({ libraryUpdates: get().libraryUpdates.filter((update) => !(update.kind === "plugin" && update.id === id)) });
+    await afterExtensionChange(get, sessionId);
+    return problems;
+  },
+
+  addMarketplace: async (token) => {
+    const source = await marketplaceAdd(token);
+    await get().refreshLibrary();
+    return source;
+  },
+
+  refreshMarketplace: async (id) => {
+    const source = await marketplaceRefresh(id);
+    set({ libraryUpdates: get().libraryUpdates.filter((update) => !(update.kind === "marketplace" && update.id === id)) });
+    await get().refreshLibrary();
+    return source;
+  },
+
+  removeMarketplace: async (id) => {
+    await marketplaceRemove(id);
+    await get().refreshLibrary();
+  },
+
+  checkLibraryUpdates: async () => {
+    const updates = await libraryCheckUpdates();
+    set({ libraryUpdates: updates });
+    return updates;
+  },
+
   refreshPlugins: async (available = false) => {
     if (get().pluginsLoading) return;
     set({ pluginsLoading: true, pluginsError: null, pluginsAvailableShown: available });
@@ -2973,6 +3110,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     update({ opening: true, error: null });
     if (thread.agentId) {
       try {
+        if (thread.agentId === "harness") await get().applyHarnessRules();
         const opened = await bridge<{ agentConfig?: AgentSessionConfig; alreadyOpen?: boolean }>("resumeSession", { agentId: thread.agentId, sessionId });
         // A reopened thread keeps the app's permission mode, on any agent.
         const approvalMode = approvalModeForAgent(thread.agentId, thread.config?.approvalMode);
@@ -3093,6 +3231,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         const orchestrator = agentId === "harness"
           ? config.orchestrator !== undefined ? config.orchestrator ?? undefined : orchestratorStart(get())
           : undefined;
+        if (agentId === "harness") await get().applyHarnessRules();
         const opened = await bridge<{ sessionId: string; agentConfig?: AgentSessionConfig }>("startSession", { agentId, grantId: workspace.grantId ?? undefined, ...(orchestrator ? { orchestrator } : { modelId: ownModel && !gated ? config.modelId : undefined, reasoningEffort: config.effort }), ...(mode ? { mode } : {}), ...(approvalMode ? { approvalMode } : {}) });
         thread = { sessionId: opened.sessionId, agentId, workspacePath: workspace.path, title, order: Date.now(), updatedAt: new Date().toISOString(), status: "idle", unread: false, items: [], opened: true, config: { ...config, ...agentConfigPatch(opened.agentConfig), ...(approvalMode ? { approvalMode } : {}), agentId }, modes: opened.agentConfig?.modes };
       } else {
@@ -3157,6 +3296,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         next = { ...thread, agentId, opened: true, modes, config: { agentId, ...(approvalMode ? { approvalMode } : {}), ...(modes ? { mode: "build" } : {}) }, error: null, notice: null, status: "idle", configPending: false, pendingConfig: undefined, configNotice: `Now using ${nextName}` };
       } else if (agentId !== "muse") {
         const orchestrator = agentId === "harness" ? orchestratorStart(get()) : undefined;
+        if (agentId === "harness") await get().applyHarnessRules();
         const opened = await bridge<{ sessionId: string; agentConfig?: AgentSessionConfig }>("startSession", { agentId, grantId: workspace.grantId ?? undefined, ...(orchestrator ? { orchestrator } : {}), ...(approvalMode ? { approvalMode } : {}) });
         next = {
           ...thread,
@@ -3331,6 +3471,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         }
         return true;
       }
+      if (thread?.agentId === "harness") await get().applyHarnessRules();
       // A leading `/selector` invokes a session skill for real: the typed
       // spelling matches the catalog verbatim (unknown stays plain text),
       // and the invocation travels as a structured skill part.
@@ -3469,6 +3610,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     }) });
     update({ approvalPending: true, error: null });
     try {
+      if (thread.agentId === "harness" && !choice.decision.startsWith("denied")) await get().applyHarnessRules();
       if (!get().preview) await bridge("decideApproval", { approvalId, choiceId, sessionId: thread.sessionId });
       settle();
       if (explanation) {
@@ -3508,6 +3650,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     const update = (patch: Partial<Thread>) => set({ threads: get().threads.map((item) => item.sessionId === sessionId ? { ...item, ...patch } : item) });
     update({ userInputPending: userInputId, error: null });
     try {
+      if (thread.agentId === "harness") await get().applyHarnessRules();
       if (!get().preview) await bridge("respondUserInput", { sessionId, userInputId, response });
       update({ userInputs: get().threads.find((item) => item.sessionId === sessionId)?.userInputs?.filter((request) => request.userInputId !== userInputId) });
     } catch (error) { update({ error: sentenceAfter(describeError("Could not respond", error), "Your answer is retained; retry or cancel the question.") }); }
@@ -4273,6 +4416,7 @@ async function deliverApprovalFeedback(sessionId: string): Promise<void> {
   let started = false;
   let before: Partial<Thread> = {};
   try {
+    if (thread.agentId === "harness") await useAppStore.getState().applyHarnessRules();
     let steered = false;
     if (acceptsBusySend(thread.agentId) && thread.status === "running" && !state.preview) {
       try {
@@ -4449,6 +4593,8 @@ export function bindBridgeEvents() {
     if (event === "hostExit" || event === "bridgeExit" || event === "connectionError" || event === "hostStopping") {
       ++modelVersion;
       modelsInFlight = null;
+      harnessRulesApplied = null;
+      harnessRulesGeneration += 1;
       const payloadInfo = payload as BridgeEventPayloads["hostExit"] | undefined;
       const closed = event === "hostStopping" ? null : payloadInfo?.kind === "crash"
         ? `Muse exited unexpectedly${payloadInfo.exitCode != null ? ` (${payloadInfo.exitCode})` : ""}. Open Settings to reconnect; drafts are retained.`
@@ -4954,7 +5100,7 @@ function agentConfigPatch(config?: AgentSessionConfig): Partial<SessionConfig> {
 /** Keeps the effort inside the tiers the selected model supports. */
 function fitEffort(config: SessionConfig, models: Model[]): SessionConfig {
   if (!config.effort) return config;
-  return { ...config, effort: clampTier(config.effort, tiersFor(modelFor(models, config), config.agentId)) };
+  return { ...config, effort: clampTier(config.effort, tiersFor(modelFor(models, config))) };
 }
 
 /** The config the composer shows: the thread's, else this workspace's draft, else defaults. */

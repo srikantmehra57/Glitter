@@ -156,10 +156,12 @@ describe("EffortPicker", () => {
     expect(menu()).toBeInTheDocument();
   });
 
-  it("is absent for a model without effort levels", () => {
+  it("is visible and shows the default effort level for a model without effort levels", () => {
     seed({ models: [{ modelId: "plain", isActive: true, reasoningEfforts: [], effortSource: "host" }], threads: [thread({ agentId: "grok", config: { agentId: "grok", modelId: "plain" } })], modelsAgentId: "grok", agents: [{ id: "grok", name: "Grok", protocol: "acp", found: true, path: "/bin/grok", version: "1", verified: true, signIn: "" }], enabledAgents: { grok: true } });
     render(<Composer />);
-    expect(screen.queryByRole("button", { name: /^Reasoning effort/ })).toBeNull();
-    expect(openPicker("effort")).toBe(false);
+    expect(screen.getByRole("button", { name: /^Reasoning effort/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Reasoning effort/ })).toHaveAccessibleName("Reasoning effort, High, model default");
+    act(() => { expect(openPicker("effort")).toBe(true); });
+    expect(menu()).toBeInTheDocument();
   });
 });

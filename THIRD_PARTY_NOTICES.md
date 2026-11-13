@@ -17,6 +17,7 @@ Meta's separately distributed CLI.
 | `@muse-code/sdk` | 1.3.0 | MIT — © Meta Platforms, Inc. and affiliates | Bundled into `glitter-bridge/dist/index.js` |
 | `playwright-core` | 1.64.1 | Apache-2.0 — © Microsoft Corporation | Browser automation, bundled into the bridge with its registry metadata; Chromium itself is installed separately, not redistributed by Glitter |
 | `chromium-bidi` | 12.1.0 | Apache-2.0 — © Google LLC and contributors | Playwright's browser-protocol dependency, bundled into the bridge |
+| `@fontsource-variable/google-sans` | 5.3.2 | OFL-1.1 — © 2017 Google, Inc. | Google Sans variable font, bundled locally into the webview |
 | `@fontsource-variable/inter` | 5.3.0 | OFL-1.1 — © 2016 The Inter Project Authors | Inter variable font, bundled locally into the webview |
 | `react`, `react-dom` | 19.x | MIT — © Meta Platforms, Inc. and affiliates | Compiled into the webview bundle |
 | `react-markdown` | 10.1.0 | MIT | Compiled into the webview bundle |
@@ -69,11 +70,12 @@ crate sources in the local cargo registry.
 
 ## Fonts and icons
 
-Inter is bundled locally through `@fontsource-variable/inter` under the SIL Open
-Font License 1.1; its full license is included below with the generated npm
-package notices. No fonts are remotely loaded. The other interface choices use
-system font stacks (`SF`/`system-ui`). The app icon derives from the in-repo
-`docs/brand/glitter-mark.svg`; `npm run icons` generates the public marks and native icons.
+Inter and Google Sans are bundled locally through `@fontsource-variable/inter` and
+`@fontsource-variable/google-sans` under the SIL Open Font License 1.1; their
+full licenses are included below with the generated npm package notices. No
+fonts are remotely loaded. The other interface choices use system font stacks
+(`SF`/`system-ui`). The app icon derives from the in-repo `docs/brand/glitter-mark.svg`;
+`npm run icons` generates the public marks and native icons.
 
 ## License texts
 

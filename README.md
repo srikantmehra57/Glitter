@@ -255,8 +255,8 @@ Coding agents should start with [AGENTS.md](AGENTS.md).
   `scripts/live-muse-smoke.mjs` is a manual check.
 - **Experimental agents.** Gemini CLI, Qwen Code, Goose and Cline CLI aren't
   verified.
-- **Large modules.** `apps/desktop/src/lib/store.ts` (~4.7k lines) and
-  `src-tauri/src/lib.rs` (~7.4k lines, tests included) hold most of the logic.
+- **Large modules.** `apps/desktop/src/lib/store.ts` (~5.0k lines) and
+  `src-tauri/src/lib.rs` (~7.8k lines, tests included) hold most of the logic.
   The startup script is the app itself. The terminal and syntax highlighter
   load later, and `scripts/check-chunks.mjs` fails the build if they move back
   into that script.

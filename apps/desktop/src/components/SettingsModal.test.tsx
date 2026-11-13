@@ -106,6 +106,16 @@ describe("settings navigation", () => {
     expect(useAppStore.getState().theme).toBe("dark");
   });
 
+  it("adds and removes a built-in agent rule from Permissions", async () => {
+    seedStore({ settingsTab: "Permissions", harnessRules: [] });
+    render(<SettingsModal />);
+    fireEvent.change(screen.getByRole("textbox", { name: "Add a rule to Never allow" }), { target: { value: "Edit(.env)" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add rule to Never allow" }));
+    await vi.waitFor(() => expect(useAppStore.getState().harnessRules).toEqual([{ effect: "deny", rule: "Edit(.env)" }]));
+    fireEvent.click(screen.getByRole("button", { name: "Remove Edit(.env) from Never allow" }));
+    await vi.waitFor(() => expect(useAppStore.getState().harnessRules).toEqual([]));
+  });
+
   it("holds a connection setting for an explicit restart and drops it on Cancel", () => {
     seedStore({ settingsTab: "Agents", museBin: "" });
     render(<SettingsModal />);
@@ -353,8 +363,10 @@ describe("settings navigation", () => {
     render(<SettingsModal />);
     fireEvent.click(screen.getByRole("button", { name: "Font" }));
     const list = screen.getByRole("listbox", { name: "Font" });
-    expect(within(list).getAllByRole("option")).toHaveLength(6);
+    expect(within(list).getAllByRole("option")).toHaveLength(7);
     expect(within(list).queryByRole("option", { name: /New York/ })).toBeNull();
+    const googleSans = within(list).getByRole("option", { name: /Google Sans/ });
+    expect(googleSans.style.fontFamily).toContain("Google Sans Variable");
     const inter = within(list).getByRole("option", { name: /Inter/ });
     expect(inter.style.fontFamily).toContain("Inter Variable");
     fireEvent.click(inter);

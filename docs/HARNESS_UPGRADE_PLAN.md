@@ -95,8 +95,8 @@ These are inputs to this plan, not work to repeat:
 | Phase | Outcome | Status |
 |---|---|---|
 | 0 | Trust boundary and known correctness gaps closed | done |
-| 1 | Repeatable live conformance and task-quality baseline | todo |
-| 2 | Context pressure handled with bounded, honest compaction | todo |
+| 1 | Repeatable live conformance and task-quality baseline | in progress |
+| 2 | Context pressure handled with bounded, honest compaction | in progress |
 | 3 | Interrupted work recovered without unsafe replay | todo |
 | 4 | Provider capabilities and compatibility made explicit | todo |
 | 5 | Harness thread lifecycle reaches supported app parity | todo |
@@ -188,8 +188,18 @@ failure is presented as a successful fit.
 
 ## Phase 1 — Establish live evidence before tuning
 
-**Status:** todo · **Depends on:** Phase 0 · **Gate for:** quality claims and
+**Status:** in progress · **Depends on:** Phase 0 · **Gate for:** quality claims and
 Phase 2 tradeoffs.
+
+The initial synthetic corpus and bounded Harness runner are in
+`evals/harness/`. They reuse shared fixtures, forbid model-requested shell and
+network tools, and report unobserved conformance cases rather than treating
+them as passes. Authenticated provider baselines, several conformance probes,
+and comparisons remain open; this phase has not met its exit gate.
+The Anthropic and OpenAI-family live runs are blocked in this environment:
+the evaluator's environment credentials are not configured. The project
+maintainer with provider access owns selecting models and price bounds and
+running them; this does not assert whether the app has keys in its keychain.
 
 Add repeatable evidence without introducing a hosted service, committed secrets
 or an always-on paid CI suite.
@@ -242,7 +252,10 @@ against it without inventing success metrics.
 
 ## Phase 2 — Make long sessions coherent and bounded
 
-**Status:** todo · **Depends on:** Phases 0 and 1.
+**Status:** in progress · **Depends on:** Phases 0 and 1.
+
+Manual and automatic compaction have an implementation. Their quality and
+long-session exit gate still need comparison with the Phase 1 baseline.
 
 Extend the current request-fitting work into context management that survives
 more than tool-output growth. Keep model history as a projection of the durable

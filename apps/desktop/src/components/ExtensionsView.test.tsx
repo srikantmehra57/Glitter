@@ -48,9 +48,14 @@ function mount(partial: Partial<Thread>, extra: Partial<ReturnType<typeof useApp
     refreshHarnessMcpConfig: vi.fn(async () => {}),
     addHarnessMcpServer: vi.fn(async () => {}),
     removeHarnessMcpServer: vi.fn(async () => {}),
+    refreshLibrary: vi.fn(async () => {}),
+    refreshCatalog: vi.fn(async () => {}),
     ...extra,
   });
-  return render(<ExtensionsView embedded />);
+  const view = render(<ExtensionsView embedded />);
+  // Skills and MCP servers are managed under Installed; Discover opens first.
+  fireEvent.click(screen.getByRole("tab", { name: /^Installed/ }));
+  return view;
 }
 
 describe("ExtensionsView skills", () => {

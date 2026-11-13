@@ -61,7 +61,7 @@ export async function runChecks(root, task, options = {}) {
       // A command check may run from inside this repo's own node:test run; the
       // child runner must not inherit the parent's test context.
       delete env.NODE_TEST_CONTEXT;
-      const result = spawnSync(program, args, { cwd: root, encoding: "utf8", timeout: check.timeoutMs ?? timeoutMs, maxBuffer: 1_000_000, env });
+      const result = (options.commandRunner ?? spawnSync)(program, args, { cwd: root, encoding: "utf8", timeout: check.timeoutMs ?? timeoutMs, maxBuffer: 1_000_000, env });
       const expected = check.expectExit ?? 0;
       results.push({ kind: "command", ok: !result.error && result.status === expected, detail: `${check.command.join(" ")}: ${commandDetail(result)}` });
     }

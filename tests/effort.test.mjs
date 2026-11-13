@@ -48,7 +48,13 @@ test('effort clamps to the nearest supported tier at or below when the model cha
   assert.equal(clampTier('none', tiers), 'low');
   assert.equal(clampTier('max', tiers), 'max');
   assert.deepEqual(tiersFor(undefined), VOCABULARY);
+  assert.deepEqual(tiersFor({ modelId: 'm', reasoningEfforts: [] }), VOCABULARY, 'empty efforts fall back to vocabulary');
+  assert.deepEqual(tiersFor({ modelId: 'm' }), VOCABULARY, 'model without tiers falls back to vocabulary');
+  assert.deepEqual(tiersFor({ modelId: 'm', reasoningEfforts: ['low', 'high'] }), ['low', 'high'], 'model tiers win when present');
   assert.equal(defaultTier({ modelId: 'm', reasoningEfforts: tiers }), 'high');
+  assert.equal(defaultTier({ modelId: 'm', reasoningEfforts: [] }), 'high', 'falls back to default high effort');
+  assert.equal(defaultTier({ modelId: 'm', defaultReasoningEffort: 'low', reasoningEfforts: ['low', 'high'] }), 'low', 'model default wins');
+  assert.equal(defaultTier({ modelId: 'm' }, VOCABULARY, 'medium'), 'medium', 'user default wins when model declares none');
   assert.equal(isPeak('max', tiers), true);
   assert.equal(isPeak('high', ['low', 'high']), false);
 });

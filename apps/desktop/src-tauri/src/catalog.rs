@@ -11,7 +11,7 @@ use std::path::{Component, Path, PathBuf};
 
 const SKILLS_DIR: [&str; 2] = [".agents", "skills"];
 const MCP_FILE: [&str; 2] = [".glitter", "mcp.json"];
-const MARKER: &str = ".glitter-catalog.json";
+pub(crate) const MARKER: &str = ".glitter-catalog.json";
 const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 
 pub struct CatalogSkill {
@@ -412,23 +412,23 @@ fn find_entry(id: &str) -> Option<Entry<'static>> {
     SERVERS.iter().find(|server| server.id == id).map(Entry::Server)
 }
 
-fn valid_id(id: &str) -> bool {
+pub(crate) fn valid_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 64
         && id.as_bytes()[0].is_ascii_alphanumeric()
         && id.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
 }
 
-fn skills_root(home: &Path) -> PathBuf {
+pub(crate) fn skills_root(home: &Path) -> PathBuf {
     SKILLS_DIR.iter().fold(home.to_path_buf(), |path, part| path.join(part))
 }
 
-fn config_path(root: &Path) -> PathBuf {
+pub(crate) fn config_path(root: &Path) -> PathBuf {
     MCP_FILE.iter().fold(root.to_path_buf(), |path, part| path.join(part))
 }
 
 /// A relative path with no `..`, root or prefix components.
-fn safe_relative(name: &str) -> Option<PathBuf> {
+pub(crate) fn safe_relative(name: &str) -> Option<PathBuf> {
     let mut out = PathBuf::new();
     for component in Path::new(name).components() {
         match component {
@@ -448,6 +448,8 @@ fn marker_matches(folder: &Path, id: &str) -> bool {
     match fs::read_to_string(folder.join(MARKER)) {
         Ok(raw) => serde_json::from_str::<Value>(&raw)
             .ok()
+            // A plugin-installed skill carries `plugin`; the store never owns it.
+            .filter(|value| value.get("plugin").is_none())
             .and_then(|value| value.get("id").and_then(Value::as_str).map(|value| value == id))
             .unwrap_or(false),
         Err(_) => false,
@@ -490,7 +492,7 @@ fn install_skill(home: &Path, skill: &CatalogSkill) -> Result<bool, String> {
     Ok(true)
 }
 
-fn read_config(file: &Path) -> Result<Value, String> {
+pub(crate) fn read_config(file: &Path) -> Result<Value, String> {
     let metadata = match fs::metadata(file) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(json!({})),
@@ -518,7 +520,7 @@ fn server_names(file: &Path) -> Result<Vec<String>, String> {
 
 /// The `mcpServers` map, wrapping a legacy bare server map so the bridge keeps
 /// seeing every server after the store adds one.
-fn document_servers_mut<'a>(document: &'a mut Value, file: &Path) -> Result<&'a mut Map<String, Value>, String> {
+pub(crate) fn document_servers_mut<'a>(document: &'a mut Value, file: &Path) -> Result<&'a mut Map<String, Value>, String> {
     let object = document.as_object_mut().expect("read_config returns an object");
     if !object.contains_key("mcpServers") {
         let legacy = std::mem::take(object);
@@ -600,7 +602,7 @@ fn install_server(home: &Path, workspace: Option<&Path>, server: &CatalogServer)
     Ok(true)
 }
 
-fn write_config(file: &Path, document: &Value) -> Result<(), String> {
+pub(crate) fn write_config(file: &Path, document: &Value) -> Result<(), String> {
     if let Some(parent) = file.parent() {
         fs::create_dir_all(parent).map_err(|error| format!("Could not create {}: {error}", parent.display()))?;
     }

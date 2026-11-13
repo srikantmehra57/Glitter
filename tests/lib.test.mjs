@@ -30,6 +30,7 @@ const { rekeyThreadState, projectDraftForAgent } = await bundle('apps/desktop/sr
 const { mcpServerNameProblem, mcpServerSummary, parseMcpArguments, parseMcpKeyValues } = await bundle('apps/desktop/src/lib/mcpConfig.ts');
 const { modelVisibilityKey, normalizeHiddenModels, normalizeHiddenProviders, providerKey, isModelHidden, pickerModels, withModelsHidden } = await bundle('apps/desktop/src/lib/modelVisibility.ts');
 const { extensionArt, EXTENSION_TONES } = await bundle('apps/desktop/src/lib/extensionArt.ts');
+const { readGithubSource, componentSummary, unsupportedSummary, discoverRows, installedFromMarketplace, pluginTitle, selectableParts, FEATURED_SOURCES } = await bundle('apps/desktop/src/lib/pluginLibrary.ts');
 const { SETTINGS_NAV_GROUPS, SETTINGS_TAB_LABELS, SETTINGS_TAB_COPY, settingsTabsMatching } = await bundle('apps/desktop/src/lib/settingsNav.ts');
 const { SETTINGS_TABS } = await bundle('apps/desktop/src/lib/types.ts');
 
@@ -420,16 +421,18 @@ test('sidebar density and reduced motion persist safely and can be found in Appe
 
 test('the interface font is an available sans-serif, and an unknown choice stays on System', () => {
   assert.equal(DEFAULT_SETTINGS.uiFont, 'system');
-  assert.equal(UI_FONTS.length, 6);
+  assert.equal(UI_FONTS.length, 7);
   assert.equal(new Set(Object.values(UI_FONT_STACKS)).size, UI_FONTS.length, 'each face has its own stack');
   const css = readFileSync('apps/desktop/src/styles.css', 'utf8');
   assert.ok(css.includes(`--font-sans: ${UI_FONT_STACKS.system};`), 'the stylesheet default is the System stack');
   assert.equal(normalizeUiFont('helvetica'), 'helvetica');
   assert.equal(normalizeUiFont('inter'), 'inter');
+  assert.equal(normalizeUiFont('googleSans'), 'googleSans');
   assert.equal(normalizeUiFont('newYork'), 'system', 'the retired serif falls back to System');
   assert.equal(normalizeUiFont('comic sans'), 'system');
   assert.equal(normalizeUiFont(undefined), 'system');
   assert.equal(settingsFields({ ...DEFAULT_SETTINGS, uiFont: 'avenir' }).uiFont, 'avenir');
+  assert.equal(settingsFields({ ...DEFAULT_SETTINGS, uiFont: 'googleSans' }).uiFont, 'googleSans');
   assert.equal(settingsFields({ ...DEFAULT_SETTINGS, uiFont: 'nope' }).uiFont, 'system');
   const { uiFont: _absent, ...older } = DEFAULT_SETTINGS;
   assert.equal(settingsFields(older).uiFont, 'system');
@@ -438,9 +441,11 @@ test('the interface font is an available sans-serif, and an unknown choice stays
   assert.equal(resolveTheme(base, desktop).properties['--font-sans'], UI_FONT_STACKS.system);
   assert.equal(resolveTheme({ ...base, uiFont: 'helvetica' }, desktop).properties['--font-sans'], UI_FONT_STACKS.helvetica);
   assert.equal(resolveTheme({ ...base, uiFont: 'inter' }, desktop).properties['--font-sans'], UI_FONT_STACKS.inter);
+  assert.equal(resolveTheme({ ...base, uiFont: 'googleSans' }, desktop).properties['--font-sans'], UI_FONT_STACKS.googleSans);
   assert.ok(settingsTabsMatching('helvetica').includes('Theme'));
   assert.ok(settingsTabsMatching('futura').includes('Theme'));
   assert.ok(settingsTabsMatching('inter').includes('Theme'));
+  assert.ok(settingsTabsMatching('google').includes('Theme'));
   assert.deepEqual(settingsTabsMatching('new york'), []);
   assert.deepEqual(settingsTabsMatching('serif'), []);
 });
@@ -1085,6 +1090,61 @@ test('an extension gets its own icon and tint: by id in the store, by name other
   assert.deepEqual(extensionArt('skill', 'anything'), extensionArt('skill', 'anything'), 'the tint does not change between renders');
 });
 
+test('a plugin from GitHub is drawn from its name, then its marketplace category, never one generic glyph', () => {
+  assert.equal(extensionArt('plugin', 'docx').icon, 'document');
+  assert.equal(extensionArt('plugin', 'vercel-deploy').icon, 'deploy');
+  assert.equal(extensionArt('plugin', 'docker-tools').icon, 'container', 'docker is a container, not docs');
+  assert.equal(extensionArt('plugin', 'chart-maker').icon, 'chart', 'chart is not art');
+  assert.equal(extensionArt('plugin', 'zzz', 'zzz', 'monitoring').icon, 'monitor');
+  assert.equal(extensionArt('plugin', 'zzz', 'zzz', 'development').icon, 'code');
+  assert.equal(extensionArt('plugin', 'anthropics/skills').icon, 'document', 'featured repositories have their own art');
+  for (const featured of FEATURED_SOURCES) assert.notEqual(extensionArt('plugin', featured.spec).icon, 'plugin', featured.spec);
+});
+
+test('GitHub sources are read from every common spelling and anything else is refused', () => {
+  for (const input of ['anthropics/skills', 'https://github.com/anthropics/skills', 'github.com/anthropics/skills.git', 'git@github.com:anthropics/skills.git', 'anthropics/skills@main:skills/pdf', 'https://github.com/anthropics/skills/tree/main/skills/pdf']) {
+    assert.deepEqual(readGithubSource(input), { repo: 'anthropics/skills', problem: null }, input);
+  }
+  assert.deepEqual(readGithubSource('  '), { repo: null, problem: null });
+  assert.match(readGithubSource('https://gitlab.com/a/b').problem, /Only github\.com/);
+  assert.match(readGithubSource('gitlab.com/a/b').problem, /Only github\.com/);
+  assert.match(readGithubSource('file:///tmp/a/b').problem, /Only github\.com/);
+  assert.match(readGithubSource('justone').problem, /owner\/repo/);
+  assert.match(readGithubSource('-bad/name').problem, /not a valid/);
+  assert.match(readGithubSource('a b/c').problem, /no spaces/);
+});
+
+test('a plugin says what it installs and what the built-in agent will not run', () => {
+  assert.equal(componentSummary({ skills: 6, commands: 1, servers: 2 }), '6 skills · 1 command · 2 MCP servers');
+  assert.equal(componentSummary({ skills: 0, commands: 0, servers: 0 }), 'Nothing the built-in agent can run');
+  assert.equal(unsupportedSummary({ agents: [], hooks: false, lsp: false }), null);
+  assert.equal(unsupportedSummary({ agents: ['a', 'b'], hooks: true, lsp: true }), 'Its 2 agents, hooks and language servers are for Claude Code and are not used by the built-in agent.');
+  assert.equal(pluginTitle({ name: 'claude-plugins-official' }), 'Claude plugins official');
+  assert.equal(pluginTitle({ name: 'x', displayName: 'Superpowers' }), 'Superpowers');
+  const analysis = { skills: [{ name: 'a' }], commands: [{ name: 'b' }], servers: [{ name: 'c' }] };
+  assert.deepEqual(selectableParts(analysis), ['a', 'b', 'c']);
+});
+
+test('Discover merges the bundled store with every source, filtered by kind, source and search', () => {
+  const entry = (id, kind) => ({ id, kind, name: id, summary: '', description: '', tags: [], skills: [], servers: [] });
+  const origin = { owner: 'acme', repo: 'market', ref: null, path: '', commit: 'x', plugin: null, spec: 'acme/market', url: '' };
+  const market = { id: 'acme', name: 'acme', origin, plugins: [
+    { name: 'lint', description: 'Lints code', category: 'development', keywords: [], location: 'This repository', supported: true },
+    { name: 'deploy', description: 'Ships it', category: 'deployment', keywords: [], location: 'acme/deploy', supported: true },
+  ] };
+  const installed = { id: 'lint', origin: { ...origin, plugin: 'lint' } };
+  const library = { plugins: [installed], marketplaces: [market], pluginsRoot: '', problems: [] };
+  const entries = [entry('code-review', 'skill'), entry('filesystem', 'mcp'), entry('daily-driver', 'plugin')];
+  assert.equal(discoverRows(entries, library, '', 'all', 'all').length, 5);
+  assert.deepEqual(discoverRows(entries, library, '', 'plugin', 'all').map((row) => row.key), ['catalog:daily-driver', 'acme:lint', 'acme:deploy']);
+  assert.deepEqual(discoverRows(entries, library, '', 'skill', 'acme'), [], 'a source lists plugins only');
+  assert.deepEqual(discoverRows(entries, library, '', 'all', 'bundled').map((row) => row.type), ['catalog', 'catalog', 'catalog']);
+  assert.deepEqual(discoverRows(entries, library, 'ships', 'all', 'all').map((row) => row.key), ['acme:deploy']);
+  assert.equal(discoverRows(entries, library, 'lint', 'all', 'acme')[0].installed, installed);
+  assert.equal(installedFromMarketplace(library, market, 'deploy'), undefined);
+  assert.equal(discoverRows(entries, null, '', 'all', 'all').length, 3, 'no library yet still shows the store');
+});
+
 test('every Settings page has one name, one group and a line under its title, and search finds it', () => {
   const grouped = SETTINGS_NAV_GROUPS.flatMap((group) => group.tabs);
   assert.deepEqual([...grouped].sort(), [...SETTINGS_TABS].sort(), 'each page sits in exactly one group');
@@ -1113,4 +1173,31 @@ test('a derived thread title drops attachment markers and keeps the words', () =
   assert.equal(titleFromText('  Plain    title   '), 'Plain title');
   assert.equal(titleFromText('[Image #1] [Image #2]'), 'Untitled thread');
   assert.equal(titleFromText('x'.repeat(60)), `${'x'.repeat(48)}…`);
+});
+
+test('permission rules normalize to what the native side accepts and stay findable in Settings', async () => {
+  const { normalizeHarnessRules, harnessRuleProblem, HARNESS_RULE_LIMIT, HARNESS_RULE_LENGTH } = await bundle('apps/desktop/src/lib/permissionRules.ts');
+  assert.equal(harnessRuleProblem('Bash(npm test)'), null);
+  assert.match(harnessRuleProblem('   '), /Write a rule/);
+  assert.match(harnessRuleProblem('x'.repeat(HARNESS_RULE_LENGTH + 1)), /at most 300 bytes/);
+  assert.match(harnessRuleProblem('Bash(npm\u0000test)'), /control characters/);
+  assert.match(harnessRuleProblem('Bash(npm\u0085test)'), /control characters/);
+  assert.match(harnessRuleProblem('é'.repeat(151)), /at most 300 bytes/);
+  assert.equal(harnessRuleProblem('Edit(src/**)'), null, 'the syntax is the harness\'s answer, not this one\'s');
+
+  const rules = [{ effect: 'deny', rule: ' Edit(.env) ' }, { effect: 'allow', rule: 'Bash(npm test)' }];
+  const normalized = [{ effect: 'deny', rule: 'Edit(.env)' }, { effect: 'allow', rule: 'Bash(npm test)' }];
+  assert.deepEqual(normalizeHarnessRules(rules), normalized, 'order and effect survive a round trip');
+  assert.deepEqual(normalizeHarnessRules([...rules, ...rules]), normalized, 'a duplicate is dropped');
+  assert.equal(normalizeHarnessRules([{ effect: 'allow', rule: 'Bash(npm test)' }, { effect: 'deny', rule: 'Bash(npm test)' }]).length, 2, 'the same text in both lists is two rules');
+  for (const bad of [null, undefined, 'x', {}, [null], [{ effect: 'maybe', rule: 'Bash(x)' }], [{ effect: 'allow' }], [{ effect: 'allow', rule: 42 }], [{ effect: 'allow', rule: '  ' }], [{ effect: 'allow', rule: 'x'.repeat(HARNESS_RULE_LENGTH + 1) }]]) {
+    assert.deepEqual(normalizeHarnessRules(bad), [], JSON.stringify(bad));
+  }
+  const many = Array.from({ length: HARNESS_RULE_LIMIT + 5 }, (_, index) => ({ effect: 'allow', rule: `Bash(npm run task-${index})` }));
+  assert.equal(normalizeHarnessRules(many).length, HARNESS_RULE_LIMIT, 'the native list limit is enforced here too');
+
+  assert.deepEqual(settingsFields({ ...DEFAULT_SETTINGS, harnessRules: rules }).harnessRules, normalized);
+  assert.deepEqual(settingsFields({ ...DEFAULT_SETTINGS, harnessRules: 'nonsense' }).harnessRules, []);
+  assert.deepEqual(settingsFields(DEFAULT_SETTINGS).harnessRules, []);
+  for (const query of ['rules', 'denylist', 'always allow', 'permission rules']) assert.ok(settingsTabsMatching(query).includes('Permissions'), query);
 });

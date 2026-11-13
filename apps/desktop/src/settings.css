@@ -362,6 +362,18 @@ button.setting-row.setting-switch:focus-visible { outline-offset: -2px; }
 .custom-command-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .settings-dialog .custom-command-foot .settings-note { margin: 0; }
 
+/* Permission rules share the slash-command list anatomy: 48px rows, mono subject, form at the foot. */
+.settings-dialog .permission-rules ul { margin: 0; padding: 0; list-style: none; }
+.settings-dialog .permission-rules li { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 48px; padding: 8px 12px 8px 16px; border-bottom: 1px solid var(--border); font-size: var(--text-md); }
+.settings-dialog .permission-rules li > span { min-width: 0; }
+.settings-dialog .permission-rules li strong { font-family: var(--font-mono); font-size: var(--text-sm); font-weight: 500; overflow-wrap: anywhere; }
+.settings-dialog .permission-rules form { display: flex; flex-direction: column; gap: 8px; padding: 12px 16px; }
+.settings-dialog .permission-rules .settings-note { margin: 0; }
+.permission-rule-form { display: flex; align-items: center; gap: 12px; }
+.permission-rule-form input { flex: 1; min-width: 0; font-family: var(--font-mono); font-size: var(--text-sm); }
+.settings-dialog .permissions-panel .settings-note ul { margin: 6px 0; padding-left: 16px; }
+.settings-dialog .permissions-panel .settings-note li { font-size: var(--text-xs); }
+
 .settings-dialog .shortcut-group h3 { margin: 0 0 8px; color: var(--ink); font-size: var(--text-md); font-weight: 600; }
 .settings-dialog .shortcut-list li { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 42px; padding: 6px 12px 6px 16px; font-size: var(--text-md); }
 .settings-dialog .shortcut-list li > span:first-child { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
@@ -431,6 +443,10 @@ button.setting-row.setting-switch:focus-visible { outline-offset: -2px; }
 .settings-dialog .catalog-card:hover { border-color: var(--border-heavy); background: var(--hover); box-shadow: none; }
 .settings-dialog .catalog-card:hover .ext-thumb, .settings-dialog .extension-card:hover .ext-thumb { transform: none; }
 .settings-dialog .catalog-commands { background: var(--fog); }
+.settings-dialog .featured-card, .settings-dialog .featured-card.compact { border-radius: var(--r-sm); background: transparent; }
+.settings-dialog .featured-card:hover { background: var(--hover); }
+.settings-dialog .plugins-list .extension-card { min-height: 60px; }
+.settings-dialog .plugins-bar { top: -1px; }
 .settings-dialog .permission-note.extension-empty { border-radius: var(--r-sm); }
 .settings-dialog .picker-tag { border-radius: var(--r-sm); }
 .settings-dialog .usage-periods { gap: 2px; padding: 2px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--fog); }

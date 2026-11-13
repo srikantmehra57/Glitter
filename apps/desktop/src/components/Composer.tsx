@@ -204,8 +204,8 @@ function ComposerView({ above }: { above?: ReactNode }) {
     ? connectedProvider ? providerName(connectedProvider.id, customProviderList) : "the built-in agent"
     : agentName;
   const speaker = agentId === "harness" && model ? humanizeModelLabel(model.modelId, model.displayLabel) : fallbackSpeaker;
-  const tiers = tiersFor(model, agentId);
-  const fallbackTier = defaultTier(model, tiers);
+  const tiers = tiersFor(model);
+  const fallbackTier = defaultTier(model, tiers, s.defaultEffort);
   const peak = isPeak(config.effort ?? fallbackTier, tiers);
   const running = thread?.status === "running";
   const busy = s.starting || s.submitting || thread?.opening || thread?.configPending || !!thread?.snapshotPending || !!thread?.rewindPending;
@@ -852,7 +852,7 @@ function ComposerView({ above }: { above?: ReactNode }) {
                 onGoal={chooseGoal}
                 onOverride={setOverride}
               />
-            ) : model && tiers.length && fallbackTier && !(s.modelsLoading && s.modelsAgentId !== agentId) ? (
+            ) : (
               <EffortPicker
                 key={`${agentId}:${modelValue ?? ""}`}
                 value={config.effort}
@@ -862,7 +862,7 @@ function ComposerView({ above }: { above?: ReactNode }) {
                 applying={Boolean(thread?.configPending)}
                 onChange={(effort) => void s.setSessionConfig({ effort })}
               />
-            ) : null}
+            )}
             {/* One permission menu for every agent. The app decides for every model. */}
             <div className={`selector-chip${approval === "allowAll" ? " danger" : ""}`} title={lockReason ?? "Permissions"}>
               <SelectMenu

@@ -44,7 +44,7 @@ function Activity({ thread, closing = false }: { thread: Thread; closing?: boole
   const label = thread.userInputs?.length ? "Waiting for your answer" : thread.pendingApproval ? "Waiting for approval" : thread.cancelRequested ? "Stopping…" : describeLive(live) ?? describeAgents(backgroundAgents(thread.items)) ?? thread.goal?.currentWork ?? "Thinking";
   const models = useAppStore((state) => state.models);
   const model = modelFor(models, thread.config ?? {});
-  const tiers = tiersFor(model, thread.agentId);
+  const tiers = tiersFor(model);
   const peak = isPeak(thread.config?.effort ?? defaultTier(model, tiers), tiers);
   const agentId: AgentId = thread.agentId ?? "muse";
   const agentName = useAppStore((state) => state.agents.find((agent) => agent.id === agentId)?.name ?? AGENT_LABELS[agentId]);
