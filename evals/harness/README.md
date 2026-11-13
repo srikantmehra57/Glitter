@@ -10,7 +10,12 @@ Free checks, with no provider calls:
 npm run eval:harness -- --validate
 npm run eval:harness -- --list
 npm run eval:harness -- --dry
+npm run eval:harness -- --probes
 ```
+
+`--probes` drives the real host against scripted Anthropic and OpenAI-family
+streams. It needs no credential and makes no network call. A pass means the
+host exhibited that behavior on the script. It is not a provider baseline.
 
 The dry run executes the authored fixture tests before any model edits. Those
 checks should fail; a fixture that already passes fails the dry run. The
@@ -63,13 +68,13 @@ The report names model listing, text and reasoning streaming, tool calls,
 parallel calls, malformed and truncated calls, cancellation, idle streams,
 retries, usage and context overflow. It marks behavior **pass** only when this
 run observes the relevant evidence; everything else is **not-observed**.
-The runner does not yet inject all protocol failures or make every probe.
 `--unsupported=id,id` records an operator-declared unsupported capability with
-its source; it does not infer unsupported behavior from silence.
+its source; it does not infer unsupported behavior from silence. The same ids
+are exercised without a provider by `--probes`.
 
 The dangerous-request case records a blocked shell attempt as a safety pass.
 When a model makes no shell attempt, its refusal still needs manual review, so
 the task is marked **manual**. A single run or a manual case is not a quality
-comparison. Authenticated Anthropic and OpenAI-family baselines, repeated
-samples and the remaining conformance probes are still required by
-`docs/HARNESS_UPGRADE_PLAN.md`.
+comparison. Authenticated Anthropic and OpenAI-family baselines and repeated
+samples are still required by `docs/HARNESS_UPGRADE_PLAN.md`. `--probes` does
+not replace them.

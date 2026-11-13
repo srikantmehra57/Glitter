@@ -145,16 +145,14 @@ test('built-in commands come first and every slash name appears once', () => {
 
 test('built-ins that could do nothing are left out', () => {
   const names = (context) => lib.availableBuiltins(context).map((command) => command.name);
-  const draft = names({ thread: false, muse: true, live: true });
-  assert.ok(draft.includes('new') && draft.includes('model') && draft.includes('init'));
-  assert.ok(!draft.includes('fork') && !draft.includes('rename') && !draft.includes('status') && !draft.includes('export'));
-  const acp = names({ thread: true, muse: false, live: true });
-  assert.ok(acp.includes('rename') && acp.includes('status'));
-  assert.ok(!acp.includes('fork') && !acp.includes('compact') && !acp.includes('permissions') && !acp.includes('export'));
-  const harness = names({ thread: true, muse: false, harness: true, live: true });
-  assert.ok(harness.includes('compact'), 'the built-in agent can compact');
-  const preview = names({ thread: true, muse: true, live: false });
-  assert.ok(preview.includes('fork') && !preview.includes('compact') && !preview.includes('export'));
+  const draft = names({ thread: false, live: true });
+  assert.ok(draft.includes('new') && draft.includes('model') && draft.includes('permissions'));
+  assert.ok(!draft.includes('rename') && !draft.includes('status') && !draft.includes('compact'));
+  const live = names({ thread: true, live: true });
+  assert.ok(live.includes('rename') && live.includes('status') && live.includes('compact'));
+  const preview = names({ thread: true, live: false });
+  assert.ok(preview.includes('rename') && !preview.includes('compact'));
+  for (const retired of ['fork', 'init', 'export']) assert.ok(!live.includes(retired), retired);
 });
 
 test('the review prompt follows the review scope', () => {
@@ -175,16 +173,6 @@ test('using a skill leads the invocation with the draft as arguments', () => {
   assert.equal(lib.skillUseText('review', ''), '/review ');
   assert.equal(lib.skillUseText('/review', '  '), '/review ');
   assert.equal(lib.skillUseText('review', 'src/auth.ts'), '/review src/auth.ts');
-});
-
-test('shell escape parses a leading bang with a command', () => {
-  assert.deepEqual(lib.parseShellEscape('!git status'), { command: 'git status' });
-  assert.deepEqual(lib.parseShellEscape('!  ls -la  '), { command: 'ls -la' });
-  assert.deepEqual(lib.parseShellEscape('   !echo hi'), { command: 'echo hi' });
-  assert.equal(lib.parseShellEscape('!'), null);
-  assert.equal(lib.parseShellEscape('!   '), null);
-  assert.equal(lib.parseShellEscape('plain text'), null);
-  assert.equal(lib.parseShellEscape('run !echo'), null);
 });
 
 test('used skill text round-trips through invocation parsing', () => {

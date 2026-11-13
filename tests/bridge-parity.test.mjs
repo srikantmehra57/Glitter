@@ -76,15 +76,11 @@ assert.ok(mocked.has('sendTurn') && mocked.has('detect'), 'the scan found the mo
  * lands on the fallback fails the parity test until it is answered or listed.
  */
 const PREVIEW_FALLBACK = new Set([
-  'cancelLogin',      // startLogin early-returns on preview, so no prompt is ever up to cancel
   'closeSession',     // fire-and-forget `.catch(() => {})` on thread/workspace removal
   'compactSession',   // compactThread early-returns on preview
-  'forkSession',      // preview forks locally instead of asking the bridge
-  'pageHistory',      // history paging and rebuild both early-return on preview
   'respondUserInput', // the respond call is `!preview`-guarded
   'resumeSession',    // selectThread early-returns on preview
-  'setSessionOption', // the ACP config path tolerates `{}` — agentConfig is optional
-  'startLogin',       // startLogin early-returns on preview
+  'setSessionOption', // the session option path tolerates `{}` — agentConfig is optional
   'steerTurn',        // busy sends (steer/queue/replace) are disabled in preview
   'unqueueTurn',      // queues never accumulate in preview; the action early-returns
 ]);

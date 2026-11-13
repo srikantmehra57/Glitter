@@ -18,7 +18,7 @@ export function PermissionRulesCard({ rules, onChange, problems, syncError, onRe
   onRetry?: () => void;
 }) {
   return <>
-    <SectionHead title="Built-in agent rules" help="Your own lists, applied to every built-in agent thread. Muse and the agent CLIs keep their own permissions." />
+    <SectionHead title="Rules" help="Your own lists, applied to every thread." />
     {syncError ? <div className="settings-note danger" role="alert">
       <p>{syncError}</p>
       {onRetry ? <button type="button" className="text-btn" onClick={onRetry}>Retry applying rules</button> : null}

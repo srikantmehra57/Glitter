@@ -7,6 +7,22 @@ must respect. Don't log routine changes here; they belong in git history and
 
 ---
 
+### Harness is the only agent runtime
+
+- **Date:** 2026-11-13
+- **Decision:** Glitter runs its own Harness with the provider or local model
+  selected by the user. The Muse MSP and third-party ACP integrations, their
+  connection settings and their agent-specific UI are retired. This supersedes
+  earlier decisions below that kept those integrations alongside Harness.
+- **Continuity:** Harness retains its JSONL session store and native workspace
+  grants. Existing Muse and ACP histories stay in those CLIs' own storage;
+  Glitter neither converts nor deletes them. Retired keychain entries remain in
+  the keychain rather than being deleted on launch.
+- **Surfaces:** The model picker lists model providers; Settings → Providers
+  manages their credentials. The source-build terminal CLI can use the same
+  Harness engine, provider keys and local session store as the app; the desktop
+  installer does not add it to the system PATH.
+
 ### The built-in agent compacts its own model history
 
 - **Date:** 2026-11-07
@@ -179,8 +195,8 @@ must respect. Don't log routine changes here; they belong in git history and
   CLI, and has grown into an independent agent harness. "Muse Code" is also
   Meta's own name for that CLI and its subscription.
 - **Decision:** The app, its packages (`glitter`, `@glitter/desktop`,
-  `@glitter/bridge`, `@glitter/website`), the bridge folder
-  (`packages/glitter-bridge`), the Node sidecar (`glitter-node`), the crate
+  `@glitter/harness`, `@glitter/website`), the bridge folder
+  (`packages/glitter-harness`), the Node sidecar (`glitter-node`), the crate
   (`glitter`) and the bundle identifier (`com.glitter.desktop`) are named
   Glitter. "Muse" and "Muse Code" stay wherever they name Meta's CLI, agent,
   SDK or subscription.
@@ -575,7 +591,7 @@ must respect. Don't log routine changes here; they belong in git history and
   (`effortTiers`), since providers do not report it. Provider quirks stay in
   the shared wire rather than in a path per provider: NVIDIA NIM, for one,
   rejects request fields its schema does not list, so `stream_options` goes
-  only to providers known to accept it (`USAGE_IN_STREAM`) and to custom
+  only where `modelCapabilities` reports streaming usage, including custom
   OpenAI-compatible gateways. ZenMux omits `usage` unless that flag is set,
   and without it the app can count only the reply. A gateway that rejects
   the field is asked once more without it. NIM's RFC 7807 error bodies are
@@ -651,7 +667,7 @@ must respect. Don't log routine changes here; they belong in git history and
 ### A separate Node bridge built on the official SDK
 
 - **Date:** 2026-09-18
-- **Decision:** MSP is spoken by `packages/glitter-bridge`, a Node process that uses
+- **Decision:** MSP is spoken by `packages/glitter-harness`, a Node process that uses
   `@muse-code/sdk` and talks to the shell over NDJSON on stdio. It isn't
   reimplemented in Rust.
 - **Reason:** The SDK is the supported client. Reimplementing the protocol would
@@ -706,7 +722,7 @@ must respect. Don't log routine changes here; they belong in git history and
   answers select once-only choices, never an always grant.
 - **Reason:** These are third-party binaries running with the user's identity.
 - **Consequences:** Only Muse, OpenCode and Grok are marked verified. The others
-  are labeled experimental in `packages/glitter-bridge/src/agents.ts`.
+  are labeled experimental in `packages/glitter-harness/src/agents.ts`.
 
 ### Muse owns its shell sandbox
 

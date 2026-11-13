@@ -8,18 +8,18 @@ import { copyFile, mkdtemp, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { metadataPlugin, STANDALONE_BANNER } from '../packages/glitter-bridge/scripts/playwright-metadata.mjs';
+import { metadataPlugin, STANDALONE_BANNER } from '../packages/glitter-harness/scripts/playwright-metadata.mjs';
 
 const temporary = await mkdtemp(join(tmpdir(), 'glitter-browser-tests-'));
 const outfile = join(temporary, 'browser.mjs');
 await writeFile(join(temporary, 'entry.ts'), `
-  export { BrowserManager, browserExtension, normalizeBrowserUrl, parseBrowserControl } from ${JSON.stringify(resolve('packages/glitter-bridge/src/browser.ts'))};
-  export { ExtensionRegistry } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/registry.ts'))};
-  export { decide } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/permission/policy.ts'))};
-  export { covers, scopesFor } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/permission/grants.ts'))};
-  export { anthropicMessages, openAiMessages } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/wire.ts'))};
-  export { estimateRequestTokens, fitHistory } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/context.ts'))};
-  export { SessionStore } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/store.ts'))};
+  export { BrowserManager, browserExtension, normalizeBrowserUrl, parseBrowserControl } from ${JSON.stringify(resolve('packages/glitter-harness/src/browser.ts'))};
+  export { ExtensionRegistry } from ${JSON.stringify(resolve('packages/glitter-harness/src/harness/registry.ts'))};
+  export { decide } from ${JSON.stringify(resolve('packages/glitter-harness/src/harness/permission/policy.ts'))};
+  export { covers, scopesFor } from ${JSON.stringify(resolve('packages/glitter-harness/src/harness/permission/grants.ts'))};
+  export { anthropicMessages, openAiMessages } from ${JSON.stringify(resolve('packages/glitter-harness/src/harness/wire.ts'))};
+  export { estimateRequestTokens, fitHistory } from ${JSON.stringify(resolve('packages/glitter-harness/src/harness/context.ts'))};
+  export { SessionStore } from ${JSON.stringify(resolve('packages/glitter-harness/src/harness/store.ts'))};
   export { browserPoint, normalizeBrowserAddress } from ${JSON.stringify(resolve('apps/desktop/src/lib/browser.ts'))};
 `);
 await build({ entryPoints: [join(temporary, 'entry.ts')], bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'silent', plugins: [metadataPlugin], banner: { js: STANDALONE_BANNER } });
@@ -115,7 +115,7 @@ test('standalone bundled bridge navigates, interacts, captures and closes a real
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const isolated = join(temporary, 'standalone');
   await mkdir(isolated, { recursive: true });
-  await copyFile(resolve('packages/glitter-bridge/dist/index.js'), join(isolated, 'index.js'));
+  await copyFile(resolve('packages/glitter-harness/dist/index.js'), join(isolated, 'index.js'));
   const child = spawn(process.execPath, [join(isolated, 'index.js')], { stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, GLITTER_NATIVE_BROWSER_CHECK: '', GLITTER_BROWSER_BIN: '', GLITTER_BROWSER_SHA256: '' } });
   child.stderr.on('data', () => {});
   const pending = new Map();

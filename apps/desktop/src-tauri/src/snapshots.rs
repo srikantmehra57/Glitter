@@ -41,8 +41,6 @@ struct Record {
     client_key: Option<String>,
     before: Option<String>,
     after: Option<String>,
-    #[serde(default)]
-    agent: Option<String>,
     /// Persist intent before writing files, so a relaunch can reconcile a
     /// completed apply whose final metadata write was interrupted.
     #[serde(default)]
@@ -62,17 +60,7 @@ pub struct Snapshots {
     records: BTreeMap<String, Record>,
     requests: HashMap<String, String>,
     active: HashMap<String, String>,
-    /// A shell escape has no turn boundary. Its running item blocks restores.
-    shells: HashMap<String, Shell>,
-    shell_requests: HashMap<String, String>,
-    shell_completed: HashSet<(String, String)>,
-    stop_requests: HashMap<String, String>,
-}
-
-struct Shell {
-    root: PathBuf,
-    pending: usize,
-    items: HashSet<String>,
+    stop_requests: HashSet<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -436,9 +424,7 @@ impl Snapshots {
         }
     }
 
-    // One argument per turn field the caller already holds. A struct would only rename the call.
-    #[allow(clippy::too_many_arguments)]
-    pub fn prepare(&mut self, request: &str, grant: &str, root: &Path, session: &str, client_key: Option<&str>, agent: &str, if_busy: Option<&str>) {
+    pub fn prepare(&mut self, request: &str, grant: &str, root: &Path, session: &str, client_key: Option<&str>, if_busy: Option<&str>) {
         if self.requests.len() >= 512 {
             return;
         }
@@ -464,8 +450,6 @@ impl Snapshots {
             Some("This turn was queued behind the running turn. A start-of-turn snapshot is unavailable.".to_string())
         } else if !overlap.is_empty() {
             Some("This turn was queued or overlapped another run. Undo is unavailable.".to_string())
-        } else if self.shells.values().any(|shell| overlaps(root, &shell.root)) {
-            Some("A shell command is still running. Undo is unavailable.".to_string())
         } else if self.active.len() >= RECORD_LIMIT {
             Some("Too many runs are active. Undo is unavailable.".to_string())
         } else {
@@ -491,7 +475,6 @@ impl Snapshots {
             client_key: client_key.map(str::to_string),
             before: None,
             after: None,
-            agent: Some(agent.into()),
             restore_to: None,
         };
         match before {
@@ -518,31 +501,12 @@ impl Snapshots {
         }
     }
 
-    pub fn shell_request(&mut self, request: &str, session: &str, root: &Path) {
-        self.shell(root);
-        self.shells
-            .entry(session.into())
-            .or_insert_with(|| Shell {
-                root: root.into(),
-                pending: 0,
-                items: HashSet::new(),
-            })
-            .pending += 1;
-        self.shell_requests.insert(request.into(), session.into());
-    }
-
-    pub fn stop_request(&mut self, request: &str, agent: &str) {
-        self.stop_requests.insert(request.into(), agent.into());
+    pub fn stop_request(&mut self, request: &str) {
+        self.stop_requests.insert(request.into());
     }
 
     pub fn failed_request(&mut self, request: &str) {
         self.stop_requests.remove(request);
-        if let Some(session) = self.shell_requests.remove(request) {
-            if let Some(shell) = self.shells.get_mut(&session) {
-                shell.pending = shell.pending.saturating_sub(1);
-            }
-            self.shells.retain(|_, shell| shell.pending > 0 || !shell.items.is_empty());
-        }
         if let Some(id) = self.requests.remove(request) {
             if self.records.get(&id).is_some_and(|r| r.info.turn_id.is_none()) {
                 self.active.retain(|_, active| active != &id);
@@ -555,17 +519,9 @@ impl Snapshots {
         let Some(request) = value.get("id").and_then(Value::as_str) else {
             return;
         };
-        if let Some(agent) = self.stop_requests.remove(request) {
+        if self.stop_requests.remove(request) {
             if value.get("ok").and_then(Value::as_bool) == Some(true) {
-                self.disconnect(Some(&agent), true);
-            }
-            return;
-        }
-        if self.shell_requests.contains_key(request) {
-            if value.get("ok").and_then(Value::as_bool) == Some(false) {
-                self.failed_request(request);
-            } else {
-                self.shell_requests.remove(request);
+                self.disconnect(true);
             }
             return;
         }
@@ -598,47 +554,12 @@ impl Snapshots {
     }
 
     pub fn event(&mut self, event: &str, payload: &Value, binding: Option<(&str, &Path)>) -> Vec<TurnSnapshot> {
-        if event == "bridgeExit" {
-            return self.disconnect(None, true);
-        }
-        if matches!(event, "hostStopping" | "hostExit" | "connectionError") {
-            return self.disconnect(Some("muse"), event == "hostExit");
-        }
-        if event == "agentExit" {
-            return payload["agentId"].as_str().map(|agent| self.disconnect(Some(agent), true)).unwrap_or_default();
+        if matches!(event, "bridgeExit" | "connectionError") {
+            return self.disconnect(event == "bridgeExit");
         }
         let Some(session) = payload.get("sessionId").and_then(Value::as_str) else {
             return Vec::new();
         };
-        if event == "item" && payload["item"]["kind"].as_str() == Some("userShell") {
-            if let (Some((_, root)), Some(item)) = (binding, payload["item"]["itemId"].as_str()) {
-                let key = (session.to_string(), item.to_string());
-                if !self.shell_completed.contains(&key) {
-                    self.shell(root);
-                    let shell = self.shells.entry(session.into()).or_insert_with(|| Shell {
-                        root: root.into(),
-                        pending: 0,
-                        items: HashSet::new(),
-                    });
-                    if matches!(payload["item"]["status"].as_str(), Some("completed" | "failed" | "cancelled")) {
-                        if !shell.items.remove(item) {
-                            shell.pending = shell.pending.saturating_sub(1);
-                        }
-                        // A bounded replay window prevents repeated terminal
-                        // items from finishing another pending shell command.
-                        if self.shell_completed.len() < 10_000 {
-                            self.shell_completed.insert(key);
-                        } else {
-                            shell.pending = shell.pending.max(1);
-                        }
-                    } else if shell.items.insert(item.into()) {
-                        shell.pending = shell.pending.saturating_sub(1);
-                    }
-                    self.shells.retain(|_, shell| shell.pending > 0 || !shell.items.is_empty());
-                }
-            }
-            return Vec::new();
-        }
         let Some(turn) = payload.get("turnId").and_then(Value::as_str).or_else(|| payload["item"]["turnId"].as_str()) else {
             return Vec::new();
         };
@@ -683,7 +604,6 @@ impl Snapshots {
                             client_key: None,
                             before: None,
                             after: None,
-                            agent: None,
                             restore_to: None,
                         },
                     );
@@ -744,32 +664,17 @@ impl Snapshots {
         vec![record.info]
     }
 
-    fn shell(&mut self, root: &Path) {
-        let ids: Vec<_> = self.active.values().filter_map(|id| self.records.get(id)).filter(|record| overlaps(root, &record.root)).map(|record| record.info.snapshot_id.clone()).collect();
-        for id in ids {
-            self.unavailable(&id, "A shell command ran alongside this turn. Its changes cannot be separated.");
-        }
-    }
-
-    fn disconnect(&mut self, agent: Option<&str>, stopped: bool) -> Vec<TurnSnapshot> {
-        // Losing the Muse host does not stop independent ACP processes. A
-        // stopping notice also precedes process shutdown; only exit or the
-        // stop acknowledgement may release that engine's running markers.
-        let ids: HashSet<_> = self.active.values().filter_map(|id| self.records.get(id)).filter(|record| agent.is_none() || record.agent.as_deref() == agent).map(|record| record.info.snapshot_id.clone()).collect();
+    fn disconnect(&mut self, stopped: bool) -> Vec<TurnSnapshot> {
+        // A connection error may precede process shutdown; only exit or the
+        // stop acknowledgement may release the running markers.
+        let ids: HashSet<_> = self.active.values().filter_map(|id| self.records.get(id)).map(|record| record.info.snapshot_id.clone()).collect();
         for id in &ids {
             self.unavailable(id, "The connection ended before the turn's end state was captured.");
         }
         if stopped {
             self.active.retain(|_, id| !ids.contains(id));
             self.requests.retain(|_, id| !ids.contains(id));
-            if agent.is_none() || agent == Some("muse") {
-                self.shells.clear();
-                self.shell_requests.clear();
-                self.shell_completed.clear();
-            }
-            if agent.is_none() {
-                self.stop_requests.clear();
-            }
+            self.stop_requests.clear();
         }
         ids.iter().filter_map(|id| self.records.get(id).map(|record| record.info.clone())).collect()
     }
@@ -787,7 +692,7 @@ impl Snapshots {
         if now().saturating_sub(record.info.created_at) > RETENTION_SECONDS {
             return Err("This saved file state has expired.".into());
         }
-        if self.active.values().filter_map(|id| self.records.get(id)).any(|r| overlaps(root, &r.root)) || self.shells.values().any(|shell| overlaps(root, &shell.root)) {
+        if self.active.values().filter_map(|id| self.records.get(id)).any(|r| overlaps(root, &r.root)) {
             return Err("Stop the running work before restoring files.".into());
         }
         if record.restore_to.is_some() {
@@ -1076,7 +981,7 @@ mod tests {
             std::fs::write(path, bytes).unwrap();
         }
         fn begin(&mut self, session: &str, turn: &str) {
-            self.store.prepare(turn, "grant", &self.root, session, Some(turn), "muse", None);
+            self.store.prepare(turn, "grant", &self.root, session, Some(turn), None);
             self.store.event("turnStarted", &json!({ "sessionId": session, "turnId": turn }), Some(("grant", &self.root)));
         }
         fn end(&mut self, session: &str, turn: &str) -> TurnSnapshot {
@@ -1237,7 +1142,7 @@ mod tests {
         f.write("a.txt", b"after\n");
         let info = f.end("s1", "t1");
         f.store.response(&json!({"id":"t1","ok":true,"result":{"turnId":"t1"}}));
-        f.store.prepare("retry", "grant", &f.root, "s1", Some("t1"), "muse", None);
+        f.store.prepare("retry", "grant", &f.root, "s1", Some("t1"), None);
         f.store.response(&json!({"id":"retry","ok":true,"result":{"turnId":"t1","deduped":true}}));
         assert_eq!(f.store.list("grant", &f.root, "s1").len(), 1);
         f.restore(&info, false);
@@ -1254,7 +1159,7 @@ mod tests {
         assert_eq!(f.end("s1", "t1").state, "unavailable");
         assert_eq!(f.end("s2", "t2").state, "unavailable");
         f.begin("s1", "t3");
-        f.store.prepare("queued", "grant", &f.root, "s1", Some("queued"), "muse", Some("queue"));
+        f.store.prepare("queued", "grant", &f.root, "s1", Some("queued"), Some("queue"));
         f.store.response(&json!({"id":"queued","ok":true,"result":{"turnId":"q1","disposition":"queued"}}));
         f.write("a.txt", b"t3\n");
         // A queued submit can never run alongside its own session's turn, so
@@ -1274,11 +1179,11 @@ mod tests {
         f.begin("s1", "t1");
         // The default busy disposition queues `sendTurn`; prepare() runs while
         // t1 is still active. It must not mark t1's record unavailable.
-        f.store.prepare("queued", "grant", &f.root, "s1", Some("queued"), "muse", Some("queue"));
+        f.store.prepare("queued", "grant", &f.root, "s1", Some("queued"), Some("queue"));
         f.store.response(&json!({"id":"queued","ok":true,"result":{"turnId":"q1","disposition":"queued"}}));
         // A `sendTurn` that steers into the running turn likewise adds no new
         // turn; its record is folded away instead of poisoning t1.
-        f.store.prepare("steered", "grant", &f.root, "s1", Some("steered"), "muse", Some("steer"));
+        f.store.prepare("steered", "grant", &f.root, "s1", Some("steered"), Some("steer"));
         f.store.response(&json!({"id":"steered","ok":true,"result":{"turnId":"t1","disposition":"steered"}}));
         f.write("a.txt", b"agent\n");
         let info = f.end("s1", "t1");
@@ -1358,29 +1263,6 @@ mod tests {
     }
 
     #[test]
-    fn concurrent_shells_block_restore_until_each_command_finishes() {
-        let mut f = Fixture::new(false);
-        f.write("a.txt", b"before\n");
-        f.begin("s1", "t1");
-        f.write("a.txt", b"after\n");
-        let info = f.end("s1", "t1");
-        f.store.shell_request("r1", "s1", &f.root);
-        f.store.shell_request("r2", "s1", &f.root);
-        let shell = |item: &str, status: &str| json!({"sessionId":"s1","item":{"itemId":item,"kind":"userShell","status":status}});
-        f.store.event("item", &shell("sh1", "inProgress"), Some(("grant", &f.root)));
-        f.store.event("item", &shell("sh2", "inProgress"), Some(("grant", &f.root)));
-        f.store.event("item", &shell("sh1", "completed"), Some(("grant", &f.root)));
-        f.store.event("item", &shell("sh1", "completed"), Some(("grant", &f.root)));
-        assert!(f.store.restore("grant", &f.root, "s1", &info.snapshot_id, false).is_err());
-        f.store.event("item", &shell("sh2", "completed"), Some(("grant", &f.root)));
-        f.restore(&info, false);
-        let other = f.dir.join("other");
-        std::fs::create_dir_all(&other).unwrap();
-        f.store.shell_request("r3", "s2", &other);
-        f.restore(&info, true); // Independent workspaces do not block each other.
-    }
-
-    #[test]
     fn retention_and_thread_deletion_release_private_refs() {
         let mut f = Fixture::new(false);
         f.write("a.txt", b"before\n");
@@ -1418,16 +1300,10 @@ mod tests {
         f.end("s1", "t2");
         f.restore(&info, false);
         f.restore(&info, true);
-        f.store.prepare("acp", "grant", &f.root, "s-acp", None, "opencode", None);
-        f.store.event("hostExit", &json!({}), None);
-        assert!(f.store.restore("grant", &f.root, "history", &info.snapshot_id, false).is_err(), "Muse exit does not stop ACP");
-        f.store.event("agentExit", &json!({"agentId":"opencode"}), None);
-        f.restore(&info, false);
-        f.restore(&info, true);
         f.begin("s1", "t3");
-        f.store.event("hostStopping", &json!({}), None);
-        assert!(f.store.restore("grant", &f.root, "history", &info.snapshot_id, false).is_err(), "stopping precedes process exit");
-        f.store.stop_request("stop", "muse");
+        f.store.event("connectionError", &json!({}), None);
+        assert!(f.store.restore("grant", &f.root, "history", &info.snapshot_id, false).is_err(), "a connection error precedes process exit");
+        f.store.stop_request("stop");
         f.store.response(&json!({"id":"stop","ok":true,"result":{"stopped":true}}));
         f.restore(&info, false);
     }

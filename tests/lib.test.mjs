@@ -19,14 +19,12 @@ const { groupAgentRuns, classifyTool, messageRewindBoundary } = await bundle('ap
 const { parseUnifiedDiff, dropHunk, unquoteDiffPath, wordChanges, splitDiffLines, reviewTarget } = await bundle('apps/desktop/src/lib/diff.ts');
 const { normalizeDockWidth, dockWidthBounds, clampDockWidth, sidebarWidthFor, sidebarWidthBounds, normalizeSidebarWidth } = await bundle('apps/desktop/src/lib/reviewLayout.ts');
 const { composePrompt, shortHash, threadStatusLines, worktreeRemovalNote, titleFromText } = await bundle('apps/desktop/src/lib/format.ts');
-const { classifyError, describeError, authRequired, isGrantError } = await bundle('apps/desktop/src/lib/errors.ts');
+const { classifyError, describeError, isGrantError } = await bundle('apps/desktop/src/lib/errors.ts');
 const { SessionMemoryPersistence, normalizeMemory, normalizeDraft, persistableDrafts, rememberPrompt, SESSION_MEMORY_VERSION } = await bundle('apps/desktop/src/lib/sessionMemory.ts');
-const { resolveMuseBin } = await bundle('packages/glitter-bridge/src/detect.ts');
-const { agentEnabled, DEFAULT_ENABLED_AGENTS, DEFAULT_SETTINGS, skillScopeArg, UI_FONTS } = await bundle('apps/desktop/src/lib/types.ts');
+const { DEFAULT_SETTINGS, UI_FONTS } = await bundle('apps/desktop/src/lib/types.ts');
 const { settingsFields } = await bundle('apps/desktop/src/lib/settingsPersistence.ts');
 const { resolveTheme, shellOpacity, normalizeTranslucency } = await bundle('apps/desktop/src/lib/theme.ts');
 const { UI_FONT_STACKS, normalizeUiFont } = await bundle('apps/desktop/src/lib/fonts.ts');
-const { rekeyThreadState, projectDraftForAgent } = await bundle('apps/desktop/src/lib/agentSwitch.ts');
 const { mcpServerNameProblem, mcpServerSummary, parseMcpArguments, parseMcpKeyValues } = await bundle('apps/desktop/src/lib/mcpConfig.ts');
 const { modelVisibilityKey, normalizeHiddenModels, normalizeHiddenProviders, providerKey, isModelHidden, pickerModels, withModelsHidden } = await bundle('apps/desktop/src/lib/modelVisibility.ts');
 const { extensionArt, EXTENSION_TONES } = await bundle('apps/desktop/src/lib/extensionArt.ts');
@@ -156,9 +154,8 @@ test('dropHunk removes only the indexed block of the named file', () => {
 });
 
 test('classifies auth and host failures', () => {
-  assert.equal(classifyError('not logged in: run /login').code, 'auth');
-  assert.equal(classifyError('Muse connection closed. Reconnect from Settings.').code, 'host');
-  assert.equal(authRequired({ params: { error: { kind: 'authRequired', message: 'login' } } }), true);
+  assert.equal(classifyError(Object.assign(new Error('rejected'), { code: 'INVALID_CREDENTIAL' })).code, 'auth');
+  assert.equal(classifyError('The agent connection closed. Reconnect from Settings.').code, 'host');
 });
 
 test('grant failures match on both renderer and native wording', () => {
@@ -287,63 +284,9 @@ test('deleted archived threads stay forgotten in session memory', async () => {
   assert.equal(loaded.threadMeta.gone.archived, true);
 });
 
-test('custom muse paths in temp dirs are rejected', () => {
-  assert.equal(resolveMuseBin('/tmp/muse'), null);
-  assert.equal(resolveMuseBin('/tmp/muse-audit-probe.sh'), null);
-});
-
-test('muse resolution checks the canonical target, not the link string', async () => {
-  const { mkdtemp, mkdir, rm, symlink, writeFile, chmod, realpath } = await import('node:fs/promises');
-  const { tmpdir } = await import('node:os');
-  const { join } = await import('node:path');
-  // Non-temp link dir inside the repo (cleaned up); target inside temp.
-  // Absolute: relative symlink targets resolve against the link's own dir.
-  const outer = join(process.cwd(), 'tests', 'fixtures', `muse-link-${process.pid}`);
-  await mkdir(outer, { recursive: true });
-  const work = await mkdtemp(join(tmpdir(), 'muse-resolve-'));
-  try {
-    const target = join(work, 'real-muse');
-    await writeFile(target, '#!/bin/sh\necho hi\n');
-    await chmod(target, 0o755);
-    const link = join(outer, 'muse');
-    await symlink(target, link);
-    // The link string is non-temp and well-named, but its target is temp.
-    assert.equal(resolveMuseBin(link), null);
-    // A well-named non-temp target resolves even behind a misnamed link.
-    await rm(link, { force: true });
-    const real = join(outer, 'muse');
-    await writeFile(real, '#!/bin/sh\necho hi\n');
-    await chmod(real, 0o755);
-    const alias = join(outer, 'launcher');
-    await symlink(real, alias);
-    assert.equal(resolveMuseBin(alias), await realpath(real));
-    assert.equal(resolveMuseBin(join(work, 'missing')), null);
-  } finally {
-    await rm(work, { recursive: true, force: true });
-    await rm(outer, { recursive: true, force: true });
-  }
-});
-
-test('OpenCode is off by default and can be toggled in persisted settings', () => {
-  assert.equal(DEFAULT_ENABLED_AGENTS.opencode, false);
-  assert.equal(agentEnabled({}, 'opencode'), false);
-  assert.equal(agentEnabled({}, 'grok'), false);
-  assert.equal(agentEnabled({ enabledAgents: { opencode: true } }, 'opencode'), true);
-  assert.equal(agentEnabled({ enabledAgents: { opencode: true }, acpUnisolatedConsent: false }, 'opencode'), false);
-  assert.equal(agentEnabled({ enabledAgents: { opencode: true }, acpUnisolatedConsent: true }, 'opencode'), true);
-  assert.equal(agentEnabled({ enabledAgents: { muse: true }, acpUnisolatedConsent: false }, 'muse'), true);
-  assert.equal(agentEnabled({ enabledAgents: { harness: true }, acpUnisolatedConsent: false }, 'harness'), true);
-  const saved = settingsFields({ ...DEFAULT_SETTINGS, enabledAgents: { grok: false } });
-  assert.equal(saved.enabledAgents.opencode, false);
-  assert.equal(saved.enabledAgents.grok, false);
-  assert.equal(saved.enabledAgents.muse, true);
-  assert.equal(saved.acpUnisolatedConsent, false);
-  assert.equal(settingsFields({ ...DEFAULT_SETTINGS, acpUnisolatedConsent: true }).acpUnisolatedConsent, true);
-  assert.equal(settingsFields({ ...DEFAULT_SETTINGS, hideAgentCapabilities: true }).hideAgentCapabilities, true);
-  assert.equal(settingsFields({ ...DEFAULT_SETTINGS, hideAgentCapabilities: 'true' }).hideAgentCapabilities, false);
-  assert.equal(settingsFields(DEFAULT_SETTINGS).contributorMode, undefined, 'upgrades preserve the CLI preference');
-  for (const contributorMode of ['on', 'off']) assert.equal(settingsFields({ ...DEFAULT_SETTINGS, contributorMode }).contributorMode, contributorMode);
-  assert.equal(settingsFields({ ...DEFAULT_SETTINGS, contributorMode: 'auto' }).contributorMode, undefined);
+test('retired agent settings are dropped and appearance settings persist', () => {
+  const saved = settingsFields({ ...DEFAULT_SETTINGS, enabledAgents: { grok: false }, acpUnisolatedConsent: true, contributorMode: 'on', museBin: '/x' });
+  for (const retired of ['enabledAgents', 'acpUnisolatedConsent', 'contributorMode', 'museBin']) assert.equal(retired in saved, false, retired);
   assert.equal(DEFAULT_SETTINGS.accentColor, 'ember');
   assert.equal(DEFAULT_SETTINGS.accentSidebar, false);
   assert.equal(DEFAULT_SETTINGS.darkIntensity, 'mid');
@@ -455,57 +398,6 @@ test('shortHash truncates digests and leaves short text alone', () => {
   assert.equal(shortHash('abc123'), 'abc123');
   assert.equal(shortHash('z'.repeat(40)), `${'z'.repeat(24)}…`);
   assert.equal(shortHash(null), '');
-});
-
-test('skill list scopes map to the enable/disable scope argument', () => {
-  assert.equal(skillScopeArg('bundled'), 'built-in');
-  assert.equal(skillScopeArg('built-in'), 'built-in');
-  assert.equal(skillScopeArg('user'), 'user');
-  assert.equal(skillScopeArg('project'), 'project');
-  assert.equal(skillScopeArg('plugin'), 'plugin');
-  assert.equal(skillScopeArg('  Bundled '), 'built-in');
-  assert.equal(skillScopeArg('marketplace'), null);
-  assert.equal(skillScopeArg(''), null);
-});
-
-test('switching agents rebinds the current thread and does not keep the previous agent on the project draft', () => {
-  const previous = {
-    sessionId: 'oc-1',
-    agentId: 'opencode',
-    workspacePath: '/ws',
-    title: 'hi',
-    updatedAt: '2026-09-19T00:00:00Z',
-    status: 'idle',
-    unread: false,
-    items: [{ itemId: 'u', kind: 'userMessage', status: 'completed', text: 'hi' }],
-    config: { agentId: 'opencode', modelId: 'opencode/mimo-v2.5-free' },
-  };
-  const next = {
-    ...previous,
-    sessionId: 'grok-9',
-    agentId: 'grok',
-    config: { agentId: 'grok', modelId: 'grok-4.6' },
-    configNotice: 'Now using Grok',
-  };
-  const state = rekeyThreadState({
-    threads: [previous],
-    drafts: {
-      'project:w': { text: '', images: [], refs: [], config: { agentId: 'opencode', modelId: 'opencode/mimo-v2.5-free' } },
-      'thread:oc-1': { text: 'follow up', images: [], refs: [], config: { agentId: 'opencode' } },
-    },
-    threadMeta: { 'oc-1': { title: 'hi', agentId: 'opencode' } },
-    selectedWorkspaceId: 'w',
-    selectedSessionId: 'oc-1',
-  }, 'oc-1', next);
-  assert.equal(state.selectedSessionId, 'grok-9');
-  assert.equal(state.threads[0].agentId, 'grok');
-  assert.equal(state.threads[0].items[0].text, 'hi');
-  assert.equal(state.drafts['project:w'].config.agentId, 'grok');
-  assert.equal(state.drafts['project:w'].config.modelId, undefined);
-  assert.equal(state.drafts['thread:grok-9'].text, 'follow up');
-  assert.equal(state.drafts['thread:oc-1'], undefined);
-  assert.equal(state.threadMeta['grok-9'].agentId, 'grok');
-  assert.equal(projectDraftForAgent({}, 'w', 'muse')['project:w'].config.agentId, undefined);
 });
 
 test('prompt history normalizes older saves and keeps the last 50 per workspace', () => {
@@ -1153,16 +1045,17 @@ test('every Settings page has one name, one group and a line under its title, an
     assert.ok(SETTINGS_TAB_LABELS[tab], `${tab} has a name`);
     assert.ok(SETTINGS_TAB_COPY[tab]?.endsWith('.'), `${tab} has a sentence under its title`);
   }
-  assert.ok(!SETTINGS_TABS.includes('Account'), 'Muse has no page of its own');
+  assert.ok(!SETTINGS_TABS.includes('Account') && !SETTINGS_TABS.includes('Agents'), 'no external agent pages remain');
   assert.deepEqual(settingsTabsMatching(''), [...SETTINGS_TABS]);
-  assert.ok(settingsTabsMatching('contributor').includes('Agents'));
+  assert.ok(settingsTabsMatching('api key').includes('Providers'));
   assert.ok(settingsTabsMatching('test latency').includes('Models'));
   assert.ok(settingsTabsMatching('slash').includes('Shortcuts'));
   assert.deepEqual(settingsTabsMatching('zzzz'), []);
 });
 
-test('a remembered Account page opens Agents, where the Muse connection moved', () => {
-  assert.equal(normalizeMemory({ settingsTab: 'Account' }).settingsTab, 'Agents');
+test('a remembered Account or Agents page opens Providers, where the built-in agent is set up', () => {
+  assert.equal(normalizeMemory({ settingsTab: 'Account' }).settingsTab, 'Providers');
+  assert.equal(normalizeMemory({ settingsTab: 'Agents' }).settingsTab, 'Providers');
   assert.equal(normalizeMemory({ settingsTab: 'Theme' }).settingsTab, 'Theme');
   assert.equal(normalizeMemory({ settingsTab: 'Gone' }).settingsTab, 'Models');
 });

@@ -80,6 +80,8 @@ async function newPage(browser, { theme, width = 1440, height = 900 } = {}) {
   });
   const page = await context.newPage();
   await page.goto(URL, { waitUntil: "networkidle" });
+  const explore = page.getByRole("button", { name: "Explore the interface" });
+  if (await explore.isVisible().catch(() => false)) await explore.click();
   // Preview mode populates after hydration; wait for the dressed UI.
   await page.waitForSelector(".sidebar .thread", { timeout: 15000 });
   await page.waitForSelector(".conversation-inner .item, .conversation-inner > *", {
@@ -112,8 +114,8 @@ async function setDock(page, open) {
     await page.waitForTimeout(350);
   }
   if (open) {
-    const tab = page.locator('aside.dock [role="tab"]:has-text("Changes")');
-    if ((await tab.getAttribute("aria-selected")) !== "true") await tab.click();
+    const back = page.getByRole("button", { name: "Back to changes" });
+    if (await back.isVisible().catch(() => false)) await back.click();
     await page.waitForTimeout(250);
   }
 }
@@ -162,16 +164,16 @@ async function shootComponents(browser, theme) {
   await setDock(page, false);
   const composer = page.locator(".composer-beam");
 
-  // Effort popover, default tier (High).
-  await page.locator('#model-picker').click();
-  await page.waitForSelector(".effort-slider", { timeout: 5000 });
+  // Effort menu, at the model's default tier.
+  await page.locator('#effort-meter').click();
+  const effortMenu = page.locator('.effort-menu.select-menu-overlay .select-menu-popover');
+  await effortMenu.waitFor({ state: "visible", timeout: 5000 });
   await page.waitForTimeout(250);
-  await cropShot(page, `effort-open-${theme}.png`, [composer, page.locator(".model-pop")]);
+  await cropShot(page, `effort-open-${theme}.png`, [composer, effortMenu]);
 
   if (theme === "dark") {
-    // Move the slider to the last tier so the peak/flame state shows.
-    const slider = page.getByRole("slider", { name: "Reasoning effort" });
-    await slider.press("End");
+    // Select the last tier so the peak state shows, then reopen its menu.
+    await effortMenu.getByRole("option", { name: "Max" }).click();
     // The peak ripple self-removes after ~1.4s; wait it out so the shot is clean.
     await page
       .waitForFunction(
@@ -182,20 +184,19 @@ async function shootComponents(browser, theme) {
       )
       .catch(() => {});
     await page.waitForTimeout(400);
-    await cropShot(page, "effort-max-dark.png", [composer, page.locator(".model-pop")]);
-    // Restore High so the remaining shots on this page match the light set.
-    await slider.press("ArrowLeft");
-    await slider.press("ArrowLeft");
+    await page.locator('#effort-meter').click();
+    await effortMenu.waitFor({ state: "visible" });
+    await cropShot(page, "effort-max-dark.png", [composer, effortMenu]);
+    // Restore the model's default for the remaining shots.
+    await effortMenu.getByRole("option", { name: /Medium/ }).click();
     await page.waitForTimeout(400);
   }
   await page.keyboard.press("Escape");
   await page.waitForTimeout(200);
 
-  // Model picker popover: the catalog sits a view back from the effort card.
-  await page.locator('.picker-trigger[aria-label="Model"]').click();
+  // Model picker popover.
+  await page.locator('#model-picker').click();
   await page.waitForSelector(".model-pop", { timeout: 5000 });
-  const changeModel = page.getByRole("button", { name: /Change model/ });
-  if (await changeModel.count()) await changeModel.click();
   await page.waitForTimeout(250);
   await cropShot(page, `model-open-${theme}.png`, [composer, page.locator(".model-pop")]);
   await page.keyboard.press("Escape");
@@ -211,7 +212,7 @@ async function shootComponents(browser, theme) {
   }
 
   // Approval card on the running mock thread.
-  await selectThread(page, "Wire muse serve");
+  await selectThread(page, "Stream agent events");
   const approval = page.locator("section.approval");
   if (await approval.isVisible().catch(() => false)) {
     await cropShot(page, `approval-${theme}.png`, [approval]);
@@ -221,7 +222,7 @@ async function shootComponents(browser, theme) {
   await selectThread(page, "Command center layout");
 
   // Settings modal on the Appearance tab.
-  await page.keyboard.press("Control+,");
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.waitForSelector("dialog.settings-dialog", { timeout: 5000 });
   await page.locator('dialog.settings-dialog button[aria-label="Theme"]').click();
   await page.waitForSelector(".theme-panel", { timeout: 5000 });
@@ -256,7 +257,7 @@ async function shootSurfaces(browser, theme) {
 
   // Diff tab, expanded so the lines are not cut.
   await setDock(page, true);
-  await page.locator('aside.dock [role="tab"]:has-text("Diff")').click();
+  await page.getByRole("button", { name: "Open changes for apps/desktop/src/App.tsx" }).click();
   await page.waitForTimeout(300);
   await page.locator('button[aria-label="Expand changes"]').click();
   await page.waitForTimeout(450);
@@ -278,13 +279,13 @@ async function shootSurfaces(browser, theme) {
 
   // The running thread: subagents, a background task and a pending approval.
   await setDock(page, true);
-  await selectThread(page, "Wire muse serve");
+  await selectThread(page, "Stream agent events");
   await snap(page, `run-${theme}.png`);
   await selectThread(page, "Command center layout");
   await setDock(page, false);
 
   // Keyboard shortcuts in Settings.
-  await page.keyboard.press("Control+,");
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.waitForSelector("dialog.settings-dialog", { timeout: 5000 });
   await page.locator('dialog.settings-dialog button[aria-label="Shortcuts"]').click();
   await page.waitForTimeout(350);
@@ -297,7 +298,7 @@ async function shootSurfaces(browser, theme) {
   await page.waitForSelector(".welcome-card", { timeout: 5000 });
   await page.waitForTimeout(500);
   await snap(page, `welcome-${theme}.png`);
-  await cropShot(page, `welcome-card-${theme}.png`, [page.locator(".welcome-card")], 28);
+  await cropShot(page, `welcome-card-${theme}.png`, [page.locator(".welcome-card"), page.locator(".suggestions"), page.locator(".composer-beam")], 28);
   await page.locator('header.topbar button:has-text("Local")').click();
   await page.waitForTimeout(350);
   const bar = await page.locator("header.topbar").boundingBox();

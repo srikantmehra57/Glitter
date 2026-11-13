@@ -10,31 +10,35 @@ import { pathToFileURL } from 'node:url';
 const temporary = await mkdtemp(join(tmpdir(), 'muse-harness-'));
 const outfile = join(temporary, 'harness.mjs');
 await writeFile(join(temporary, 'entry.ts'), `
-export { HarnessHost, retryBudgetOpen } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/host.ts'))};
-export { SessionStore } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/store.ts'))};
-export { BUILTIN_TOOLS, confine, globRegex, runTool, scheduleToolCalls, encodeSegment } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/tools.ts'))};
-export { ExtensionRegistry } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/registry.ts'))};
-export { parseScript } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/permission/shell.ts'))};
-export { isReadOnly } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/permission/classify.ts'))};
-export { assessCommand } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/permission/danger.ts'))};
-export { covers, scopesFor } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/permission/grants.ts'))};
-export { runGuards } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/permission/guards.ts'))};
-export { decide } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/permission/policy.ts'))};
-export { compileRules, parseRule } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/permission/rules.ts'))};
-export { catalogPrompt, discoverSkills, parseFrontmatter } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/skills.ts'))};
-export { isTruncatedStop, repairHistory, classifyProviderFailure, anthropicReasoning, cacheHistory } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/wire.ts'))};
-export { clipRecency, contextBudget, estimateRequestTokens, fitHistory, headTail, outputReserve, skeleton } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/context.ts'))};
-export { transcriptOf } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/compaction.ts'))};
-export { effortTiers, claudeThinking, nativeProviderCredentials, resolveProvider } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/providers.ts'))};
-export { webExtension, htmlToText, searchProvider } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/web.ts'))};
-export { mcpConfigFingerprints } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/mcp-config.ts'))};
-export { diagnosticEvent } from ${JSON.stringify(resolve('packages/glitter-bridge/src/redaction.ts'))};
-export { McpManager, readMcpServers, readMcpConfig, addMcpServer, removeMcpServer, mcpToolName } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/mcp.ts'))};
+export { HarnessHost, retryBudgetOpen } from ${JSON.stringify(resolve('packages/glitter-harness/src/harness/host.ts'))};
+export { SessionStore } from ${JSON.stringify(resolve('packages/glitter-harness/src/harness/store.ts'))};
+export { BUILTIN_TOOLS, confine, globRegex, runTool, scheduleToolCalls, encodeSegment } from ${JSON.stringify(resolve('packages/glitter-harness/src/harness/tools.ts'))};
+export { ExtensionRegistry } from ${JSON.stringify(resolve('packages/glitter-harness/src/harness/registry.ts'))};
+export { parseScript } from ${JSON.stringify(resolve('packages/glitter-harness/src/harness/permission/shell.ts'))};
+export { isReadOnly } from ${JSON.stringify(resolve('packages/glitter-harness/src/harness/permission/classify.ts'))};
+export { assessCommand } from ${JSON.stringify(resolve('packages/glitter-harness/src/harness/permission/danger.ts'))};
+export { covers, scopesFor } from ${JSON.stringify(resolve('packages/glitter-harness/src/harness/permission/grants.ts'))};
+export { runGuards } from ${JSON.stringify(resolve('packages/glitter-harness/src/harness/permission/guards.ts'))};
+export { decide } from ${JSON.stringify(resolve('packages/glitter-harness/src/harness/permission/policy.ts'))};
+export { compileRules, parseRule } from ${JSON.stringify(resolve('packages/glitter-harness/src/harness/permission/rules.ts'))};
+export { catalogPrompt, discoverSkills, parseFrontmatter } from ${JSON.stringify(resolve('packages/glitter-harness/src/harness/skills.ts'))};
+export { isTruncatedStop, repairHistory, interruptedOutput, classifyProviderFailure, anthropicReasoning, cacheHistory } from ${JSON.stringify(resolve('packages/glitter-harness/src/harness/wire.ts'))};
+export { clipRecency, contextBudget, estimateRequestTokens, fitHistory, headTail, outputReserve, skeleton } from ${JSON.stringify(resolve('packages/glitter-harness/src/harness/context.ts'))};
+export { transcriptOf } from ${JSON.stringify(resolve('packages/glitter-harness/src/harness/compaction.ts'))};
+export { effortTiers, claudeThinking, nativeProviderCredentials, resolveProvider } from ${JSON.stringify(resolve('packages/glitter-harness/src/harness/providers.ts'))};
+export { capabilityGaps, modelCapabilities } from ${JSON.stringify(resolve('packages/glitter-harness/src/harness/capabilities.ts'))};
+export { webExtension, htmlToText, searchProvider } from ${JSON.stringify(resolve('packages/glitter-harness/src/harness/web.ts'))};
+export { mcpConfigFingerprints } from ${JSON.stringify(resolve('packages/glitter-harness/src/harness/mcp-config.ts'))};
+export { diagnosticEvent } from ${JSON.stringify(resolve('packages/glitter-harness/src/redaction.ts'))};
+export { McpManager, readMcpServers, readMcpConfig, addMcpServer, removeMcpServer, mcpToolName } from ${JSON.stringify(resolve('packages/glitter-harness/src/harness/mcp.ts'))};
 `);
 await build({ entryPoints: [join(temporary, 'entry.ts')], bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'silent' });
-const { webExtension, htmlToText, searchProvider, anthropicReasoning, cacheHistory, claudeThinking, HarnessHost, SessionStore, BUILTIN_TOOLS, ExtensionRegistry, parseScript, isReadOnly, assessCommand, covers, scopesFor, runGuards, decide, catalogPrompt, discoverSkills, parseFrontmatter, confine, globRegex, runTool, scheduleToolCalls, encodeSegment, repairHistory, isTruncatedStop, retryBudgetOpen, effortTiers, nativeProviderCredentials, resolveProvider, classifyProviderFailure, McpManager, diagnosticEvent, mcpConfigFingerprints, readMcpServers, readMcpConfig, addMcpServer, removeMcpServer, mcpToolName, clipRecency, contextBudget, estimateRequestTokens, fitHistory, headTail, outputReserve, skeleton, transcriptOf, compileRules, parseRule } = await import(pathToFileURL(outfile).href);
+const { webExtension, htmlToText, searchProvider, anthropicReasoning, cacheHistory, claudeThinking, HarnessHost, SessionStore, BUILTIN_TOOLS, ExtensionRegistry, parseScript, isReadOnly, assessCommand, covers, scopesFor, runGuards, decide, catalogPrompt, discoverSkills, parseFrontmatter, confine, globRegex, runTool, scheduleToolCalls, encodeSegment, repairHistory, interruptedOutput, isTruncatedStop, retryBudgetOpen, effortTiers, nativeProviderCredentials, resolveProvider, classifyProviderFailure, McpManager, diagnosticEvent, mcpConfigFingerprints, readMcpServers, readMcpConfig, addMcpServer, removeMcpServer, mcpToolName, clipRecency, contextBudget, estimateRequestTokens, fitHistory, headTail, outputReserve, skeleton, transcriptOf, compileRules, parseRule, modelCapabilities, capabilityGaps } = await import(pathToFileURL(outfile).href);
 
 const authorization = async (root, home) => ({ workspaceTrusted: true, ...await mcpConfigFingerprints(root, home) });
+
+// A real 1×1 PNG, so these routing tests also pass the image admission gate.
+const TEST_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jQkYAAAAASUVORK5CYII=';
 
 const sse = (frames) => new Response(new ReadableStream({
   start(controller) {
@@ -127,6 +131,44 @@ const until = async (events, predicate, ms = 4000) => {
   for (let waited = 0; waited < ms && !events.some(predicate); waited += 10) await new Promise((r) => setTimeout(r, 10));
   return events.find(predicate);
 };
+
+test('missing capabilities are named and do not invent support', () => {
+  const denied = modelCapabilities({ providerId: 'anthropic', model: 'claude-sonnet-4.6', wire: 'anthropic', listedTools: false, listedImages: false });
+  assert.deepEqual(capabilityGaps(denied), ['no tool support', 'no image support']);
+  const unknown = modelCapabilities({ providerId: 'ollama', model: 'local-writer' });
+  assert.deepEqual(capabilityGaps(unknown), ['an unknown context window']);
+  assert.deepEqual(capabilityGaps(modelCapabilities({ providerId: 'anthropic', model: 'claude-sonnet-4.6', wire: 'anthropic' })), []);
+});
+
+test('a model capability is catalog evidence, a tested family override, or an explicit unknown', () => {
+  const claude = modelCapabilities({ providerId: 'anthropic', model: 'claude-sonnet-4.6', wire: 'anthropic' });
+  assert.deepEqual(claude.context, { value: 200_000, source: 'family' });
+  assert.deepEqual(claude.output, { value: 32_000, source: 'family' });
+  assert.equal(claude.images.value, true);
+  assert.deepEqual(claude.cache, { value: true, source: 'family' });
+  assert.ok(claude.reasoning.tiers.length);
+  assert.equal(claude.reasoning.source, 'family');
+  assert.deepEqual(modelCapabilities({ providerId: 'anthropic', model: 'claude-3-5-sonnet', wire: 'anthropic' }).output, { value: 8_192, source: 'family' });
+  const listed = modelCapabilities({ providerId: 'anthropic', model: 'claude-sonnet-4.6', wire: 'anthropic', listedContext: 50_000, listedOutput: 4_000, listedTools: false, listedImages: false, listedEfforts: ['low', 'high'] });
+  assert.deepEqual(listed.context, { value: 50_000, source: 'catalog' });
+  assert.deepEqual(listed.output, { value: 4_000, source: 'catalog' });
+  assert.deepEqual(listed.tools, { value: false, source: 'catalog' });
+  assert.deepEqual(listed.images, { value: false, source: 'catalog' });
+  assert.deepEqual(listed.reasoning.tiers, ['low', 'high']);
+  assert.equal(listed.reasoning.source, 'catalog');
+  assert.deepEqual(modelCapabilities({ providerId: 'openai', model: 'gpt-5' }).context, { value: 400_000, source: 'family' });
+  assert.deepEqual(modelCapabilities({ providerId: 'openai', model: 'gpt-4o' }).context, { value: 128_000, source: 'family' });
+  assert.equal(modelCapabilities({ providerId: 'openai', model: 'gpt-5' }).streamingUsage.value, true);
+  const unknown = modelCapabilities({ providerId: 'ollama', model: 'local-writer' });
+  assert.deepEqual(unknown.context, { value: null, source: 'unknown' });
+  assert.deepEqual(unknown.output, { value: null, source: 'unknown' });
+  assert.deepEqual(unknown.images, { value: null, source: 'unknown' });
+  assert.deepEqual(unknown.streamingUsage, { value: null, source: 'unknown' });
+  assert.deepEqual(unknown.cache, { value: null, source: 'unknown' });
+  assert.equal(unknown.reasoning.source, 'unknown');
+  assert.deepEqual(modelCapabilities({ providerId: 'cline', model: 'x-ai/grok-4' }).context, { value: 256_000, source: 'family' });
+  assert.equal(modelCapabilities({ providerId: 'custom-1', model: 'kimi-k3' }).streamingUsage.value, true);
+});
 
 test('providers need a key unless they are local or a custom endpoint, which the credential describes', () => {
   assert.equal(resolveProvider('anthropic', {}), null);
@@ -385,13 +427,17 @@ test('a cancelled turn settles its approval and reports cancelled', async () => 
   const root = await workspace();
   // `echo` is read-only and would run without asking; `touch` writes, so it waits for approval.
   const { fetchImpl } = anthropicStub([() => toolReply('tu_1', 'bash', { command: 'touch made.txt' })]);
-  const { instance, events } = host(fetchImpl, new SessionStore(await mkdtemp(join(temporary, 'store-'))));
+  const store = new SessionStore(await mkdtemp(join(temporary, 'store-')));
+  const { instance, events } = host(fetchImpl, store);
   const { sessionId } = await instance.startSession({ workspaceRoot: root });
   await instance.sendTurn({ sessionId, text: 'run it' });
   assert.ok(await until(events, ({ event }) => event === 'approval'), 'the command asks first');
   await instance.cancelTurn({ sessionId });
   const done = await until(events, ({ event }) => event === 'turnCompleted');
   assert.equal(done.payload.outcome.params.terminal, 'cancelled');
+  const { checkpoint } = await store.read(sessionId);
+  assert.equal(checkpoint.turn.state, 'cancelled');
+  assert.equal(checkpoint.approvals.find((entry) => entry.callId === 'tu_1').state, 'cancelled');
 });
 
 test('OpenAI-compatible providers stream text and tool calls through the same loop', async () => {
@@ -783,7 +829,7 @@ test('a rate-limited call is retried, and an unconfigured provider fails with wh
   const fetchImpl = async (url) => {
     if (String(url).endsWith('/models?limit=1000')) return Response.json({ data: [{ id: 'claude-sonnet-9' }] });
     attempts += 1;
-    if (attempts === 1) return new Response(JSON.stringify({ error: { message: 'slow down' } }), { status: 429 });
+    if (attempts === 1) return new Response(JSON.stringify({ error: { message: 'slow down' } }), { status: 429, headers: { 'retry-after': '0' } });
     return sse(textReply('ok now'));
   };
   const { instance, events } = host(fetchImpl, new SessionStore(await mkdtemp(join(temporary, 'store-'))));
@@ -791,13 +837,38 @@ test('a rate-limited call is retried, and an unconfigured provider fails with wh
   await instance.sendTurn({ sessionId, text: 'hi' });
   const done = await until(events, ({ event }) => event === 'turnCompleted', 8000);
   assert.equal(done.payload.outcome.params.terminal, 'completed');
-  assert.ok(events.some(({ event, payload }) => event === 'agentNotice' && /Retrying/.test(payload.message ?? '')));
+  assert.equal(attempts, 2, 'the rate limit is retried once and the tool is not replayed');
+  assert.ok(events.some(({ event, payload }) => event === 'agentNotice' && /Retrying in 0s/.test(payload.message ?? '')), 'Retry-After replaces the backoff');
 
   events.length = 0;
   await instance.setModel({ sessionId, modelId: 'openai/gpt-5' });
   await instance.sendTurn({ sessionId, text: 'again' });
   const failed = await until(events, ({ event }) => event === 'turnCompleted');
   assert.match(failed.payload.outcome.params.error.message, /OpenAI has no key\. Add it in Settings → Providers/);
+});
+
+test('an unknown context window is named without switching the model', async () => {
+  const root = await workspace();
+  let model = '';
+  const fetchImpl = async (url, init) => {
+    if (String(url).includes('/models')) return Response.json({ data: [{ id: 'local-writer' }] });
+    model = JSON.parse(init.body).model;
+    return sse([{ choices: [{ index: 0, delta: { content: 'ok' }, finish_reason: 'stop' }] }, '[DONE]']);
+  };
+  const { instance, events } = host(fetchImpl, new SessionStore(await mkdtemp(join(temporary, 'store-'))));
+  instance.setCredentials({ ollama: {} });
+  const { sessionId } = await instance.startSession({ workspaceRoot: root, modelId: 'ollama/local-writer' });
+  await instance.sendTurn({ sessionId, text: 'hi' });
+  const done = await until(events, ({ event }) => event === 'turnCompleted', 8000);
+  assert.equal(done.payload.outcome.params.terminal, 'completed');
+  const notices = events.filter(({ event, payload }) => event === 'agentNotice' && /unknown context window/.test(payload.message ?? ''));
+  assert.equal(notices.length, 1);
+  assert.match(notices[0].payload.message, /ollama\/local-writer/);
+  assert.equal(model, 'local-writer');
+  const before = events.length;
+  await instance.sendTurn({ sessionId, text: 'again' });
+  await until(events, () => events.filter(({ event }) => event === 'turnCompleted').length > 1, 8000);
+  assert.equal(events.slice(before).filter(({ event, payload }) => event === 'agentNotice' && /unknown context window/.test(payload.message ?? '')).length, 0);
 });
 
 test('cached input counts in the context window, and the session keeps the counters apart', async () => {
@@ -915,7 +986,7 @@ test('an invalid Router reply falls back to a staged Lead-guided turn and record
 
 test('a staged Lead plan sees the request image while the Builder works from the plan', async () => {
   const root = await workspace();
-  const image = 'aW1hZ2UtYnl0ZXM=';
+  const image = TEST_PNG;
   const visionAssessment = { taskKind: 'minor_edit', difficulty: 'complex', designChoices: true, separable: true, causeKnown: true, risk: 'low', confidence: 'high', continuity: 'new', requiredCapabilities: [], reasonCodes: ['fixture'] };
   const { calls, fetchImpl } = anthropicStub([
     () => textReply(JSON.stringify(visionAssessment)),
@@ -939,18 +1010,18 @@ test('a staged Lead plan sees the request image while the Builder works from the
   assert.equal(calls.length, 3);
   const router = JSON.stringify(calls[0].body);
   assert.match(router, /image-1/, 'the Router only learns the attachment name');
-  assert.doesNotMatch(router, new RegExp(image), 'image bytes never reach the Router');
+  assert.ok(!router.includes(image), 'image bytes never reach the Router');
   const leadPlan = JSON.stringify(calls[1].body);
   assert.match(leadPlan, /"type":"image"/, 'the Lead plan call carries the image part');
-  assert.match(leadPlan, new RegExp(image));
+  assert.ok(leadPlan.includes(image));
   const builder = JSON.stringify(calls[2].body);
-  assert.doesNotMatch(builder, new RegExp(image), 'the Builder works from the plan, not the image');
+  assert.ok(!builder.includes(image), 'the Builder works from the plan, not the image');
   assert.match(builder, /1 image attachment/);
 });
 
 test('the Lead read-and-plan stage sees the request image', async () => {
   const root = await workspace();
-  const image = 'aW1hZ2UtYnl0ZXM=';
+  const image = TEST_PNG;
   const visionAssessment = { taskKind: 'minor_edit', difficulty: 'complex', designChoices: true, separable: true, causeKnown: true, risk: 'low', confidence: 'high', continuity: 'new', requiredCapabilities: [], reasonCodes: ['fixture'] };
   const { calls, fetchImpl } = anthropicStub([
     () => textReply(JSON.stringify(visionAssessment)),
@@ -975,13 +1046,14 @@ test('the Lead read-and-plan stage sees the request image', async () => {
   assert.equal(calls.length, 5);
   const leadRead = JSON.stringify(calls[3].body);
   assert.match(leadRead, /"type":"image"/, 'the read-and-plan stage carries the image part');
-  assert.match(leadRead, new RegExp(image));
-  assert.doesNotMatch(JSON.stringify(calls[4].body), new RegExp(image), 'the Builder works from the plan');
+  assert.ok(leadRead.includes(image));
+  assert.ok(!JSON.stringify(calls[4].body).includes(image), 'the Builder works from the plan');
 });
 
 test('a large request image does not consume the Lead read budget', async () => {
   const root = await workspace();
-  const image = 'A'.repeat(30_000);
+  const image = (await readFile(resolve('apps/desktop/public/brand/pixel-field.png'))).toString('base64');
+  assert.ok(image.length > 30_000, 'the image exceeds the text read budget');
   const visionAssessment = { taskKind: 'minor_edit', difficulty: 'complex', designChoices: true, separable: true, causeKnown: true, risk: 'low', confidence: 'high', continuity: 'new', requiredCapabilities: [], reasonCodes: ['fixture'] };
   const { calls, fetchImpl } = anthropicStub([
     () => textReply(JSON.stringify(visionAssessment)),
@@ -1008,7 +1080,7 @@ test('a large request image does not consume the Lead read budget', async () => 
 
 test('the Lead review keeps the request image in its session', async () => {
   const root = await workspace();
-  const image = 'aW1hZ2UtYnl0ZXM=';
+  const image = TEST_PNG;
   const visionAssessment = { taskKind: 'minor_edit', difficulty: 'complex', designChoices: true, separable: true, causeKnown: true, risk: 'low', confidence: 'high', continuity: 'new', requiredCapabilities: [], reasonCodes: ['fixture'] };
   const { calls, fetchImpl } = anthropicStub([
     () => textReply(JSON.stringify(visionAssessment)),
@@ -1030,12 +1102,12 @@ test('the Lead review keeps the request image in its session', async () => {
   const route = events.filter(({ event }) => event === 'route').at(-1).payload.route;
   assert.deepEqual(route.stages.map((stage) => stage.stage), ['router', 'lead-plan', 'builder', 'review']);
   assert.equal(calls.length, 4);
-  assert.match(JSON.stringify(calls[3].body), new RegExp(image), 'the review still sees the request image');
+  assert.ok(JSON.stringify(calls[3].body).includes(image), 'the review still sees the request image');
 });
 
 test('a direct image turn carries the image into the selected role', async () => {
   const root = await workspace();
-  const image = 'aW1hZ2UtYnl0ZXM=';
+  const image = TEST_PNG;
   const trivial = { ...trivialAssessment, taskKind: 'minor_edit', difficulty: 'trivial', designChoices: false, requiredCapabilities: [] };
   const { calls, fetchImpl } = anthropicStub([
     () => textReply(JSON.stringify(trivial)),
@@ -1049,7 +1121,7 @@ test('a direct image turn carries the image into the selected role', async () =>
   const route = events.filter(({ event }) => event === 'route').at(-1).payload.route;
   assert.equal(route.shape, 'direct-small');
   assert.equal(calls.length, 2);
-  assert.match(JSON.stringify(calls[1].body), new RegExp(image), 'the Small role receives the image from the thread');
+  assert.ok(JSON.stringify(calls[1].body).includes(image), 'the Small role receives the image from the thread');
 });
 
 test('an image turn stops when the selected Lead cannot see it', async () => {
@@ -1072,7 +1144,7 @@ test('an image turn stops when the selected Lead cannot see it', async () => {
     router: { modelId: 'anthropic/claude-haiku-9', providerId: 'anthropic' },
   };
   const { sessionId } = await instance.startSession({ workspaceRoot: root, orchestrator: { goal: 'balanced', models: roles } });
-  await instance.sendTurn({ sessionId, text: 'Match the colour in the attached swatch.', images: [{ mediaType: 'image/png', base64Data: 'aW1hZ2UtYnl0ZXM=' }] });
+  await instance.sendTurn({ sessionId, text: 'Match the colour in the attached swatch.', images: [{ mediaType: 'image/png', base64Data: TEST_PNG }] });
   const done = await until(events, ({ event }) => event === 'turnCompleted');
   assert.equal(done.payload.outcome.params.terminal, 'failed');
   assert.match(JSON.stringify(done.payload.outcome), /cannot cover vision/);
@@ -1770,6 +1842,18 @@ test('the estimator counts system, tools and history conservatively', () => {
   assert.ok(estimateRequestTokens({ system, messages: [{ role: 'user', content: [{ type: 'image', mediaType: 'image/png', data: 'x' }] }], tools: [] }) >= 1100, 'an image costs a flat estimate, not its bytes');
 });
 
+test('signed reasoning and tool-call metadata count against the context window', () => {
+  const messages = [
+    { role: 'assistant', text: '', thinking: [{ text: 'thinking', signature: 's'.repeat(4_000), redacted: 'r'.repeat(4_000), id: 'i'.repeat(400) }], toolCalls: [{ id: 'c'.repeat(400), name: 'read_file', input: {}, signature: 't'.repeat(4_000) }] },
+    { role: 'tool', results: [{ id: 'c'.repeat(400), name: 'read_file', output: 'ok' }] },
+  ];
+  const estimate = estimateRequestTokens({ system: { stable: '', volatile: '' }, messages, tools: [] });
+  assert.ok(estimate >= 3_000, 'opaque data replayed to the provider consumes budget');
+  const fitted = fitHistory({ messages, budget: 500 });
+  assert.equal(fitted.outcome, 'unfittable', 'the fit cannot ignore opaque data it must preserve');
+  assert.equal(fitted.tokens, estimate, 'request estimation and fitting count the same history');
+});
+
 test('the budget keeps an output reserve, and a small window keeps a positive input', () => {
   assert.deepEqual(contextBudget(200_000), { input: 180_000, output: 20_000 });
   assert.deepEqual(outputReserve(200_000), 20_000);
@@ -1894,7 +1978,7 @@ test('clipRecency keeps the last 8 messages verbatim and shortens older output',
   assert.equal(clipped[19].results[0].output.length, 9_000, 'the newest tool result is verbatim');
 });
 
-async function runReadBigWindow(window) {
+async function runReadBigWindow(window, prompt = 'read big.txt') {
   const root = await workspace();
   const big = `line of output\n`.repeat(700); // ~10.5k chars, inline (under the spill budget)
   await writeFile(join(root, 'big.txt'), big);
@@ -1902,12 +1986,14 @@ async function runReadBigWindow(window) {
   await writeFile(join(root, 'big.txt'), `${big}\n${tail}`);
   let chatAttempts = 0;
   const bodies = [];
+  const requests = [];
   const fetchImpl = async (url, init) => {
     if (String(url).endsWith('/models?limit=1000')) {
       return Response.json({ data: [{ id: 'claude-sonnet-9', context_length: window }] });
     }
     chatAttempts += 1;
     const body = JSON.parse(init.body);
+    requests.push(body);
     bodies.push(JSON.stringify(body.messages));
     if (chatAttempts === 1) {
       return sse([
@@ -1928,13 +2014,38 @@ async function runReadBigWindow(window) {
   const store = new SessionStore(await mkdtemp(join(temporary, 'store-')));
   const { instance, events } = host(fetchImpl, store);
   const { sessionId } = await instance.startSession({ workspaceRoot: root });
-  await instance.sendTurn({ sessionId, text: 'read big.txt' });
+  await instance.sendTurn({ sessionId, text: prompt });
   const done = await until(events, ({ event }) => event === 'turnCompleted');
-  return { chatAttempts, bodies, events, store, sessionId, done };
+  return { chatAttempts, bodies, requests, events, store, sessionId, done };
 }
 
+// Choose windows relative to the actual system and tool definitions, which grow
+// as the harness adds capabilities. The assertions still exercise real turns.
+let fixedRequestTokens;
+async function windowWithHistoryBudget(tokens) {
+  fixedRequestTokens ??= (async () => {
+    const { requests, done } = await runReadBigWindow(100_000);
+    assert.equal(done.payload.outcome.params.terminal, 'completed');
+    const first = requests[0];
+    return estimateRequestTokens({
+      system: { stable: first.system[0].text, volatile: first.system[1]?.text ?? '' },
+      messages: [],
+      tools: first.tools.map((tool) => ({ name: tool.name, description: tool.description, parameters: tool.input_schema })),
+    });
+  })();
+  const input = await fixedRequestTokens + tokens;
+  return Math.ceil(input / 0.9);
+}
+
+test('a request is not sent when the system prompt and tools exhaust the window', async () => {
+  const { chatAttempts, done } = await runReadBigWindow(100, 'a');
+  assert.equal(done.payload.outcome.params.terminal, 'failed');
+  assert.match(done.payload.outcome.params.error.message, /cannot fit the model's context window/i);
+  assert.equal(chatAttempts, 0, 'even a one-token user message cannot fit behind an oversized system prompt');
+});
+
 test('a genuinely fitted window trims the request, notices once, and keeps the full transcript', async () => {
-  const { chatAttempts, bodies, events, store, sessionId, done } = await runReadBigWindow(4_000);
+  const { chatAttempts, bodies, events, store, sessionId, done } = await runReadBigWindow(await windowWithHistoryBudget(200));
   assert.equal(done.payload.outcome.params.terminal, 'completed');
   assert.equal(chatAttempts, 2);
   assert.ok(!bodies[1].includes('TAIL-MARKER-'), 'the request view is shortened');
@@ -1950,7 +2061,7 @@ test('a genuinely fitted window trims the request, notices once, and keeps the f
 
 test('an unfittable tool-result view fails before the next provider call with recovery and the transcript intact', async () => {
   // Tuned to the built-in tool schemas: the first request fits and the request carrying the result cannot.
-  const { chatAttempts, events, store, sessionId, done } = await runReadBigWindow(3_850);
+  const { chatAttempts, events, store, sessionId, done } = await runReadBigWindow(await windowWithHistoryBudget(12));
   assert.equal(done.payload.outcome.params.terminal, 'failed');
   assert.equal(chatAttempts, 1, 'the follow-up request known not to fit is not sent');
   const error = done.payload.outcome.params.error.message;
@@ -1966,6 +2077,7 @@ test('an unfittable tool-result view fails before the next provider call with re
 
 test('an overflow is recovered by a tighter trim, and a second overflow fails the turn', async () => {
   const root = await workspace();
+  const window = await windowWithHistoryBudget(1_500);
   const big = `out\n`.repeat(6_000); // ~24k chars; read_file returns it numbered, ~30k
   await writeFile(join(root, 'big.txt'), big);
   let chatAttempts = 0;
@@ -1974,7 +2086,7 @@ test('an overflow is recovered by a tighter trim, and a second overflow fails th
     if (String(url).endsWith('/models?limit=1000')) {
       // The natural trim fits this window; only the provider-reported path goes deeper.
       // The full ~30k-char result does not fit, while a shortened result does.
-      return Response.json({ data: [{ id: 'claude-sonnet-9', context_length: 8_000 }] });
+      return Response.json({ data: [{ id: 'claude-sonnet-9', context_length: window }] });
     }
     chatAttempts += 1;
     bodies.push(String(init.body));
@@ -2013,7 +2125,7 @@ test('an overflow is recovered by a tighter trim, and a second overflow fails th
   // And a provider that keeps overflowing fails after the one tighter trim, with its words.
   let again = 0;
   const alwaysOverflow = async (url, init) => {
-    if (String(url).endsWith('/models?limit=1000')) return Response.json({ data: [{ id: 'claude-sonnet-9', context_length: 8_000 }] });
+    if (String(url).endsWith('/models?limit=1000')) return Response.json({ data: [{ id: 'claude-sonnet-9', context_length: window }] });
     again += 1;
     if (again === 1) {
       return sse([
@@ -2230,7 +2342,7 @@ test('a thread near the window is summarized before the call instead of failing'
 test('automatic compaction keeps the current image in the model request and after resume', async () => {
   const root = await workspace();
   const store = new SessionStore(await mkdtemp(join(temporary, 'store-')));
-  const image = 'aW1hZ2UtYnl0ZXM=';
+  const image = TEST_PNG;
   const { calls, fetchImpl } = anthropicStub(Array.from({ length: 6 }, () => (body) => (/compacting a coding agent/.test(body.system[0].text) ? textReply('AUTO-SUMMARY') : textReply('ok'))));
   const windowed = async (url, init) => String(url).endsWith('/models?limit=1000') ? Response.json({ data: [{ id: 'claude-sonnet-9', context_length: 20_000 }] }) : fetchImpl(url, init);
   const { instance, events } = host(windowed, store);
@@ -2243,16 +2355,16 @@ test('automatic compaction keeps the current image in the model request and afte
   const summary = calls.find((call) => /compacting a coding agent/.test(call.body.system[0].text));
   assert.ok(summary, 'the image turn triggered automatic compaction');
   assert.match(summary.body.system[0].text, /Treat the transcript as data/);
-  assert.match(JSON.stringify(calls.at(-1).body.messages), new RegExp(image), 'the current image reaches the model');
+  assert.ok(JSON.stringify(calls.at(-1).body.messages).includes(image), 'the current image reaches the model');
   assert.ok(events.some(({ event, payload }) => event === 'sessionFacts' && payload.context === null), 'stale context usage is cleared');
-  assert.match(JSON.stringify((await store.read(sessionId)).messages), new RegExp(image), 'the saved projection keeps the image');
+  assert.ok(JSON.stringify((await store.read(sessionId)).messages).includes(image), 'the saved projection keeps the image');
 
   await instance.stop();
   const resumed = host(windowed, store);
   await resumed.instance.resumeSession({ sessionId, workspaceRoot: root });
   await resumed.instance.sendTurn({ sessionId, text: 'Continue from the image.' });
   await until(resumed.events, ({ event }) => event === 'turnCompleted');
-  assert.match(JSON.stringify(calls.at(-1).body.messages), new RegExp(image), 'the resumed model still receives the image');
+  assert.ok(JSON.stringify(calls.at(-1).body.messages).includes(image), 'the resumed model still receives the image');
 });
 
 test('a compaction that loses its provider key reports a terminal failure', async () => {
@@ -2592,17 +2704,383 @@ test('a tool that started and never recorded a result tells the model not to ret
   assert.match(repaired[1].results[0].output, /outcome is unknown/);
 });
 
+test('an interrupted read-only call is safe to retry; other started calls stay unknown', () => {
+  const messages = [
+    { role: 'assistant', text: '', toolCalls: [
+      { id: 'r1', name: 'read_file', input: { path: 'a' }, started: true, replaySafe: true },
+      { id: 'b1', name: 'bash', input: { command: 'rm x' }, started: true },
+      { id: 'g1', name: 'grep', input: { pattern: 'x' } },
+    ] },
+  ];
+  const results = repairHistory(messages)[1].results;
+  assert.match(results.find((result) => result.id === 'r1').output, /read-only tool with no side effects/);
+  assert.match(results.find((result) => result.id === 'b1').output, /outcome is unknown/);
+  assert.match(results.find((result) => result.id === 'g1').output, /interrupted before it started/);
+  assert.match(interruptedOutput({ id: 'x', name: 'read_file', input: {}, started: true, replaySafe: true }), /safe to call again/);
+});
+
+test('the store records which interrupted calls are safe to replay', async () => {
+  const store = new SessionStore(await mkdtemp(join(temporary, 'store-')));
+  const now = new Date().toISOString();
+  await store.create({ sessionId: 'h-replay-safe', workspaceRoot: '/tmp/ws', title: null, createdAt: now, updatedAt: now });
+  await store.append('h-replay-safe', [
+    { type: 'message', message: { role: 'assistant', text: '', toolCalls: [{ id: 'c1', name: 'read_file', input: { path: 'a' } }, { id: 'c2', name: 'bash', input: { command: 'ls' } }] } },
+    { type: 'toolStarted', id: 'c1', replay: 'safe' },
+    { type: 'toolStarted', id: 'c2' },
+  ]);
+  const { messages } = await store.read('h-replay-safe');
+  assert.equal(messages[0].toolCalls[0].started, true);
+  assert.equal(messages[0].toolCalls[0].replaySafe, true);
+  assert.equal(messages[0].toolCalls[1].started, true);
+  assert.equal(messages[0].toolCalls[1].replaySafe, undefined);
+});
+
+test('resuming an interrupted turn settles the missing results once and tells the user', async () => {
+  const root = await workspace();
+  const store = new SessionStore(await mkdtemp(join(temporary, 'store-')));
+  const now = new Date().toISOString();
+  await store.create({ sessionId: 'h-crash-resume', workspaceRoot: root, title: null, createdAt: now, updatedAt: now });
+  await store.append('h-crash-resume', [
+    { type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'do it' }] } },
+    { type: 'message', message: { role: 'assistant', text: '', toolCalls: [{ id: 'c1', name: 'read_file', input: { path: 'hello.txt' } }, { id: 'c2', name: 'bash', input: { command: 'rm x' } }] } },
+    { type: 'toolStarted', id: 'c1', replay: 'safe' },
+    { type: 'toolStarted', id: 'c2' },
+  ]);
+  const fetchImpl = async (url) => {
+    if (String(url).endsWith('/models?limit=1000')) return Response.json({ data: [{ id: 'claude-sonnet-9' }] });
+    throw new Error('resume must not call the model');
+  };
+  const { instance, events } = host(fetchImpl, store);
+  await instance.resumeSession({ sessionId: 'h-crash-resume', workspaceRoot: root });
+  const notices = events.filter(({ event }) => event === 'agentNotice');
+  assert.equal(notices.length, 1);
+  assert.equal(notices[0].payload.level, 'warning');
+  assert.match(notices[0].payload.message, /interrupted/);
+  const { messages } = await store.read('h-crash-resume');
+  const last = messages.at(-1);
+  assert.equal(last.role, 'tool');
+  assert.match(last.results.find((result) => result.id === 'c1').output, /safe to call again/);
+  assert.match(last.results.find((result) => result.id === 'c2').output, /outcome is unknown/);
+
+  // A second resume settles nothing again and stays quiet.
+  const second = host(fetchImpl, store);
+  await second.instance.resumeSession({ sessionId: 'h-crash-resume', workspaceRoot: root });
+  assert.equal(second.events.filter(({ event }) => event === 'agentNotice').length, 0);
+  const reread = await store.read('h-crash-resume');
+  assert.equal(reread.messages.filter((message) => message.role === 'tool').length, 1, 'the repair is recorded once');
+});
+
+test("a pending question's batch is not repaired on resume", async () => {
+  const root = await workspace();
+  const store = new SessionStore(await mkdtemp(join(temporary, 'store-')));
+  const now = new Date().toISOString();
+  await store.create({ sessionId: 'h-ask-pending', workspaceRoot: root, title: null, createdAt: now, updatedAt: now });
+  const question = {
+    userInputId: 'q-1', turnId: 't1', callId: 'c1', toolName: 'ask_user', itemId: 'i1',
+    item: { itemId: 'i1', kind: 'userInput', status: 'inProgress', turnId: 't1' },
+    questions: [{ question: 'Which?', header: 'Pick', options: [{ label: 'A' }, { label: 'B' }], multiSelect: false }],
+    results: [{ id: 'c1', name: 'ask_user', output: '' }, { id: 'c2', name: 'read_file', output: 'file text' }],
+  };
+  await store.append('h-ask-pending', [
+    { type: 'message', message: { role: 'assistant', text: '', toolCalls: [{ id: 'c1', name: 'ask_user', input: {} }, { id: 'c2', name: 'read_file', input: { path: 'hello.txt' } }] } },
+    { type: 'item', item: question.item },
+    { type: 'question', question },
+  ]);
+  const fetchImpl = async (url) => {
+    if (String(url).endsWith('/models?limit=1000')) return Response.json({ data: [{ id: 'claude-sonnet-9' }] });
+    throw new Error('resume must not call the model');
+  };
+  const { instance, events } = host(fetchImpl, store);
+  const resumed = await instance.resumeSession({ sessionId: 'h-ask-pending', workspaceRoot: root });
+  assert.equal(resumed.userInputs.length, 1, 'the question is still pending');
+  assert.equal(events.filter(({ event }) => event === 'agentNotice').length, 0);
+  const { messages, question: still } = await store.read('h-ask-pending');
+  assert.equal(messages.at(-1).role, 'assistant', 'no filler was appended');
+  assert.ok(still, 'the question record survives');
+});
+
+test('an open turn is not resumed, and a second open is quiet', async () => {
+  const root = await workspace();
+  const store = new SessionStore(await mkdtemp(join(temporary, 'store-')));
+  const now = new Date().toISOString();
+  await store.create({ sessionId: 'h-open-turn1', workspaceRoot: root, title: null, createdAt: now, updatedAt: now });
+  await store.append('h-open-turn1', [
+    { type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'do it' }] } },
+    { type: 'checkpoint', checkpoint: { kind: 'turn', turnId: 'turn-open', state: 'open' } },
+    { type: 'item', item: { itemId: 'stream-1', kind: 'agentMessage', status: 'inProgress', text: 'partial' } },
+  ]);
+  let calls = 0;
+  const fetchImpl = async () => { calls += 1; throw new Error('resume must not call the model'); };
+  const { instance, events } = host(fetchImpl, store);
+  await instance.resumeSession({ sessionId: 'h-open-turn1', workspaceRoot: root });
+  assert.equal(calls, 0, 'an open turn does not start a model call');
+  const notices = events.filter(({ event }) => event === 'agentNotice');
+  assert.equal(notices.length, 1);
+  assert.match(notices[0].payload.message, /not resumed/);
+  const streamed = events.find(({ event, payload }) => event === 'item' && payload.item?.itemId === 'stream-1');
+  assert.equal(streamed.payload.item.status, 'cancelled');
+  const first = await store.read('h-open-turn1');
+  assert.equal(first.checkpoint.turn.state, 'interrupted');
+  assert.equal(first.items.find((item) => item.itemId === 'stream-1').status, 'cancelled');
+  const second = host(fetchImpl, store);
+  await second.instance.resumeSession({ sessionId: 'h-open-turn1', workspaceRoot: root });
+  assert.equal(second.events.filter(({ event }) => event === 'agentNotice').length, 0);
+  assert.equal(calls, 0);
+});
+
+test('a lost approval is not kept and is not described as safe to retry', async () => {
+  const root = await workspace();
+  const store = new SessionStore(await mkdtemp(join(temporary, 'store-')));
+  const now = new Date().toISOString();
+  await store.create({ sessionId: 'h-approval-lost', workspaceRoot: root, title: null, createdAt: now, updatedAt: now });
+  await store.append('h-approval-lost', [
+    { type: 'message', message: { role: 'assistant', text: '', toolCalls: [
+      { id: 'c-ask', name: 'bash', input: { command: 'rm x' } },
+      { id: 'c-no', name: 'bash', input: { command: 'rm y' } },
+      { id: 'c-ran', name: 'bash', input: { command: 'ls' } },
+    ] } },
+    { type: 'checkpoint', checkpoint: { kind: 'approval', turnId: 't1', callId: 'c-ask', state: 'pending' } },
+    { type: 'checkpoint', checkpoint: { kind: 'approval', turnId: 't1', callId: 'c-no', state: 'rejected' } },
+    { type: 'checkpoint', checkpoint: { kind: 'approval', turnId: 't1', callId: 'c-ran', state: 'allowed' } },
+    { type: 'toolStarted', id: 'c-ran' },
+  ]);
+  const fetchImpl = async () => { throw new Error('resume must not call the model'); };
+  const { instance } = host(fetchImpl, store);
+  await instance.resumeSession({ sessionId: 'h-approval-lost', workspaceRoot: root });
+  const { messages } = await store.read('h-approval-lost');
+  const results = messages.at(-1).results;
+  assert.match(results.find((result) => result.id === 'c-ask').output, /approval was not kept/);
+  assert.match(results.find((result) => result.id === 'c-no').output, /was not approved/);
+  assert.match(results.find((result) => result.id === 'c-ran').output, /outcome is unknown/);
+  assert.doesNotMatch(results.find((result) => result.id === 'c-ask').output, /Retry it if it is still needed/);
+  const again = host(fetchImpl, store);
+  await again.instance.resumeSession({ sessionId: 'h-approval-lost', workspaceRoot: root });
+  const reread = await store.read('h-approval-lost');
+  assert.equal(reread.messages.filter((message) => message.role === 'tool').length, 1);
+});
+
+test('a parent restart settles an interrupted child in place and does not start another', async () => {
+  const root = await workspace();
+  const store = new SessionStore(await mkdtemp(join(temporary, 'store-')));
+  const now = new Date().toISOString();
+  const child = {
+    sessionId: 'h-child-task1', workspaceRoot: root, title: 'Look', createdAt: now, updatedAt: now,
+    delegation: { parentSessionId: 'h-parent-task1', depth: 1, profile: 'delegate', approvalMode: 'promptUnmatched', planMode: false },
+  };
+  await store.create({ sessionId: 'h-parent-task1', workspaceRoot: root, title: null, createdAt: now, updatedAt: now });
+  await store.create(child);
+  await store.append('h-child-task1', [
+    { type: 'delegation', delegation: child.delegation },
+    { type: 'message', message: { role: 'assistant', text: '', toolCalls: [{ id: 'bash-1', name: 'bash', input: { command: 'rm x' } }] } },
+    { type: 'toolStarted', id: 'bash-1' },
+    { type: 'checkpoint', checkpoint: { kind: 'turn', turnId: 'child-turn', state: 'open' } },
+  ]);
+  await store.append('h-parent-task1', [
+    { type: 'message', message: { role: 'assistant', text: '', toolCalls: [
+      { id: 'task-1', name: 'task', input: { description: 'Look', prompt: 'Look around' } },
+      { id: 'mcp-1', name: 'mcp__srv__echo', input: { text: 'hi' } },
+    ] } },
+    { type: 'toolStarted', id: 'task-1' },
+    { type: 'toolStarted', id: 'mcp-1' },
+    { type: 'item', item: { itemId: 'sub-1', kind: 'subagent', status: 'inProgress', childSessionId: 'h-child-task1', turnId: 'parent-turn' } },
+    { type: 'checkpoint', checkpoint: { kind: 'turn', turnId: 'parent-turn', state: 'completed' } },
+  ]);
+  let calls = 0;
+  const fetchImpl = async () => { calls += 1; throw new Error('resume must not call the model or start another child'); };
+  const { instance } = host(fetchImpl, store);
+  await instance.resumeSession({ sessionId: 'h-parent-task1', workspaceRoot: root, approvalMode: 'allowAll' });
+  assert.equal(calls, 0, 'resume does not start a model call or a new child');
+  const parent = await store.read('h-parent-task1');
+  const results = parent.messages.at(-1).results;
+  assert.match(results.find((result) => result.id === 'task-1').output, /child session is h-child-task1/);
+  assert.match(results.find((result) => result.id === 'task-1').output, /Do not start another child/);
+  assert.match(results.find((result) => result.id === 'mcp-1').output, /outcome is unknown/);
+  assert.doesNotMatch(results.find((result) => result.id === 'mcp-1').output, /safe to call again|did not run/);
+  const childLog = await store.read('h-child-task1');
+  assert.equal(childLog.checkpoint.turn.state, 'interrupted');
+  assert.match(childLog.messages.at(-1).results[0].output, /outcome is unknown/);
+  const meta = await store.meta('h-child-task1');
+  assert.equal(meta.delegation.approvalMode, 'promptUnmatched', 'the child keeps the mode it was created with');
+  const again = host(fetchImpl, store);
+  await again.instance.resumeSession({ sessionId: 'h-parent-task1', workspaceRoot: root, approvalMode: 'allowAll' });
+  const reread = await store.read('h-parent-task1');
+  assert.equal(reread.messages.filter((message) => message.role === 'tool').length, 1);
+  assert.equal(calls, 0);
+});
+
+test('a crash at each persistence boundary resumes once and does not replay side effects', async () => {
+  const root = await workspace();
+  await writeFile(join(root, 'hello.txt'), 'CHANGED-BY-TOOL\n');
+  const store = new SessionStore(await mkdtemp(join(temporary, 'store-')));
+  const now = new Date().toISOString();
+  const user = (text) => ({ type: 'message', message: { role: 'user', content: [{ type: 'text', text }] } });
+  const assistant = (calls) => ({ type: 'message', message: { role: 'assistant', text: '', toolCalls: calls } });
+  const tool = (results) => ({ type: 'message', message: { role: 'tool', results } });
+  const open = (turnId) => ({ type: 'checkpoint', checkpoint: { kind: 'turn', turnId, state: 'open' } });
+  const approval = (callId, state) => ({ type: 'checkpoint', checkpoint: { kind: 'approval', turnId: 't', callId, state } });
+  const started = (id, safe = false) => ({ type: 'toolStarted', id, ...(safe ? { replay: 'safe' } : {}) });
+  const bash = (id, command) => ({ id, name: 'bash', input: { command } });
+  const cases = [
+    { id: 'h-fault-01', records: [user('before the model call'), open('t')], check: (log) => { assert.equal(log.checkpoint.turn.state, 'interrupted'); assert.equal(log.messages.at(-1).role, 'user'); } },
+    { id: 'h-fault-02', records: [user('partial stream'), open('t'), { type: 'item', item: { itemId: 'stream', kind: 'agentMessage', status: 'inProgress', text: 'partial' } }], check: (log) => { assert.equal(log.items.find((item) => item.itemId === 'stream').status, 'cancelled'); assert.equal(log.messages.filter((message) => message.role === 'assistant').length, 0); } },
+    { id: 'h-fault-03', records: [assistant([bash('c', 'touch made.txt')]), open('t')], check: (log) => assert.match(log.messages.at(-1).results[0].output, /interrupted before it started/) },
+    { id: 'h-fault-04', records: [assistant([bash('c', 'touch made.txt')]), approval('c', 'allowed'), open('t')], check: (log) => assert.match(log.messages.at(-1).results[0].output, /approval was not kept/) },
+    { id: 'h-fault-05', records: [assistant([bash('c', 'touch made.txt')]), approval('c', 'expired'), open('t')], check: (log) => assert.match(log.messages.at(-1).results[0].output, /was not approved/) },
+    { id: 'h-fault-06', records: [assistant([{ id: 'c', name: 'read_file', input: { path: 'hello.txt' } }]), open('t')], check: (log) => { assert.match(log.messages.at(-1).results[0].output, /interrupted before it started/); assert.doesNotMatch(log.messages.at(-1).results[0].output, /safe to call again/); } },
+    { id: 'h-fault-07', records: [assistant([{ id: 'c', name: 'read_file', input: { path: 'hello.txt' } }]), started('c', true), open('t')], check: (log) => assert.match(log.messages.at(-1).results[0].output, /safe to call again/) },
+    { id: 'h-fault-08', records: [assistant([{ id: 'c', name: 'edit_file', input: { path: 'hello.txt', old_string: 'one', new_string: 'TWO' } }]), started('c'), open('t')], check: (log) => assert.match(log.messages.at(-1).results[0].output, /outcome is unknown/) },
+    { id: 'h-fault-09', records: [assistant([{ id: 'c', name: 'read_file', input: { path: 'hello.txt' } }]), tool([{ id: 'c', name: 'read_file', output: 'COMMITTED-RESULT' }]), open('t')], check: (log) => { assert.equal(log.messages.filter((message) => message.role === 'tool').length, 1); assert.equal(log.messages.at(-1).results[0].output, 'COMMITTED-RESULT'); } },
+    { id: 'h-fault-10', records: [user('ORIGINAL-REQUEST'), open('t'), { type: 'item', item: { itemId: 'compact', kind: 'compaction', status: 'inProgress', text: '' } }], check: (log) => { assert.match(JSON.stringify(log.messages), /ORIGINAL-REQUEST/); assert.equal(log.items.find((item) => item.itemId === 'compact').status, 'cancelled'); assert.equal(log.messages.some((message) => message.role === 'user' && JSON.stringify(message).includes('SUMMARY-KEEP')), false); } },
+    { id: 'h-fault-11', records: [user('ORIGINAL-REQUEST'), { type: 'compaction', messages: [{ role: 'user', content: [{ type: 'text', text: 'SUMMARY-KEEP' }] }] }, { type: 'item', item: { itemId: 'compact', kind: 'compaction', status: 'inProgress', text: '' } }], check: (log) => { assert.equal(log.messages[0].content[0].text, 'SUMMARY-KEEP'); assert.equal(log.messages.length, 1); assert.equal(log.items.find((item) => item.itemId === 'compact').status, 'cancelled'); } },
+  ];
+  for (const entry of cases) {
+    await store.create({ sessionId: entry.id, workspaceRoot: root, title: null, createdAt: now, updatedAt: now });
+    await store.append(entry.id, entry.records);
+  }
+  const childDelegation = { parentSessionId: 'h-fault-12', depth: 1, profile: 'delegate', approvalMode: 'promptUnmatched', planMode: false };
+  await store.create({ sessionId: 'h-fault-12c', workspaceRoot: root, title: null, createdAt: now, updatedAt: now, delegation: childDelegation });
+  await store.append('h-fault-12c', [
+    { type: 'delegation', delegation: childDelegation },
+    assistant([{ id: 'edit-1', name: 'edit_file', input: { path: 'hello.txt', old_string: 'a', new_string: 'b' } }]),
+    tool([{ id: 'edit-1', name: 'edit_file', output: 'EDIT-KEPT' }]),
+    assistant([bash('bash-1', 'rm x')]),
+    started('bash-1'),
+    open('child'),
+  ]);
+  await store.create({ sessionId: 'h-fault-12', workspaceRoot: root, title: null, createdAt: now, updatedAt: now });
+  await store.append('h-fault-12', [
+    assistant([{ id: 'task-1', name: 'task', input: { description: 'Look', prompt: 'Look' } }]),
+    started('task-1'),
+    { type: 'item', item: { itemId: 'sub', kind: 'subagent', status: 'inProgress', childSessionId: 'h-fault-12c', turnId: 'parent' } },
+    open('parent'),
+  ]);
+  await store.create({ sessionId: 'h-fault-13', workspaceRoot: root, title: null, createdAt: now, updatedAt: now });
+  await store.append('h-fault-13', [assistant([bash('c', 'rm x')]), started('c')]);
+  let calls = 0;
+  const fetchImpl = async () => { calls += 1; throw new Error('fault resume must not call the model'); };
+  const first = host(fetchImpl, store);
+  for (const id of [...cases.map((entry) => entry.id), 'h-fault-12', 'h-fault-13']) {
+    await first.instance.resumeSession({ sessionId: id, workspaceRoot: root, approvalMode: 'allowAll' });
+  }
+  assert.equal(calls, 0, 'no boundary starts a model call');
+  for (const entry of cases) entry.check(await store.read(entry.id));
+  const child = await store.read('h-fault-12c');
+  assert.equal(child.messages.filter((message) => message.role === 'tool' && message.results.some((result) => result.output === 'EDIT-KEPT')).length, 1);
+  assert.match(child.messages.at(-1).results[0].output, /outcome is unknown/);
+  assert.equal(child.checkpoint.turn.state, 'interrupted');
+  const parent = await store.read('h-fault-12');
+  assert.match(parent.messages.at(-1).results[0].output, /h-fault-12c/);
+  assert.match(parent.messages.at(-1).results[0].output, /Do not start another child/);
+  const legacy = await store.read('h-fault-13');
+  assert.match(legacy.messages.at(-1).results[0].output, /outcome is unknown/);
+  assert.equal(legacy.checkpoint.turn, undefined, 'an old log gains no invented success');
+  const second = host(fetchImpl, store);
+  for (const id of [...cases.map((entry) => entry.id), 'h-fault-12', 'h-fault-12c', 'h-fault-13']) {
+    await second.instance.resumeSession({ sessionId: id, workspaceRoot: root, approvalMode: 'allowAll' });
+  }
+  assert.equal(calls, 0);
+  for (const entry of cases) entry.check(await store.read(entry.id));
+  assert.equal(await readFile(join(root, 'hello.txt'), 'utf8'), 'CHANGED-BY-TOOL\n');
+  const childAgain = await store.read('h-fault-12c');
+  assert.equal(childAgain.messages.filter((message) => message.role === 'tool').length, 2);
+});
+
+test('resuming a child with a wider mode does not record that wider mode', async () => {
+  const root = await workspace();
+  const store = new SessionStore(await mkdtemp(join(temporary, 'store-')));
+  const now = new Date().toISOString();
+  const delegation = { parentSessionId: 'h-parent-mode1', depth: 1, profile: 'delegate', approvalMode: 'promptUnmatched', planMode: true };
+  await store.create({ sessionId: 'h-child-mode1', workspaceRoot: root, title: null, createdAt: now, updatedAt: now, mode: 'plan', delegation });
+  await store.append('h-child-mode1', [{ type: 'delegation', delegation }]);
+  const fetchImpl = async () => { throw new Error('resume must not call the model'); };
+  const { instance } = host(fetchImpl, store);
+  await instance.resumeSession({ sessionId: 'h-child-mode1', workspaceRoot: root, approvalMode: 'allowAll' });
+  const meta = await store.meta('h-child-mode1');
+  assert.equal(meta.delegation.approvalMode, 'promptUnmatched');
+  assert.equal(meta.mode, 'plan');
+});
+
+test('a finished turn records an open checkpoint and then a completed one', async () => {
+  const root = await workspace();
+  const dir = await mkdtemp(join(temporary, 'store-'));
+  const store = new SessionStore(dir);
+  const { fetchImpl } = anthropicStub([() => textReply('Done.')]);
+  const { instance, events } = host(fetchImpl, store);
+  const { sessionId } = await instance.startSession({ workspaceRoot: root, approvalMode: 'allowAll' });
+  await instance.sendTurn({ sessionId, text: 'hi' });
+  await until(events, ({ event }) => event === 'turnCompleted');
+  const { checkpoint } = await store.read(sessionId);
+  assert.equal(checkpoint.turn.state, 'completed');
+  const raw = await readFile(join(dir, 'sessions', `${sessionId}.jsonl`), 'utf8');
+  assert.match(raw, /"kind":"turn","turnId":"[^"]+","state":"open"/);
+});
+
+test('a read tool records a safe replay; an edit records none', async () => {
+  const root = await workspace();
+  const store = new SessionStore(await mkdtemp(join(temporary, 'store-')));
+  const { fetchImpl } = anthropicStub([
+    () => toolReply('tu_r', 'read_file', { path: 'hello.txt' }),
+    () => toolReply('tu_e', 'edit_file', { path: 'hello.txt', old_string: 'one', new_string: 'ONE' }),
+    () => textReply('Done.'),
+  ]);
+  const { instance, events } = host(fetchImpl, store);
+  const { sessionId } = await instance.startSession({ workspaceRoot: root, approvalMode: 'allowAll' });
+  await instance.sendTurn({ sessionId, text: 'Read then edit' });
+  await until(events, ({ event }) => event === 'turnCompleted');
+  const { messages } = await store.read(sessionId);
+  const calls = messages.flatMap((message) => (message.role === 'assistant' ? (message.toolCalls ?? []) : []));
+  const read = calls.find((call) => call.id === 'tu_r');
+  const edit = calls.find((call) => call.id === 'tu_e');
+  assert.equal(read.started, true);
+  assert.equal(read.replaySafe, true);
+  assert.equal(edit.started, true);
+  assert.equal(edit.replaySafe, undefined);
+});
+
+test('the started and safe-replay markers cover Lead and Builder histories too', async () => {
+  const store = new SessionStore(await mkdtemp(join(temporary, 'store-')));
+  const now = new Date().toISOString();
+  await store.create({ sessionId: 'h-role-history', workspaceRoot: '/tmp/ws', title: null, createdAt: now, updatedAt: now });
+  await store.append('h-role-history', [
+    { type: 'leadMessage', message: { role: 'assistant', text: '', toolCalls: [{ id: 'lc1', name: 'read_file', input: { path: 'a' } }] } },
+    { type: 'builderStart', planId: 'p1', plan: {} },
+    { type: 'builderMessage', planId: 'p1', message: { role: 'assistant', text: '', toolCalls: [{ id: 'bc1', name: 'bash', input: { command: 'rm x' } }] } },
+    { type: 'toolStarted', id: 'lc1', replay: 'safe' },
+    { type: 'toolStarted', id: 'bc1' },
+  ]);
+  const { leadMessages, builder } = await store.read('h-role-history');
+  assert.equal(leadMessages[0].toolCalls[0].started, true);
+  assert.equal(leadMessages[0].toolCalls[0].replaySafe, true);
+  assert.equal(builder.messages[0].toolCalls[0].started, true);
+  assert.equal(builder.messages[0].toolCalls[0].replaySafe, undefined);
+  assert.match(repairHistory(builder.messages)[1].results[0].output, /outcome is unknown/, 'a started Builder shell call is not told it never ran');
+});
+
+test('a torn last line does not swallow the next record', async () => {
+  const dir = await mkdtemp(join(temporary, 'store-'));
+  const store = new SessionStore(dir);
+  const now = new Date().toISOString();
+  await store.create({ sessionId: 'h-torn-tail', workspaceRoot: '/tmp/ws', title: null, createdAt: now, updatedAt: now });
+  await store.append('h-torn-tail', [{ type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'first' }] } }]);
+  // A crash mid-write leaves a partial record with no trailing newline.
+  await writeFile(join(dir, 'sessions', 'h-torn-tail.jsonl'), '{"type":"message","message":{"role":"user","content":[{"type":"text","text":"tor', { flag: 'a' });
+  await store.append('h-torn-tail', [{ type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'second' }] } }]);
+  const { messages } = await store.read('h-torn-tail');
+  const texts = messages.filter((message) => message.role === 'user').map((message) => message.content[0].text);
+  assert.deepEqual(texts, ['first', 'second'], 'the torn fragment is dropped, the next record survives');
+});
+
 test('the UI, the bridge and the native keychain agree on the provider list', async () => {
   const ids = (source, pattern) => [...source.matchAll(pattern)].map((match) => match[1]);
   const uiSource = await readFile(resolve('apps/desktop/src/lib/providers.ts'), 'utf8');
   const [uiModels, uiSearch] = uiSource.split('export const PROVIDER_IDS');
   const ui = ids(uiModels, /\{ id: "([a-z]+)"/g);
-  const bridge = ids(await readFile(resolve('packages/glitter-bridge/src/harness/providers.ts'), 'utf8'), /\{ id: "([a-z]+)", name:/g);
+  const bridge = ids(await readFile(resolve('packages/glitter-harness/src/harness/providers.ts'), 'utf8'), /\{ id: "([a-z]+)", name:/g);
   const credentials = await readFile(resolve('apps/desktop/src-tauri/src/credentials.rs'), 'utf8');
   const nativeList = (name) => credentials.match(new RegExp(`pub const ${name}: &\\[&str\\] = &\\[([^\\]]+)\\]`))[1].match(/"([a-z]+)"/g).map((id) => id.slice(1, -1));
   assert.deepEqual(ui, bridge);
   assert.deepEqual(nativeList('PROVIDER_IDS'), bridge);
-  const bridgeSearch = ids(await readFile(resolve('packages/glitter-bridge/src/harness/web.ts'), 'utf8'), /\{ id: "([a-z]+)", name:/g);
+  const bridgeSearch = ids(await readFile(resolve('packages/glitter-harness/src/harness/web.ts'), 'utf8'), /\{ id: "([a-z]+)", name:/g);
   assert.deepEqual(ids(uiSearch, /\{ id: "([a-z]+)"/g), bridgeSearch, 'the search providers agree too');
   assert.deepEqual(nativeList('SEARCH_PROVIDER_IDS'), bridgeSearch);
 });
@@ -2723,13 +3201,13 @@ test('oversized output is saved, keeps its paging hint, and the receipt is not t
   assert.match(result.output, /re-run list_files with next_offset 500/, 'the next slice is still named after the receipt');
   assert.equal(result.continuation.nextOffset, 500);
   assert.equal(result.presentation.truncated, true);
-  assert.match(result.presentation.artifactPath, /^\.muse\/tool-output\//);
+  assert.match(result.presentation.artifactPath, /^\.glitter\/tool-output\//);
   assert.equal(result.presentation.artifactPath.includes('..'), false);
   const info = await stat(join(root, result.presentation.artifactPath));
   assert.equal(info.mode & 0o777, 0o600);
-  const dir = await stat(join(root, '.muse/tool-output'));
+  const dir = await stat(join(root, '.glitter/tool-output'));
   assert.equal(dir.mode & 0o777, 0o700);
-  assert.equal(await readFile(join(root, '.muse/tool-output/.gitignore'), 'utf8'), '*\n', 'saved output stays out of git status and the review');
+  assert.equal(await readFile(join(root, '.glitter/tool-output/.gitignore'), 'utf8'), '*\n', 'saved output stays out of git status and the review');
   const recovered = await runTool(root, 'read_file', { path: result.presentation.artifactPath, limit: 2 }, undefined, { canRead: true });
   assert.match(recovered.output, /many\/n{72}-000\.txt/);
   assert.doesNotMatch(recovered.output, /Tool output externalized/);
@@ -3314,7 +3792,7 @@ test('Plan mode does not write an output artifact for a large file listing', asy
   await instance.sendTurn({ sessionId, text: 'inspect files' });
   await settled(events, 1);
   assert.match(JSON.stringify(calls[1].body.messages.at(-1)), /0000-x/);
-  assert.equal(await stat(join(root, '.muse')).catch(() => null), null, 'a read in Plan mode does not spill into the workspace');
+  assert.equal(await stat(join(root, '.glitter')).catch(() => null), null, 'a read in Plan mode does not spill into the workspace');
 });
 
 test('Plan cannot read or stop a background shell from an earlier Build turn', async () => {

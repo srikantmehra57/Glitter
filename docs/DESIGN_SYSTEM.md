@@ -20,9 +20,8 @@ document should be corrected.
 4. **Density with hierarchy.** Developer sessions are long. Prefer 13px body, tight rows, collapsed tools. Hierarchy from contrast and spacing, not cards.
 5. **One vocabulary.** Workspace, Thread, Agent, Provider, Model, Run, Plan, Changes, Terminal.
 6. **Every control is real.** Hidden > disabled > fake.
-7. **Providers first.** Glitter is an agent harness. Its built-in agent and the
-   providers you connect come first; an agent CLI such as Muse is one more
-   provider, never the frame the app is described in.
+7. **Providers first.** Glitter's built-in agent uses the model providers the
+   user connects. External agent CLIs are not presented as providers.
 
 ---
 
@@ -39,7 +38,7 @@ document should be corrected.
 | Browser | The shared, agent-controllable Chromium pane. Not the mock browser preview used for UI development, and not the user's normal browser profile |
 | Local / Worktree | Where a thread works: the workspace folder, or its own checkout on a `glitter/` branch. Not “sandbox”, “copy” or “isolated mode” |
 | Stop | Cancel turn (button label: Stop) |
-| Provider | Where models come from, as the model picker and Settings → Models list them: a provider the built-in agent calls with your key (Anthropic, OpenRouter…), or an agent CLI (Muse, Cline CLI…). Not “source”, “lab” or “backend” |
+| Provider | Where models come from, as the model picker and Settings → Models list them: a provider the built-in agent calls with your key or a local endpoint. Not “source”, “lab” or “backend” |
 | Built-in agent | Glitter’s own agent (`harness` in code). In copy it is “the built-in agent”; the composer addresses it by its model (“Ask Claude Sonnet 5…”), and before one resolves by the connected provider’s name (“Ask Anthropic to…”) — never by the code name |
 | Custom endpoint | A provider the user adds in Settings → Providers: their own name for it, its API type (OpenAI-compatible or Anthropic), its address, and a key only when the endpoint needs one. Not “custom provider” in copy |
 | Source | A plugin marketplace added from GitHub in Extensions → Sources; its plugins list in Discover. “Marketplace” only tags the kind of repository in a preview |
@@ -249,9 +248,15 @@ in Settings. There are no icon wells.
 (`ExtensionThumb`, art from `lib/extensionArt.ts`): a rounded `--r-md` tile.
 A plugin from GitHub shows its own logo (a Codex `interface.logo` or a
 conventional `assets/icon.png`) or, without one, its owner's GitHub avatar,
-filling the tile. A marketplace listing keeps its generated tile and carries
-the source's avatar as a small corner badge, ringed in `--surface`; a plugin
-with a logo carries its owner's avatar the same way. Everything else is tinted
+filling the tile. A skill that ships a logo shows it the same way: the
+`interface.icon_large` (else `icon_small`) its `agents/openai.yaml` names, or a
+conventional `assets/icon.png`; a single-colour `currentColor` SVG is skipped,
+since an image would draw it black. A marketplace listing that lives in another
+owner's repository shows that owner's GitHub avatar (fetched once into a cache,
+in the background); a listing in the source's own repository keeps its
+generated tile. Either way it carries the source's avatar as a small corner
+badge, ringed in `--surface`; a plugin with a logo carries its owner's avatar
+the same way. Everything else is tinted
 with one of eight tones and holds the Lucide icon for what it does: store
 entries and featured repositories are mapped by id; anything else is matched on
 its name, then its marketplace category, then falls back to its kind (wand,
@@ -316,7 +321,7 @@ canvas as well as its tint loop. Keep both the media query and the root-attribut
 rule when adding motion.
 
 Settings → Appearance offers the nine `thinking-orbs` animations with a live
-preview in the current accent, neutral by default. The saved choice applies to Muse's live thinking
+preview in the current accent, neutral by default. The saved choice applies to the agent's live thinking
 indicator; Automatic uses Working normally and Solving at peak effort. Paused,
 connecting and empty states retain their existing treatment.
 
@@ -329,8 +334,8 @@ Do not animate decorative blobs.
 ### Thread row
 
 One line, 28px tall, on the sidebar grid (below): the agent's mark fills the
-icon column under the workspace's folder — the harness H, the Muse spark, or
-another agent's own mark — so the column is never empty and every title starts
+icon column under the workspace's folder — the harness H — so the column is
+never empty and every title starts
 on the same line as the workspace names. Then the title, rolling to its tail on
 hover when clipped, and at its end the pin, the worktree branch chip, the
 change-count pill, the thread's state and the relative time. The state is one
@@ -342,8 +347,8 @@ Mark as unread/read and Delete stay first-class thread actions. Open in Finder
 and Copy path follow the thread's worktree when it has one. Copy task path is
 Harness-only because only Harness has a canonical per-session JSONL log; Copy
 log path is the app log, Copy session ID is exact, and Go to config opens
-Glitter's own settings document, never a renderer-supplied path. Fork and Export
-remain Muse-only. View model trajectory opens Usage filtered to that thread;
+Glitter's own settings document, never a renderer-supplied path. Fork and export
+are not yet available for Harness threads. View model trajectory opens Usage filtered to that thread;
 Report issue opens a pre-filled GitHub draft but never submits it. The long menu
 scrolls inside short windows.
 
@@ -356,7 +361,7 @@ a message that was only attachments is untitled.
 ### Agent turn
 
 The agent's side of a turn reads top to bottom as **what it did → what it
-says**. Harness, Muse and every other agent share that stream: a turn does
+says**. A turn does
 not wear a provider mark or an agent mark. Who is running is the composer’s
 model control. The thinking orb belongs to the live status line, so a settled
 turn never wears a paused one.
@@ -430,8 +435,7 @@ never from guesswork.
 
 ### Live status line
 
-The working row has one 20px live mark — the Orb on Muse and built-in Harness
-threads, the agent mark for CLIs — then the current action in `--text-md`
+The working row has one 20px live Orb, then the current action in `--text-md`
 `--secondary`, elapsed and token facts in `--text-sm` `--tertiary`, and a bare
 caret when details are available. It has no second action icon, accent tile,
 or shimmering label. Its dropdown lists the same step rows, indented by one
@@ -478,9 +482,8 @@ window, and the figure beside it is used/window and that share. When cache
 reads and writes add up to the used count, the bar splits into Prompt, Cached
 and Cache write, and the card shows the average cache hit rate. Estimated cost
 stays when the model has a price. Today lists the models used on this Mac
-today, each with its share of that total. Compact stays on a Muse or built-in
-agent thread that can compact. The Muse subscription meter lives on the Usage page while Muse
-is enabled. The selectors are one family of 28px borderless
+today, each with its share of that total. Compact stays on a thread that can
+compact. The selectors are one family of 28px borderless
 controls (`.picker-trigger`, and `.select-trigger` inside `.composer-foot`)
 that fill a capsule on hover; short 16px hairlines separate model, effort and
 permissions, as one separates attach and mention from them. The model control
@@ -514,23 +517,14 @@ lines up at any width. Edge chrome follows the
 column — the prompt rail hugs the panel's left edge, vertically centred, and
 the find bar sits just inside its right edge.
 
-Third-party capabilities open in a dismissible dialog once per agent during
-the app session, with a persisted "Don’t show again" choice. The model picker's
-rail foot has a Capabilities action to reopen the dialog at any time.
-
 The model picker opens above the composer and stays within the window. It has
 exactly two levels: **providers**, then **models**. The rail is a 56px column of
 provider icons — no names; a label floats beside the hovered or focused icon,
-and the list's header names the open provider. It lists providers —
-each provider the built-in agent has a key for (Anthropic, OpenAI, OpenRouter…)
-and each other installed agent as a provider of its own (Muse, Cline CLI…), in
-a fixed order — with no Agents section and no agent row nested over its
-providers. A dot marks the provider the thread's model comes from. The list
-shows that provider's models; an agent whose catalog mixes labs groups them
-under lab headings inside the list, never as a third level. Search spans every
-provider, with provider headings. Picking a model from a provider on another
-agent moves the thread to that agent, then sets the model; those rows are off
-while the thread cannot switch. Models switched off in Settings → Models leave
+and the list's header names the open provider. It lists connected providers in
+a fixed order, with no Agents section. A dot marks the provider the thread's
+model comes from. The list shows that provider's models; catalogs that mix labs
+group them under lab headings inside the list, never as a third level. Search
+spans every provider, with provider headings. Models switched off in Settings → Models leave
 the list (the thread's current model stays), and a provider switched off — or
 with every model off — leaves the rail unless the thread's model comes from it;
 the foot says how many are hidden
@@ -538,7 +532,7 @@ and links to Manage models and Manage providers. One click on a row picks it
 and closes. A built-in agent thread gets one **Orchestrator** switch row above
 the list: off, it describes routing across the role models in Settings, or says
 a Lead and Builder are needed first and leads to Settings; on, it names the
-goal. It is hidden while a search is active, other agents never show it, and a
+goal. It is hidden while a search is active, and a
 switch closes the picker. Turning it on or off reaches the live session at once,
 and turning it off restores the manual model and effort from before. Picking a
 model row, including the selected one, leaves Orchestrator for that thread or
@@ -601,8 +595,8 @@ so rows compare at a glance.
 A completed turn closes with one quiet line under the reply, with no rule or
 box, starting on the content column: a small success check leading **Done**,
 then the turn's facts in `--text-sm` `--tertiary`, dot-separated — duration,
-estimated token speed, tokens, estimated cost, and the model last with a 12px mark — and Undo,
-Review and Fork here as quiet buttons at the end. A routed turn replaces the
+estimated token speed, tokens, estimated cost, and the model last with a 12px mark — and Undo
+and Review as quiet buttons at the end. A routed turn replaces the
 cost estimate with its route: the decided shape, a `floor` mark when a floor
 raised the per-message choice and a `fallback` mark when routing itself fell
 back (the reason on hover), the calls and models it used, and the
@@ -694,15 +688,12 @@ and the navigation, search and the command palette all read those names.
   **Get a key at** link. Its heading names the provider the agent searches with
   once one is keyed, and otherwise says the agent can still fetch pages the user
   or it names. The first key saved is the one used.
-- **Agents**: the default agent, the built-in agent, the agent CLIs, and the
-  Muse connection (credential, API key, binary, Contributor mode) while Muse is
-  shown. There is no Account page: Muse is one agent among others.
 - **Extensions**: a bar of three tabs — **Discover**, **Installed** and
   **Sources**, each with a count — and **Add from GitHub** (primary) at its
   right; the bar sticks to the top of the page while it scrolls, and a tab
   opens at its top. Discover is the store grid (see Extension library);
   Installed lists **Plugins** (from GitHub), **From the store**, then the
-  thread's Skills, Skill lifecycle, MCP servers and Muse CLI plugins; Sources
+  thread's skills and MCP servers; Sources
   lists added marketplaces and **Featured on GitHub**. Harness MCP keeps
   redacted workspace rows visible while startup is denied. An inline approval
   card lets the user approve the exact reviewed workspace/home configuration,
@@ -713,15 +704,15 @@ and the navigation, search and the command palette all read those names.
   translucency where supported, and tint), then Thinking orb. Density and motion
   save with the other settings; zoom uses the same session-memory preference as
   the View menu. Standard density and Reduce motion off preserve the original look.
-- **Permissions**: approvals for new threads, then built-in agent rules, then
-  the Muse host sandbox. Rules use separate **Always allow** and **Never allow**
+- **Permissions**: approvals for new threads, a **Disable Terminal pane**
+  switch, then built-in agent rules. The switch affects the interactive Terminal
+  only; agent commands continue to follow their approval and permission rules.
+  Rules use separate **Always allow** and **Never allow**
   cards, with a monospace rule list, an input and an Add rule button in each.
   Invalid rules and failed application are explained beside the cards, with a
   retry for a failed application. Copy states that Edit rules cover built-in
   edits, while shell commands can still change those files, and that commands
   executed indirectly by other programs cannot be inspected.
-- Muse-only content (the subscription meter, the CLI updater, Muse diagnostics)
-  appears only while Muse is shown, and after the app's own content.
 - **Usage**: the heading reads **Usage stats**, with an **App usage** pill beside
   it and no sentence or hairline. The column is 960px so the year of activity
   fits; every other page stays 760px. A stat strip leads with total tokens
@@ -735,14 +726,11 @@ and the navigation, search and the command palette all read those names.
   model's share. Provider, trajectory, agent, tool
   and insight cards follow in the same card chrome, and each call in the
   trajectory carries a quiet role tag (Router, Small, Builder, Lead) when the
-  Orchestrator made it. The Muse subscription meter
-  is last, and only while Muse is shown. The map uses chart series 1, so it
+  Orchestrator made it. The map uses chart series 1, so it
   stays a data colour when the accent changes. Model lines and the donut take
   the series palette in size order. Refresh and Clear history sit at the top
   right of the page, level with the heading: Refresh recomputes the local
-  charts at once and forces a new Muse subscription reading when Muse is
-  enabled, with a spinner while that read runs. The page advances its clock
-  and refreshes that reading once a minute. A day in the activity map and a
+  charts. A day in the activity map and a
   model in the trend legend answer a hover at once with a tooltip — the day's
   date and tokens, or the model's full id and the tokens it drew — instead of
   waiting on a native title. On first paint the year settles in one
@@ -790,10 +778,8 @@ panels.
   the value beside it. It repaints while it is dragged and saves once, when the
   gesture ends.
 
-**Saving.** Preferences save as they change, and the page strip says so. A
-Muse host setting waits for an explicit restart: a bar rises from the foot of
-the page with Cancel and Save & restart connection. Messages (copied, signed
-out, a failed save) appear as a glass toast at the foot, never as a banner that
+**Saving.** Preferences save as they change, and the page strip says so.
+Messages (copied, a failed save) appear as a glass toast at the foot, never as a banner that
 shifts the page.
 
 Select menus portal directly into the page, outside its scroller. Their
@@ -1017,7 +1003,7 @@ Centered, 420px, search field + command rows with shortcut glyphs. Arrow keys + 
 | Running | Timeline + plan + Stop |
 | Waiting | Approval / question card, focus moved, `alertdialog` |
 | Failed | Banner + retry/settings |
-| Interrupted | Receipt on the run + Continue |
+| Interrupted | Receipt on the run + Continue. Harness also offers Leave stopped, which sends nothing. File undo stays the snapshot control. |
 | Offline | Top banner, composer disabled |
 | Preview | Badge on sidebar; no live host commands |
 
@@ -1109,15 +1095,12 @@ more**, keeping the open thread and anything waiting or running in place. A
 search opens every folder with a match, for that search only, and drops the
 rest.
 
-The foot sits under a hairline: a CLI update, offline, sign-in and a missing
-agent each get a row while they last, then one utility strip. Its labelled
-**profile** trigger carries an initial avatar and the Muse account name or email,
-falling back to **Profile** when there is no account identity. It opens an upward
+The foot sits under a hairline: offline or provider setup status gets a row
+while it lasts, then one utility strip. Its labelled **profile** trigger shows
+**Profile**, or **Preview** for demo data. It opens an upward
 frosted menu with the identity at its head and the frequent destinations: **App
-theme**, **Usage stats**, **Commands & shortcuts**, and **Settings**. **Sign out
-of Muse** appears only while that account is authenticated; preview identifies
-its demo data instead. This is a shortcut menu, not an Account settings page —
-the connection itself stays under Agents. Usage (a bar-chart mark and today's
+theme**, **Usage stats**, **Commands & shortcuts**, and **Settings**. This is a
+shortcut menu, not an Account settings page. Usage (a bar-chart mark and today's
 tokens on this Mac) and Settings remain direct icon buttons beside the profile;
 Usage opens its page directly, with no popup in between. The list scrolls
 vertically only — never sideways — and a thread name that does not fit rolls to

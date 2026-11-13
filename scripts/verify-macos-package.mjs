@@ -43,13 +43,13 @@ async function smokeLaunch(app) {
 }
 const runtime = join(app, 'Contents/MacOS/glitter-node');
 const binary = join(app, 'Contents/MacOS/glitter');
-const script = join(app, 'Contents/Resources/glitter-bridge/index.js');
+const script = join(app, 'Contents/Resources/glitter-harness/index.js');
 await access(runtime, constants.X_OK);
 const digest = (data) => createHash('sha256').update(data).digest('hex');
 const scriptBytes = await readFile(script);
 const notices = await readFile(join(app, 'Contents/Resources/THIRD_PARTY_LICENSES.txt'), 'utf8');
-assert.ok(notices.includes('GLITTER THIRD-PARTY LICENSES') && notices.includes('@muse-code/sdk') && notices.includes('RUST PACKAGES'), 'Bundled third-party license texts are missing');
-assert.equal(digest(scriptBytes), digest(await readFile(join(root, 'packages/glitter-bridge/dist/index.js'))), 'Packaged bridge is stale');
+assert.ok(notices.includes('GLITTER THIRD-PARTY LICENSES') && notices.includes('playwright-core') && notices.includes('RUST PACKAGES'), 'Bundled third-party license texts are missing');
+assert.equal(digest(scriptBytes), digest(await readFile(join(root, 'packages/glitter-harness/dist/index.js'))), 'Packaged bridge is stale');
 
 // Swap rejection, statically verifiable without launching the GUI:
 // build.rs bakes the bridge digest into the binary at compile time and

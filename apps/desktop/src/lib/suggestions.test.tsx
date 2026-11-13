@@ -121,7 +121,7 @@ describe("cheapestModel", () => {
 });
 
 describe("refreshSuggestions", () => {
-  const muse = { id: "muse", name: "Muse", protocol: "msp", found: true, path: "/muse", version: "1", verified: true, signIn: "", authenticated: true } as const;
+  const muse = { id: "harness", name: "Harness", protocol: "native", found: true, path: null, version: null, verified: true, signIn: "", authenticated: true } as const;
   beforeEach(() => {
     resetStore();
     seedStore({ workspaces: [workspace], selectedWorkspaceId: "w", selectedSessionId: null, threads: [], suggestionsEnabled: true, agents: [muse] });

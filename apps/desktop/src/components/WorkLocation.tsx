@@ -1,10 +1,10 @@
 import { GitBranch } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
-import { activeAgentId, currentThread, currentWorkspace, useAppStore } from "../lib/store";
+import { currentThread, currentWorkspace, useAppStore } from "../lib/store";
 import { SelectMenu } from "./SelectMenu";
 
 /**
- * Where a new Muse thread works: the workspace folder, or a worktree of its
+ * Where a new thread works: the workspace folder, or a worktree of its
  * own. Shown in the thread header while the workspace draft is open; an
  * existing thread already has its place and shows its branch instead.
  */
@@ -12,7 +12,7 @@ export function WorkLocation() {
   const s = useAppStore(useShallow((state) => {
     const workspace = currentWorkspace(state);
     return {
-      shown: Boolean(workspace) && !currentThread(state) && activeAgentId(state) === "muse",
+      shown: Boolean(workspace) && !currentThread(state),
       worktree: workspace ? state.drafts[`project:${workspace.id}`]?.worktree : undefined,
       repository: state.git?.repository !== false,
       disabled: state.starting || state.submitting,

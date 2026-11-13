@@ -14,7 +14,7 @@ import {
 import { PROVIDERS, providerName, type ProviderEntry } from "../lib/providers";
 import { selectableModels } from "../lib/modelVisibility";
 import { useAppStore } from "../lib/store";
-import { AGENT_LABELS, ORCHESTRATOR_GOALS, type Model, type OrchestratorAssignments, type OrchestratorModel, type OrchestratorRole, type Settings } from "../lib/types";
+import { ORCHESTRATOR_GOALS, type Model, type OrchestratorAssignments, type OrchestratorModel, type OrchestratorRole, type Settings } from "../lib/types";
 import { AgentMark, ModelIcon } from "./AgentPicker";
 import { modelKey } from "./ModelPicker";
 import { SelectMenu, type SelectMenuOption } from "./SelectMenu";
@@ -65,7 +65,6 @@ export function OrchestratorPanel({ draft, onChange, customProviders: customs = 
   const effective = effectiveOrchestratorAssignments(assignments);
   const ready = orchestratorReady(assignments);
   const enabled = draft.orchestratorEnabled === true;
-  const otherDefault = draft.defaultAgentId && draft.defaultAgentId !== "harness" ? draft.defaultAgentId : undefined;
   const modelLabel = (role: OrchestratorRole) => {
     const model = effective[role];
     return model ? humanizeModelLabel(model.modelId) : null;
@@ -190,9 +189,9 @@ export function OrchestratorPanel({ draft, onChange, customProviders: customs = 
   });
 
   return <>
-    <SectionHead title="New threads" help="Split a built-in agent thread between the roles below. Muse and external agent CLIs choose their own models and are unchanged." />
+    <SectionHead title="New threads" help="Split a new thread between the roles below." />
     <section className="settings-card" aria-label="New threads">
-      <SettingRow label={<span id="orchestrator-enabled-label" className="setting-label">Use Orchestrator for new threads</span>} help={<>{otherDefault ? `${AGENT_LABELS[otherDefault]} is your default agent; this applies when a built-in agent thread starts. ` : "Applies to built-in agent threads. "}Off by default.</>}>
+      <SettingRow label={<span id="orchestrator-enabled-label" className="setting-label">Use Orchestrator for new threads</span>} help={<>Off by default.</>}>
         <button type="button" role="switch" aria-labelledby="orchestrator-enabled-label" aria-checked={enabled} className="toggle" onClick={() => onChange({ orchestratorEnabled: !enabled })}><i /></button>
       </SettingRow>
     </section>

@@ -36,15 +36,14 @@ jobs:
       # though debug/test builds spawn ambient node and never run the
       # staged runtime. Stage it exactly like a release build does.
       - name: Stage bridge sidecar
-        run: npm run build:sidecar -w @glitter/bridge
+        run: npm run build:sidecar -w @glitter/harness
       # RELEASING.md counts the website build among the verify gates; a
       # broken site used to ship undetected.
       - name: Build website
         run: npm run build:website
       - name: Node tests
         run: npm test
-        # A leaked handle once kept acp.test.mjs alive for hours; bound the
-        # step so a hang can never burn a full job window again.
+        # Bound the step so a leaked handle cannot burn a full job window.
         timeout-minutes: 20
       - name: DOM component tests
         run: npm run test:ui

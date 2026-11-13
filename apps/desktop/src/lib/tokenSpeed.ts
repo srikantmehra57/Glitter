@@ -14,8 +14,8 @@ export type TokenSpeedReading = {
 
 /**
  * Add newly streamed generated text. The renderer owns this measurement, so it
- * works identically for Muse, Harness and ACP agents. Long tool or approval
- * gaps contribute at most one second instead of being mistaken for generation.
+ * measures the Harness stream. Long tool or approval gaps contribute at most
+ * one second instead of being mistaken for generation.
  */
 export function recordTokenSpeed(current: TokenSpeed | undefined, text: string, at: number): TokenSpeed | undefined {
   if (!text) return current;

@@ -1,13 +1,13 @@
-import { memo, useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode, type DragEvent as ReactDragEvent } from "react";
+import { memo, useEffect, useId, useMemo, useRef, useState, type ReactNode, type DragEvent as ReactDragEvent } from "react";
 import { describeError } from "../lib/errors";
 import { useShallow } from "zustand/react/shallow";
 import { ArrowUp, AtSign, FileText, FileUp, GitBranch, Hammer, Lock, Paperclip, Play, RotateCcw, ShieldAlert, ShieldCheck, Square, Terminal, TriangleAlert, X } from "lucide-react";
-import { AGENT_LABELS, APPROVAL_DESCRIPTIONS, APPROVAL_LABELS, APPROVAL_ORDER, agentEnabled, approvalModeForAgent, type ApprovalMode, type ContextRef, type OrchestratorGoal, type Thread, type TranscriptItem } from "../lib/types";
-import { defaultTier, isPeak, modelFor, tiersFor, withUnlistedModels } from "../lib/effort";
+import { AGENT_LABELS, APPROVAL_DESCRIPTIONS, APPROVAL_LABELS, APPROVAL_ORDER, approvalModeForAgent, type ApprovalMode, type ContextRef, type OrchestratorGoal, type Thread, type TranscriptItem } from "../lib/types";
+import { defaultTier, isPeak, modelFor, tiersFor } from "../lib/effort";
 import { contextComposition, formatShare, formatTokens, humanizeModelLabel, isTauri, uid } from "../lib/format";
 import { fuzzyScore } from "../lib/fuzzy";
 import { listen } from "@tauri-apps/api/event";
-import { acceptsBusySend, activeAgentId, activeConfig, currentThread, currentWorkspace, useAppStore } from "../lib/store";
+import { activeConfig, currentThread, currentWorkspace, useAppStore } from "../lib/store";
 import { runBuiltinCommand } from "../lib/commands";
 import { estimateUsageCost, formatCost } from "../lib/cost";
 import { groupUsage, ledgerSlices } from "../lib/usageLedger";
@@ -17,7 +17,7 @@ import { ModelPicker, modelKey } from "./ModelPicker";
 import { EffortPicker } from "./EffortPicker";
 import { GoalPicker, type OrchestratorOverride } from "./GoalPicker";
 import { SelectMenu } from "./SelectMenu";
-import { availableBuiltins, collectCandidates, customCommandInsert, continuationForEnter, currentWord, filterSlashCommands, findUniqueCompletion, indentText, isStopWord, outdentText, parseShellEscape, slashQuery } from "../lib/composerText";
+import { availableBuiltins, collectCandidates, customCommandInsert, continuationForEnter, currentWord, filterSlashCommands, findUniqueCompletion, indentText, isStopWord, outdentText, slashQuery } from "../lib/composerText";
 import { MAX_DROP_FILES, isImageFile, refPathForDrop } from "../lib/drop";
 import { EXIT_FAST_MS, usePresence } from "../lib/presence";
 
@@ -63,6 +63,7 @@ function pickComposerThread(state: Parameters<typeof currentThread>[0]) {
     rewindPending: open.rewindPending,
     cancelRequested: open.cancelRequested,
     lastOutcome: open.lastOutcome,
+    recoveryDismissed: open.recoveryDismissed,
     config: open.config,
     context: open.context,
     usage: open.usage,
@@ -84,8 +85,6 @@ function ComposerView({ above }: { above?: ReactNode }) {
     workspaces: state.workspaces,
     selectedWorkspaceId: state.selectedWorkspaceId,
     drafts: state.drafts,
-    enabledAgents: state.enabledAgents,
-    defaultAgentId: state.defaultAgentId,
     defaultModel: state.defaultModel,
     defaultProviderId: state.defaultProviderId,
     defaultApprovalMode: state.defaultApprovalMode,
@@ -93,17 +92,10 @@ function ComposerView({ above }: { above?: ReactNode }) {
     orchestratorEnabled: state.orchestratorEnabled,
     orchestratorGoal: state.orchestratorGoal,
     orchestratorModels: state.orchestratorModels,
-    agents: state.agents,
-    detection: state.detection,
     models: state.models,
-    modelsAgentId: state.modelsAgentId,
     agentModes: state.agentModes,
     modelsLoading: state.modelsLoading,
     modelsError: state.modelsError,
-    hideAgentCapabilities: state.hideAgentCapabilities,
-    confirmOpen: Boolean(state.confirmDialog),
-    confirm: state.confirm,
-    commitSettings: state.commitSettings,
     setSettingsOpen: state.setSettingsOpen,
     starting: state.starting,
     submitting: state.submitting,
@@ -127,9 +119,6 @@ function ComposerView({ above }: { above?: ReactNode }) {
     reclaimApprovalFeedback: state.reclaimApprovalFeedback,
     sendPrompt: state.sendPrompt,
     stopTurn: state.stopTurn,
-    switchThreadAgent: state.switchThreadAgent,
-    chooseAgentModel: state.chooseAgentModel,
-    peekModelCatalog: state.peekModelCatalog,
     hiddenModels: state.hiddenModels,
     hiddenProviders: state.hiddenProviders,
     refreshDetection: state.refreshDetection,
@@ -138,55 +127,33 @@ function ComposerView({ above }: { above?: ReactNode }) {
     compactThread: state.compactThread,
     usageLedger: state.usageLedger,
     continueThread: state.continueThread,
+    stopRecovery: state.stopRecovery,
     retryLast: state.retryLast,
     startHost: state.startHost,
   })));
   const thread = useAppStore(useShallow(pickComposerThread));
   const workspace = currentWorkspace(s);
-  // `activeConfig` / `activeAgentId` read the thread by id; hand them just the
-  // fields they use rather than the (constantly replaced) full thread list.
+  // `activeConfig` reads the thread by id; hand it just the fields it uses
+  // rather than the (constantly replaced) full thread list.
   const openThreads = useMemo(() => (thread ? [{ sessionId: thread.sessionId, agentId: thread.agentId, config: thread.config } as Thread] : []), [thread?.sessionId, thread?.agentId, thread?.config]);
   const config = activeConfig({ ...s, threads: openThreads });
-  const agentId = activeAgentId({ ...s, threads: openThreads });
-  const pickerAgents = s.agents.filter((item) => agentEnabled(s, item.id));
-  const agent = s.agents.find((item) => item.id === agentId);
-  const agentName = agent?.name ?? AGENT_LABELS[agentId];
+  const agentId = "harness" as const;
+  const agentName = AGENT_LABELS[agentId];
   const approval = approvalModeForAgent(agentId, config.approvalMode);
   const approvalModes: ApprovalMode[] = approval === "denyUnmatched" ? ["denyUnmatched", ...APPROVAL_ORDER] : [...APPROVAL_ORDER];
-  // A draft has no session to report its modes yet; the agent's catalog lists
-  // them, so Build/Plan shows before the first message as well as after it.
-  const agentModes = thread ? thread.modes : agentId !== "muse" ? s.agentModes[agentId]?.modes : undefined;
+  // A draft has no session to report its modes yet; the catalog lists them,
+  // so Build/Plan shows before the first message as well as after it.
+  const agentModes = thread ? thread.modes : s.agentModes[agentId]?.modes;
   const modeValue = config.mode ?? (thread ? undefined : s.agentModes[agentId]?.defaultMode);
-  const capabilitiesShown = useRef(new Set<string>());
-  const showCapabilities = useCallback(() => {
-    void s.confirm({
-      title: `${agentName} capabilities in Glitter`,
-      body: `Threads, file edits, tool approvals, and the agent’s models and modes are supported.\n\nThis adapter does not support fork/export, older history paging, compaction, queued messages, ! shell commands, or Muse’s goal and background-task controls. Stop a running turn before sending another message.\n\nThese are Glitter adapter limits, rather than limits of the ${agentName} CLI. You can reopen this information from the model picker’s Agent section.`,
-      confirmLabel: "Don’t show again",
-      info: true,
-    }).then((hide) => { if (hide) void s.commitSettings({ hideAgentCapabilities: true }); });
-  }, [agentName, s.confirm, s.commitSettings]);
-  useEffect(() => {
-    if (agentId === "muse" || agentId === "harness" || !workspace || s.booting || s.hideAgentCapabilities || s.confirmOpen || capabilitiesShown.current.has(agentId)) return;
-    capabilitiesShown.current.add(agentId);
-    showCapabilities();
-  }, [agentId, workspace?.id, s.booting, s.hideAgentCapabilities, s.confirmOpen, showCapabilities]);
-  // Models in the store may still belong to the previous agent while the new list loads.
-  const catalog = s.modelsAgentId === agentId ? s.models : [];
-  // A Muse model this thread or the saved default names stays in the picker even when Muse no longer lists it.
-  const models = useMemo(
-    () => agentId === "muse" ? withUnlistedModels(catalog, [{ modelId: config.modelId, providerId: config.providerId }, { modelId: s.defaultModel, providerId: s.defaultProviderId }]) : catalog,
-    [agentId, catalog, config.modelId, config.providerId, s.defaultModel, s.defaultProviderId],
-  );
+  const models = s.models;
   const model = modelFor(models, config);
-  // Orchestrator applies to built-in agent threads. A live session's own block
+  // A live session's own Orchestrator block
   // wins; a draft follows Settings until the model chip switches it either way.
   const settingsOrchestrator = useMemo(
     () => orchestratorFromSettings({ orchestratorGoal: s.orchestratorGoal, orchestratorModels: s.orchestratorModels }),
     [s.orchestratorGoal, s.orchestratorModels],
   );
-  const orchestrator = agentId !== "harness" ? null
-    : thread ? config.orchestrator ?? null
+  const orchestrator = thread ? config.orchestrator ?? null
     : config.orchestrator !== undefined ? config.orchestrator
     : s.orchestratorEnabled ? settingsOrchestrator ?? null
     : null;
@@ -194,16 +161,14 @@ function ComposerView({ above }: { above?: ReactNode }) {
   // The next message's requested shape; Auto lets the policy decide. A new
   // thread or mode clears it, and a delivered message returns it to Auto.
   const [override, setOverride] = useState<OrchestratorOverride>("auto");
-  useEffect(() => { setOverride("auto"); }, [s.selectedSessionId, agentId, orchestratorOn]);
+  useEffect(() => { setOverride("auto"); }, [s.selectedSessionId, orchestratorOn]);
   const customProviderList = useMemo(() => customProviders(s.providerStatus ?? []), [s.providerStatus]);
-  // The built-in agent is addressed by its model, the way the picker shows it.
-  // Before any model resolves, the connected provider names it; with none
-  // connected it is "the built-in agent" — never the code name.
+  // The agent is addressed by its model, the way the picker shows it. Before
+  // any model resolves, the connected provider names it; with none connected
+  // it is "the agent" — never the code name.
   const connectedProvider = s.providerStatus?.find((row) => row.configured && !isSearchProviderId(row.id));
-  const fallbackSpeaker = agentId === "harness"
-    ? connectedProvider ? providerName(connectedProvider.id, customProviderList) : "the built-in agent"
-    : agentName;
-  const speaker = agentId === "harness" && model ? humanizeModelLabel(model.modelId, model.displayLabel) : fallbackSpeaker;
+  const fallbackSpeaker = connectedProvider ? providerName(connectedProvider.id, customProviderList) : "the agent";
+  const speaker = model ? humanizeModelLabel(model.modelId, model.displayLabel) : fallbackSpeaker;
   const tiers = tiersFor(model);
   const fallbackTier = defaultTier(model, tiers, s.defaultEffort);
   const peak = isPeak(config.effort ?? fallbackTier, tiers);
@@ -211,13 +176,13 @@ function ComposerView({ above }: { above?: ReactNode }) {
   const busy = s.starting || s.submitting || thread?.opening || thread?.configPending || !!thread?.snapshotPending || !!thread?.rewindPending;
   const locked = busy || running || !workspace || (!!thread && !thread.opened && !s.preview);
   // Effort choices stay available during an apply: the store merges further
-  // picks into a trailing call instead of losing clicks during ACP round-trips.
+  // picks into a trailing call instead of losing clicks during round-trips.
   const pickerLocked = s.starting || s.submitting || thread?.opening || running || !workspace || (!!thread && !thread.opened && !s.preview) || !!thread?.snapshotPending || !!thread?.rewindPending;
   // Applying a setting locks the controls for a moment. When that is the only
   // lock, they keep their look for that long, so the toolbar does not blink.
   const settling = Boolean(thread?.configPending) && !pickerLocked;
-  // Busy sends are Muse and Harness. ACP agents and preview keep the Stop-to-send lock.
-  const busySend = Boolean(running && thread && acceptsBusySend(thread.agentId) && !s.preview);
+  // A running turn takes a follow-up; the preview keeps the Stop-to-send lock.
+  const busySend = Boolean(running && thread && !s.preview);
   const [disposition, setDisposition] = useState<"queue" | "steer" | "replace">("queue");
   const queued = thread?.queuedTurns ?? [];
   const inputDisabled = !workspace || s.starting || s.submitting || s.offline;
@@ -245,7 +210,8 @@ function ComposerView({ above }: { above?: ReactNode }) {
   const [dragging, setDragging] = useState(false);
   const [contextOpen, setContextOpen] = useState(false);
   const empty = !s.composer.trim() && s.images.length === 0 && s.contextRefs.length === 0;
-  const canContinue = Boolean(thread && thread.status !== "running" && (thread.lastOutcome === "failed" || thread.lastOutcome === "cancelled" || thread.lastOutcome === "interrupted"));
+  const canContinue = Boolean(thread && !thread.recoveryDismissed && thread.status !== "running" && (thread.lastOutcome === "failed" || thread.lastOutcome === "cancelled" || thread.lastOutcome === "interrupted"));
+  const canStopRecovery = Boolean(thread && !thread.recoveryDismissed && thread.status !== "running" && thread.lastOutcome === "interrupted");
   const modelValue = model ? modelKey(model) : undefined;
   const lockReason = !workspace ? "Open a workspace to enable the composer" : running ? "Stop the current turn to change settings" : busy ? "Please wait…" : thread && !thread.opened ? "Reconnect the thread to change settings" : undefined;
   const busySendTitle = disposition === "steer" ? "Steer the running turn (Enter)" : disposition === "replace" ? "Replace the running turn (Enter)" : "Queue behind the running turn (Enter)";
@@ -303,7 +269,7 @@ function ComposerView({ above }: { above?: ReactNode }) {
   const slash = slashQuery(s.composer, caret);
   const slashKey = slash ? slash.query : null;
   const sessionSkills = useMemo(() => thread?.skills ?? [], [thread?.skills]);
-  const builtins = useMemo(() => availableBuiltins({ thread: Boolean(thread), muse: agentId === "muse", harness: agentId === "harness", live: !s.preview }), [Boolean(thread), agentId, s.preview]);
+  const builtins = useMemo(() => availableBuiltins({ thread: Boolean(thread), live: !s.preview }), [Boolean(thread), s.preview]);
   const slashOptions = useMemo(() => (slashKey == null ? [] : filterSlashCommands(slashKey, sessionSkills, builtins, s.customCommands)), [slashKey, sessionSkills, builtins, s.customCommands]);
   const slashOpen = slash != null && !slashDismissed && slashOptions.length > 0 && !mention && Boolean(workspace);
   // Both popups leave with a short fade, drawing the list they last showed.
@@ -313,7 +279,6 @@ function ComposerView({ above }: { above?: ReactNode }) {
   if (mentionOpen) lastMentions.current = suggestions;
   const lastSlash = useRef(slashOptions);
   if (slashOpen) lastSlash.current = slashOptions;
-  const shellEscape = agentId === "muse" ? parseShellEscape(s.composer) : null;
 
   const word = useMemo(() => (focused && !ghostDismissed && !inputDisabled ? currentWord(s.composer, caret) : null), [focused, ghostDismissed, inputDisabled, s.composer, caret]);
   const wantsGhostWord = word != null && word.word.length >= 3 && !isStopWord(word.word);
@@ -535,9 +500,10 @@ function ComposerView({ above }: { above?: ReactNode }) {
           }}
         >
           <div className="composer-status" role="status">
-            {!s.booting && (s.modelsError || (!s.modelsLoading && !s.models.length)) ? <span className="status-issue"><span>{s.modelsError || "No models found."}</span><button className="ghost-btn small" onClick={() => void (agentId === "muse" ? s.startHost() : s.refreshModels()).catch((error) => useAppStore.setState({ modelsError: describeError(`Could not load ${agentName} models`, error) }))}>Retry</button></span> : null}
+            {!s.booting && (s.modelsError || (!s.modelsLoading && !s.models.length)) ? <span className="status-issue"><span>{s.modelsError || "No models found."}</span><button className="ghost-btn small" onClick={() => void s.refreshModels().catch((error) => useAppStore.setState({ modelsError: describeError("Could not load models", error) }))}>Retry</button></span> : null}
             {canContinue && !thread?.hasItems ? <span className="status-actions">
               <button className="ghost-btn small" onClick={() => void s.continueThread()}><Play size={11} />Continue</button>
+              {canStopRecovery ? <button className="ghost-btn small" onClick={() => s.stopRecovery()}>Leave stopped</button> : null}
               <button className="ghost-btn small" onClick={() => void s.retryLast()}><RotateCcw size={11} />Retry last prompt</button>
             </span> : null}
             {thread?.notice && !running ? <span className={`status-notice ${thread.notice.level}`}><TriangleAlert size={11} aria-hidden="true" />{thread.notice.message}</span> : null}
@@ -816,30 +782,23 @@ function ComposerView({ above }: { above?: ReactNode }) {
             <button ref={mentionTriggerRef} className="icon-btn" aria-label="Add file reference" data-tooltip-side="top" data-tooltip-align="start" data-tooltip="Reference a file  @" aria-pressed={picker} disabled={!workspace || s.submitting} onClick={() => { setMentionDismissed(false); setPicker((open) => !open); }}><AtSign size={15} /></button>
             </div>
             <div className="composer-settings">
-            {shellEscape ? <span className="shell-chip" role="status" title={`Shell command: runs in ${workspace?.path ?? "the workspace"} and streams output into the thread`}><Terminal size={13} aria-hidden="true" />Shell command</span> : null}
             <ModelPicker
               models={models}
-              agentId={agentId}
-              agents={pickerAgents}
               customProviders={customProviderList}
-              agentDisabled={Boolean(busy || running || !workspace)}
               value={modelValue}
-              loading={s.modelsLoading || s.modelsAgentId !== agentId || s.booting}
+              loading={s.modelsLoading || s.booting}
               disabled={Boolean(pickerLocked)}
               applying={Boolean(thread?.configPending)}
               title={thread?.configPending ? "Applying your last change…" : lockReason}
               hidden={s.hiddenModels}
               hiddenProviders={s.hiddenProviders}
               onChange={(next) => void s.setSessionConfig({ modelId: next.modelId, providerId: next.providerId })}
-              onChooseOther={(id, next) => void s.chooseAgentModel(id, next)}
-              loadCatalog={s.peekModelCatalog}
               onRescan={async () => { await s.refreshDetection(); await s.refreshModels(true); }}
-              onShowCapabilities={agentId !== "muse" && agentId !== "harness" ? showCapabilities : undefined}
               onManageModels={() => s.setSettingsOpen(true, "Models")}
               onManageProviders={() => s.setSettingsOpen(true, "Providers")}
-              orchestrator={agentId === "harness" ? orchestrator : undefined}
+              orchestrator={orchestrator}
               orchestratorReady={Boolean(settingsOrchestrator)}
-              onOrchestratorChange={agentId === "harness" ? setOrchestratorMode : undefined}
+              onOrchestratorChange={setOrchestratorMode}
               onManageOrchestrator={() => s.setSettingsOpen(true, "Orchestrator")}
             />
             {/* Orchestrator replaces effort with its goal in the same footprint. */}
@@ -959,7 +918,7 @@ function ComposerView({ above }: { above?: ReactNode }) {
                     </div>
                   </div> : null}
                   {contextLevel ? <span className={`context-pressure ${contextLevel}`}><TriangleAlert size={12} aria-hidden="true" />{contextLevel === "blocked" ? "Context limit reached. Compact or start a new thread to continue." : "Context is getting full. Older turns may be compacted."}</span> : null}
-                  {thread && (!thread.agentId || thread.agentId === "harness") && !s.preview ? <button type="button" className="ghost-btn small context-compact" disabled={thread.status === "running"} title={thread.status === "running" ? "Compact when the turn finishes" : "Compact this thread's context now"} onClick={() => { setContextOpen(false); void s.compactThread(); }}>Compact now</button> : null}
+                  {thread && !s.preview ? <button type="button" className="ghost-btn small context-compact" disabled={thread.status === "running"} title={thread.status === "running" ? "Compact when the turn finishes" : "Compact this thread's context now"} onClick={() => { setContextOpen(false); void s.compactThread(); }}>Compact now</button> : null}
                 </div>
               </div>
             ) : null}

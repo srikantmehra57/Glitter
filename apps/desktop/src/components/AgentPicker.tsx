@@ -3,26 +3,6 @@ import { Info, RefreshCw } from "lucide-react";
 import { brandSrc, modelBrand, providerBrand, type BrandMark } from "../lib/brands";
 import type { AgentId } from "../lib/types";
 
-const MARKS: Record<AgentId, { glyph: string; tone: string }> = {
-  harness: { glyph: "H", tone: "harness" },
-  muse: { glyph: "M", tone: "muse" },
-  opencode: { glyph: "OC", tone: "opencode" },
-  grok: { glyph: "G", tone: "grok" },
-  gemini: { glyph: "Ge", tone: "gemini" },
-  qwen: { glyph: "Q", tone: "qwen" },
-  goose: { glyph: "Go", tone: "goose" },
-  cline: { glyph: "Cl", tone: "cline" },
-};
-
-const ICONS: Partial<Record<AgentId, string>> = {
-  muse: "/spark.svg",
-  grok: "/agents/grok.svg",
-  opencode: "/agents/opencode.svg",
-  gemini: "/agents/gemini.svg",
-  qwen: "/agents/qwen.svg",
-  cline: "/brands/cline.svg",
-};
-
 function Mark({ brand, size }: { brand: BrandMark; size: number }) {
   if ("slug" in brand) {
     return (
@@ -67,18 +47,9 @@ export function ModelIcon({ modelId, providerId, size = 16, badge = false, fallb
   );
 }
 
-/** Agents with a published product mark use it; the rest stay lettered. */
-export function AgentMark({ id, size = 16 }: { id: AgentId; size?: number }) {
-  const icon = ICONS[id];
-  if (icon) {
-    return (
-      <span className={`agent-mark img ${id}`} style={{ width: size, height: size }} aria-hidden="true">
-        <img src={icon} alt="" width={size} height={size} />
-      </span>
-    );
-  }
-  const mark = MARKS[id] ?? { glyph: id.slice(0, 1).toUpperCase(), tone: "muse" };
-  return <span className={`agent-mark ${mark.tone}`} style={{ width: size, height: size, fontSize: size * (mark.glyph.length > 1 ? 0.5 : 0.62) }} aria-hidden="true">{mark.glyph}</span>;
+/** The agent's own mark: the Harness, lettered. */
+export function AgentMark({ size = 16 }: { id?: AgentId; size?: number }) {
+  return <span className="agent-mark harness" style={{ width: size, height: size, fontSize: size * 0.62 }} aria-hidden="true">H</span>;
 }
 
 export type RailSource = { id: string; name: string; mark: ReactNode; count?: number; disabled?: boolean; live?: boolean; title?: string };
@@ -106,8 +77,7 @@ function moveFocus(event: React.KeyboardEvent<HTMLElement>) {
 
 /**
  * The model picker's left rail: one icon per provider, named by its tooltip and
- * label. A provider the built-in agent calls and another agent sit side by side;
- * the dot marks where the thread's model comes from.
+ * label. The dot marks where the thread's model comes from.
  */
 export function SourceRail({ sources, sourceId, onSourceChange, onRescan, onShowCapabilities, capabilitiesLabel }: RailProps) {
   const [scanning, setScanning] = useState(false);

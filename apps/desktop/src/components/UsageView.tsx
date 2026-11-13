@@ -1,15 +1,15 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ComponentType } from "react";
 import { createPortal } from "react-dom";
-import { Clock3, Coins, FilePenLine, FileText, Flame, LoaderCircle, ChevronRight, Mountain, RefreshCw, RotateCcw, Search, Terminal, Trash2, Wrench, Zap } from "lucide-react";
+import { Clock3, Coins, FilePenLine, FileText, Flame, ChevronRight, Mountain, RefreshCw, Search, Terminal, Trash2, Wrench, Zap } from "lucide-react";
 import { useAppStore } from "../lib/store";
 import { motionReduced } from "../lib/presence";
-import { formatDuration, formatResetIn, humanizeStopReason, relativeTime, usageWindowLabel, windowPercent } from "../lib/format";
+import { formatDuration, humanizeStopReason } from "../lib/format";
 import { mockUsageLedger } from "../lib/mock";
 import { PROVIDERS, customProviders } from "../lib/providers";
 import { groupUsage, ledgerSlices, type UsageGroup, type UsageSlice } from "../lib/usageLedger";
 import { ORCHESTRATOR_USAGE_ROLE_LABELS } from "../lib/orchestrator";
 import { activityMap, busiestDay, chartLabels, formatCount, formatSpan, peakTokens, smoothPath, streakStats, tokenTrend, type ActivityGrain } from "../lib/usageChart";
-import { AGENT_LABELS, agentEnabled, type AgentId, type ModelCall } from "../lib/types";
+import { AGENT_LABELS, type AgentId, type ModelCall } from "../lib/types";
 import { AgentMark } from "./AgentPicker";
 
 type RangeDays = 7 | 30;
@@ -36,6 +36,9 @@ const PROVIDER_NAMES: Record<string, string> = {
   alibaba: "Alibaba Cloud",
   opencode: "OpenCode Zen",
 };
+/** History keeps turns from agents earlier builds ran, so their names stay readable. */
+const RETIRED_AGENT_LABELS: Record<string, string> = { muse: "Muse", opencode: "OpenCode", grok: "Grok", gemini: "Gemini CLI", qwen: "Qwen Code", goose: "Goose", cline: "Cline CLI" };
+const agentLabel = (id: string) => AGENT_LABELS[id as AgentId] ?? RETIRED_AGENT_LABELS[id] ?? id;
 export const providerName = (id: string, customs: ReadonlyArray<{ id: string; name: string }> = []) => PROVIDER_NAMES[id] ?? customs.find((row) => row.id === id)?.name ?? (AGENT_LABELS[id as AgentId] || (id ? id[0].toUpperCase() + id.slice(1) : "Unknown"));
 /** "anthropic/claude-sonnet-5" reads as "claude-sonnet-5": the provider is shown beside it. */
 const modelLabel = (modelId: string) => (modelId === "other" ? "Other" : modelId.includes("/") ? modelId.slice(modelId.indexOf("/") + 1) : modelId);
@@ -118,57 +121,6 @@ function useUsageTip() {
     },
     hide: () => setTip(null),
   };
-}
-
-function PlanUsage({ now }: { now: number }) {
-  const usage = useAppStore((state) => state.subscriptionUsage);
-  const loading = useAppStore((state) => state.subscriptionUsageLoading);
-  const error = useAppStore((state) => state.subscriptionUsageError);
-  const authenticated = useAppStore((state) => state.detection?.authenticated);
-  const refresh = useAppStore((state) => state.refreshSubscriptionUsage);
-  useEffect(() => { void refresh(); }, [refresh]);
-  const rows = usage
-    ? [
-      { label: usageWindowLabel(usage.window.windowDurationMins), percent: usage.window.usedPercent, resetsAtMs: usage.window.resetsAtMs },
-      { label: "Weekly", percent: usage.weekly.usedPercent, resetsAtMs: usage.weekly.resetsAtMs },
-    ]
-    : [];
-  const ago = usage ? relativeTime(new Date(usage.observedAtMs).toISOString()) : "";
-  return (
-    <section className="usage-plan" aria-labelledby="plan-usage-title">
-      <div className="usage-section-head">
-        <div>
-          <h2 id="plan-usage-title">Muse subscription</h2>
-          <p>{usage ? `Reported by the Muse host · as of ${ago === "now" ? "now" : `${ago} ago`}` : "Reported by the Muse host once it has seen a turn."}</p>
-        </div>
-        <button type="button" className="ghost-btn small" disabled={loading} onClick={() => void refresh(true)}>
-          {loading ? <LoaderCircle size={11} className="spin" aria-hidden="true" /> : <RotateCcw size={11} aria-hidden="true" />}
-          {loading ? "Reading…" : "Refresh"}
-        </button>
-      </div>
-      {rows.length ? (
-        <div className="usage-plan-rows">
-          {rows.map((row) => {
-            const current = windowPercent(row.percent, row.resetsAtMs, now);
-            const rounded = Math.round(current ?? 0);
-            const tone = current == null ? "" : rounded >= 100 ? " over" : rounded >= 80 ? " high" : "";
-            return (
-              <div className="usage-row" key={row.label}>
-                <div className="usage-row-head"><span>{row.label}</span><span className="usage-pct">{current == null ? "—" : `${rounded}%`}</span></div>
-                <span className={`usage-bar${tone}`} role="img" aria-label={current == null ? "No current reading" : `${rounded}% used`}><span style={{ width: `${Math.min(100, Math.max(0, rounded))}%` }} /></span>
-                <div className="usage-sub">{current == null ? "Reset since this reading" : formatResetIn(row.resetsAtMs, now)}</div>
-              </div>
-            );
-          })}
-        </div>
-      ) : null}
-      {error || !rows.length ? (
-        <p className={`usage-empty${rows.length ? " usage-plan-error" : ""}`} role={error ? "alert" : "status"}>
-          {error ? error : loading ? "Reading usage…" : authenticated === false ? "Sign in with the Muse CLI to see subscription usage." : "No reading yet. It appears after your first Muse turn."}
-        </p>
-      ) : null}
-    </section>
-  );
 }
 
 /** One provider's share of the period: a coloured segment, and a labelled row below. */
@@ -359,13 +311,8 @@ export function UsageView({ embedded = false, actionsHost }: { embedded?: boolea
   const trajectoryThreadTitle = useAppStore((state) => state.trajectoryThreadId ? state.threads.find((thread) => thread.sessionId === state.trajectoryThreadId)?.title : undefined);
   const clearTrajectory = useAppStore((state) => state.clearThreadTrajectory);
   const preview = useAppStore((state) => state.preview);
-  // The plan meter is Meta's subscription. It stays off unless Muse itself is on,
-  // so a disabled Muse CLI does not pin the page to a host that is not running.
-  const museOn = useAppStore((state) => state.preview || (agentEnabled(state, "muse") && state.agents.some((agent) => agent.id === "muse" && agent.found)));
   const confirm = useAppStore((state) => state.confirm);
   const clearUsageHistory = useAppStore((state) => state.clearUsageHistory);
-  const refreshSubscriptionUsage = useAppStore((state) => state.refreshSubscriptionUsage);
-  const subscriptionLoading = useAppStore((state) => state.subscriptionUsageLoading);
   const { tip, show: showTip, hide: hideTip } = useUsageTip();
   const [grain, setGrain] = useState<ActivityGrain>("daily");
   const [range, setRange] = useState<RangeDays>(7);
@@ -376,12 +323,6 @@ export function UsageView({ embedded = false, actionsHost }: { embedded?: boolea
     const timer = window.setInterval(() => setNowMs(Date.now()), 60_000);
     return () => window.clearInterval(timer);
   }, []);
-  useEffect(() => {
-    if (!museOn) return;
-    void refreshSubscriptionUsage();
-    const timer = window.setInterval(() => void refreshSubscriptionUsage(), 60_000);
-    return () => window.clearInterval(timer);
-  }, [museOn, refreshSubscriptionUsage]);
   useEffect(() => {
     if (!trajectoryThreadId) return;
     const frame = requestAnimationFrame(() => document.getElementById("usage-trajectory-title")?.scrollIntoView({ block: "start", behavior: motionReduced() ? "auto" : "smooth" }));
@@ -438,7 +379,7 @@ export function UsageView({ embedded = false, actionsHost }: { embedded?: boolea
   const grainLabel = GRAINS.find((item) => item.id === grain)?.label ?? "Daily";
 
   const clearHistory = async () => {
-    const ok = await confirm({ title: "Clear usage history?", body: "Every recorded turn and daily total is removed from this Mac. The Muse subscription reading is not affected.", confirmLabel: "Clear history", danger: true });
+    const ok = await confirm({ title: "Clear usage history?", body: "Every recorded turn and daily total is removed from this Mac.", confirmLabel: "Clear history", danger: true });
     if (ok) clearUsageHistory();
   };
 
@@ -446,17 +387,15 @@ export function UsageView({ embedded = false, actionsHost }: { embedded?: boolea
     if (refreshing) return;
     setRefreshing(true);
     setNowMs(Date.now());
-    try {
-      if (museOn) await refreshSubscriptionUsage(true);
-    } finally {
-      setRefreshing(false);
-    }
+    // The ledger is local; a refresh re-reads the clock and lets the spinner show it ran.
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    setRefreshing(false);
   };
 
   const refresh = (
-    <button type="button" className="secondary" aria-label="Refresh usage" disabled={refreshing || subscriptionLoading} onClick={() => void refreshPage()}>
-      <RefreshCw size={14} className={refreshing || subscriptionLoading ? "spin" : undefined} aria-hidden="true" />
-      {refreshing || subscriptionLoading ? "Refreshing…" : "Refresh"}
+    <button type="button" className="secondary" aria-label="Refresh usage" disabled={refreshing} onClick={() => void refreshPage()}>
+      <RefreshCw size={14} className={refreshing ? "spin" : undefined} aria-hidden="true" />
+      {refreshing ? "Refreshing…" : "Refresh"}
     </button>
   );
 
@@ -606,7 +545,7 @@ export function UsageView({ embedded = false, actionsHost }: { embedded?: boolea
               {agents.map((group) => (
                 <li key={group.id}>
                   <span className="usage-agent-mark"><AgentMark id={group.id as AgentId} size={17} /></span>
-                  <span>{AGENT_LABELS[group.id as AgentId] ?? group.id}<em>{plural(group.turns, "turn")}</em></span>
+                  <span>{agentLabel(group.id)}<em>{plural(group.turns, "turn")}</em></span>
                   <strong>{group.estimatedTurns ? "≈" : ""}{formatCount(tokensOf(group))}</strong>
                 </li>
               ))}
@@ -637,8 +576,6 @@ export function UsageView({ embedded = false, actionsHost }: { embedded?: boolea
         </div>
         {trajectoryThreadId ? <div className="usage-thread-filter"><span>Model calls for <strong>{trajectoryThreadTitle ?? "this thread"}</strong></span><button type="button" className="text-btn" onClick={clearTrajectory}>View all threads</button></div> : null}
         <Trajectory turns={trajectory} slots={slots} emptyText={trajectoryThreadId ? "No recent model calls are recorded for this thread. Older turns and other agents may report totals only." : undefined} />
-        {/* Muse's own plan meter, for people who also run Muse: after Glitter's counts, not ahead of them. */}
-        {museOn ? <PlanUsage now={nowMs} /> : null}
         <p className="usage-note">
           <Clock3 size={12} aria-hidden />
           <span>Counted as each turn finishes, from the tokens each agent reports, and kept on this Mac.{estimated ? ` ≈ marks ${plural(estimated, "turn")} whose agent reported no counts; those are estimated from the reply.` : ""}</span>

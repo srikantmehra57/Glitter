@@ -92,40 +92,6 @@ export function relativeTime(iso: string): string {
   return `${Math.abs(days)}d`;
 }
 
-/** "5-hour window" from the provider's window length in minutes. */
-export function usageWindowLabel(windowDurationMins?: number): string {
-  if (!windowDurationMins || !Number.isFinite(windowDurationMins) || windowDurationMins <= 0) return "Current window";
-  if (windowDurationMins < 60) return `${Math.round(windowDurationMins)}-minute window`;
-  const hours = windowDurationMins / 60;
-  return `${Number.isInteger(hours) ? hours : hours.toFixed(1)}-hour window`;
-}
-
-/**
- * A subscription window's share used, or null once the window has reset since
- * the reading was taken: the old figure no longer describes it, and the next
- * reading arrives with the next Muse turn.
- */
-export function windowPercent(percent: number, resetsAtMs: number, nowMs: number): number | null {
-  return Number.isFinite(resetsAtMs) && resetsAtMs <= nowMs ? null : percent;
-}
-
-/** "resets in 3h 12m" countdown to a reset stamp; "resetting…" once passed. */
-export function formatResetIn(resetsAtMs: number, nowMs: number): string {
-  const delta = resetsAtMs - nowMs;
-  if (!Number.isFinite(delta) || delta <= 0) return "resetting…";
-  const minutes = Math.floor(delta / 60000);
-  if (minutes < 1) return "resets in under a minute";
-  if (minutes < 60) return `resets in ${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) {
-    const rest = minutes % 60;
-    return rest ? `resets in ${hours}h ${rest}m` : `resets in ${hours}h`;
-  }
-  const days = Math.floor(hours / 24);
-  const rest = hours % 24;
-  return rest ? `resets in ${days}d ${rest}h` : `resets in ${days}d`;
-}
-
 export function titleFromText(text: string): string {
   // Attachment markers a prompt can carry ("[Image #1]", "[Screenshot]") are not
   // words a title should lead with; drop them so the title starts at real text.
@@ -244,15 +210,6 @@ export function shortHash(value?: string | null): string {
   return `${match[1] ?? ""}${match[2].slice(0, 12)}…`;
 }
 
-export function shortCliVersion(version?: string | null): string {
-  if (!version) return "";
-  const first = version.split("\n")[0].trim();
-  // Prefer a semver-looking token, fall back to first 24 chars.
-  const match = first.match(/\d+\.\d+\.\d+[^ ]*/);
-  if (match) return `v${match[0].replace(/^v/, "")}`;
-  return first.length > 24 ? `${first.slice(0, 24)}…` : first;
-}
-
 export function summarizeArgs(toolName: string, args?: string): string {
   if (!args) return "";
   try {
@@ -319,7 +276,7 @@ export function describeApprovalScope(scope: string): string {
   switch (scope) {
     case "once": return "Allows this call only.";
     case "session": return "Allows every matching call for the rest of this thread.";
-    case "localPersistent": return "Saved for this workspace; Muse will not ask again.";
+    case "localPersistent": return "Saved for this workspace; the agent will not ask again.";
     default: return "";
   }
 }

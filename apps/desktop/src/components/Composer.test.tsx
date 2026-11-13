@@ -106,8 +106,8 @@ describe("Composer", () => {
     expect(screen.getByPlaceholderText(/Queue a follow-up/)).toBeInTheDocument();
   });
 
-  it("offers the same three permission modes for every agent", () => {
-    for (const agentId of ["harness", undefined, "grok"] as const) {
+  it("offers the same three permission modes on every thread", () => {
+    for (const agentId of ["harness", undefined] as const) {
       seedWorkspace(agentId ? { agentId, config: { agentId, approvalMode: "onRequest" } } : { config: { approvalMode: "onRequest" } });
       const view = render(<Composer />);
       fireEvent.click(screen.getByRole("button", { name: "Permissions" }));
@@ -122,7 +122,7 @@ describe("Composer", () => {
 
   it("keeps a read-only thread on Read only until another mode is chosen", () => {
     const setSessionConfig = vi.fn(async () => {});
-    seedWorkspace({ agentId: "grok", config: { agentId: "grok", approvalMode: "denyUnmatched" } });
+    seedWorkspace({ agentId: "harness", config: { agentId: "harness", approvalMode: "denyUnmatched" } });
     useAppStore.setState({ setSessionConfig });
     render(<Composer />);
     const trigger = screen.getByRole("button", { name: "Permissions" });
@@ -134,13 +134,6 @@ describe("Composer", () => {
     expect(setSessionConfig).toHaveBeenCalledWith({ approvalMode: "allowAll" });
   });
 
-  it("keeps Stop-to-send for an ACP agent while a turn runs", () => {
-    seedWorkspace({ agentId: "opencode", status: "running", activeTurnId: "t1" });
-    useAppStore.setState({ composer: "follow up" });
-    render(<Composer />);
-    expect(screen.queryByRole("button", { name: "What to do with this message while a turn runs" })).toBeNull();
-    expect(screen.getByPlaceholderText(/Stop to send a new message/)).toBeInTheDocument();
-  });
 
   it("shows Stop instead of Send while the turn runs and calls stopTurn", async () => {
     const stopTurn = vi.fn();
@@ -306,24 +299,12 @@ describe("prompt history and agent capabilities", () => {
     expect(box.value).toBe("");
   });
 
-  it("puts ACP limits in a dismissible dialog and remembers Don’t show again", async () => {
-    seedWorkspace({ agentId: "opencode" });
-    seedStore({ theme: "light" });
-    const view = render(<Composer />);
-    expect(useAppStore.getState().confirmDialog).toMatchObject({ title: "OpenCode capabilities in Glitter", confirmLabel: "Don’t show again" });
-    expect(screen.queryByText(/threads can’t be forked or exported/)).toBeNull();
-    await act(async () => useAppStore.getState().resolveConfirm(true));
-    expect(useAppStore.getState().hideAgentCapabilities).toBe(true);
-    view.unmount();
-    render(<Composer />);
-    expect(useAppStore.getState().confirmDialog).toBeNull();
-  });
 
-  it("keeps model errors and agent notices inside the composer, with an ACP retry", () => {
-    seedWorkspace({ agentId: "grok", notice: { level: "warning", message: "Rate limited" } });
+  it("keeps model errors and agent notices inside the composer, with a retry", () => {
+    seedWorkspace({ agentId: "harness", notice: { level: "warning", message: "Rate limited" } });
     const refreshModels = vi.fn(async () => {});
     const startHost = vi.fn(async () => {});
-    seedStore({ hideAgentCapabilities: true, modelsError: "Catalog unavailable", refreshModels, startHost });
+    seedStore({ modelsError: "Catalog unavailable", refreshModels, startHost });
     render(<Composer />);
     for (const message of ["Catalog unavailable", "Rate limited"]) expect(screen.getByText(message).closest(".composer")).not.toBeNull();
     expect(document.querySelector(".composer-beam")?.nextElementSibling).toBeNull();
@@ -351,7 +332,7 @@ describe("built-in slash commands", () => {
 
   it("keeps focus on the effort choices after removing the slash command from the draft", async () => {
     seedWorkspace();
-    seedStore({ models: [{ modelId: "muse-spark-1.3", isActive: true }], modelsAgentId: "muse" });
+    seedStore({ models: [{ modelId: "muse-spark-1.3", isActive: true }] });
     const user = userEvent.setup();
     render(<Composer />);
     const box = screen.getByRole("combobox");
@@ -384,7 +365,7 @@ describe("built-in slash commands", () => {
 
     await user.clear(box);
     await user.type(box, "/status{Enter}");
-    expect(useAppStore.getState().confirmDialog?.body).toMatch(/Session: s1\nAgent: Muse\nContext: 1K of 4K tokens \(25%\)/);
+    expect(useAppStore.getState().confirmDialog?.body).toMatch(/Session: s1\nAgent: Harness\nContext: 1K of 4K tokens \(25%\)/);
     expect(sendPrompt).not.toHaveBeenCalled();
   });
 
@@ -438,7 +419,7 @@ describe("cost estimate", () => {
 
   it("shows the thread's estimated cost beside context usage", async () => {
     seedWorkspace({ context: { usedTokens: 1000, windowTokens: 4000 }, usage: { promptTokens: 48210, totalTokens: 61004, outputTokens: 12794 } });
-    seedStore({ models: priced, modelsAgentId: "muse" });
+    seedStore({ models: priced });
     const user = userEvent.setup();
     render(<Composer />);
     await user.click(screen.getByRole("button", { name: /Context window/ }));
@@ -449,14 +430,14 @@ describe("cost estimate", () => {
 
   it("omits the row without reported usage", () => {
     seedWorkspace({ context: { usedTokens: 1000, windowTokens: 4000 } });
-    seedStore({ models: priced, modelsAgentId: "muse" });
+    seedStore({ models: priced });
     render(<Composer />);
     expect(screen.queryByText("Est. cost")).toBeNull();
   });
 
   it("labels an estimate partial when cache writes have no reported price", async () => {
     seedWorkspace({ context: { usedTokens: 1000, windowTokens: 4000 }, usage: { promptTokens: 1000, cacheReadTokens: 500, cacheWriteTokens: 200, outputTokens: 100 } });
-    seedStore({ models: priced, modelsAgentId: "muse" });
+    seedStore({ models: priced });
     render(<Composer />);
     await userEvent.setup().click(screen.getByRole("button", { name: /Context window/ }));
     expect(screen.getByText("Partial est. cost").parentElement).toHaveTextContent("$0.0017");
@@ -504,7 +485,7 @@ describe("cost estimate", () => {
 
   it("omits the row when the model has no price", () => {
     seedWorkspace({ context: { usedTokens: 1000, windowTokens: 4000 }, usage: { promptTokens: 48210, totalTokens: 61004, outputTokens: 12794 } });
-    seedStore({ models: [{ ...priced[0], cost: null }], modelsAgentId: "muse" });
+    seedStore({ models: [{ ...priced[0], cost: null }] });
     render(<Composer />);
     expect(screen.queryByText("Est. cost")).toBeNull();
   });
@@ -525,9 +506,7 @@ describe("Orchestrator mode", () => {
       threads: [thread({ agentId: "harness", config: { agentId: "harness", modelId: lead.modelId, providerId: lead.providerId, effort: "high", approvalMode: "guarded", ...config }, ...threadPatch })],
       selectedSessionId: "s1",
       models: harnessModels,
-      modelsAgentId: "harness",
       agents: [{ id: "harness", name: "Harness", protocol: "native", found: true, path: null, version: null, verified: true, signIn: "", authenticated: true }],
-      enabledAgents: { harness: true },
     });
   }
 
@@ -564,7 +543,7 @@ describe("Orchestrator mode", () => {
     seedHarness();
     seedStore({
       preview: true, threads: [], selectedSessionId: null,
-      defaultAgentId: "harness", defaultModel: lead.modelId, defaultProviderId: lead.providerId, defaultEffort: "high",
+      defaultModel: lead.modelId, defaultProviderId: lead.providerId, defaultEffort: "high",
       orchestratorEnabled: true, orchestratorModels: { lead, builder },
       refreshModels: vi.fn(async () => {}),
       drafts: explicit ? { "project:w": { text: "", images: [], config: { agentId: "harness", ...lead, effort: "high", orchestrator: sessionOrchestrator } } } : {},
@@ -581,7 +560,7 @@ describe("Orchestrator mode", () => {
     expect(useAppStore.getState().orchestratorEnabled).toBe(true);
   });
 
-  it("leads to Settings when the roles are incomplete, and switches with no change to a non-built-in thread", () => {
+  it("leads to Settings when the roles are incomplete", () => {
     seedHarness({ orchestrator: null });
     seedStore({ orchestratorModels: { lead } });
     const view = render(<Composer />);
@@ -591,14 +570,6 @@ describe("Orchestrator mode", () => {
     expect(useAppStore.getState().settingsOpen).toBe(true);
     expect(useAppStore.getState().settingsTab).toBe("Orchestrator");
     view.unmount();
-
-    // A Muse thread never offers the row, even with roles saved in Settings.
-    resetStore();
-    seedWorkspace();
-    seedStore({ orchestratorModels: { lead, builder } });
-    render(<Composer />);
-    openPicker();
-    expect(screen.queryByRole("switch", { name: /Orchestrator/ })).toBeNull();
   });
 
   it("writes a goal change to the session", () => {

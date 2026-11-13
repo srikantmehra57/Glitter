@@ -49,43 +49,22 @@ const BASE_ENV: &[&str] = &[
     "NODE_NO_WARNINGS",
 ];
 
-const PROVIDER_PREFIXES: &[&str] = &["OPENCODE_", "ANTHROPIC_", "OPENAI_", "OPENROUTER_", "GROK_", "GEMINI_", "QWEN_", "DASHSCOPE_", "GOOSE_", "MUSE_"];
-
-const PROVIDER_KEYS: &[&str] = &["XAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_GENAI_API_KEY", "DASHSCOPE_API_KEY", "QWEN_API_KEY"];
-
+/// The Harness takes provider keys from the keychain with each request, so no
+/// credential is inherited from the environment.
 fn keep_env_key(key: &str) -> bool {
-    if key == "NODE_OPTIONS" || key == "META_API_KEY" {
-        return false;
-    }
-    BASE_ENV.contains(&key) || PROVIDER_KEYS.contains(&key) || PROVIDER_PREFIXES.iter().any(|prefix| key.starts_with(prefix))
+    key != "NODE_OPTIONS" && BASE_ENV.contains(&key)
 }
 
-/// Version probes run before an agent needs any account credential.
-const PROBE_ENV: &[&str] = &["PATH", "HOME", "USER", "LOGNAME", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE", "LANGUAGE"];
-
-fn keep_probe_env_key(key: &str) -> bool {
-    PROBE_ENV.contains(&key)
-}
-
-fn apply_env(cmd: &mut Command, keep: fn(&str) -> bool) {
+/// Clear inherited secrets, then keep PATH/HOME and the other base keys.
+pub fn apply_minimal_env(cmd: &mut Command) {
     cmd.env_clear();
     let mut kept = HashSet::new();
     for (key, value) in std::env::vars() {
-        if keep(&key) && kept.insert(key.clone()) {
+        if keep_env_key(&key) && kept.insert(key.clone()) {
             cmd.env(key, value);
         }
     }
     cmd.env("NODE_NO_WARNINGS", "1");
-}
-
-/// Clear inherited secrets, then keep PATH/HOME and known provider keys.
-pub fn apply_minimal_env(cmd: &mut Command) {
-    apply_env(cmd, keep_env_key);
-}
-
-/// Metadata probes never receive provider credentials or agent configuration.
-pub fn apply_probe_env(cmd: &mut Command) {
-    apply_env(cmd, keep_probe_env_key);
 }
 
 pub fn isolate_command(cmd: &mut Command) {
@@ -147,23 +126,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn env_filter_drops_unrelated_secrets() {
-        assert!(!keep_env_key("META_API_KEY"));
-        assert!(!keep_env_key("AWS_SECRET_ACCESS_KEY"));
-        assert!(!keep_env_key("GITHUB_TOKEN"));
-        assert!(!keep_env_key("NODE_OPTIONS"));
+    fn env_filter_drops_secrets() {
+        for key in ["AWS_SECRET_ACCESS_KEY", "GITHUB_TOKEN", "NODE_OPTIONS", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "XAI_API_KEY", "META_API_KEY"] {
+            assert!(!keep_env_key(key), "kept {key}");
+        }
         assert!(keep_env_key("PATH"));
         assert!(keep_env_key("HOME"));
-        assert!(keep_env_key("XAI_API_KEY"));
-        assert!(keep_env_key("OPENCODE_TOKEN"));
-    }
-
-    #[test]
-    fn version_probe_env_drops_provider_credentials() {
-        assert!(keep_probe_env_key("PATH"));
-        assert!(keep_probe_env_key("HOME"));
-        for key in ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENCODE_TOKEN", "GOOGLE_API_KEY", "XAI_API_KEY", "MUSE_API_KEY", "SSH_AUTH_SOCK", "NODE_OPTIONS"] {
-            assert!(!keep_probe_env_key(key), "probe kept {key}");
-        }
     }
 }

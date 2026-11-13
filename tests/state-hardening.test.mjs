@@ -37,6 +37,7 @@ const storeReplacements = {
     export const openLogFolder=async()=>globalThis.testInvoke ? globalThis.testInvoke('open_log_folder') : '/preview/logs/app.log';
     export const providerKeysGet=async(ids)=>ids.map((id)=>({id,configured:false,keyHint:null,baseUrl:null}));
     export const persistStoreDocument=async(...args)=>globalThis.persistStoreDocument?.(...args);
+    export const preserveLegacyMuseKey=async()=>{};
     export const repairStoreDocument=async()=>globalThis.storeRepair ?? {status:'ok'};
     export const bridge=(...args)=>globalThis.storeBridge(...args);
     export const gitReview=async(...args)=>globalThis.readReview?.(...args) ?? {files:[],diff:"",truncated:false};
@@ -72,7 +73,7 @@ const storeReplacements = {
     export const listWorkspaceFiles=async()=>[];
     export const cliLogout=async()=>{};
     export const pluginList=async()=>[];export const skillList=async()=>[];
-    export const catalogList=async()=>({entries:[],skillsRoot:'',error:null});export const catalogInstall=async()=>({installedSkills:[],installedServers:[],skipped:[],errors:[]});export const catalogRemove=async()=>({removed:[],skipped:[],errors:[]});export const githubInstall=async()=>({id:'',skills:[],commands:[],servers:[],problems:[]});export const libraryList=async()=>({plugins:[],marketplaces:[],pluginsRoot:'',problems:[]});export const librarySetEnabled=async()=>({id:'',skills:[],commands:[],servers:[],problems:[]});export const libraryRemove=async()=>[];export const libraryCheckUpdates=async()=>[];export const marketplaceAdd=async()=>({});export const marketplaceRefresh=async()=>({});export const marketplaceRemove=async()=>{};
+    export const catalogList=async()=>({entries:[],skillsRoot:'',error:null});export const catalogInstall=async()=>({installedSkills:[],installedServers:[],skipped:[],errors:[]});export const catalogRemove=async()=>({removed:[],skipped:[],errors:[]});export const githubInstall=async()=>({id:'',skills:[],commands:[],servers:[],problems:[]});export const libraryList=async()=>({plugins:[],marketplaces:[],pluginsRoot:'',problems:[]});export const librarySetEnabled=async()=>({id:'',skills:[],commands:[],servers:[],problems:[]});export const libraryRemove=async()=>[];export const libraryCheckUpdates=async()=>[];export const marketplaceAdd=async()=>({});export const marketplaceRefresh=async()=>({});export const marketplaceRemove=async()=>{};export const marketplaceAvatars=async()=>0;
     export const projectInit=async()=>({});
     export const enterpriseStatus=async()=>({ generation: null, sources: [] });
     export const pickPluginBundle=async()=>null;export const pluginInstall=async()=>{};
@@ -229,161 +230,15 @@ async function rewindStore(patch = {}) {
   return { store, calls, items, images, refs, snapshot, response };
 }
 
-test('editing message N forks through N-1, hydrates early history, and sends attachments in the fork', async () => {
-  const { store, calls, items, images, refs } = await rewindStore();
-  assert.equal(await store.getState().rewindMessage('s1', 'u2', '  Revised prompt  '), true);
-  const forkRequest = calls.find((call) => call.method === 'forkSession').params;
-  assert.equal(forkRequest.sessionId, 's1'); assert.equal(forkRequest.lastTurnId, 't1');
-  assert.ok(forkRequest.clientRequestId);
-  const send = calls.find((call) => call.method === 'sendTurn').params;
-  assert.equal(send.sessionId, 'fork-1'); assert.equal(send.text, '@src/a.ts\n\nRevised prompt');
-  assert.deepEqual(send.images, [{ mediaType: 'image/png', base64Data: 'aW1hZ2U=' }]);
-  const state = store.getState(); const source = state.threads.find((thread) => thread.sessionId === 's1');
-  const fork = state.threads.find((thread) => thread.sessionId === 'fork-1');
-  assert.equal(source.items, items, 'the source history is never edited');
-  assert.deepEqual(fork.items.map((item) => item.text), ['First prompt', 'First reply', 'Revised prompt']);
-  assert.deepEqual(fork.items[2].images, images); assert.deepEqual(fork.items[2].refs, refs);
-  assert.deepEqual(fork.forkedFrom, { sessionId: 's1', title: 'Source', cutTurnId: 't1' });
-  assert.equal(state.selectedSessionId, 'fork-1'); assert.equal(state.composer, '');
-  assert.equal(state.drafts['thread:s1'].text, 'Keep my draft');
-  assert.equal(source.rewindPending, undefined);
-  assert.equal(source.rewindAttempt, undefined, 'a successful edit retires the create retry');
-});
 
-test('editing the first message creates an empty Muse session with explicit provenance', async () => {
-  const { store, calls, items } = await rewindStore();
-  assert.equal(await store.getState().rewindMessage('s1', 'u1', 'New opening'), true);
-  assert.equal(calls.filter((call) => call.method === 'forkSession').length, 0);
-  const start = calls.find((call) => call.method === 'startSession').params;
-  assert.equal(start.grantId, 'g1'); assert.equal(start.modelId, 'model-1'); assert.equal(start.providerId, 'provider-1'); assert.equal(start.approvalMode, 'ask'); assert.ok(start.clientRequestId);
-  const fork = store.getState().threads.find((thread) => thread.sessionId === 'fresh-1');
-  assert.deepEqual(fork.items.map((item) => item.text), ['New opening']);
-  assert.equal(fork.forkedFrom.firstMessage, true);
-  assert.match(fork.notice.message, /no earlier messages/);
-  assert.equal(store.getState().threads.find((thread) => thread.sessionId === 's1').items, items);
-});
 
-test('a partially streamed fork keeps canonical order and newer item contents', async () => {
-  const { store, calls, response } = await rewindStore();
-  globalThis.storeBridge = async (method, params) => {
-    calls.push({ method, params });
-    if (method === 'forkSession') {
-      // The row is learned before the reply but only part of the history has
-      // arrived. Treating the whole response as an older page reverses it.
-      store.setState({ threads: [...store.getState().threads, { sessionId: 'fork-1', workspacePath: '/repo', title: 'Unnamed', status: 'idle', items: [{ ...response.items[0], text: 'Newer streamed text' }] }] });
-      return response;
-    }
-    if (method === 'resumeSession') return { alreadyOpen: true };
-    if (method === 'sendTurn') return { turnId: 'edited-turn' };
-    return {};
-  };
-  assert.equal(await store.getState().rewindMessage('s1', 'u2', 'Edit'), true);
-  const fork = store.getState().threads.find((thread) => thread.sessionId === 'fork-1');
-  assert.deepEqual(fork.items.map((item) => item.text), ['Newer streamed text', 'First reply', 'Edit']);
-  assert.equal(fork.title, 'Source (fork)');
-  assert.equal(store.getState().threads.filter((thread) => thread.sessionId === 'fork-1').length, 1);
-});
 
-test('editing the source again starts a new fork instead of appending another revision to the used fork', async () => {
-  const { store, calls, response } = await rewindStore();
-  await store.getState().rewindMessage('s1', 'u2', 'Edit');
-  await store.getState().selectThread('s1');
-  response.sessionId = 'fork-2';
-  await store.getState().rewindMessage('s1', 'u2', 'Edit');
-  const requests = calls.filter((call) => call.method === 'forkSession');
-  assert.equal(requests.length, 2); assert.notEqual(requests[0].params.clientRequestId, requests[1].params.clientRequestId);
-  assert.deepEqual(store.getState().threads.find((thread) => thread.sessionId === 'fork-2').items.map((item) => item.text), ['First prompt', 'First reply', 'Edit']);
-});
 
-test('rewind refuses partial history, unconfirmed cuts, and ACP threads without sending', async () => {
-  const { store, calls, response } = await rewindStore({ historyExhausted: false });
-  assert.equal(await store.getState().rewindMessage('s1', 'u1', 'Edit'), false);
-  assert.equal(calls.length, 0); assert.match(store.getState().threads[0].rewindError.message, /Load earlier messages/);
-  response.forkedFrom.cutExplicit = false;
-  assert.equal(await store.getState().rewindMessage('s1', 'u2', 'Edit'), false);
-  assert.equal(calls.filter((call) => call.method === 'sendTurn').length, 0);
-  assert.equal(store.getState().selectedSessionId, 's1'); assert.equal(store.getState().composer, 'Keep my draft');
-  assert.equal(store.getState().drafts['thread:fork-1'].text, 'Edit');
-  assert.match(store.getState().threads[0].rewindError.message, /did not confirm/);
-  store.setState({ threads: store.getState().threads.map((thread) => ({ ...thread, agentId: 'opencode' })) });
-  const count = calls.length;
-  assert.equal(await store.getState().rewindMessage('s1', 'u2', 'Edit'), false); assert.equal(calls.length, count);
-});
 
-test('Reset files too cancellation creates no fork, sends nothing, and keeps drafts', async () => {
-  const { store, calls, items } = await rewindStore();
-  const editing = store.getState().rewindMessage('s1', 'u2', 'Edit', true);
-  assert.match(store.getState().confirmDialog.body, /Only the edited turn/);
-  assert.equal(await store.getState().rewindMessage('s1', 'u2', 'Edit', true), false, 'double-click is single-flight');
-  await store.getState().sendPrompt(); assert.equal(calls.length, 0, 'composer cannot race rewind');
-  store.getState().resolveConfirm(false); assert.equal(await editing, false);
-  assert.equal(calls.length, 0); assert.equal(store.getState().composer, 'Keep my draft'); assert.equal(store.getState().threads[0].items, items);
-  assert.equal(store.getState().threads[0].rewindPending, undefined);
-});
 
-test('Reset files too restores only the edited turn before sending in the fork', async () => {
-  const { store, calls, snapshot } = await rewindStore();
-  globalThis.restoreSnapshot = async (...args) => { calls.push({ method: 'reset', args }); return { snapshot: { ...snapshot, state: 'undone' }, conflicts: [] }; };
-  const editing = store.getState().rewindMessage('s1', 'u2', 'Edit', true);
-  store.getState().resolveConfirm(true); assert.equal(await editing, true);
-  const reset = calls.find((call) => call.method === 'reset');
-  assert.deepEqual(reset.args, ['g1', 's1', 'snap-1', false]);
-  assert.ok(calls.indexOf(reset) > calls.findIndex((call) => call.method === 'forkSession'));
-  assert.ok(calls.indexOf(reset) < calls.findIndex((call) => call.method === 'sendTurn'));
-  const source = store.getState().threads.find((thread) => thread.sessionId === 's1');
-  assert.equal(source.snapshots.t2.state, 'undone'); assert.equal(source.rewindAttempt, undefined);
-});
 
-test('a conflicting reset keeps the fork draft and retry reuses the same fork', async () => {
-  const { store, calls, snapshot } = await rewindStore();
-  globalThis.restoreSnapshot = async () => ({ snapshot, conflicts: ['a.txt'] });
-  const editing = store.getState().rewindMessage('s1', 'u2', 'Edit', true);
-  store.getState().resolveConfirm(true); assert.equal(await editing, false);
-  assert.equal(store.getState().selectedSessionId, 's1'); assert.equal(store.getState().composer, 'Keep my draft');
-  assert.equal(store.getState().drafts['thread:fork-1'].text, 'Edit');
-  assert.match(store.getState().threads[0].rewindError.message, /Nothing was restored/);
-  assert.equal(calls.filter((call) => call.method === 'sendTurn').length, 0);
-  globalThis.restoreSnapshot = async () => ({ snapshot: { ...snapshot, state: 'undone' }, conflicts: [] });
-  const retry = store.getState().rewindMessage('s1', 'u2', 'Edit', true);
-  store.getState().resolveConfirm(true); assert.equal(await retry, true);
-  assert.equal(calls.filter((call) => call.method === 'forkSession').length, 1);
-  assert.equal(calls.filter((call) => call.method === 'sendTurn').length, 1);
-});
 
-test('navigation during fork creation leaves a draft and prevents reset or send', async () => {
-  const { store, calls, response } = await rewindStore();
-  const waiting = deferred();
-  globalThis.storeBridge = async (method, params) => { calls.push({ method, params }); return method === 'forkSession' ? waiting.promise : {}; };
-  let resets = 0; globalThis.restoreSnapshot = async () => { resets += 1; };
-  const editing = store.getState().rewindMessage('s1', 'u2', 'Edit', true);
-  store.getState().resolveConfirm(true); await new Promise(setImmediate);
-  store.setState({ threads: [...store.getState().threads, { sessionId: 'other', workspacePath: '/repo', status: 'idle', opened: true, items: [] }], drafts: { 'thread:other': { text: 'Other draft', images: [] } } });
-  await store.getState().selectThread('other');
-  waiting.resolve(response); assert.equal(await editing, false);
-  assert.equal(store.getState().selectedSessionId, 'other'); assert.equal(store.getState().composer, 'Other draft');
-  assert.equal(store.getState().drafts['thread:fork-1'].text, 'Edit'); assert.equal(resets, 0);
-  assert.equal(calls.filter((call) => call.method === 'sendTurn').length, 0);
-});
 
-test('a failed fork retries the same create key and a failed send retains the fork draft', async () => {
-  const { store, calls, response } = await rewindStore();
-  let first = true;
-  globalThis.storeBridge = async (method, params) => {
-    calls.push({ method, params });
-    if (method === 'forkSession') { if (first) { first = false; throw new Error('lost acknowledgement'); } return response; }
-    if (method === 'resumeSession') return { alreadyOpen: true };
-    if (method === 'sendTurn') throw new Error('model unavailable');
-    return {};
-  };
-  assert.equal(await store.getState().rewindMessage('s1', 'u2', 'Edit'), false);
-  assert.equal(store.getState().composer, 'Keep my draft');
-  assert.equal(await store.getState().rewindMessage('s1', 'u2', 'Edit'), true);
-  const requests = calls.filter((call) => call.method === 'forkSession');
-  assert.equal(requests[0].params.clientRequestId, requests[1].params.clientRequestId);
-  assert.equal(store.getState().selectedSessionId, 'fork-1'); assert.equal(store.getState().composer, 'Edit');
-  assert.equal(store.getState().drafts['thread:s1'].text, 'Keep my draft');
-  assert.match(store.getState().threads.find((thread) => thread.sessionId === 'fork-1').error, /Send failed/);
-});
 
 test('a late snapshot listing cannot replace a newer native snapshot event', async () => {
   const store = await snapshotStore();
@@ -476,13 +331,6 @@ test('a successful restore with a failed Changes refresh keeps Reapply available
   await sleep(850);
 });
 
-test('a preview fork never inherits snapshot ownership from its source', async () => {
-  const store = await snapshotStore(); store.setState({ preview: true });
-  await store.getState().forkThread('s1');
-  const fork = store.getState().threads.find((thread) => thread.sessionId !== 's1');
-  assert.ok(fork); assert.equal(fork.snapshots, undefined);
-  assert.equal(store.getState().threads[0].snapshots.t1.sessionId, 's1');
-});
 
 test('a git read started before a mutation cannot resurrect pre-mutation state', async () => {
   const store = await frontendStore();
@@ -504,20 +352,6 @@ test('a git read started before a mutation cannot resurrect pre-mutation state',
   assert.equal(store.getState().gitLoading, false);
 });
 
-test('a double-click on fork sends exactly one forkSession', async () => {
-  const store = await frontendStore();
-  const forks = [];
-  globalThis.storeBridge = async (method, args) => {
-    if (method === 'forkSession') { forks.push(args); await sleep(20); return { sessionId: `fork-${forks.length}` }; }
-    return {};
-  };
-  store.setState({ threads: [{ sessionId: 's1', workspacePath: '/repo', items: [], opened: true, status: 'idle', title: 'Source' }], selectedSessionId: 's1', preview: false });
-
-  await Promise.all([store.getState().forkThread('s1'), store.getState().forkThread('s1')]);
-  assert.equal(forks.length, 1, 'session/fork is not idempotent; a second concurrent call must be dropped');
-  const created = store.getState().threads.filter((thread) => thread.sessionId.startsWith('fork-'));
-  assert.equal(created.length, 1);
-});
 
 test('local saves go through the native atomic writer and never the plugin writer', async () => {
   const store = await frontendStore(true);
@@ -700,7 +534,6 @@ test('an older settings save preserves fields from a newer document', async () =
   const backing = { settings: { theme: 'light', futureSetting: { enabled: true } } };
   const persistence = new SettingsPersistence(
     { get: async () => backing.settings, set: async (_key, value) => { backing.settings = value; }, save: async () => {} },
-    { get: async () => null, set: async () => {} },
   );
   const loaded = await persistence.load();
   await persistence.save({ ...loaded, theme: 'dark' });
@@ -724,21 +557,20 @@ test('an intact store document raises no recovery banner', async () => {
 
 // ARCH-003: the agent-exit path used to clear a different set of fields than the
 // connection-loss path, leaving a phantom approval behind.
-test('an agent exit mid-approval clears the pending approval instead of leaving a phantom one', async () => {
+test('an agent process exit mid-approval clears the pending approval instead of leaving a phantom one', async () => {
   const store = await frontendStore();
   workspace(store);
   store.setState({
-    agents: [{ id: 'agent-a', name: 'Agent A', status: 'ready' }],
     threads: [{
       sessionId: 's1', workspacePath: '/repo', items: [], opened: true,
-      agentId: 'agent-a', status: 'running', activeTurnId: 't1',
+      agentId: 'harness', status: 'running', activeTurnId: 't1',
       pendingApproval: { requestId: 'a1', kind: 'exec', summary: 'rm -rf', createdAt: '2026-01-01' },
       approvalPending: true, pendingTurnKey: 'p1', cancelRequested: true, configPending: true,
     }],
     selectedSessionId: 's1',
   });
 
-  globalThis.storeEvent('agentExit', { agentId: 'agent-a', error: 'boom' });
+  globalThis.storeEvent('bridgeExit', { error: 'boom' });
 
   const thread = store.getState().threads[0];
   assert.equal(thread.pendingApproval, null, 'nothing can resolve it, so it must not stay on screen');
@@ -748,7 +580,8 @@ test('an agent exit mid-approval clears the pending approval instead of leaving 
   assert.equal(thread.configPending, false);
   assert.equal(thread.status, 'error');
   assert.equal(thread.lastOutcome, 'interrupted');
-  assert.match(thread.error, /Agent A stopped: boom/);
+  assert.equal(thread.opened, false, 'the session died with the process, so selecting it resumes it');
+  assert.match(store.getState().error, /The agent stopped: boom/);
 });
 
 test('a failed busy-send replaces the optimistic message and settles the thread', async () => {
@@ -913,9 +746,9 @@ test('denial feedback waits for acknowledgement and stays with its original thre
   store.setState({ selectedSessionId: 's2', composer: 'Other thread draft' });
   denial.resolve({});
   await deciding;
-  assert.deepEqual(calls.map(([method]) => method), ['decideApproval', 'steerTurn']);
-  assert.equal(calls[1][1].sessionId, 's1');
-  assert.equal(calls[1][1].text, 'Use the existing helper');
+  assert.deepEqual(calls.map(([method]) => method), ['decideApproval', 'harnessRules', 'steerTurn']);
+  assert.equal(calls[2][1].sessionId, 's1');
+  assert.equal(calls[2][1].text, 'Use the existing helper');
   assert.equal(store.getState().composer, 'Other thread draft');
   assert.deepEqual(store.getState().promptHistory.w, ['Use the existing helper']);
 });
@@ -931,21 +764,6 @@ test('a failed denial never sends feedback and keeps the approval retryable', as
   assert.deepEqual(store.getState().promptHistory, {});
 });
 
-test('denial feedback queues through Muse when steering is definitively unavailable', async () => {
-  const store = await feedbackStore();
-  const calls = [];
-  globalThis.storeBridge = async (method, args) => {
-    calls.push([method, args]);
-    if (method === 'steerTurn') throw new Error('No active turn');
-    return { turnId: 't2', disposition: 'queued' };
-  };
-  await store.getState().decide('a1', 'deny', 'Try another approach');
-  assert.deepEqual(calls.map(([method]) => method), ['decideApproval', 'steerTurn', 'sendTurn']);
-  assert.equal(calls[2][1].ifBusy, 'queue');
-  assert.ok(calls[2][1].clientTurnId);
-  assert.deepEqual(store.getState().threads[0].queuedTurns, [{ turnId: 't2', text: 'Try another approach' }]);
-  assert.equal(store.getState().composer, 'Keep this draft');
-});
 
 test('an uncertain steer is never duplicated and can be reclaimed without replacing a draft', async () => {
   const store = await feedbackStore();
@@ -956,7 +774,7 @@ test('an uncertain steer is never duplicated and can be reclaimed without replac
     return {};
   };
   await store.getState().decide('a1', 'deny', 'Keep the public API');
-  assert.deepEqual(calls, ['decideApproval', 'steerTurn']);
+  assert.deepEqual(calls, ['decideApproval', 'harnessRules', 'steerTurn']);
   const feedback = store.getState().threads[0].approvalFeedback[0];
   assert.equal(feedback.state, 'uncertain');
   store.getState().reclaimApprovalFeedback('s1', feedback.id);
@@ -964,33 +782,7 @@ test('an uncertain steer is never duplicated and can be reclaimed without replac
   assert.deepEqual(store.getState().threads[0].approvalFeedback, []);
 });
 
-test('ACP denial feedback waits for completion, then sends once to the original agent', async () => {
-  const store = await feedbackStore({ agentId: 'opencode' });
-  const calls = [];
-  globalThis.storeBridge = async (method, args) => { calls.push([method, args]); return { turnId: 't2' }; };
-  await store.getState().decide('a1', 'deny', 'Use a read-only command');
-  assert.deepEqual(calls.map(([method]) => method), ['decideApproval']);
-  assert.equal(store.getState().threads[0].approvalFeedback[0].state, 'queued');
-  completeFeedbackTurn();
-  await new Promise(setImmediate);
-  assert.deepEqual(calls.map(([method]) => method), ['decideApproval', 'sendTurn']);
-  assert.equal(calls[1][1].agentId, 'opencode');
-  assert.equal(calls[1][1].sessionId, 's1');
-  assert.equal(store.getState().threads[0].activeTurnId, 't2');
-  assert.deepEqual(store.getState().threads[0].approvalFeedback, []);
-  assert.equal(store.getState().composer, 'Keep this draft');
-});
 
-test('stopping an ACP turn keeps its feedback without starting another turn', async () => {
-  const store = await feedbackStore({ agentId: 'opencode' });
-  const calls = [];
-  globalThis.storeBridge = async (method) => { calls.push(method); return {}; };
-  await store.getState().decide('a1', 'deny', 'Feedback to keep');
-  completeFeedbackTurn('cancelled');
-  await new Promise(setImmediate);
-  assert.deepEqual(calls, ['decideApproval']);
-  assert.equal(store.getState().threads[0].approvalFeedback[0].state, 'failed');
-});
 
 test('a completion before the feedback send acknowledgement cannot resurrect a finished turn', async () => {
   const store = await feedbackStore({ agentId: 'opencode' });
@@ -1377,7 +1169,7 @@ test('a replaced grant fences pending reads and writes', async () => {
 });
 
 // A1: a worktree thread works in its own checkout through its own grant.
-const musePresent = (store) => store.setState({ detection: { found: true, path: '/bin/muse', version: '1', authenticated: true }, hostInfo: null });
+const musePresent = (store) => store.setState({ agents: [{ id: 'harness', name: 'Harness', protocol: 'native', found: true, path: null, version: null, verified: true, signIn: '', authenticated: true }], hostInfo: null });
 
 test('a worktree draft creates its worktree before the session and moves Changes there', async () => {
   const store = await frontendStore(); workspace(store); musePresent(store);
@@ -1419,17 +1211,14 @@ test('a session that fails to start takes its new worktree with it', async () =>
   globalThis.removeWorktree = undefined;
 });
 
-test('a worktree is removed with its last thread, not while a fork still uses it', async () => {
+test('a worktree is removed with its last thread, not while another thread still uses it', async () => {
   const store = await frontendStore(); workspace(store);
   const removed = [];
   globalThis.removeWorktree = async (grant) => { removed.push(grant); return { branch: 'muse/one', branchKept: true }; };
   globalThis.readGit = () => git([]);
   const worktree = { grantId: 'wt1', path: '/worktrees/one', branch: 'muse/one', base: 'main', workspaceId: 'w' };
   const row = (sessionId, extra = {}) => ({ sessionId, workspacePath: '/repo', title: sessionId, status: 'idle', opened: true, items: [], ...extra });
-  store.setState({ selectedSessionId: 'a', threads: [row('a', { worktree }), row('local')] });
-  globalThis.storeBridge = async (method) => method === 'forkSession' ? { sessionId: 'b', items: [] } : {};
-  await store.getState().forkThread('a', undefined, { select: false });
-  assert.deepEqual(store.getState().threads.find((item) => item.sessionId === 'b').worktree, worktree, 'a fork shares its source worktree');
+  store.setState({ selectedSessionId: 'a', threads: [row('a', { worktree }), row('b', { worktree }), row('local')] });
   store.getState().deleteThread('a'); await sleep(5);
   assert.deepEqual(removed, []);
   store.getState().deleteThread('local'); await sleep(5);
@@ -1452,7 +1241,7 @@ test('a built-in session listing error is visible and does not remove existing t
     return {};
   };
   await store.getState().selectWorkspace('w');
-  assert.match(store.getState().error, /Could not load built-in agent threads.*session index is corrupt/i);
+  assert.match(store.getState().error, /Could not load workspace threads.*session index is corrupt/i);
   assert.ok(store.getState().threads.some((thread) => thread.sessionId === 'existing'));
 });
 
@@ -1603,7 +1392,7 @@ test('archiving the selected thread preserves its draft and the workspace draft'
   assert.equal(store.getState().drafts['project:w'].text, 'workspace draft');
 });
 
-test('line comments are sent as one message without touching the composer draft, and steer a running Muse turn', async () => {
+test('line comments are sent as one message without touching the composer draft, and steer a running turn', async () => {
   const store = await frontendStore(); workspace(store);
   globalThis.readGit = () => git(['a.ts']);
   const sent = [];
@@ -1628,16 +1417,11 @@ test('line comments are sent as one message without touching the composer draft,
   assert.equal(sent.length, 1); assert.equal(sent[0][0], 'sendTurn'); assert.match(sent[0][1], /a\.ts:4 — Use a constant/);
   assert.equal(store.getState().lineComments['thread:s1'], undefined);
   assert.equal(store.getState().composer, 'half-written thought', 'the draft is put back');
-  // While a Muse turn runs the comments steer it.
+  // While a turn runs the comments steer it.
   store.setState({ threads: store.getState().threads.map((thread) => ({ ...thread, status: 'running', activeTurnId: 't1' })) });
   store.getState().addLineComment(comment);
   await store.getState().sendLineComments();
   assert.equal(sent.at(-1)[0], 'steerTurn');
-  // An ACP turn cannot take one mid-run; the comments wait.
-  store.setState({ threads: store.getState().threads.map((thread) => ({ ...thread, agentId: 'opencode' })) });
-  store.getState().addLineComment(comment);
-  await assert.rejects(store.getState().sendLineComments(), /Stop the running turn first/);
-  assert.equal(store.getState().lineComments['thread:s1'].length, 1);
 });
 
 test('line comment delivery preserves both threads drafts after navigation', async () => {

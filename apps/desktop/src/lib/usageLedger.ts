@@ -1,5 +1,5 @@
 import { estimateCallCost } from "./cost";
-import type { AgentId, Model, ModelCall, Thread } from "./types";
+import type { Model, ModelCall, Thread } from "./types";
 
 /**
  * Durable usage, owned by the app. Turn and day totals drive the existing
@@ -12,7 +12,8 @@ export type UsageTurn = {
   /** `sessionId:turnId`, so a late usage report updates the same entry. */
   key: string;
   at: number;
-  agentId: AgentId;
+  /** The agent that ran it. History keeps the ids of agents earlier builds ran (Muse, the ACP CLIs). */
+  agentId: string;
   providerId: string;
   modelId?: string;
   effort?: string;
@@ -35,7 +36,7 @@ export type UsageCall = ModelCall & {
   /** `turnKey:callId` (or the legacy call position), unique within the ledger. */
   key: string;
   turnKey: string;
-  agentId: AgentId;
+  agentId: string;
   threadId: string;
   workspace: string;
 };
@@ -43,7 +44,7 @@ export type UsageCall = ModelCall & {
 /** One day's totals for one agent, provider and model. */
 export type UsageDay = {
   day: string;
-  agentId: AgentId;
+  agentId: string;
   providerId: string;
   modelId?: string;
   turns: number;
@@ -87,7 +88,7 @@ export function dayStart(day: string): number {
 const PROVIDER_ALIASES: Record<string, string> = { muse: "meta", grok: "xai", gemini: "google", qwen: "alibaba", claude: "anthropic" };
 
 /** Who served a turn: the model's provider prefix, else the catalog's provider, else the agent's own service. */
-export function providerOf(agentId: AgentId, modelId?: string, providerId?: string): string {
+export function providerOf(agentId: string, modelId?: string, providerId?: string): string {
   const named = modelId?.includes("/") ? modelId.slice(0, modelId.indexOf("/")) : providerId || agentId;
   return PROVIDER_ALIASES[named] ?? named;
 }
@@ -196,7 +197,7 @@ export function turnEntry(
   const inputTokens = Math.max(0, Math.round(stats.inputTokens ?? 0)) + cachedTokens;
   const outputTokens = Math.max(0, Math.round(stats.outputTokens ?? 0));
   if (!inputTokens && !outputTokens && !Object.keys(tools).length) return null;
-  const agentId: AgentId = thread.agentId ?? "muse";
+  const agentId = thread.agentId ?? "harness";
   const modelId = thread.config?.modelId;
   const calls = thread.turnCalls?.slice(-MAX_TURN_CALLS).map((call) => {
     const estimatedCost = call.estimatedCost ?? estimateCallCost(call, catalog.find((model) => model.modelId === call.modelId)?.cost);
@@ -272,7 +273,7 @@ function asStoredCalls(value: unknown): UsageCall[] {
       ...call,
       key: entry.key,
       turnKey: entry.turnKey,
-      agentId: entry.agentId as AgentId,
+      agentId: entry.agentId,
       threadId: String(entry.threadId ?? ""),
       workspace: String(entry.workspace ?? ""),
     }];
@@ -285,7 +286,7 @@ export function asLedger(raw: unknown): UsageLedger {
   const turns = (Array.isArray(raw.turns) ? raw.turns : []).filter(isRecord).filter((turn) => typeof turn.key === "string" && typeof turn.agentId === "string" && typeof turn.providerId === "string").map((turn): UsageTurn => ({
     key: String(turn.key),
     at: num(turn.at),
-    agentId: turn.agentId as AgentId,
+    agentId: String(turn.agentId),
     providerId: String(turn.providerId),
     ...(typeof turn.modelId === "string" ? { modelId: turn.modelId } : {}),
     ...(typeof turn.effort === "string" ? { effort: turn.effort } : {}),
@@ -301,7 +302,7 @@ export function asLedger(raw: unknown): UsageLedger {
   }));
   const days = (Array.isArray(raw.days) ? raw.days : []).filter(isRecord).filter((day) => typeof day.day === "string" && /^\d{4}-\d{2}-\d{2}$/.test(day.day) && typeof day.agentId === "string" && typeof day.providerId === "string").map((day): UsageDay => ({
     day: String(day.day),
-    agentId: day.agentId as AgentId,
+    agentId: String(day.agentId),
     providerId: String(day.providerId),
     ...(typeof day.modelId === "string" ? { modelId: day.modelId } : {}),
     turns: num(day.turns),
@@ -352,7 +353,7 @@ export type UsageSlice = {
   at: number;
   /** Whole-day totals carry no time of day. */
   wholeDay: boolean;
-  agentId: AgentId;
+  agentId: string;
   providerId: string;
   modelId?: string;
   effort?: string;

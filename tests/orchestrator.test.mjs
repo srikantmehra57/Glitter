@@ -10,21 +10,21 @@ import { PRE_ROUTE_CASES, PRE_ROUTE_RULES, measurePreRoute, validatePreRouteCase
 const temporary = await mkdtemp(join(tmpdir(), 'glitter-orchestrator-'));
 const outfile = join(temporary, 'orchestrator.mjs');
 await writeFile(join(temporary, 'entry.ts'), `
-export { parseRouterAssessment, validateRouterAssessment } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/orchestrator/assessment.ts'))};
-export { preRoute, decideRoute, createRouteRecord, continuationAssessment, ORCHESTRATOR_POLICY_VERSION } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/orchestrator/policy.ts'))};
-export { validateContextPack, validatePlan, validateBuildReport, validateReviewNotes, validateHandoff, parseHandoff, parsePlan } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/orchestrator/handoffs.ts'))};
-export { neutralEntries, neutralTranscriptTail, threadBrief, MAX_THREAD_BRIEF_CHARS } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/orchestrator/transcript.ts'))};
-export { ASK_LEAD_TOOL, LEAD_CONSULT_INSTRUCTIONS, leadConsultPrompt, stuckConsultPrompt } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/orchestrator/consult.ts'))};
-export { LEAD_PLAN_INSTRUCTIONS, LEAD_PLAN_READ_INSTRUCTIONS, LEAD_REVIEW_INSTRUCTIONS } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/orchestrator/prompts.ts'))};
-export { createStuckState, observeStuck, planChecksSignal, rearmStuck, stepLimitSignal, DEFAULT_STUCK_TUNING } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/orchestrator/stuck.ts'))};
-export { DEFAULT_ORCHESTRATOR_TUNING, resolveOrchestratorTuning } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/orchestrator/tuning.ts'))};
-export { approvedPlanFromHistory, pendingPlanFromHistory, planMarkdown, MAX_PLAN_MARKDOWN_CHARS } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/orchestrator/plan-mode.ts'))};
-export { probeRequest, validateProbeResponse, runProbe, createProbeStore, findProbe, probeNeeded, probePassed, recordProbe, roleCapabilitiesFromProbes, PROBE_VERSION, PROBE_FILE, PROBE_CONTENT, PROBE_DONE, ROUTER_PROBE_ASSESSMENT } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/orchestrator/probes.ts'))};
-export { normalizeOrchestratorSettings } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/orchestrator/settings.ts'))};
-export { resolveEffortTarget } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/orchestrator/effort.ts'))};
-export { routerEnvelope, ROUTER_SYSTEM, MAX_ROUTER_ENVELOPE_CHARS } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/orchestrator/router.ts'))};
-export { sanitizeHistory } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/orchestrator/history.ts'))};
-export { catalogCapabilities, LONG_CONTEXT_MIN } from ${JSON.stringify(resolve('packages/glitter-bridge/src/harness/orchestrator/capabilities.ts'))};
+export { parseRouterAssessment, validateRouterAssessment } from ${JSON.stringify(resolve('packages/glitter-harness/src/harness/orchestrator/assessment.ts'))};
+export { preRoute, decideRoute, createRouteRecord, continuationAssessment, ORCHESTRATOR_POLICY_VERSION } from ${JSON.stringify(resolve('packages/glitter-harness/src/harness/orchestrator/policy.ts'))};
+export { validateContextPack, validatePlan, validateBuildReport, validateReviewNotes, validateHandoff, parseHandoff, parsePlan } from ${JSON.stringify(resolve('packages/glitter-harness/src/harness/orchestrator/handoffs.ts'))};
+export { neutralEntries, neutralTranscriptTail, threadBrief, MAX_THREAD_BRIEF_CHARS } from ${JSON.stringify(resolve('packages/glitter-harness/src/harness/orchestrator/transcript.ts'))};
+export { ASK_LEAD_TOOL, LEAD_CONSULT_INSTRUCTIONS, leadConsultPrompt, stuckConsultPrompt } from ${JSON.stringify(resolve('packages/glitter-harness/src/harness/orchestrator/consult.ts'))};
+export { LEAD_PLAN_INSTRUCTIONS, LEAD_PLAN_READ_INSTRUCTIONS, LEAD_REVIEW_INSTRUCTIONS } from ${JSON.stringify(resolve('packages/glitter-harness/src/harness/orchestrator/prompts.ts'))};
+export { createStuckState, observeStuck, planChecksSignal, rearmStuck, stepLimitSignal, DEFAULT_STUCK_TUNING } from ${JSON.stringify(resolve('packages/glitter-harness/src/harness/orchestrator/stuck.ts'))};
+export { DEFAULT_ORCHESTRATOR_TUNING, resolveOrchestratorTuning } from ${JSON.stringify(resolve('packages/glitter-harness/src/harness/orchestrator/tuning.ts'))};
+export { approvedPlanFromHistory, pendingPlanFromHistory, planMarkdown, MAX_PLAN_MARKDOWN_CHARS } from ${JSON.stringify(resolve('packages/glitter-harness/src/harness/orchestrator/plan-mode.ts'))};
+export { probeRequest, validateProbeResponse, runProbe, createProbeStore, findProbe, probeNeeded, probePassed, recordProbe, roleCapabilitiesFromProbes, PROBE_VERSION, PROBE_FILE, PROBE_CONTENT, PROBE_DONE, ROUTER_PROBE_ASSESSMENT } from ${JSON.stringify(resolve('packages/glitter-harness/src/harness/orchestrator/probes.ts'))};
+export { normalizeOrchestratorSettings } from ${JSON.stringify(resolve('packages/glitter-harness/src/harness/orchestrator/settings.ts'))};
+export { resolveEffortTarget } from ${JSON.stringify(resolve('packages/glitter-harness/src/harness/orchestrator/effort.ts'))};
+export { routerEnvelope, ROUTER_SYSTEM, MAX_ROUTER_ENVELOPE_CHARS } from ${JSON.stringify(resolve('packages/glitter-harness/src/harness/orchestrator/router.ts'))};
+export { sanitizeHistory } from ${JSON.stringify(resolve('packages/glitter-harness/src/harness/orchestrator/history.ts'))};
+export { catalogCapabilities, LONG_CONTEXT_MIN } from ${JSON.stringify(resolve('packages/glitter-harness/src/harness/orchestrator/capabilities.ts'))};
 `);
 await build({ entryPoints: [join(temporary, 'entry.ts')], bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'silent' });
 const {
@@ -73,8 +73,8 @@ const validPlan = () => ({
   version: 1,
   goal: 'Keep routing deterministic.',
   acceptanceCriteria: ['Complex work never routes to Small.'],
-  fileTargets: [{ path: 'packages/glitter-bridge/src/harness/orchestrator/policy.ts', symbols: ['decideRoute'], intent: 'Apply the floors.' }],
-  steps: [{ intent: 'Implement and test the policy.', files: ['packages/glitter-bridge/src/harness/orchestrator/policy.ts'] }],
+  fileTargets: [{ path: 'packages/glitter-harness/src/harness/orchestrator/policy.ts', symbols: ['decideRoute'], intent: 'Apply the floors.' }],
+  steps: [{ intent: 'Implement and test the policy.', files: ['packages/glitter-harness/src/harness/orchestrator/policy.ts'] }],
   constraints: ['Do not change permissions.'],
   checks: ['node --test tests/orchestrator.test.mjs'],
   risks: ['A bad fallback could hide a provider failure.'],

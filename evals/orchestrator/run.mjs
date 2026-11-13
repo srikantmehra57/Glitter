@@ -101,8 +101,8 @@ function select(options) {
 async function loadHost() {
   const dir = await mkdtemp(join(tmpdir(), "glitter-eval-host-"));
   const entry = join(dir, "entry.ts");
-  const host = join(ROOT, "packages/glitter-bridge/src/harness/host.ts");
-  const store = join(ROOT, "packages/glitter-bridge/src/harness/store.ts");
+  const host = join(ROOT, "packages/glitter-harness/src/harness/host.ts");
+  const store = join(ROOT, "packages/glitter-harness/src/harness/store.ts");
   await writeFile(entry, `export { HarnessHost } from ${JSON.stringify(host)};\nexport { SessionStore } from ${JSON.stringify(store)};\n`);
   const outfile = join(dir, "host.mjs");
   await build({ entryPoints: [entry], bundle: true, platform: "node", format: "esm", outfile, logLevel: "silent" });
@@ -112,7 +112,7 @@ async function loadHost() {
 async function loadPolicy() {
   const dir = await mkdtemp(join(tmpdir(), "glitter-eval-policy-"));
   const entry = join(dir, "entry.ts");
-  const policy = join(ROOT, "packages/glitter-bridge/src/harness/orchestrator/policy.ts");
+  const policy = join(ROOT, "packages/glitter-harness/src/harness/orchestrator/policy.ts");
   await writeFile(entry, `export { preRoute, decideRoute } from ${JSON.stringify(policy)};\n`);
   const outfile = join(dir, "policy.mjs");
   await build({ entryPoints: [entry], bundle: true, platform: "node", format: "esm", outfile, logLevel: "silent" });
@@ -121,7 +121,7 @@ async function loadPolicy() {
 
 async function sourceIdentity() {
   const hash = createHash("sha256");
-  for (const folder of ["packages/glitter-bridge/src", "evals/orchestrator"]) {
+  for (const folder of ["packages/glitter-harness/src", "evals/orchestrator"]) {
     const files = (await readdir(join(ROOT, folder), { recursive: true })).filter((file) => /\.(?:ts|mjs)$/.test(file)).sort();
     for (const file of files) hash.update(`${folder}/${file}\0`).update(await readFile(join(ROOT, folder, file))).update("\0");
   }
@@ -129,7 +129,7 @@ async function sourceIdentity() {
   let dirty = null;
   try {
     revision = execFileSync("git", ["rev-parse", "HEAD"], { cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 10_000 }).trim();
-    dirty = Boolean(execFileSync("git", ["status", "--porcelain", "--", "packages/glitter-bridge/src", "evals/orchestrator"], { cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 10_000 }).trim());
+    dirty = Boolean(execFileSync("git", ["status", "--porcelain", "--", "packages/glitter-harness/src", "evals/orchestrator"], { cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 10_000 }).trim());
   } catch {
     // A source archive can still identify its contents without git metadata.
   }

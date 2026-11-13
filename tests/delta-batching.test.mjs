@@ -28,6 +28,7 @@ const storeReplacements = {
     export const openLogFolder=async()=>globalThis.testInvoke ? globalThis.testInvoke('open_log_folder') : '/preview/logs/app.log';
     export const providerKeysGet=async(ids)=>ids.map((id)=>({id,configured:false,keyHint:null,baseUrl:null}));
     export const persistStoreDocument=async(...args)=>globalThis.persistStoreDocument?.(...args);
+    export const preserveLegacyMuseKey=async()=>{};
     export const repairStoreDocument=async()=>globalThis.storeRepair ?? {status:'ok'};
     export const bridge=(...args)=>globalThis.storeBridge(...args);
     export const gitReview=async(...args)=>globalThis.readReview?.(...args) ?? {files:[],diff:"",truncated:false};
@@ -63,7 +64,7 @@ const storeReplacements = {
     export const cliLogout=async()=>{globalThis.cliLoggedOut=true;};
     export const pluginList=async()=>globalThis.pluginEntries ?? [];
     export const skillList=async()=>globalThis.skillEntries ?? [];
-    export const catalogList=async()=>({entries:[],skillsRoot:'',error:null});export const catalogInstall=async()=>({installedSkills:[],installedServers:[],skipped:[],errors:[]});export const catalogRemove=async()=>({removed:[],skipped:[],errors:[]});export const githubInstall=async()=>({id:'',skills:[],commands:[],servers:[],problems:[]});export const libraryList=async()=>({plugins:[],marketplaces:[],pluginsRoot:'',problems:[]});export const librarySetEnabled=async()=>({id:'',skills:[],commands:[],servers:[],problems:[]});export const libraryRemove=async()=>[];export const libraryCheckUpdates=async()=>[];export const marketplaceAdd=async()=>({});export const marketplaceRefresh=async()=>({});export const marketplaceRemove=async()=>{};
+    export const catalogList=async()=>({entries:[],skillsRoot:'',error:null});export const catalogInstall=async()=>({installedSkills:[],installedServers:[],skipped:[],errors:[]});export const catalogRemove=async()=>({removed:[],skipped:[],errors:[]});export const githubInstall=async()=>({id:'',skills:[],commands:[],servers:[],problems:[]});export const libraryList=async()=>({plugins:[],marketplaces:[],pluginsRoot:'',problems:[]});export const librarySetEnabled=async()=>({id:'',skills:[],commands:[],servers:[],problems:[]});export const libraryRemove=async()=>[];export const libraryCheckUpdates=async()=>[];export const marketplaceAdd=async()=>({});export const marketplaceRefresh=async()=>({});export const marketplaceRemove=async()=>{};export const marketplaceAvatars=async()=>0;
     export const projectInit=async(...args)=>globalThis.runProjectInit(...args);
     export const enterpriseStatus=async()=>globalThis.enterpriseFixture ?? { generation: null, sources: [] };
     export const pickPluginBundle=async()=>globalThis.pickedBundle ?? null;

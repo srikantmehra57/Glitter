@@ -1,5 +1,10 @@
 # Improvement plan
 
+> This is a historical plan, written before the Harness-only transition. Its
+> Muse and ACP proposals and CLI-as-source-of-truth rule no longer describe the
+> app. Reassess any remaining item against [AGENT_GUIDE.md](AGENT_GUIDE.md)
+> and the current [Harness roadmap](HARNESS_UPGRADE_PLAN.md) before using it.
+
 This plan comes from a comparison of Glitter with the Codex app,
 Claude Code (desktop and CLI) and ZCode on 2026-10-11. It also draws on a
 walkthrough of the browser preview (`npm run dev:ui`). It lists the gaps in
@@ -451,7 +456,7 @@ Per-item log (newest first):
 - **Effort.** Small means renderer-only and local. Medium crosses one layer
   boundary. Large crosses several layers or needs a new dependency.
 - **Layers.** UI (`components/`), store (`lib/store.ts`), IPC (`lib/bridge.ts`),
-  native (`src-tauri/`), bridge (`packages/glitter-bridge/`), CLI (needs the Muse
+  native (`src-tauri/`), bridge (`packages/glitter-harness/`), CLI (needs the Muse
   CLI or protocol to change).
 
 ## Summary

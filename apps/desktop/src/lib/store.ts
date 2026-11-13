@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { estimateTurnTokens, mergeHistoryItems, messageRewindBoundary, planAnchorFor, relativeToWorkspace, stepFromItem } from "./agent";
+import { estimateTurnTokens, planAnchorFor, relativeToWorkspace, stepFromItem } from "./agent";
 import { readTokenSpeed, recordTokenSpeed } from "./tokenSpeed";
 import { LazyStore } from "@tauri-apps/plugin-store";
 import { SettingsPersistence, settingsFields } from "./settingsPersistence";
@@ -11,28 +11,25 @@ import { buildSuggestionPrompt, cheapestModel, parseSuggestions, suggestionSigna
 import { stepZoom } from "./zoom";
 import { asLedger, compact, EMPTY_LEDGER, recordTurn, turnEntry, type UsageLedger } from "./usageLedger";
 import { persistableDrafts, rememberPrompt, NewerSessionMemoryError, SessionMemoryPersistence, SESSION_MEMORY_VERSION, type Draft, type SessionMemory, type ThreadMeta } from "./sessionMemory";
-import { acpConsentGet, acpConsentSet, agentIdentities, bridge, catalogInstall, catalogList, catalogRemove, githubInstall, libraryCheckUpdates, libraryList, libraryRemove, librarySetEnabled, marketplaceAdd, marketplaceRefresh, marketplaceRemove, cliLogout, confirmAgentBin, credentialGet, credentialSet, enterpriseStatus, gitCommit, gitDiscardAll, gitDiscardFiles, gitDiscardHunk, gitGraph as readGitGraph, gitInit, gitReview, gitBranches, gitPull, gitPullRequest, gitPush, gitSnapshot, gitStage, gitSwitch, gitWorktreeCreate, gitWorktreeHandoff, gitWorktreeRemove, turnSnapshots, restoreTurnSnapshot, forgetTurnSnapshots, listWorkspaceFiles, MOCK_FILES, mockThreads, mockWorkspaceFile, mockWorktree, providerKeysGet, readWorkspaceFile, onBridgeEvent, onWindowCloseRequested, persistStoreDocument, pickFolder, pickPluginBundle, pickSkillSource, pluginInstall, pluginList, projectInit, readDroppedPaths, removeGrant, repairStoreDocument, setInterfaceZoom, setWindowAppearance, setMenuShortcuts, skillImport, skillInstall, skillList, skillUninstall, trustPreview, verifyGrants, type BridgeEventPayloads } from "./bridge";
-import { MOCK_AGENT_MODELS, MOCK_AGENTS, MOCK_GIT, MOCK_GIT_GRAPH, MOCK_MODELS, mockGitReview } from "./mock";
+import { bridge, catalogInstall, catalogList, catalogRemove, githubInstall, libraryCheckUpdates, libraryList, libraryRemove, librarySetEnabled, marketplaceAdd, marketplaceAvatars, marketplaceRefresh, marketplaceRemove, gitCommit, gitDiscardAll, gitDiscardFiles, gitDiscardHunk, gitGraph as readGitGraph, gitInit, gitReview, gitBranches, gitPull, gitPullRequest, gitPush, gitSnapshot, gitStage, gitSwitch, gitWorktreeCreate, gitWorktreeHandoff, gitWorktreeRemove, turnSnapshots, restoreTurnSnapshot, forgetTurnSnapshots, listWorkspaceFiles, MOCK_FILES, mockThreads, mockWorkspaceFile, mockWorktree, providerKeysGet, readWorkspaceFile, onBridgeEvent, onWindowCloseRequested, persistStoreDocument, preserveLegacyMuseKey, pickFolder, readDroppedPaths, removeGrant, repairStoreDocument, setInterfaceZoom, setWindowAppearance, setMenuShortcuts, trustPreview, verifyGrants, type BridgeEventPayloads } from "./bridge";
+import { MOCK_AGENTS, MOCK_GIT, MOCK_GIT_GRAPH, MOCK_MODELS, mockGitReview } from "./mock";
 import { KEYED_PROVIDER_IDS, type ProviderStatus } from "./providers";
 import { clampTier, modelFor, tiersFor } from "./effort";
 import { orchestratorStart } from "./orchestrator";
 import { dropHunk, parseUnifiedDiff, reviewTarget } from "./diff";
 import { MAX_DROP_FILES, MAX_IMAGE_BYTES, refPathForDrop } from "./drop";
-import { authRequired, describeError, isGrantError, timeoutUnknown } from "./errors";
+import { describeError, isGrantError, timeoutUnknown } from "./errors";
 import { log } from "./logger";
-import { commitDraftPrompt, commitSubjectFromReply, parseShellEscape, parseSkillInvocation } from "./composerText";
+import { commitDraftPrompt, commitSubjectFromReply, parseSkillInvocation } from "./composerText";
+import { continuationPrompt } from "./continuation";
 import { composePrompt, humanizeToolName, isMacPlatform, isTauri, nextAttentionThread, timeFilterCutoff, titleFromText, uid, untitledThreadTitle, workspaceName } from "./format";
 import { notify, shouldNotify } from "./notify";
 import { DOCK_DEFAULT_WIDTH, normalizeDockWidth, normalizeSidebarWidth } from "./reviewLayout";
-import { rekeyThreadState } from "./agentSwitch";
 import { resolveTheme, type ThemeSettings } from "./theme";
 import {
-  AGENT_LABELS,
   DEFAULT_SETTINGS,
-  agentEnabled,
   approvalModeForAgent,
   type AgentId,
-  type AgentIdentity,
   type AgentInfo,
   type AgentSessionConfig,
   type ApprovalRequest,
@@ -51,8 +48,8 @@ import {
   type ThreadWorktree,
   type WorkspaceFile,
   type Workspace,
-  type CliUpdateOutcome, type CliUpdateStatus, type ComposerImage, type ContextRef, type HostCompat, type HostInfo, type Model, type ModelTestResult, type SessionConfig, type SessionMetadata, type SessionOpening, type SessionPreview,
-  type UserInputResponse, type GoalState, type ContextUsage, type TokenUsage, type SubscriptionUsage, type SubagentResult, type Suggestion, type TrustPreview, type SkillRow, type McpServer, type HarnessMcpStatus, type HarnessMcpConfig, type HarnessMcpScope, type HarnessMcpServerInput, type CatalogEntry, type CatalogInstallResult, type CatalogRemoveResult, type MarketplaceSource, type PluginInstallOutcome, type PluginLibrary, type PluginUpdate, type PluginEntry, type SkillEntry, type HostPosture, type EnterpriseStatus, type SettingsTab, type BrowserControlInput, type BrowserControlResult, type BrowserFrame, type BrowserState, type BrowserStateEvent, type OrchestratorModel, type OrchestratorProbeResult, type OrchestratorRole, type OrchestratorShape,
+  type ComposerImage, type ContextRef, type HostInfo, type Model, type ModelTestResult, type SessionConfig, type SessionMetadata, type SessionPreview,
+  type UserInputResponse, type TokenUsage, type SubagentResult, type Suggestion, type TrustPreview, type SkillRow, type HarnessMcpStatus, type HarnessMcpConfig, type HarnessMcpScope, type HarnessMcpServerInput, type CatalogEntry, type CatalogInstallResult, type CatalogRemoveResult, type MarketplaceSource, type PluginInstallOutcome, type PluginLibrary, type PluginUpdate, type SettingsTab, type BrowserControlInput, type BrowserControlResult, type BrowserFrame, type BrowserState, type BrowserStateEvent, type OrchestratorModel, type OrchestratorProbeResult, type OrchestratorRole, type OrchestratorShape,
 } from "./types";
 
 const persist = isTauri() ? new LazyStore("glitter.json", { autoSave: false, defaults: {} }) : null;
@@ -71,10 +68,7 @@ const persistentStore: { get<T>(key: string): Promise<T | undefined>; set(key: s
   },
 } : null;
 
-const settingsPersistence = persistentStore ? new SettingsPersistence(persistentStore, {
-  get: credentialGet,
-  set: credentialSet,
-}) : null;
+const settingsPersistence = persistentStore ? new SettingsPersistence(persistentStore, preserveLegacyMuseKey) : null;
 const memoryPersistence = new SessionMemoryPersistence(persistentStore, typeof localStorage === "undefined" ? null : localStorage);
 const pendingDeltas = new Map<string, { at: number; text?: string; output?: string }>();
 /** A stashed delta whose `item` never landed is orphaned after this long. */
@@ -103,10 +97,10 @@ const modelCatalogs = new Map<AgentId, Model[]>();
  *  on one agent can list concurrently, and a slower older answer must not win the cache. */
 const modelListings = new Map<AgentId, number>();
 const modelCatalogAt = new Map<AgentId, number>();
-/** Modes an ACP agent offers a new session (OpenCode: build, plan), as its catalog reported them. */
+/** Modes the agent offers a new session (build, plan), as its catalog reported them. */
 export type AgentModes = { modes: NonNullable<AgentSessionConfig["modes"]>; defaultMode?: string };
 async function readModelCatalog(agentId: AgentId, preview: boolean, sessionId?: string, refresh = false, modelId?: string): Promise<{ models: Model[]; modes?: AgentModes }> {
-  if (preview) return { models: agentId === "muse" ? MOCK_MODELS : MOCK_AGENT_MODELS[agentId] ?? [], ...(agentId === "opencode" ? { modes: { modes: OPENCODE_MODES, defaultMode: "build" } } : agentId === "harness" ? { modes: { modes: HARNESS_MODES, defaultMode: "build" } } : {}) };
+  if (preview) return { models: MOCK_MODELS, modes: { modes: HARNESS_MODES, defaultMode: "build" } };
   // A draft names its picked model, so the agent reports that model's effort levels before any session exists.
   const result = await bridge<{ models: Model[]; modes?: AgentModes["modes"]; defaultMode?: string }>("listModels", { agentId, sessionId, ...(refresh ? { refresh: true } : {}), ...(modelId && !sessionId ? { modelId } : {}) });
   return { models: result.models ?? [], ...(result.modes?.length ? { modes: { modes: result.modes, defaultMode: result.defaultMode } } : {}) };
@@ -133,8 +127,6 @@ function cancelScheduledGitRefresh() {
   gitRefreshTimer = null;
   gitRefreshPending = null;
 }
-/** Sources with a `forkSession` in flight. `session/fork` is not idempotent. */
-const forking = new Set<string>();
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
 
 /**
@@ -234,59 +226,17 @@ async function runGitMutation(
   }
 }
 
-/** Validate a `usage/read` / `usage/changed` payload; malformed or absent snapshots become null. */
-function asSubscriptionUsage(value: unknown): SubscriptionUsage | null {
-  if (!value || typeof value !== "object") return null;
-  const record = value as Record<string, unknown>;
-  const window = record.window as Record<string, unknown> | null;
-  const weekly = record.weekly as Record<string, unknown> | null;
-  if (!window || typeof window !== "object" || !weekly || typeof weekly !== "object") return null;
-  if (typeof record.tier !== "string" || !record.tier.trim()) return null;
-  const required = [record.observedAtMs, window.usedPercent, window.resetsAtMs, weekly.usedPercent, weekly.resetsAtMs];
-  if (!required.every((entry) => typeof entry === "number" && Number.isFinite(entry))) return null;
-  const duration = window.windowDurationMins;
-  return {
-    observedAtMs: record.observedAtMs as number,
-    tier: (record.tier as string).trim(),
-    window: {
-      usedPercent: window.usedPercent as number,
-      resetsAtMs: window.resetsAtMs as number,
-      ...(typeof duration === "number" && Number.isFinite(duration) && duration > 0 ? { windowDurationMins: duration } : {}),
-    },
-    weekly: { usedPercent: weekly.usedPercent as number, resetsAtMs: weekly.resetsAtMs as number },
-  };
-}
-/** "Thread settings updated" style confirmations fade after a few seconds. */
-const noticeTokens = new Map<string, number>();
-function scheduleConfigNoticeClear(sessionId: string, notice: string, delay = 4000) {
-  // Keyed per thread: a second notice must not strand the first thread's clear.
-  const token = (noticeTokens.get(sessionId) ?? 0) + 1;
-  noticeTokens.set(sessionId, token);
-  window.setTimeout(() => {
-    if (noticeTokens.get(sessionId) !== token) return;
-    useAppStore.setState((state) => ({
-      threads: state.threads.map((thread) => thread.sessionId === sessionId && thread.configNotice === notice ? { ...thread, configNotice: undefined } : thread),
-    }));
-  }, delay);
-}
 const draftKey = (state: Pick<AppStore, "selectedSessionId" | "selectedWorkspaceId">) => state.selectedSessionId ? `thread:${state.selectedSessionId}` : `project:${state.selectedWorkspaceId}`;
-const defaults = (state: Pick<Settings, "defaultAgentId" | "defaultModel" | "defaultProviderId" | "defaultApprovalMode" | "defaultEffort" | "enabledAgents">): SessionConfig => ({
-  ...(state.defaultAgentId && state.defaultAgentId !== "muse" && agentEnabled(state, state.defaultAgentId) ? { agentId: state.defaultAgentId } : {}),
+const defaults = (state: Pick<Settings, "defaultModel" | "defaultProviderId" | "defaultApprovalMode" | "defaultEffort">): SessionConfig => ({
+  agentId: "harness",
   ...(state.defaultModel.trim() ? { modelId: state.defaultModel.trim(), providerId: state.defaultProviderId } : {}),
   approvalMode: state.defaultApprovalMode,
   effort: state.defaultEffort,
 });
-function samePosture(a: HostPosture, b: HostPosture): boolean {
-  return a.ephemeralSessions === b.ephemeralSessions && a.disableWrite === b.disableWrite && a.disableShell === b.disableShell && a.sandboxNetwork === b.sandboxNetwork && a.contributorMode === b.contributorMode;
-}
 /** The built-in harness's modes, as its bridge reports them (`harness/host.ts`). */
 const HARNESS_MODES = [
   { value: "build", name: "Build", description: "Reads, edits files and runs commands, within the permission mode." },
   { value: "plan", name: "Plan", description: "Reads the workspace and plans. File edits are refused." },
-];
-const OPENCODE_MODES = [
-  { value: "build", name: "build", description: "The default agent. Executes tools based on configured permissions." },
-  { value: "plan", name: "plan", description: "Plan mode. Disallows all edit tools." },
 ];
 const metadataConfig = (session: SessionMetadata, effort: SessionConfig["effort"]): SessionConfig => ({
   ...(session.modelId ? { modelId: session.modelId, providerId: session.providerId ?? undefined } : {}),
@@ -319,19 +269,8 @@ type AppStore = Settings & {
   providerStatusError: string | null;
   /** Re-read the provider keychain status (connection, key hint, custom names and wires). */
   refreshProviders: () => Promise<void>;
-  /** Last CLI release-channel check; null until the first check settles. */
-  cliUpdate: CliUpdateStatus | null;
-  cliUpdateLoading: boolean;
-  cliUpdateError: string | null;
-  cliUpdateAt: number | null;
-  /** An explicit CLI update run is in flight. */
-  cliUpdating: boolean;
-  /** Last explicit update outcome, for the sidebar popover; cleared by the next check. */
-  cliUpdateResult: CliUpdateOutcome | null;
-  /** Live `muse serve` handshake facts; null when the host is not running. */
+  /** What the agent process reported when it started; null while it is not running. */
   hostInfo: HostInfo | null;
-  /** Trust class the running host was constructed with; null while stopped. */
-  hostTrust: boolean | null;
   /** Session-list time filter (`updatedAfter`) and all-workspace listing. */
   listSince: null | "day" | "week" | "month";
   showAllWorkspaces: boolean;
@@ -361,20 +300,10 @@ type AppStore = Settings & {
   confirm: (options: { title: string; body?: string; confirmLabel?: string; danger?: boolean; info?: boolean }) => Promise<boolean>;
   resolveConfirm: (ok: boolean) => void;
   confirmTrust: () => Promise<void>;
-  /** Agent-config setup dialog: dry-run preview, then scaffold with conflict handling. */
-  initDialog: { workspaceId: string; loading: boolean; error: string | null; preview: string | null; conflict: boolean; done: boolean } | null;
-  openInitDialog: (workspaceId: string) => Promise<void>;
-  closeInitDialog: () => void;
-  runInit: (force: boolean) => Promise<void>;
   untrustWorkspace: (workspaceId: string) => Promise<void>;
   openLastThread: () => Promise<void>;
   /** Refresh the session skill catalog (`skill/list`). */
   refreshSkills: (sessionId?: string) => Promise<void>;
-  /** Host-configured MCP servers (`mcpServers` verb); host-global, not per session. */
-  mcpServers: McpServer[];
-  mcpLoading: boolean;
-  mcpError: string | null;
-  refreshMcpServers: () => Promise<void>;
   /** The Harness's own MCP generation for the thread's workspace; null until loaded. */
   harnessMcp: HarnessMcpStatus | null;
   harnessMcpLoading: string | null;
@@ -414,36 +343,8 @@ type AppStore = Settings & {
   refreshMarketplace: (id: string) => Promise<MarketplaceSource>;
   removeMarketplace: (id: string) => Promise<void>;
   checkLibraryUpdates: () => Promise<PluginUpdate[]>;
-  /** Plugin inventory (`plugin_list`); `availableShown` selects marketplace-available rows. */
-  pluginEntries: PluginEntry[];
-  pluginsAvailableShown: boolean;
-  pluginsLoading: boolean;
-  pluginsError: string | null;
-  refreshPlugins: (available?: boolean) => Promise<void>;
-  /** Pick a bundle folder and install it, then show the installed inventory. */
-  installPlugin: () => Promise<void>;
-  /** CLI skill inventory (`skill_list`) for lifecycle management. */
-  skillEntries: SkillEntry[];
-  skillsLoading: boolean;
-  skillsError: string | null;
-  refreshManagedSkills: () => Promise<void>;
-  /** Pick a bundle folder and install it, then refresh the inventory. */
-  installSkill: () => Promise<void>;
-  /** Import skills from another agent; dry runs return the preview text. */
-  importSkills: (from: "claude" | "codex", dryRun: boolean) => Promise<string>;
-  /** Uninstall a skill by id, then refresh the inventory. */
-  uninstallSkill: (id: string) => Promise<void>;
-  /** Enterprise configuration status (`config status`); null until loaded. */
-  enterprise: EnterpriseStatus | null;
-  enterpriseLoading: boolean;
-  enterpriseError: string | null;
-  refreshEnterprise: () => Promise<void>;
-  /** Agent CLIs detected on this machine. */
+  /** The agent as detection last reported it. */
   agents: AgentInfo[];
-  /** Native ACP binary identities (canonical path, pin/drift state). */
-  agentIdentities: AgentIdentity[];
-  /** Which agent `models` belongs to. */
-  modelsAgentId: AgentId;
   settingsOpen: boolean;
   /** Last visited Settings tab, also used by explicit navigation links. */
   settingsTab: SettingsTab;
@@ -486,14 +387,10 @@ type AppStore = Settings & {
   models: Model[];
   modelsLoading: boolean;
   modelsError: string | null;
-  /** Each ACP agent's session modes from its catalog, so a draft can offer them before a session exists. */
+  /** The agent's session modes from its catalog, so a draft can offer them before a session exists. */
   agentModes: Partial<Record<AgentId, AgentModes>>;
   gitLoading: boolean;
   gitError: string | null;
-  subscriptionUsage: SubscriptionUsage | null;
-  subscriptionUsageLoading: boolean;
-  subscriptionUsageError: string | null;
-  subscriptionUsageAt: number | null;
   starting: boolean;
   submitting: boolean;
   drafts: Record<string, Draft>;
@@ -517,8 +414,6 @@ type AppStore = Settings & {
   testModel: (agentId: AgentId, model: Model) => Promise<ModelTestResult>;
   /** One role's fixed capability check against the Harness model Settings assigned it. */
   probeOrchestratorRole: (role: OrchestratorRole, model: OrchestratorModel, options?: { refresh?: boolean }) => Promise<OrchestratorProbeResult>;
-  /** Pick a model from another agent's provider: switch the thread's agent, then its model. */
-  chooseAgentModel: (agentId: AgentId, model: Model) => Promise<void>;
   setSessionConfig: (patch: Partial<SessionConfig>) => Promise<void>;
   dismissError: () => void;
   dismissPersistNotice: () => void;
@@ -529,6 +424,8 @@ type AppStore = Settings & {
   removeContextRef: (id: string) => void;
   retryLast: () => Promise<void>;
   continueThread: () => Promise<void>;
+  /** Leave an interrupted turn stopped. Does not send a message or replay work. */
+  stopRecovery: () => void;
   error: string | null;
   /** REC-002: local persistence failed, or the settings file was recovered after corruption. */
   persistNotice: string | null;
@@ -541,14 +438,6 @@ type AppStore = Settings & {
   /** Tell the harness host the saved rules. Rejects so a thread cannot run without them. */
   applyHarnessRules: (force?: boolean) => Promise<void>;
   refreshDetection: () => Promise<void>;
-  /** Compare the installed CLI against its release channel (hourly unless forced). */
-  refreshCliUpdate: (force?: boolean) => Promise<void>;
-  /** Run the launcher's synchronous update, then re-detect and re-check. */
-  updateCli: () => Promise<void>;
-  /** Remove CLI + desktop credentials, close sessions, and re-detect auth. */
-  signOut: () => Promise<void>;
-  refreshAgentIdentities: () => Promise<void>;
-  confirmAgentBin: (agentId: AgentId) => Promise<void>;
   startHost: (restart?: boolean) => Promise<void>;
   chooseProject: () => Promise<void>;
   addWorkspace: (path: string, grantId?: string | null) => Promise<void>;
@@ -562,34 +451,11 @@ type AppStore = Settings & {
   reorderThreads: (sessionIds: string[]) => void;
   archiveThread: (sessionId: string, archived?: boolean) => void;
   deleteThread: (sessionId: string) => void;
-  forkThread: (sessionId?: string, lastTurnId?: string, options?: { select?: boolean; firstMessage?: boolean; clientRequestId?: string }) => Promise<string | undefined>;
-  rewindMessage: (sessionId: string, itemId: string, text: string, resetFiles?: boolean) => Promise<boolean>;
   compactThread: () => Promise<void>;
-  /** Read-only session preview (metadata + recent transcript; never attaches). */
-  previewSession: { sessionId: string; title: string; loading: boolean; error: string | null; snapshot: SessionPreview | null } | null;
-  openPreview: (sessionId: string) => Promise<void>;
-  closePreview: () => void;
-  /** Full stored tool output (`item/readOutput` pages, concatenated). */
-  outputViewer: { sessionId: string; itemId: string; title: string; loading: boolean; error: string | null; encoding: "utf8" | "base64"; mediaType: string; content: string; byteLen: number; complete: boolean } | null;
-  openOutput: (sessionId: string, itemId: string) => Promise<void>;
-  closeOutput: () => void;
-  /** Child lifecycle/messaging (`subagent/*`); throws unless the host accepts. */
-  controlSubagent: (sessionId: string, subagentId: string, action: string, extra?: { body?: string; reason?: string }) => Promise<void>;
-  /** Foreground/background tool-task control (`task/*`); throws unless accepted. */
-  controlTask: (sessionId: string, action: string, taskId?: string) => Promise<void>;
-  /** Workflow-run control (`workflow/*`); throws unless accepted. */
-  controlWorkflow: (sessionId: string, workflowRunId: string, action: string, child?: { childId: string; attempt: number }) => Promise<void>;
-  /** Session-goal control (`goal/*`); resolves the ack (a `turnId` names the goal-driving turn). */
-  controlGoal: (sessionId: string, action: string, objective?: string) => Promise<{ turnId?: string }>;
-  /** Child drill-down: result envelope plus the child transcript via `session/read` (harness: `readChildSession`). */
-  childSession: { sessionId: string; itemId: string; title: string; loading: boolean; error: string | null; result: SubagentResult | null; items: TranscriptItem[]; consumed: boolean; consumable: boolean } | null;
+  /** Child drill-down: a delegated child's result and transcript (`readChildSession`). */
+  childSession: { sessionId: string; itemId: string; title: string; loading: boolean; error: string | null; result: SubagentResult | null; items: TranscriptItem[] } | null;
   openChild: (sessionId: string, itemId: string) => Promise<void>;
-  consumeChild: () => Promise<void>;
   closeChild: () => void;
-  /** Fetch one more older-history chunk past the held cursor and prepend it. */
-  loadOlderHistory: () => Promise<void>;
-  /** Rebuild the transcript after a failed fill or history load (re-resume). */
-  rebuildThread: () => Promise<void>;
   setThreadSearch: (value: string) => void;
   /** Show or hide the sidebar's search field; opening also expands a collapsed sidebar. Closing clears the query. */
   setThreadSearchOpen: (open: boolean) => void;
@@ -634,8 +500,6 @@ type AppStore = Settings & {
   pendingSend: { workspaceId: string; text: string; images: ComposerImage[] } | null;
   /** Open the next thread, in sidebar order, that waits on an approval or an answer. */
   selectNextAttentionThread: () => Promise<void>;
-  /** Bind this thread (or the workspace draft) to another agent CLI. */
-  switchThreadAgent: (agentId: AgentId) => Promise<void>;
   refreshTurnSnapshots: (sessionId: string) => Promise<void>;
   restoreSnapshot: (sessionId: string, turnId: string, options?: { confirmed?: boolean }) => Promise<boolean>;
   sendPrompt: (options?: { resetTaskState?: boolean; disposition?: "queue" | "steer" | "replace"; shape?: OrchestratorShape }) => Promise<boolean>;
@@ -661,7 +525,7 @@ type AppStore = Settings & {
   lineComments: Record<string, LineComment[]>;
   addLineComment: (comment: Omit<LineComment, "id">) => void;
   removeLineComment: (id: string) => void;
-  /** Send every pending comment as one prompt: a new turn, or a steer when a Muse turn is running. */
+  /** Send pending comments as one prompt, steering a running Harness turn. */
   sendLineComments: () => Promise<void>;
   /** Apply the open worktree thread's changes to its workspace folder, after a confirm. */
   handoffWorktree: () => Promise<void>;
@@ -682,7 +546,6 @@ type AppStore = Settings & {
   /** The thread whose running turn is drafting a commit message. */
   commitDrafting: string | null;
   draftCommitMessage: (includeUnstaged?: boolean) => Promise<void>;
-  refreshSubscriptionUsage: (force?: boolean) => Promise<void>;
   /** Every finished turn's tokens, per agent, provider and model (see lib/usageLedger.ts). */
   usageLedger: UsageLedger;
   clearUsageHistory: () => void;
@@ -710,12 +573,6 @@ type AppStore = Settings & {
   setActiveDiff: (path: string | null) => void;
   enterPreview: () => void;
   exitPreview: () => Promise<void>;
-  /** Device-code prompt from an in-flight `muse login`; null when no sign-in is running. */
-  loginPrompt: { url: string; code: string } | null;
-  loginBusy: boolean;
-  loginError: string | null;
-  startLogin: () => Promise<void>;
-  cancelLogin: () => Promise<void>;
 };
 
 type PreviewSnapshot = Pick<AppStore, "workspaces" | "selectedWorkspaceId" | "selectedSessionId" | "threads" | "drafts" | "composer" | "images" | "contextRefs" | "git">;
@@ -744,9 +601,6 @@ function dropApproval(thread: Thread, approvalId: string): { thread: Thread; slo
   return { thread: { ...thread, pendingApproval: next, queuedApprovals: next ? queued.slice(0, -1) : queued }, slotted: true };
 }
 
-/** Rename generations (per session) so only the latest settlement wins; plus the in-flight set for host-name racing. */
-const renameGeneration = new Map<string, number>();
-const renameInflight = new Set<string>();
 
 function countsForTokenSpeed(item: TranscriptItem): boolean {
   return item.kind === "agentMessage" || item.kind === "reasoning";
@@ -861,6 +715,22 @@ function recordUsage(get: () => AppStore, set: (patch: Partial<AppStore>) => voi
   scheduleLedger(get);
 }
 
+/**
+ * Discover shows a listing from another repository with that owner's avatar.
+ * The native side fetches the missing ones in the background, once per new or
+ * refreshed source, and the library is read again when they arrive.
+ */
+let listingAvatarsTried = false;
+async function fetchListingAvatars(get: () => AppStore) {
+  if (listingAvatarsTried) return;
+  listingAvatarsTried = true;
+  try {
+    if (await marketplaceAvatars() > 0) await get().refreshLibrary();
+  } catch (error) {
+    log.warn("library.avatars_failed", { error: message(error) });
+  }
+}
+
 async function persistMemory(state: AppStore) {
   if (state.preview) return;
   const threadMeta: Record<string, ThreadMeta> = { ...state.threadMeta };
@@ -898,7 +768,6 @@ async function persistMemory(state: AppStore) {
     zoom: state.zoom,
     sidebarCollapsed: state.sidebarCollapsed,
     sidebarWidth: state.sidebarWidth,
-    subscriptionUsage: state.subscriptionUsage,
   };
   try {
     await memoryPersistence.save(memory);
@@ -946,7 +815,7 @@ function noteVersionRefuse() {
   useAppStore.setState({ persistNotice: VERSION_REFUSE_NOTICE });
 }
 
-/** Host session name first (Muse names sessions from the first prompt), then the last title we saw. */
+/** Host session name first, then the last title we saw. */
 function listedTitle(session: SessionMetadata, meta?: ThreadMeta): string {
   // Durable `name` is authoritative; derived `title` is the host's display
   // heuristic for sessions without an allocated name (SS2.14.1).
@@ -1066,16 +935,14 @@ async function listWorkspaceThreads(
     await detectionSettled();
     ready = readyAgents(get());
     if (!ready.length) {
-      fail("No agent is ready yet. Add a model provider key in Settings → Providers, or sign in to an agent CLI.");
+      fail("The agent is not ready yet. Add a model provider key in Settings → Providers.");
       return;
     }
-    // Every ready agent contributes its sessions; one failing never blocks the
-    // rest. Muse lists at 200 rows × 10 pages with the time filter, across
-    // every workspace when the all-projects view is on.
+    // The listing is 200 rows × 10 pages with the time filter, across every
+    // workspace when the all-projects view is on.
     const updatedAfter = get().listSince ? timeFilterCutoff(get().listSince as "day" | "week" | "month") : undefined;
     listings = await Promise.allSettled(ready.map(async (agent) => {
-      if (agent.id === "muse") await get().startHost();
-      const all = agent.id === "muse" && get().showAllWorkspaces;
+      const all = get().showAllWorkspaces;
       const { sessions, truncated } = await listWorkspaceSessions(all ? null : workspace, agent.id, 10, undefined, { updatedAfter });
       if (truncated) log.warn("sessions.truncated", { agent: agent.id, workspace: all ? "(all)" : workspace.path, pages: 10 });
       return { agentId: agent.id, sessions };
@@ -1087,13 +954,13 @@ async function listWorkspaceThreads(
     if (at >= 0) loading.splice(at, 1);
     set({ threadsLoading: loading });
   }
-  // The CLI files a worktree thread under the worktree's root, so the listing
+  // The agent files a worktree thread under the worktree's root, so the listing
   // above never returns it. Each known worktree is listed through its own
   // grant, which also binds its sessions natively.
   const worktrees = new Map<string, { worktree: ThreadWorktree; agentId: AgentId }>();
   if (workspace.grantId) {
     for (const meta of Object.values(get().threadMeta)) {
-      const agentId = (meta.agentId ?? "muse") as AgentId;
+      const agentId: AgentId = "harness";
       if (meta.worktree && !meta.deleted && meta.worktree.workspaceId === workspace.id && ready.some((agent) => agent.id === agentId)) worktrees.set(`${meta.worktree.grantId} ${agentId}`, { worktree: meta.worktree, agentId });
     }
   }
@@ -1111,14 +978,12 @@ async function listWorkspaceThreads(
   // hold a lot of threads: membership against the array is quadratic, which cost
   // ~10ms per open at a thousand threads and two thousand sessions.
   const listed = new Set(threads.map((thread) => thread.sessionId));
-  for (const [index, listing] of listings.entries()) {
+  for (const listing of listings) {
     if (listing.status === "rejected") {
-      if (ready[index].id === "muse") fail(describeError("Could not load workspace", listing.reason));
-      else if (ready[index].id === "harness") fail(describeError("Could not load built-in agent threads", listing.reason));
-      else log.warn("agent.sessions.unavailable", { agent: ready[index].id, error: message(listing.reason) });
+      fail(describeError("Could not load workspace threads", listing.reason));
       continue;
     }
-    const agentId = listing.value.agentId === "muse" ? undefined : listing.value.agentId;
+    const agentId = listing.value.agentId;
     for (const session of listing.value.sessions) {
       // All-workspace rows for folders never registered have no grant path;
       // they cannot be opened, so they never become threads.
@@ -1126,23 +991,22 @@ async function listWorkspaceThreads(
       const meta = get().threadMeta[session.sessionId];
       if (meta?.deleted || listed.has(session.sessionId)) continue;
       listed.add(session.sessionId);
-      threads.push(applyMeta({ sessionId: session.sessionId, agentId, workspacePath: session.workspaceRoot ?? workspace.path, title: listedTitle(session, meta), order: Date.parse(session.updatedAt ?? "") || Date.now(), updatedAt: session.updatedAt ?? new Date().toISOString(), status: session.status === "running" ? "running" : "idle", unread: false, items: [], activeTurnId: session.activeTurnId, config: { ...metadataConfig(session, agentId ? undefined : get().defaultEffort), ...(agentId ? { agentId } : {}) } }, meta, session.status));
+      threads.push(applyMeta({ sessionId: session.sessionId, agentId, workspacePath: session.workspaceRoot ?? workspace.path, title: listedTitle(session, meta), order: Date.parse(session.updatedAt ?? "") || Date.now(), updatedAt: session.updatedAt ?? new Date().toISOString(), status: session.status === "running" ? "running" : "idle", unread: false, items: [], activeTurnId: session.activeTurnId, config: { ...metadataConfig(session, undefined), agentId } }, meta, session.status));
     }
   }
-  for (const { worktree, agentId: listedAgent, sessions } of worktreeSessions) {
-    const agentId = listedAgent === "muse" ? undefined : listedAgent;
+  for (const { worktree, agentId, sessions } of worktreeSessions) {
     for (const session of sessions) {
       const meta = get().threadMeta[session.sessionId];
       // Only threads this app put in the worktree: its record is what ties the
       // session to this workspace.
       if (!meta?.worktree || meta.deleted || listed.has(session.sessionId)) continue;
       listed.add(session.sessionId);
-      threads.push(applyMeta({ sessionId: session.sessionId, agentId, workspacePath: workspace.path, worktree, title: listedTitle(session, meta), order: Date.parse(session.updatedAt ?? "") || Date.now(), updatedAt: session.updatedAt ?? new Date().toISOString(), status: session.status === "running" ? "running" : "idle", unread: false, items: [], activeTurnId: session.activeTurnId, config: { ...metadataConfig(session, agentId ? undefined : get().defaultEffort), ...(agentId ? { agentId } : {}) } }, meta, session.status));
+      threads.push(applyMeta({ sessionId: session.sessionId, agentId, workspacePath: workspace.path, worktree, title: listedTitle(session, meta), order: Date.parse(session.updatedAt ?? "") || Date.now(), updatedAt: session.updatedAt ?? new Date().toISOString(), status: session.status === "running" ? "running" : "idle", unread: false, items: [], activeTurnId: session.activeTurnId, config: { ...metadataConfig(session, undefined), agentId } }, meta, session.status));
     }
   }
   set({ threads });
   scheduleMemory(get);
-  if (!ready.some((agent) => agent.id === "muse")) void get().refreshModels();
+  void get().refreshModels();
 }
 
 /**
@@ -1166,36 +1030,6 @@ function beginWorkspaceSelection(
   return { workspace, version };
 }
 
-/**
- * Settle every Muse thread for a host restart: the dead host held their
- * sessions, turns, approvals, and questions, so all of it unwinds to idle
- * with the transcripts kept and a notice on the open thread.
- */
-function settleHostRestart(get: () => AppStore, set: (patch: Partial<AppStore>) => void, messageText: string) {
-  const selected = get().selectedSessionId;
-  set({
-    threads: get().threads.map((thread) => thread.agentId ? thread : {
-      ...thread,
-      opened: false,
-      opening: false,
-      status: "idle",
-      activeTurnId: null,
-      pendingTurnKey: null,
-      queuedTurns: [],
-      pendingApproval: null,
-      queuedApprovals: [],
-      userInputs: [],
-      userInputPending: undefined,
-      cancelRequested: false,
-      activity: undefined,
-      retry: null,
-      viewGap: null,
-      plan: settlePlan(thread.plan, "cancelled"),
-      items: settleItems(thread.items, "cancelled", true),
-      ...(thread.sessionId === selected ? { notice: { level: "info" as const, message: messageText } } : {}),
-    }),
-  });
-}
 
 function finishTurn(thread: Thread, turnId?: string): Partial<Thread> {
   if (thread.turnStartedAt == null) return { tokenSpeed: undefined };
@@ -1254,65 +1088,33 @@ async function applyThreadConfig(get: () => AppStore, set: (patch: Partial<AppSt
       void drainSessionConfig(get, set, sessionId, stashed);
     }
   };
-  if (thread.agentId) {
-    const agentId = thread.agentId;
-    // ACP applies are a serialized round-trip (~2s on Grok). Changes made
-    // while one is in flight merge into a trailing call instead of being
-    // dropped, so a scrubbed value is never silently lost.
-    if (thread.configPending) { update({ pendingConfig: { ...thread.pendingConfig, ...patch } }); return; }
-    update({ configPending: true, configNotice: undefined, error: null });
-    try {
-      let applied: AgentSessionConfig | undefined;
-      // Enabling Orchestrator fixes the model and effort to its role settings,
-      // so the manual controls wait for the next switch back.
-      const enabling = patch.orchestrator != null;
-      if (patch.orchestrator !== undefined) applied = (await bridge<{ agentConfig?: AgentSessionConfig }>("setOrchestrator", { agentId, sessionId, orchestrator: patch.orchestrator })).agentConfig;
-      if (!enabling) {
-        if (patch.modelId !== undefined) {
-          // A manual model pick leaves Orchestrator first: role models are Settings.
-          if (thread.config?.orchestrator) await bridge("setOrchestrator", { agentId, sessionId, orchestrator: null });
-          applied = (await bridge<{ agentConfig?: AgentSessionConfig }>("setModel", { agentId, sessionId, modelId: patch.modelId })).agentConfig ?? applied;
-        }
-        if (patch.effort !== undefined) applied = (await bridge<{ agentConfig?: AgentSessionConfig }>("setSessionOption", { agentId, sessionId, option: "effort", value: patch.effort })).agentConfig ?? applied;
-        if (patch.mode !== undefined) applied = (await bridge<{ agentConfig?: AgentSessionConfig }>("setSessionOption", { agentId, sessionId, option: "mode", value: patch.mode })).agentConfig ?? applied;
-      }
-      // The built-in agent enforces the app's permission modes itself; for an agent CLI the bridge answers its permission requests by the mode.
-      if (patch.approvalMode !== undefined) patch = { ...patch, approvalMode: (await bridge<{ effectiveMode?: { mode: SessionConfig["approvalMode"] } }>("setApprovalMode", { agentId, sessionId, mode: approvalModeForAgent(agentId, patch.approvalMode) })).effectiveMode?.mode ?? approvalModeForAgent(agentId, patch.approvalMode) };
-      const latest = get().threads.find((item) => item.sessionId === sessionId);
-      update({ config: { ...latest?.config, ...patch, ...agentConfigPatch(applied), agentId }, ...(applied?.modes ? { modes: applied.modes } : {}) });
-      if (patch.modelId !== undefined) void get().refreshModels();
-    } catch (error) {
-      update({ error: describeError("Settings unchanged", error) });
-    } finally {
-      update({ configPending: false });
-      drainStash();
-    }
-    return;
-  }
-  // A pending apply merges further picks into a trailing call instead of
-  // dropping them, so a scrubbed value is never silently lost.
+  const agentId = "harness" as const;
+  // Applies are a serialized round-trip. Changes made while one is in flight
+  // merge into a trailing call instead of being dropped, so a scrubbed value
+  // is never silently lost.
   if (thread.configPending) { update({ pendingConfig: { ...thread.pendingConfig, ...patch } }); return; }
-  const config = fitEffort({ ...(thread.config ?? defaults(state)), ...patch }, state.models);
-  config.approvalMode = approvalModeForAgent(thread.agentId, config.approvalMode);
   update({ configPending: true, configNotice: undefined, error: null });
   try {
-    if (!state.preview) {
-      if (!thread.opened) throw new Error("Open this thread successfully before changing its settings.");
+    if (!state.preview && !thread.opened) throw new Error("Open this thread successfully before changing its settings.");
+    let applied: AgentSessionConfig | undefined;
+    // Enabling Orchestrator fixes the model and effort to its role settings,
+    // so the manual controls wait for the next switch back.
+    const enabling = patch.orchestrator != null;
+    if (patch.orchestrator !== undefined) applied = (await bridge<{ agentConfig?: AgentSessionConfig }>("setOrchestrator", { agentId, sessionId, orchestrator: patch.orchestrator })).agentConfig;
+    if (!enabling) {
       if (patch.modelId !== undefined) {
-        const result = await bridge<{ status: string }>("setModel", { sessionId, modelId: config.modelId, providerId: config.providerId });
-        if (result.status !== "accepted") throw new Error("Model change was not accepted.");
+        // A manual model pick leaves Orchestrator first: role models are Settings.
+        if (thread.config?.orchestrator) await bridge("setOrchestrator", { agentId, sessionId, orchestrator: null });
+        applied = (await bridge<{ agentConfig?: AgentSessionConfig }>("setModel", { agentId, sessionId, modelId: patch.modelId })).agentConfig ?? applied;
       }
-      if (patch.approvalMode !== undefined) {
-        const result = await bridge<{ status: string; effectiveMode: { mode: SessionConfig["approvalMode"] } }>("setApprovalMode", { sessionId, mode: config.approvalMode });
-        if (result.status !== "accepted") throw new Error("Approval change was not accepted.");
-        config.approvalMode = result.effectiveMode.mode;
-      }
-      if (patch.effort !== undefined && config.effort) {
-        const result = await bridge<{ status: string }>("setReasoningEffort", { sessionId, reasoningEffort: config.effort });
-        if (result.status !== "accepted") throw new Error("Effort change was not accepted.");
-      }
+      if (patch.effort !== undefined) applied = (await bridge<{ agentConfig?: AgentSessionConfig }>("setSessionOption", { agentId, sessionId, option: "effort", value: patch.effort })).agentConfig ?? applied;
+      if (patch.mode !== undefined) applied = (await bridge<{ agentConfig?: AgentSessionConfig }>("setSessionOption", { agentId, sessionId, option: "mode", value: patch.mode })).agentConfig ?? applied;
     }
-    update({ config });
+    // The Harness enforces the app's permission modes itself.
+    if (patch.approvalMode !== undefined) patch = { ...patch, approvalMode: (await bridge<{ effectiveMode?: { mode: SessionConfig["approvalMode"] } }>("setApprovalMode", { agentId, sessionId, mode: approvalModeForAgent(agentId, patch.approvalMode) })).effectiveMode?.mode ?? approvalModeForAgent(agentId, patch.approvalMode) };
+    const latest = get().threads.find((item) => item.sessionId === sessionId);
+    update({ config: fitEffort({ ...latest?.config, ...patch, ...agentConfigPatch(applied), agentId }, get().models), ...(applied?.modes ? { modes: applied.modes } : {}) });
+    if (patch.modelId !== undefined) void get().refreshModels();
   } catch (error) {
     update({ error: describeError("Settings unchanged", error) });
   } finally {
@@ -1328,7 +1130,7 @@ async function applyThreadConfig(get: () => AppStore, set: (patch: Partial<AppSt
 async function afterExtensionChange(get: () => AppStore, sessionId?: string) {
   await Promise.all([get().refreshLibrary(), get().refreshCatalog()]);
   const thread = sessionId ? get().threads.find((item) => item.sessionId === sessionId) : undefined;
-  if (sessionId && thread?.agentId === "harness") {
+  if (sessionId && thread) {
     await get().refreshSkills(sessionId);
     await get().refreshHarnessMcp(sessionId, true);
   }
@@ -1344,21 +1146,10 @@ export const useAppStore = create<AppStore>((set, get) => ({
   detection: null,
   providerStatus: null,
   providerStatusError: null,
-  cliUpdate: null,
-  cliUpdateLoading: false,
-  cliUpdateError: null,
-  cliUpdateAt: null,
-  cliUpdating: false,
-  cliUpdateResult: null,
   hostInfo: null,
-  hostTrust: null,
   listSince: null,
   showAllWorkspaces: false,
   agents: [],
-  agentIdentities: [],
-  mcpServers: [],
-  mcpLoading: false,
-  mcpError: null,
   harnessMcp: null,
   harnessMcpLoading: null,
   harnessMcpError: null,
@@ -1375,17 +1166,6 @@ export const useAppStore = create<AppStore>((set, get) => ({
   libraryLoading: false,
   libraryError: null,
   libraryUpdates: [],
-  pluginEntries: [],
-  pluginsAvailableShown: false,
-  pluginsLoading: false,
-  pluginsError: null,
-  skillEntries: [],
-  skillsLoading: false,
-  skillsError: null,
-  enterprise: null,
-  enterpriseLoading: false,
-  enterpriseError: null,
-  modelsAgentId: "muse",
   settingsOpen: false,
   settingsTab: "Models",
   trajectoryThreadId: null,
@@ -1427,15 +1207,11 @@ export const useAppStore = create<AppStore>((set, get) => ({
   agentModes: {},
   gitLoading: false,
   gitError: null,
-  subscriptionUsage: null,
   usageLedger: EMPTY_LEDGER,
   clearUsageHistory: () => {
     set({ usageLedger: EMPTY_LEDGER });
     scheduleLedger(get);
   },
-  subscriptionUsageLoading: false,
-  subscriptionUsageError: null,
-  subscriptionUsageAt: null,
   starting: false,
   submitting: false,
   pendingSend: null,
@@ -1446,30 +1222,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
   contextRefs: [],
   error: null,
   persistNotice: null,
-  loginPrompt: null,
-  loginBusy: false,
-  loginError: null,
   dismissPersistNotice: () => set({ persistNotice: null }),
   dismissError: () => set({ error: null, threads: get().threads.map((thread) => thread.sessionId === get().selectedSessionId ? { ...thread, error: null } : thread) }),
-
-  startLogin: async () => {
-    if (get().loginBusy || get().preview) return;
-    set({ loginBusy: true, loginError: null, loginPrompt: null });
-    try {
-      const prompt = await bridge<{ url: string; code: string }>("startLogin", { museBin: get().museBin || undefined });
-      if (!prompt?.url || !prompt?.code) throw new Error("Muse did not show a sign-in code.");
-      set({ loginPrompt: { url: prompt.url, code: prompt.code } });
-    } catch (error) {
-      set({ loginError: describeError("Could not sign in", error), loginPrompt: null });
-    } finally {
-      set({ loginBusy: false });
-    }
-  },
-  cancelLogin: async () => {
-    set({ loginPrompt: null, loginError: null });
-    try { await bridge("cancelLogin"); }
-    catch (error) { log.warn("login cancel failed", { error: message(error) }); }
-  },
 
   hydrate: async () => {
     if (hydration) return hydration;
@@ -1490,14 +1244,10 @@ export const useAppStore = create<AppStore>((set, get) => ({
         } catch (error) {
           log.warn("store.repair_failed", { error: String(error) });
         }
-        // The two persisted documents and the ACP consent gate are independent
-        // reads (the settings read also hits the keychain), so they overlap.
-        const [memory, saved, consented] = await Promise.all([
+        // The two persisted documents are independent reads, so they overlap.
+        const [memory, saved] = await Promise.all([
           memoryPersistence.load(),
           settingsPersistence ? settingsPersistence.load() : Promise.resolve(null),
-          settingsPersistence && isTauri()
-            ? acpConsentGet().then((value) => value === true, () => false)
-            : Promise.resolve(null),
         ]);
         let coerced = false;
         if (saved) {
@@ -1510,7 +1260,6 @@ export const useAppStore = create<AppStore>((set, get) => ({
             coerced = true;
           }
           set({ ...DEFAULT_SETTINGS, ...saved, threadMeta: memory.threadMeta, drafts: memory.drafts, promptHistory: memory.promptHistory, lineComments: memory.lineComments, recentCommands: memory.recentCommands, settingsTab: memory.settingsTab, dockOpen: memory.dockOpen, dockWidth: memory.dockWidth, zoom: memory.zoom, sidebarCollapsed: memory.sidebarCollapsed, sidebarWidth: memory.sidebarWidth });
-          if (consented !== null) set({ acpUnisolatedConsent: consented });
         } else {
           set({ threadMeta: memory.threadMeta, drafts: memory.drafts, promptHistory: memory.promptHistory, lineComments: memory.lineComments, recentCommands: memory.recentCommands, settingsTab: memory.settingsTab, dockOpen: memory.dockOpen, dockWidth: memory.dockWidth, zoom: memory.zoom, sidebarCollapsed: memory.sidebarCollapsed, sidebarWidth: memory.sidebarWidth });
         }
@@ -1527,9 +1276,6 @@ export const useAppStore = create<AppStore>((set, get) => ({
           const storedLedger = persistentStore ? await persistentStore.get<unknown>(LEDGER_KEY) : JSON.parse(localStorage.getItem(`glitter.${LEDGER_KEY}`) ?? "null");
           set({ usageLedger: compact(asLedger(storedLedger)) });
         } catch { /* an unreadable ledger starts empty */ }
-        const restored = asSubscriptionUsage(memory.subscriptionUsage);
-        const expired = restored != null && restored.window.resetsAtMs < Date.now() && restored.weekly.resetsAtMs < Date.now();
-        if (restored && !expired) set({ subscriptionUsage: restored, subscriptionUsageAt: restored.observedAtMs });
         applyTheme(get());
         const reconciled = await reconcileGrants(get().workspaces);
         const ungranted = reconciled.workspaces.filter((workspace) => !workspace.grantId);
@@ -1541,7 +1287,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         if (healed || coerced) void get().save();
 
         // Everything above is local. From here on the app can be shown: what
-        // remains — agent detection (which spawns CLIs), starting the host,
+        // remains — agent detection, starting the agent process,
         // listing threads, reopening the last one — takes as long as it takes,
         // and used to hold the whole window on a boot screen until it finished.
         // Detection starts first so listing and sending can wait on it. Provider
@@ -1557,11 +1303,6 @@ export const useAppStore = create<AppStore>((set, get) => ({
         set({ ready: true, booting: begun != null, restoringSession: begun ? memory.selectedSessionId : null });
         try {
           await detecting;
-          const detected = get().detection;
-          if (detected?.path && !get().museBin) {
-            set({ museBin: detected.path });
-            void get().save();
-          }
           if (!isTauri()) await get().refreshModels();
           if (begun && restoreId) {
             // A listing is applied whenever its workspace is still the open one;
@@ -1604,7 +1345,6 @@ export const useAppStore = create<AppStore>((set, get) => ({
       ? get().applyHarnessRules(true).catch((error) => { set({ error: describeError("Could not apply the permission rules", error) }); })
       : null;
     const settings = settingsFields(get());
-    set({ enabledAgents: settings.enabledAgents, acpUnisolatedConsent: settings.acpUnisolatedConsent === true });
     applyTheme(settings);
     // A failed write must not reject into a `void` call site (which would leave
     // the toggle looking inert with no explanation). Surface it and still apply
@@ -1613,29 +1353,13 @@ export const useAppStore = create<AppStore>((set, get) => ({
       try { await settingsPersistence.save(settings); }
       catch (error) { set({ error: describeError("Could not save settings", error) }); }
     }
-    if (isTauri() && !get().preview) {
-      try { await acpConsentSet(settings.acpUnisolatedConsent === true); }
-      catch { /* native gate stays at its last durable value */ }
-    }
     // The native menu holds its own copy of the accelerators.
     if ("shortcutOverrides" in patch) void setMenuShortcuts(menuAccelerators(settings.shortcutOverrides ?? {})).catch((error) => log.warn("shortcuts.menu_failed", { error: message(error) }));
     if (rulesUpdate) await rulesUpdate;
-    const next = get();
-    if (next.defaultAgentId && !agentEnabled(next, next.defaultAgentId)) set({ defaultAgentId: undefined });
-    // A disabled agent is "hidden from the composer", not deleted: the open
-    // thread and its drafts stay exactly where the user left them. Sidebar
-    // filtering owns hiding the row; clearing the selection here used to wipe
-    // the thread the user was looking at.
-
     // Only the workspace draft shows the chips. A toggle from an open thread
     // must not start a suggestion turn in the background.
     if (patch.suggestionsEnabled === true && get().selectedSessionId == null && !get().restoringSession) void get().refreshSuggestions(true);
     else if (patch.suggestionsEnabled === false) set({ suggestions: null });
-    const projectKey = `project:${get().selectedWorkspaceId}`;
-    const project = get().drafts[projectKey];
-    if (project?.config?.agentId && !agentEnabled(get(), project.config.agentId)) {
-      set({ drafts: { ...get().drafts, [projectKey]: { ...project, config: { ...project.config, agentId: undefined } } } });
-    }
   },
 
   applyHarnessRules: async (force = false) => {
@@ -1679,17 +1403,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
   refreshDetection: async () => {
     const run = (async () => {
-      const detection = await bridge<Detection>("detect", {
-        museBin: get().museBin || undefined,
-        museApiKey: get().museApiKey.trim() || undefined,
-        museAuthMode: get().museAuthMode,
-      });
+      const detection = await bridge<Detection>("detect", {});
       set({ detection, agents: detection.agents ?? get().agents });
-      // Identities only feed the Settings agent rows; nothing waits on them.
-      void get().refreshAgentIdentities();
-      // A quiet hourly channel check behind every detection; the sidebar row
-      // appears only when a newer release is actually on the channel.
-      if (detection.found && !get().preview && !get().offline) void get().refreshCliUpdate();
     })();
     detectionInFlight = run;
     try {
@@ -1698,78 +1413,6 @@ export const useAppStore = create<AppStore>((set, get) => ({
       if (detectionInFlight === run) detectionInFlight = null;
       set({ detectionChecked: true });
     }
-  },
-
-  refreshCliUpdate: async (force) => {
-    const state = get();
-    // No guard against a running update: the launcher writes state atomically,
-    // so a check racing a swap reads the old or the new release, never garbage.
-    if (state.preview || state.cliUpdateLoading) return;
-    // Same cadence as the launcher's own background check; an explicit
-    // "check again" always goes through.
-    if (!force && state.cliUpdateAt && Date.now() - state.cliUpdateAt < 60 * 60_000) return;
-    if (!force && !state.detection?.found) return;
-    set({ cliUpdateLoading: true, cliUpdateError: null, cliUpdateResult: null });
-    try {
-      const status = await bridge<CliUpdateStatus>("checkCliUpdate", { museBin: get().museBin || undefined });
-      set({ cliUpdate: status, cliUpdateAt: Date.now() });
-    } catch (error) {
-      set({ cliUpdateError: describeError("Could not check for an update", error) });
-    } finally {
-      set({ cliUpdateLoading: false });
-    }
-  },
-
-  updateCli: async () => {
-    const state = get();
-    if (state.preview || state.cliUpdating || state.cliUpdateLoading) return;
-    set({ cliUpdating: true, cliUpdateError: null, cliUpdateResult: null });
-    try {
-      // Past the bridge's 5-minute update budget, with room for the round trip.
-      const outcome = await bridge<CliUpdateOutcome>("updateCli", { museBin: get().museBin || undefined }, { timeoutMs: 330_000 });
-      // The launcher swapped binaries under us: re-probe the version (the
-      // bridge dropped its cached print) and confirm the channel state. The
-      // outcome lands last so the re-check cannot clear it before it shows.
-      try {
-        await get().refreshDetection();
-      } catch {
-        // Detection already surfaces its own state; the update itself landed.
-      }
-      await get().refreshCliUpdate(true);
-      set({ cliUpdateResult: outcome });
-    } catch (error) {
-      set({ cliUpdateError: describeError("Could not update the CLI", error) });
-    } finally {
-      set({ cliUpdating: false });
-    }
-  },
-
-  signOut: async () => {
-    try {
-      set({ error: null });
-      await cliLogout(get().museBin || undefined);
-      if (settingsPersistence && !get().preview) {
-        await settingsPersistence.save(settingsFields({ ...get(), museApiKey: "" }));
-      }
-      set({ museApiKey: "", hostInfo: null, hostTrust: null });
-      settleHostRestart(get, set, "Signed out. Sessions are closed; sign back in to continue.");
-      await get().refreshDetection();
-    } catch (error) {
-      set({ error: describeError("Could not finish signing out", error) });
-    }
-  },
-
-  refreshAgentIdentities: async () => {
-    try {
-      set({ agentIdentities: await agentIdentities() });
-    } catch {
-      // Display-only: a failed lookup leaves the last known identities.
-    }
-  },
-
-  confirmAgentBin: async (agentId) => {
-    const identity = await confirmAgentBin(agentId);
-    set({ agentIdentities: [...get().agentIdentities.filter((item) => item.agentId !== agentId), identity] });
   },
 
   chooseProject: async () => {
@@ -1787,86 +1430,32 @@ export const useAppStore = create<AppStore>((set, get) => ({
   },
 
   startHost: async (restart = false) => {
-    let corrected = false;
-    while (true) {
-      if (!hostStart) hostStart = (async (): Promise<boolean> => {
-        const museApiKey = get().museApiKey.trim() || undefined;
-        const museAuthMode = get().museAuthMode;
-        const trustWorkspace = currentWorkspace(get())?.trusted === true;
-        const posture = { ephemeralSessions: get().ephemeralSessions, disableWrite: get().disableWrite, disableShell: get().disableShell, sandboxNetwork: get().sandboxNetwork, contributorMode: get().contributorMode };
-        // Nearly every call finds the host already running the way it is wanted. The
-        // renderer hears about every exit (`hostExit`, `bridgeExit`), so what it holds
-        // is current: asking the bridge again would cost a round trip per thread open.
-        const running = get().hostInfo;
-        if (!restart && running?.posture && get().hostTrust === trustWorkspace && samePosture(running.posture, posture)) return false;
-        const result = await bridge<{ running?: boolean; compat?: HostCompat; trustWorkspace?: boolean; posture?: HostPosture | null }>("status", { museApiKey, museAuthMode });
-        // A running host of the wrong trust class restarts: skills and rules
-        // must never mix classes on one host.
-        const wrongTrust = result.running && result.trustWorkspace !== undefined && result.trustWorkspace !== trustWorkspace;
-        // Posture is also host-construction: a running host built with
-        // different flags restarts so the settings always describe the host.
-        const runningPosture = result.posture ?? get().hostInfo?.posture ?? null;
-        const wrongPosture = result.running && runningPosture !== null && !samePosture(runningPosture, posture);
-        if (restart || wrongTrust || wrongPosture || !result.running) {
-          if (wrongTrust) settleHostRestart(get, set, "The host restarted: workspace trust changed.");
-          if (wrongPosture) settleHostRestart(get, set, runningPosture?.contributorMode !== posture.contributorMode
-            ? "The host restarted: Contributor mode changed." : "The host restarted: sandbox posture changed.");
-          const started = await bridge<HostInfo>("startHost", {
-            museBin: get().museBin || get().detection?.path || undefined,
-            museApiKey,
-            museAuthMode,
-            trustWorkspace,
-            noSessionLog: posture.ephemeralSessions,
-            disableWrite: posture.disableWrite,
-            disableShell: posture.disableShell,
-            sandboxNetwork: posture.sandboxNetwork,
-            contributorMode: posture.contributorMode,
-          });
-          set({ hostInfo: started, hostTrust: started.trustWorkspace ?? trustWorkspace });
-          return true;
-        } else if (result.compat && !get().hostInfo?.compat) {
-          set({ hostInfo: { ...get().hostInfo, compat: result.compat }, hostTrust: result.trustWorkspace ?? get().hostTrust });
-        } else if (get().hostTrust === null && result.trustWorkspace !== undefined) {
-          set({ hostTrust: result.trustWorkspace });
-        }
-        return false;
-      })().finally(() => { hostStart = null; });
-      const started = await hostStart;
-      const matchesCurrentWorkspace = () => {
-        const trustWorkspace = currentWorkspace(get())?.trusted === true;
-        const posture = { ephemeralSessions: get().ephemeralSessions, disableWrite: get().disableWrite, disableShell: get().disableShell, sandboxNetwork: get().sandboxNetwork, contributorMode: get().contributorMode };
-        const running = get().hostInfo;
-        return running?.posture ? get().hostTrust === trustWorkspace && samePosture(running.posture, posture) : get().hostTrust === trustWorkspace;
-      };
-      // A shared start captures the first caller's workspace. Every waiter must
-      // revalidate before using that host, and again after a slow catalog read.
-      if (matchesCurrentWorkspace()) {
-        if (started || !get().models.length || get().modelsAgentId !== activeAgentId(get())) await get().refreshModels();
-        if (matchesCurrentWorkspace()) return;
-      }
-      // One corrective restart is enough. A bridge that still disagrees after
-      // it must fail visibly rather than recursing forever.
-      if (corrected) throw new Error("The agent host could not apply the current workspace trust and sandbox settings.");
-      corrected = true;
-      restart = true;
-    }
+    // The Harness runs inside the agent process, so starting it only confirms
+    // the process is up and reports how its commands are isolated. The renderer
+    // hears about every exit (`bridgeExit`), so what it holds is current.
+    if (!restart && get().hostInfo) return;
+    if (!hostStart) hostStart = (async (): Promise<boolean> => {
+      const started = await bridge<HostInfo>("startHost", { agentId: "harness" });
+      set({ hostInfo: { isolation: started.isolation ?? null } });
+      return true;
+    })().finally(() => { hostStart = null; });
+    await hostStart;
+    if (!get().models.length) await get().refreshModels();
   },
 
-  loadModelCatalog: async (agentId) => {
-    return (await readModelCatalog(agentId, get().preview, undefined, true)).models;
+  loadModelCatalog: async () => {
+    return (await readModelCatalog("harness", get().preview, undefined, true)).models;
   },
 
-  peekModelCatalog: async (agentId) => {
-    if (get().modelsAgentId === agentId && get().models.length) return get().models;
-    const held = modelCatalogs.get(agentId);
+  peekModelCatalog: async () => {
+    if (get().models.length) return get().models;
+    const held = modelCatalogs.get("harness");
     if (held?.length) return held;
-    return (await readModelCatalog(agentId, get().preview)).models;
+    return (await readModelCatalog("harness", get().preview)).models;
   },
 
-  testModel: async (agentId, model) => {
-    // Only the built-in agent calls a provider itself; a CLI agent's model would need a session.
-    if (agentId !== "harness") throw new Error(`${AGENT_LABELS[agentId]} models are tested by opening a thread on them.`);
-    return bridge<ModelTestResult>("testModel", { agentId, modelId: model.modelId }, { timeoutMs: 45_000 });
+  testModel: async (_agentId, model) => {
+    return bridge<ModelTestResult>("testModel", { agentId: "harness", modelId: model.modelId }, { timeoutMs: 45_000 });
   },
 
   probeOrchestratorRole: async (role, model, options) => {
@@ -1875,43 +1464,33 @@ export const useAppStore = create<AppStore>((set, get) => ({
     return bridge<OrchestratorProbeResult>("orchestratorProbe", { agentId: "harness", role, providerId, modelId: model.modelId, ...(options?.refresh ? { refresh: true } : {}) });
   },
 
-  chooseAgentModel: async (agentId, model) => {
-    if (activeAgentId(get()) !== agentId) {
-      await get().switchThreadAgent(agentId);
-      // The switch can be refused (a turn started, the agent is off) or fail; then the model stays too.
-      if (activeAgentId(get()) !== agentId) return;
-    }
-    await get().setSessionConfig({ modelId: model.modelId, providerId: model.providerId });
-  },
-
   refreshModels: async (refresh = false) => {
+    const agentId: AgentId = "harness";
     if (get().preview) {
-      const agentId = activeAgentId(get());
       const catalog = await readModelCatalog(agentId, true);
-      set({ models: catalog.models, modelsError: null, modelsLoading: false, modelsAgentId: agentId, ...(catalog.modes ? { agentModes: { ...get().agentModes, [agentId]: catalog.modes } } : {}) });
+      set({ models: catalog.models, modelsError: null, modelsLoading: false, ...(catalog.modes ? { agentModes: { ...get().agentModes, [agentId]: catalog.modes } } : {}) });
       return;
     }
-    const agentId = activeAgentId(get());
     const thread = currentThread(get());
-    const sessionId = agentId !== "muse" && thread && thread.agentId === agentId ? thread.sessionId : undefined;
-    const draftModel = agentId !== "muse" && !thread ? activeConfig(get()).modelId : undefined;
-    // Callers overlap constantly (starting the host, opening a thread, a model
-    // event); one listing per agent and session is enough for all of them.
-    const key = `${agentId}\u0000${sessionId ?? ""}\u0000${refresh}\u0000${draftModel ?? ""}`;
+    const sessionId = thread?.sessionId;
+    const draftModel = !thread ? activeConfig(get()).modelId : undefined;
+    // Callers overlap constantly (starting the agent, opening a thread, a model
+    // event); one listing per session is enough for all of them.
+    const key = `${sessionId ?? ""}\u0000${refresh}\u0000${draftModel ?? ""}`;
     if (modelsInFlight?.key === key) return modelsInFlight.promise;
     const version = ++modelVersion;
     const listing = (modelListings.get(agentId) ?? 0) + 1;
     modelListings.set(agentId, listing);
-    // Models already on screen for this agent stay there while the refresh runs:
-    // blanking the picker to "Loading…" on every thread switch made it flicker
-    // and go unclickable for the length of a round trip.
-    const known = get().modelsAgentId === agentId ? get().models : modelCatalogs.get(agentId) ?? [];
+    // Models already on screen stay there while the refresh runs: blanking the
+    // picker to "Loading…" on every thread switch made it flicker and go
+    // unclickable for the length of a round trip.
+    const known = get().models.length ? get().models : modelCatalogs.get(agentId) ?? [];
     const showing = known.length > 0;
-    set({ modelsLoading: !showing, modelsError: null, ...(get().modelsAgentId !== agentId ? { models: known, modelsAgentId: agentId } : {}) });
+    set({ modelsLoading: !showing, modelsError: null, ...(!get().models.length ? { models: known } : {}) });
     const run = (async () => {
       try {
         let { models, modes } = await readModelCatalog(agentId, false, sessionId, refresh, draftModel);
-        // An agent that lists nothing from its cache gets one fresh probe before the picker says so.
+        // A catalog that lists nothing from its cache gets one fresh probe before the picker says so.
         if (!refresh && !models.length) ({ models, modes } = await readModelCatalog(agentId, false, sessionId, true, draftModel));
         if (modes) set({ agentModes: { ...get().agentModes, [agentId]: modes } });
         // Only a listing newer than whatever wrote the cache may replace it: a
@@ -1920,9 +1499,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
           modelCatalogs.set(agentId, models);
           modelCatalogAt.set(agentId, listing);
         }
-        if (version === modelVersion) set({ models, modelsAgentId: agentId });
+        if (version === modelVersion) set({ models });
       } catch (error) {
-        if (version === modelVersion) set({ ...(showing ? {} : { models: [] }), modelsError: describeError(`Could not load ${get().agents.find((agent) => agent.id === agentId)?.name ?? agentId} models`, error) });
+        if (version === modelVersion) set({ ...(showing ? {} : { models: [] }), modelsError: describeError("Could not load models", error) });
       } finally {
         if (version === modelVersion) set({ modelsLoading: false });
       }
@@ -1935,25 +1514,6 @@ export const useAppStore = create<AppStore>((set, get) => ({
     }
   },
 
-  refreshSubscriptionUsage: async (force) => {
-    const state = get();
-    if (state.subscriptionUsageLoading) return;
-    if (!force && state.subscriptionUsageAt && Date.now() - state.subscriptionUsageAt < 60_000) return;
-    set({ subscriptionUsageLoading: true, subscriptionUsageError: null });
-    try {
-      // Usage is read from the Muse host. A cold app has never started one, so
-      // without this the read fails until some other action happens to boot it.
-      if (!state.preview && readyAgents(get()).some((agent) => agent.id === "muse")) await get().startHost();
-      const result = await bridge<{ usage?: unknown }>("usage", {});
-      set({ subscriptionUsage: asSubscriptionUsage(result?.usage ?? null), subscriptionUsageAt: Date.now() });
-      scheduleMemory(get);
-    } catch (error) {
-      set({ subscriptionUsageError: describeError("Could not load subscription usage", error) });
-    } finally {
-      set({ subscriptionUsageLoading: false });
-    }
-  },
-
   setSessionConfig: async (patch) => {
     const state = get();
     const thread = currentThread(state);
@@ -1961,15 +1521,12 @@ export const useAppStore = create<AppStore>((set, get) => ({
     if (!thread) {
       const key = draftKey(state);
       const previous = state.drafts[key]?.config ?? defaults(state);
-      const switching = patch.agentId && patch.agentId !== (previous.agentId ?? preferredAgent(state));
-      // A new agent brings its own models and effort tiers; drop the old agent's picks.
-      const next = switching ? { ...previous, agentId: patch.agentId, modelId: undefined, providerId: undefined, effort: undefined, mode: undefined } : fitEffort({ ...previous, ...patch }, state.models);
-      if (!switching && patch.modelId !== undefined && patch.orchestrator == null && activeAgentId(state) === "harness") next.orchestrator = null;
-      next.approvalMode = approvalModeForAgent(next.agentId ?? preferredAgent(state), next.approvalMode);
+      const next = fitEffort({ ...previous, ...patch }, state.models);
+      if (patch.modelId !== undefined && patch.orchestrator == null) next.orchestrator = null;
+      next.approvalMode = approvalModeForAgent("harness", next.approvalMode);
       set({ drafts: { ...state.drafts, [key]: { text: state.composer, images: state.images, refs: state.contextRefs, config: next } } });
-      // A new agent lists its own models; a newly picked third-party model is
-      // described, so its effort levels show before the thread exists.
-      if (switching || (patch.modelId && (next.agentId ?? preferredAgent(state)) !== "muse")) void get().refreshModels();
+      // A newly picked model is described, so its effort levels show before the thread exists.
+      if (patch.modelId) void get().refreshModels();
       return;
     }
     await applyThreadConfig(get, set, thread, patch);
@@ -2030,39 +1587,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
   renameThread: (sessionId, title) => {
     const next = title.replace(/\s+/g, " ").trim();
     if (!next) return;
-    const thread = get().threads.find((item) => item.sessionId === sessionId);
-    // ACP agents and preview drafts have no durable name: the local title is the truth.
-    if (!thread || thread.agentId || get().preview) {
-      set({ threads: get().threads.map((item) => item.sessionId === sessionId ? { ...item, title: next, customTitle: true } : item) });
-      scheduleMemory(get);
-      return;
-    }
-    const previous = { title: thread.title, customTitle: thread.customTitle };
-    const generation = (renameGeneration.get(sessionId) ?? 0) + 1;
-    renameGeneration.set(sessionId, generation);
-    renameInflight.add(sessionId);
-    const current = () => renameGeneration.get(sessionId) === generation;
-    set({ threads: get().threads.map((item) => item.sessionId === sessionId ? { ...item, title: next, customTitle: true, notice: null } : item) });
+    // The agent keeps no name of its own: the local title is the truth.
+    set({ threads: get().threads.map((item) => item.sessionId === sessionId ? { ...item, title: next, customTitle: true } : item) });
     scheduleMemory(get);
-    void bridge<{ name?: string; status?: string }>("renameSession", { sessionId, name: next }).then(
-      (result) => {
-        if (!current()) return;
-        renameInflight.delete(sessionId);
-        // The host normalizes; the canonical name wins and the local override
-        // clears so later host-side renames (other clients, first-naming) flow in.
-        // Without a settled name (RecoveryPending arm) the optimistic text stays
-        // until the deferred `session/nameChanged` lands — now unblocked.
-        const canonical = result.name?.trim() || next;
-        set({ threads: get().threads.map((item) => item.sessionId === sessionId ? { ...item, title: titleFromText(canonical), customTitle: false, notice: null } : item) });
-        scheduleMemory(get);
-      },
-      (error) => {
-        if (!current()) return;
-        renameInflight.delete(sessionId);
-        set({ threads: get().threads.map((item) => item.sessionId === sessionId ? { ...item, title: previous.title, customTitle: previous.customTitle, notice: { level: "warning", message: describeError("Could not rename the thread", error) } } : item) });
-        scheduleMemory(get);
-      },
-    );
   },
 
   pinThread: (sessionId) => {
@@ -2148,134 +1675,12 @@ export const useAppStore = create<AppStore>((set, get) => ({
     rescope(get, set, scope);
   },
 
-  forkThread: async (sessionId, lastTurnId, options) => {
-    const state = get();
-    const source = state.threads.find((item) => item.sessionId === (sessionId ?? state.selectedSessionId));
-    if (!source || source.agentId || source.rewindPending && options?.select !== false) return;
-    // Single-flight: `session/fork` is not idempotent, so a double-click on Fork
-    // would otherwise create one duplicate fork session per click.
-    if (forking.has(source.sessionId)) return;
-    forking.add(source.sessionId);
-    try {
-      // Cut points must be real server turn ids: local/history groupings fork whole.
-      const cut = lastTurnId && !lastTurnId.startsWith("local:") && lastTurnId !== "history" ? lastTurnId : undefined;
-      const workspace = threadScope(state, source);
-      set({ threads: get().threads.map((item) => item.sessionId === source.sessionId ? { ...item, error: null } : item) });
-      let forked: SessionOpening & { items?: TranscriptItem[]; historyCursor?: string | null; historyExhausted?: boolean; historyFailed?: boolean; forkedFrom?: { cutExplicit?: boolean } };
-      if (state.preview) {
-        let end = source.items.length;
-        if (cut) { end = 0; source.items.forEach((item, index) => { if (item.turnId === cut) end = index + 1; }); }
-        forked = { sessionId: `preview-${uid()}`, items: options?.firstMessage ? [] : source.items.slice(0, end).map((item) => ({ ...item })), historyExhausted: source.historyExhausted, forkedFrom: { cutExplicit: Boolean(cut) } };
-      } else if (options?.firstMessage) {
-        if (!workspace?.grantId) throw new Error(UNGRANTED_ERROR);
-        await get().startHost();
-        forked = { ...await bridge<SessionOpening>("startSession", { grantId: workspace.grantId, modelId: source.config?.modelId, providerId: source.config?.providerId, approvalMode: approvalModeForAgent(undefined, source.config?.approvalMode), ...(options.clientRequestId ? { clientRequestId: options.clientRequestId } : {}) }), items: [], historyExhausted: true };
-      } else {
-        forked = await bridge<typeof forked>("forkSession", { sessionId: source.sessionId, ...(cut ? { lastTurnId: cut } : {}), ...(options?.clientRequestId ? { clientRequestId: options.clientRequestId } : {}) });
-      }
-      if (!forked.sessionId) throw new Error("Muse did not return a thread. Your edited message is unchanged.");
-      const now = new Date().toISOString();
-      const title = `${source.title} (fork)`;
-      const metadata = forked.opening?.result.session;
-      const thread: Thread = {
-        sessionId: forked.sessionId, workspacePath: source.workspacePath, worktree: source.worktree, title, customTitle: true, order: Date.now(), updatedAt: now, status: "idle", unread: false,
-        items: forked.items ?? [], opened: Boolean(options?.firstMessage), config: options?.firstMessage && metadata ? metadataConfig(metadata, source.config?.effort ?? state.defaultEffort) : { ...source.config },
-        historyCursor: forked.historyCursor ?? null, historyExhausted: forked.historyExhausted ?? false, historyFailed: forked.historyFailed ?? !forked.items,
-        forkedFrom: { sessionId: source.sessionId, title: source.title, ...(cut && forked.forkedFrom?.cutExplicit ? { cutTurnId: cut } : {}), ...(options?.firstMessage ? { firstMessage: true } : {}) },
-        notice: { level: "info", message: options?.firstMessage ? `Edited from ${source.title}. Started with no earlier messages.` : `Forked from ${source.title}.` },
-      };
-      // A create retry can return a session already learned from an event or an
-      // earlier acknowledgement. Keep live items and never add a duplicate row.
-      set({ threads: get().threads.some((item) => item.sessionId === thread.sessionId)
-        ? get().threads.map((item) => item.sessionId === thread.sessionId ? { ...thread, ...item, title: item.customTitle ? item.title : thread.title, customTitle: true, items: mergeHistoryItems(item.items, thread.items, { sameWindow: true }), historyCursor: thread.historyCursor, historyExhausted: thread.historyExhausted, historyFailed: thread.historyFailed, forkedFrom: thread.forkedFrom } : item)
-        : [...get().threads, thread] });
-      scheduleMemory(get);
-      if (options?.select !== false) await get().selectThread(forked.sessionId);
-      return forked.sessionId;
-    } catch (error) {
-      set({ threads: get().threads.map((item) => item.sessionId === source.sessionId ? { ...item, error: describeError("Could not fork the thread", error) } : item) });
-    } finally {
-      forking.delete(source.sessionId);
-    }
-  },
-
-  rewindMessage: async (sessionId, itemId, value, resetFiles = false) => {
-    const state = get();
-    const source = state.threads.find((thread) => thread.sessionId === sessionId);
-    const workspace = state.workspaces.find((item) => item.path === source?.workspacePath);
-    const text = value.trim();
-    if (!source || source.agentId || !workspace || !text || state.selectedSessionId !== sessionId || state.selectedWorkspaceId !== workspace.id || state.starting || state.submitting || source.status === "running" || source.opening || source.configPending || source.snapshotPending || source.rewindPending || source.queuedTurns?.length || forking.has(sessionId)) return false;
-    const update = (patch: Partial<Thread>) => set({ threads: get().threads.map((thread) => thread.sessionId === sessionId ? { ...thread, ...patch } : thread) });
-    const boundary = messageRewindBoundary(source, itemId);
-    if ("error" in boundary) { update({ rewindError: { itemId, message: boundary.error } }); return false; }
-    const original = source.items.find((item) => item.itemId === itemId)!;
-    const held = source.rewindAttempt;
-    const attempt = held?.itemId === itemId && held.text === text && held.resetFiles === resetFiles ? { ...held } : { itemId, text, resetFiles, requestId: uid(), sessionId: undefined, filesReset: false };
-    const snapshot = source.snapshots?.[boundary.turnId];
-    const version = selectionVersion;
-    const stillSelected = () => {
-      const live = get().threads.find((thread) => thread.sessionId === sessionId);
-      return selectionVersion === version && get().selectedSessionId === sessionId && get().selectedWorkspaceId === workspace.id && get().workspaces.find((item) => item.id === workspace.id)?.grantId === workspace.grantId && live?.items.find((item) => item.itemId === itemId) === original && !live.agentId && live.status !== "running" && !live.configPending && !live.opening && !get().starting && !get().submitting;
-    };
-    update({ rewindPending: itemId, rewindError: undefined });
-    try {
-      if (resetFiles && !attempt.filesReset) {
-        if (!snapshot || snapshot.state !== "ready" || !snapshot.files.length) throw new Error("This turn has no restorable file snapshot. Uncheck Reset files too to fork the message only.");
-        const confirmed = await state.confirm({ title: `Reset this turn’s ${snapshot.files.length} file change${snapshot.files.length === 1 ? "" : "s"} and send?`, body: "Only the edited turn’s saved files are reset. Other later file changes remain. Every affected file must still match its saved end state; otherwise nothing is restored or sent. Shell or other-app changes during that turn cannot be separated from the agent’s edits. The original thread is kept.", confirmLabel: "Reset and send" });
-        if (!confirmed || !stillSelected()) return false;
-      }
-      update({ rewindAttempt: attempt });
-      const forkId = attempt.sessionId ?? await get().forkThread(sessionId, boundary.lastTurnId, { select: false, firstMessage: !boundary.lastTurnId, clientRequestId: attempt.requestId });
-      if (!forkId) throw new Error(get().threads.find((thread) => thread.sessionId === sessionId)?.error ?? "Could not create the fork. Your edited message is unchanged.");
-      attempt.sessionId = forkId;
-      update({ rewindAttempt: { ...attempt } });
-      const fork = get().threads.find((thread) => thread.sessionId === forkId);
-      if (!fork) { update({ rewindAttempt: undefined }); throw new Error("The fork was removed. Try again to create a new fork."); }
-      const key = `thread:${forkId}`;
-      const saved = get().drafts[key];
-      if (saved?.text && saved.text !== text) throw new Error("The fork already has a different draft. Open that thread to continue; neither draft was sent.");
-      set({ drafts: { ...get().drafts, [key]: { text, images: original.images ?? [], refs: original.refs ?? [], config: fork.config } } });
-      scheduleMemory(get);
-      const keepDraft = () => set({ threads: get().threads.map((thread) => thread.sessionId === forkId ? { ...thread, notice: { level: "info", key: "rewind-draft", message: `Edited prompt saved as a draft. Open this thread to send.${attempt.filesReset ? " The edited turn’s files were reset." : ""}` } } : thread) });
-      const removedTurns = new Set(source.items.slice(source.items.indexOf(original)).map((item) => item.turnId).filter(Boolean));
-      if (boundary.lastTurnId && (fork.forkedFrom?.cutTurnId !== boundary.lastTurnId || fork.historyFailed || !fork.items.length || fork.items.some((item) => item.turnId && removedTurns.has(item.turnId)))) throw new Error("Muse did not confirm the requested history cut. The edit is saved in the fork; no revised prompt was sent.");
-      // Navigation while the RPC is pending keeps the edit as a fork draft. It
-      // must not pull the user back, overwrite another draft, or reset files.
-      if (!stillSelected()) { keepDraft(); return false; }
-      if (resetFiles && !attempt.filesReset) {
-        if (get().threads.find((thread) => thread.sessionId === sessionId)?.snapshots?.[boundary.turnId] !== snapshot) throw new Error("The saved file state changed. Review it before trying Reset files too again.");
-        const restored = await get().restoreSnapshot(sessionId, boundary.turnId, { confirmed: true });
-        if (!restored) throw new Error(get().threads.find((thread) => thread.sessionId === sessionId)?.snapshotError?.message ?? "Files were not reset. The edit is saved in the fork; no revised prompt was sent.");
-        attempt.filesReset = true;
-        update({ rewindAttempt: { ...attempt } });
-        if (!stillSelected()) { keepDraft(); return false; }
-      }
-      update({ rewindPending: undefined });
-      const forkSelection = selectionVersion + 1;
-      await get().selectThread(forkId);
-      const live = get();
-      const liveFork = live.threads.find((thread) => thread.sessionId === forkId);
-      if (selectionVersion !== forkSelection || live.selectedSessionId !== forkId || live.selectedWorkspaceId !== workspace.id || live.workspaces.find((item) => item.id === workspace.id)?.grantId !== workspace.grantId || live.composer.trim() !== text || live.images !== live.drafts[key]?.images || live.contextRefs !== live.drafts[key]?.refs || !liveFork || liveFork.status === "running" || !liveFork.opened && !live.preview) { keepDraft(); return false; }
-      if (liveFork.notice?.key === "rewind-draft") set({ threads: get().threads.map((thread) => thread.sessionId === forkId ? { ...thread, notice: null } : thread) });
-      await get().sendPrompt({ resetTaskState: true });
-      // Once a revised turn exists, another edit of the source is a new fork,
-      // not a retry that appends to this already-used fork.
-      const sent = get().threads.find((thread) => thread.sessionId === forkId);
-      if (sent && sent.items.length > fork.items.length) update({ rewindAttempt: undefined });
-      return true;
-    } catch (error) {
-      update({ rewindError: { itemId, message: describeError("Edit and rewind failed", error) } });
-      if (attempt.sessionId && get().drafts[`thread:${attempt.sessionId}`]?.text === text) set({ threads: get().threads.map((thread) => thread.sessionId === attempt.sessionId ? { ...thread, notice: { level: "warning", key: "rewind-draft", message: sentenceAfter(describeError("Edit and rewind failed", error), "The edited prompt is saved as a draft.") } } : thread) });
-      return false;
-    } finally { update({ rewindPending: undefined }); }
-  },
-
   compactThread: async () => {
     const thread = currentThread(get());
-    if (!thread || (thread.agentId && thread.agentId !== "harness") || get().preview || thread.status === "running") return;
+    if (!thread || get().preview || thread.status === "running") return;
     set({ threads: get().threads.map((item) => item.sessionId === thread.sessionId ? { ...item, notice: { level: "info", message: "Compacting context…", key: "compacting" } } : item) });
     try {
-      const result = await bridge<{ status: string; reason?: string }>("compactSession", { sessionId: thread.sessionId, ...(thread.agentId ? { agentId: thread.agentId } : {}) });
+      const result = await bridge<{ status: string; reason?: string }>("compactSession", { agentId: "harness", sessionId: thread.sessionId });
       if (result.status === "noop") {
         const reason = result.reason === "no_compactable_history" ? "no compactable history yet" : result.reason ?? "nothing to do";
         set({ threads: get().threads.map((item) => item.sessionId === thread.sessionId ? { ...item, notice: { level: "info", message: `Already compact: ${reason}.` } } : item) });
@@ -2286,81 +1691,6 @@ export const useAppStore = create<AppStore>((set, get) => ({
     }
   },
 
-  previewSession: null,
-
-  openPreview: async (sessionId) => {
-    const thread = get().threads.find((item) => item.sessionId === sessionId);
-    if (!thread || thread.agentId || get().preview) return;
-    set({ previewSession: { sessionId, title: thread.title, loading: true, error: null, snapshot: null } });
-    try {
-      const snapshot = await bridge<SessionPreview>("readSession", { sessionId, excludeItems: false });
-      if (get().previewSession?.sessionId !== sessionId) return;
-      set({ previewSession: { sessionId, title: thread.title, loading: false, error: null, snapshot } });
-    } catch (error) {
-      if (get().previewSession?.sessionId !== sessionId) return;
-      set({ previewSession: { sessionId, title: thread.title, loading: false, error: describeError("Could not preview the thread", error), snapshot: null } });
-    }
-  },
-
-  closePreview: () => set({ previewSession: null }),
-
-  outputViewer: null,
-
-  openOutput: async (sessionId, itemId) => {
-    const thread = get().threads.find((item) => item.sessionId === sessionId);
-    const item = thread?.items.find((entry) => entry.itemId === itemId);
-    const ref = item?.outputRef;
-    if (!thread || !item || !ref || ref.availability !== "available") return;
-    const title = item.commandText || item.tool || "Tool output";
-    set({ outputViewer: { sessionId, itemId, title, loading: true, error: null, encoding: "utf8", mediaType: ref.mediaType ?? "text/plain", content: "", byteLen: ref.byteLen, complete: true } });
-    try {
-      type Page = { offsetBytes: number; byteLen: number; eof: boolean; encoding: "utf8" | "base64"; mediaType: string; content: string };
-      const chunks: string[] = [];
-      let offset = 0;
-      let encoding: "utf8" | "base64" = "utf8";
-      let mediaType = ref.mediaType ?? "text/plain";
-      let complete = true;
-      // Server pages top out at 6 MiB; four pages (24 MiB) bound one viewing.
-      for (let page = 0; page < 4; page += 1) {
-        const result = await bridge<Page>("readOutput", { sessionId, itemId, outputRef: ref.id, offsetBytes: offset });
-        encoding = result.encoding;
-        mediaType = result.mediaType;
-        chunks.push(result.content);
-        offset = result.offsetBytes + result.byteLen;
-        if (result.eof) break;
-        if (page === 3) complete = false;
-      }
-      if (get().outputViewer?.itemId !== itemId) return;
-      set({ outputViewer: { sessionId, itemId, title, loading: false, error: null, encoding, mediaType, content: chunks.join(""), byteLen: ref.byteLen, complete } });
-    } catch (error) {
-      if (get().outputViewer?.itemId !== itemId) return;
-      set({ outputViewer: { sessionId, itemId, title, loading: false, error: describeError("Could not read the full output", error), encoding: "utf8", mediaType: ref.mediaType ?? "text/plain", content: "", byteLen: ref.byteLen, complete: true } });
-    }
-  },
-
-  closeOutput: () => set({ outputViewer: null }),
-
-  controlSubagent: async (sessionId, subagentId, action, extra) => {
-    const result = await bridge<{ status: string }>("subagentControl", { sessionId, subagentId, action, ...(extra?.body !== undefined ? { body: extra.body } : {}), ...(extra?.reason !== undefined ? { reason: extra.reason } : {}) });
-    if (result.status !== "accepted") throw new Error("The host did not accept that control.");
-  },
-
-  controlTask: async (sessionId, action, taskId) => {
-    const result = await bridge<{ status: string }>("taskControl", { sessionId, action, ...(taskId !== undefined ? { taskId } : {}) });
-    if (result.status !== "accepted") throw new Error("The host did not accept that control.");
-  },
-
-  controlWorkflow: async (sessionId, workflowRunId, action, child) => {
-    const result = await bridge<{ status: string }>("workflowControl", { sessionId, workflowRunId, action, ...(child ? { childId: child.childId, attempt: child.attempt } : {}) });
-    if (result.status !== "accepted") throw new Error("The host did not accept that control.");
-  },
-
-  controlGoal: async (sessionId, action, objective) => {
-    const result = await bridge<{ status: string; turnId?: string }>("goalControl", { sessionId, action, ...(objective !== undefined ? { objective } : {}) });
-    if (result.status !== "accepted") throw new Error("The host did not accept that control.");
-    return { ...(result.turnId ? { turnId: result.turnId } : {}) };
-  },
-
   childSession: null,
 
   openChild: async (sessionId, itemId) => {
@@ -2368,29 +1698,15 @@ export const useAppStore = create<AppStore>((set, get) => ({
     const item = thread?.items.find((entry) => entry.itemId === itemId);
     if (!thread || !item || item.kind !== "subagent" || !item.childSessionId) return;
     const title = item.objective || "Subagent";
-    // A harness child has no subagent lifecycle, so its result needs no
-    // consuming gesture; an ACP child's result does.
-    const consumable = Boolean(item.subagentId);
-    set({ childSession: { sessionId, itemId, title, loading: true, error: null, result: item.result ?? null, items: [], consumed: false, consumable } });
+    set({ childSession: { sessionId, itemId, title, loading: true, error: null, result: item.result ?? null, items: [] } });
     try {
-      const snapshot = thread.agentId === "harness"
-        ? await bridge<SessionPreview>("readChildSession", { agentId: "harness", sessionId, childSessionId: item.childSessionId, excludeItems: false })
-        : await bridge<SessionPreview>("readSession", { sessionId: item.childSessionId, excludeItems: false });
+      const snapshot = await bridge<SessionPreview>("readChildSession", { agentId: "harness", sessionId, childSessionId: item.childSessionId, excludeItems: false });
       if (get().childSession?.itemId !== itemId) return;
-      set({ childSession: { sessionId, itemId, title, loading: false, error: null, result: item.result ?? null, items: snapshot?.history?.items ?? [], consumed: false, consumable } });
+      set({ childSession: { sessionId, itemId, title, loading: false, error: null, result: item.result ?? null, items: snapshot?.history?.items ?? [] } });
     } catch (error) {
       if (get().childSession?.itemId !== itemId) return;
-      set({ childSession: { sessionId, itemId, title, loading: false, error: describeError("Could not read the child transcript", error), result: item.result ?? null, items: [], consumed: false, consumable } });
+      set({ childSession: { sessionId, itemId, title, loading: false, error: describeError("Could not read the child transcript", error), result: item.result ?? null, items: [] } });
     }
-  },
-
-  consumeChild: async () => {
-    const viewing = get().childSession;
-    const thread = get().threads.find((item) => item.sessionId === viewing?.sessionId);
-    const subagentId = thread?.items.find((entry) => entry.itemId === viewing?.itemId)?.subagentId;
-    if (!viewing || !subagentId) return;
-    await get().controlSubagent(viewing.sessionId, subagentId, "readResult");
-    if (get().childSession?.itemId === viewing.itemId) set({ childSession: { ...viewing, consumed: true } });
   },
 
   closeChild: () => set({ childSession: null }),
@@ -2413,46 +1729,6 @@ export const useAppStore = create<AppStore>((set, get) => ({
     set({ confirmDialog: null });
     dialog.resolve(ok);
   },
-  initDialog: null,
-
-  openInitDialog: async (workspaceId) => {
-    const workspace = get().workspaces.find((item) => item.id === workspaceId);
-    if (!workspace || !workspace.grantId) return;
-    set({ initDialog: { workspaceId, loading: true, error: null, preview: null, conflict: false, done: false } });
-    try {
-      const preview = await projectInit(workspace.grantId, get().museBin || get().detection?.path || undefined, true, false);
-      if (get().initDialog?.workspaceId !== workspaceId) return;
-      set({ initDialog: { workspaceId, loading: false, error: null, preview, conflict: false, done: false } });
-    } catch (error) {
-      if (get().initDialog?.workspaceId !== workspaceId) return;
-      set({ initDialog: { workspaceId, loading: false, error: describeError("Could not preview the agent config", error), preview: null, conflict: false, done: false } });
-    }
-  },
-
-  closeInitDialog: () => set({ initDialog: null }),
-
-  runInit: async (force) => {
-    const dialog = get().initDialog;
-    if (!dialog || !dialog.preview || dialog.loading || dialog.done) return;
-    const workspace = get().workspaces.find((item) => item.id === dialog.workspaceId);
-    if (!workspace?.grantId) return;
-    set({ initDialog: { ...dialog, loading: true, error: null } });
-    try {
-      // The CLI reports conflicts on stdout with exit 0, so the conflict
-      // is parsed from the message rather than the status.
-      const output = await projectInit(workspace.grantId, get().museBin || get().detection?.path || undefined, false, force);
-      if (get().initDialog?.workspaceId !== dialog.workspaceId) return;
-      if (/already exists/i.test(output)) {
-        set({ initDialog: { ...dialog, loading: false, error: null, conflict: true } });
-      } else {
-        set({ initDialog: { ...dialog, loading: false, error: null, conflict: false, done: true } });
-      }
-    } catch (error) {
-      if (get().initDialog?.workspaceId !== dialog.workspaceId) return;
-      set({ initDialog: { ...dialog, loading: false, error: describeError("Project setup failed", error) } });
-    }
-  },
-
   openTrustDialog: async (workspaceId, prefetched) => {
     const workspace = get().workspaces.find((item) => item.id === workspaceId);
     if (!workspace || !workspace.grantId) return;
@@ -2462,7 +1738,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     }
     set({ trustDialog: { workspaceId, loading: true, error: null, preview: null } });
     try {
-      const preview = await trustPreview(workspace.grantId, get().museBin || get().detection?.path || undefined);
+      const preview = await trustPreview(workspace.grantId);
       if (get().trustDialog?.workspaceId !== workspaceId) return;
       set({ trustDialog: { workspaceId, loading: false, error: null, preview } });
     } catch (error) {
@@ -2484,7 +1760,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       void get().save();
     };
     try {
-      const preview = await trustPreview(workspace.grantId, get().museBin || get().detection?.path || undefined);
+      const preview = await trustPreview(workspace.grantId);
       markPrompted();
       if (preview.skills.length > 0 || preview.rules) await get().openTrustDialog(workspaceId, preview);
     } catch {
@@ -2553,7 +1829,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         { title: "Add coverage for new code", prompt: "Find the code changed most recently that lacks tests and add meaningful coverage." },
         { title: "Tidy the workspace", prompt: "Look for dead code, stale TODOs, or inconsistencies in this codebase and clean them up." },
       ];
-      set({ suggestions: { workspaceId: workspace.id, signature: "preview", items: preview, at: Date.now(), agentId: "muse" } });
+      set({ suggestions: { workspaceId: workspace.id, signature: "preview", items: preview, at: Date.now(), agentId: "harness" } });
       return;
     }
 
@@ -2591,9 +1867,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
     if (!snapshotComplete && !force && Date.now() - (incompleteSuggestAt.get(workspace.id) ?? 0) < SUGGESTION_MIN_GAP_MS) return;
     if (!workspace.grantId) return;
 
-    const ready = readyAgents(state);
-    const agentId = state.suggestionsAgentId && ready.some((agent) => agent.id === state.suggestionsAgentId) ? state.suggestionsAgentId : preferredAgent(state);
-    if (!ready.some((agent) => agent.id === agentId)) return;
+    const agentId: AgentId = "harness";
+    if (!readyAgents(state).length) return;
 
     // Model: the user's override, else the cheapest entry in the agent's
     // catalog; when the catalog can't be read, the agent's own default runs.
@@ -2621,12 +1896,6 @@ export const useAppStore = create<AppStore>((set, get) => ({
           timeoutMs: SUGGESTION_BUDGET_MS,
           ...(modelId ? { modelId } : {}),
           ...(providerId ? { providerId } : {}),
-          ...(agentId === "muse" ? {
-            museBin: get().museBin || get().detection?.path || undefined,
-            museApiKey: get().museApiKey.trim() || undefined,
-            museAuthMode: get().museAuthMode,
-            contributorMode: get().contributorMode,
-          } : {}),
         }, { timeoutMs: SUGGESTION_BRIDGE_TIMEOUT_MS });
         const items = parseSuggestions(result.text ?? "");
         if (!items.length) return;
@@ -2679,25 +1948,12 @@ export const useAppStore = create<AppStore>((set, get) => ({
   refreshSkills: async (sessionId?: string) => {
     const id = sessionId ?? currentThread(get())?.sessionId;
     const thread = get().threads.find((item) => item.sessionId === id);
-    if (!id || !thread || !supportsSkills(thread.agentId) || get().preview) return;
+    if (!id || !thread || get().preview) return;
     try {
       const catalog = await bridge<{ skills?: SkillRow[] }>("listSkills", { sessionId: id, agentId: thread.agentId });
       set({ threads: get().threads.map((item) => item.sessionId === id ? { ...item, skills: catalog.skills ?? [] } : item) });
     } catch (error) {
       log.warn("skills.refresh.failed", { error: message(error) });
-    }
-  },
-
-  refreshMcpServers: async () => {
-    if (get().mcpLoading) return;
-    set({ mcpLoading: true, mcpError: null });
-    try {
-      const catalog = await bridge<{ servers?: McpServer[] }>("mcpServers", {});
-      set({ mcpServers: catalog.servers ?? [] });
-    } catch (error) {
-      set({ mcpError: describeError("Could not load MCP servers", error) });
-    } finally {
-      set({ mcpLoading: false });
     }
   },
 
@@ -2756,7 +2012,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     const result = await catalogInstall(id, currentWorkspace(get())?.grantId ?? undefined);
     await get().refreshCatalog();
     const thread = sessionId ? get().threads.find((item) => item.sessionId === sessionId) : undefined;
-    if (sessionId && thread?.agentId === "harness") {
+    if (sessionId && thread) {
       await get().refreshSkills(sessionId);
       await get().refreshHarnessMcp(sessionId, true);
     }
@@ -2767,7 +2023,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     const result = await catalogRemove(id, currentWorkspace(get())?.grantId ?? undefined);
     await get().refreshCatalog();
     const thread = sessionId ? get().threads.find((item) => item.sessionId === sessionId) : undefined;
-    if (sessionId && thread?.agentId === "harness") {
+    if (sessionId && thread) {
       await get().refreshSkills(sessionId);
       await get().refreshHarnessMcp(sessionId, true);
     }
@@ -2780,6 +2036,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     try {
       const library = await libraryList();
       set({ library, libraryError: library.problems.length ? library.problems.join(" ") : null });
+      if (library.avatarsPending) void fetchListingAvatars(get);
     } catch (error) {
       set({ libraryError: describeError("Could not read your plugins", error) });
     } finally {
@@ -2809,12 +2066,14 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
   addMarketplace: async (token) => {
     const source = await marketplaceAdd(token);
+    listingAvatarsTried = false;
     await get().refreshLibrary();
     return source;
   },
 
   refreshMarketplace: async (id) => {
     const source = await marketplaceRefresh(id);
+    listingAvatarsTried = false;
     set({ libraryUpdates: get().libraryUpdates.filter((update) => !(update.kind === "marketplace" && update.id === id)) });
     await get().refreshLibrary();
     return source;
@@ -2831,135 +2090,11 @@ export const useAppStore = create<AppStore>((set, get) => ({
     return updates;
   },
 
-  refreshPlugins: async (available = false) => {
-    if (get().pluginsLoading) return;
-    set({ pluginsLoading: true, pluginsError: null, pluginsAvailableShown: available });
-    try {
-      set({ pluginEntries: await pluginList(get().museBin || undefined, available) });
-    } catch (error) {
-      set({ pluginsError: describeError("Could not load plugins", error) });
-    } finally {
-      set({ pluginsLoading: false });
-    }
-  },
-
-  refreshManagedSkills: async () => {
-    if (get().skillsLoading) return;
-    set({ skillsLoading: true, skillsError: null });
-    try {
-      set({ skillEntries: await skillList(currentWorkspace(get())?.grantId ?? undefined, get().museBin || undefined) });
-    } catch (error) {
-      set({ skillsError: describeError("Could not load the managed skills", error) });
-    } finally {
-      set({ skillsLoading: false });
-    }
-  },
-
-  installSkill: async () => {
-    if (get().skillsLoading) return;
-    set({ skillsLoading: true, skillsError: null });
-    try {
-      const picked = await pickSkillSource();
-      if (!picked) return;
-      await skillInstall(picked, get().museBin || undefined);
-      set({ skillEntries: await skillList(currentWorkspace(get())?.grantId ?? undefined, get().museBin || undefined) });
-    } catch (error) {
-      set({ skillsError: describeError("Could not install the skill", error) });
-    } finally {
-      set({ skillsLoading: false });
-    }
-  },
-
-  importSkills: async (from, dryRun) => {
-    const output = await skillImport(from, dryRun, get().museBin || undefined);
-    if (!dryRun) await get().refreshManagedSkills();
-    return output;
-  },
-
-  uninstallSkill: async (id) => {
-    if (get().skillsLoading) return;
-    set({ skillsLoading: true, skillsError: null });
-    try {
-      await skillUninstall(id, get().museBin || undefined);
-      set({ skillEntries: await skillList(currentWorkspace(get())?.grantId ?? undefined, get().museBin || undefined) });
-    } catch (error) {
-      set({ skillsError: describeError("Could not remove the skill", error) });
-    } finally {
-      set({ skillsLoading: false });
-    }
-  },
-
-  installPlugin: async () => {
-    if (get().pluginsLoading) return;
-    set({ pluginsLoading: true, pluginsError: null });
-    try {
-      const picked = await pickPluginBundle();
-      if (!picked) return;
-      await pluginInstall(picked, get().museBin || undefined);
-      set({ pluginEntries: await pluginList(get().museBin || undefined, false), pluginsAvailableShown: false });
-    } catch (error) {
-      set({ pluginsError: describeError("Could not install the plugin", error) });
-    } finally {
-      set({ pluginsLoading: false });
-    }
-  },
-
-  refreshEnterprise: async () => {
-    if (get().enterpriseLoading) return;
-    set({ enterpriseLoading: true, enterpriseError: null });
-    try {
-      set({ enterprise: await enterpriseStatus(get().museBin || undefined) });
-    } catch (error) {
-      set({ enterpriseError: describeError("Could not read the managed configuration", error) });
-    } finally {
-      set({ enterpriseLoading: false });
-    }
-  },
-
   openLastThread: async () => {
     const state = get();
     const pool = state.showAllWorkspaces ? state.threads : state.threads.filter((thread) => thread.workspacePath === currentWorkspace(state)?.path);
     const last = pool.filter((thread) => !thread.archived).sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))[0];
     if (last) await get().selectThread(last.sessionId);
-  },
-
-  loadOlderHistory: async () => {
-    const thread = currentThread(get());
-    if (!thread || thread.agentId || thread.historyLoading || thread.historyExhausted || !thread.historyCursor || get().preview) return;
-    const sessionId = thread.sessionId;
-    const cursor = thread.historyCursor;
-    const update = (patch: Partial<Thread>) => set({ threads: get().threads.map((item) => item.sessionId === sessionId ? { ...item, ...patch } : item) });
-    update({ historyLoading: true });
-    try {
-      const chunk = await bridge<{ items: TranscriptItem[]; nextCursor: string | null; exhausted: boolean }>("pageHistory", { sessionId, cursor });
-      const latest = get().threads.find((item) => item.sessionId === sessionId);
-      if (!latest || latest.historyCursor !== cursor) return;
-      update({ items: mergeHistoryItems(latest.items, chunk.items), historyCursor: chunk.nextCursor, historyExhausted: chunk.exhausted });
-    } catch (error) {
-      update({ error: describeError("Could not load older history", error) });
-    } finally {
-      update({ historyLoading: false });
-    }
-  },
-
-  rebuildThread: async () => {
-    const thread = currentThread(get());
-    if (!thread || thread.agentId || thread.opening || get().preview) return;
-    const sessionId = thread.sessionId;
-    const update = (patch: Partial<Thread>) => set({ threads: get().threads.map((item) => item.sessionId === sessionId ? { ...item, ...patch } : item) });
-    update({ opening: true, error: null, historyFailed: false });
-    try {
-      // The live stream never detached, so the rebuild is a backfill: the
-      // newest chunk replays the durable log and the merge keeps held items
-      // winning, so only the missing ones land.
-      const chunk = await bridge<{ items: TranscriptItem[]; nextCursor: string | null; exhausted: boolean }>("pageHistory", { sessionId });
-      const latest = get().threads.find((item) => item.sessionId === sessionId);
-      if (latest) update({ items: mergeHistoryItems(latest.items, chunk.items), historyCursor: chunk.nextCursor, historyExhausted: chunk.exhausted, viewGap: null, status: "idle" });
-    } catch (error) {
-      update({ error: describeError("Could not rebuild the thread", error) });
-    } finally {
-      update({ opening: false });
-    }
   },
 
   setThreadSearch: (value) => set({ threadSearch: value }),
@@ -3095,8 +2230,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     if (get().preview || thread.opening) return;
     if (thread.opened) {
       void get().refreshTurnSnapshots(sessionId);
-      // An open thread on another agent needs that agent's catalog; nothing else asks for it.
-      if (get().modelsAgentId !== activeAgentId(get())) void get().refreshModels();
+      if (!get().models.length) void get().refreshModels();
       return;
     }
     // Same fail-closed rule as every other session entry point: a stale
@@ -3108,51 +2242,16 @@ export const useAppStore = create<AppStore>((set, get) => ({
     }
     const update = (patch: Partial<Thread>) => set({ threads: get().threads.map((item) => item.sessionId === sessionId ? { ...item, ...patch } : item) });
     update({ opening: true, error: null });
-    if (thread.agentId) {
-      try {
-        if (thread.agentId === "harness") await get().applyHarnessRules();
-        const opened = await bridge<{ agentConfig?: AgentSessionConfig; alreadyOpen?: boolean }>("resumeSession", { agentId: thread.agentId, sessionId });
-        // A reopened thread keeps the app's permission mode, on any agent.
-        const approvalMode = approvalModeForAgent(thread.agentId, thread.config?.approvalMode);
-        if (approvalMode) await bridge("setApprovalMode", { agentId: thread.agentId, sessionId, mode: approvalMode }).catch(() => {});
-        void get().refreshTurnSnapshots(sessionId);
-        update({ opened: true, config: { ...thread.config, ...agentConfigPatch(opened.agentConfig), agentId: thread.agentId, ...(approvalMode ? { approvalMode } : {}) }, modes: opened.agentConfig?.modes ?? thread.modes });
-        // The picker keeps showing the last catalog meanwhile; opening does not wait on it.
-        if (get().selectedSessionId === sessionId) void get().refreshModels();
-      } catch (error) {
-        update({ error: describeError("Could not open the thread", error), opened: false });
-      } finally { update({ opening: false }); }
-      return;
-    }
     try {
-      await get().startHost();
-      const resume = (cursor?: string | null) => bridge<SessionOpening & { facts?: { plan?: PlanItem[]; goal?: GoalState | null; context?: ContextUsage | null; usage?: TokenUsage | null; branch?: string | null }; historyCursor?: string | null; historyExhausted?: boolean; historyFailed?: boolean; viewCursor?: string }>("resumeSession", { sessionId, ...(cursor ? { cursor } : {}) });
-      let opened: Awaited<ReturnType<typeof resume>>;
-      try {
-        opened = await resume(get().threads.find((item) => item.sessionId === sessionId)?.resumeCursor);
-      } catch (error) {
-        // All-workspace rows bind to no grant; a grant-scoped listing binds
-        // this one, then the open retries exactly once.
-        if (!/not connected to an open workspace/.test(message(error))) throw error;
-        await listWorkspaceSessions(home, undefined, 10, (all) => all.some((session) => session.sessionId === sessionId));
-        opened = await resume();
-      }
-      const session = opened.opening?.result.session;
-      const latest = get().threads.find((item) => item.sessionId === sessionId);
-      const unchanged = latest?.status === thread.status && latest?.activeTurnId === thread.activeTurnId && latest?.lastTurnId === thread.lastTurnId;
-      const approvalMode = approvalModeForAgent(thread.agentId, thread.config?.approvalMode);
-      if (approvalMode) await bridge("setApprovalMode", { sessionId, mode: approvalMode }).catch(() => {});
-      if (latest?.userInputVersion === thread.userInputVersion) update({ userInputs: opened.userInputs ?? [] });
-      update({
-        opened: true,
-        ...(opened.viewCursor ? { resumeCursor: opened.viewCursor } : {}),
-        ...(opened.facts ? { plan: opened.facts.plan, goal: opened.facts.goal, context: opened.facts.context, usage: opened.facts.usage, hostBranch: opened.facts.branch } : {}),
-        ...(session && !opened.alreadyOpen ? { config: { ...metadataConfig(session, thread.config?.effort ?? get().defaultEffort), ...(approvalMode ? { approvalMode } : {}) }, ...(unchanged ? { status: session.status === "running" ? "running" : session.status === "idle" ? "idle" : latest.status, activeTurnId: session.activeTurnId ?? null, lastOutcome: session.status === "running" ? latest?.lastOutcome : latest?.lastOutcome === "interrupted" ? undefined : latest?.lastOutcome } : {}) } : {}),
-        ...(!opened.alreadyOpen ? { historyCursor: opened.historyCursor ?? null, historyExhausted: opened.historyExhausted ?? true, historyFailed: opened.historyFailed ?? false, viewGap: null } : {}),
-      });
-      if (get().selectedSessionId === sessionId) void get().refreshModels();
-      void get().refreshSkills(sessionId).catch(() => {});
+      await get().applyHarnessRules();
+      const opened = await bridge<{ agentConfig?: AgentSessionConfig; alreadyOpen?: boolean }>("resumeSession", { agentId: "harness", sessionId });
+      // A reopened thread keeps the app's permission mode.
+      const approvalMode = approvalModeForAgent("harness", thread.config?.approvalMode);
+      if (approvalMode) await bridge("setApprovalMode", { agentId: "harness", sessionId, mode: approvalMode }).catch(() => {});
       void get().refreshTurnSnapshots(sessionId);
+      update({ opened: true, config: { ...thread.config, ...agentConfigPatch(opened.agentConfig), agentId: "harness", ...(approvalMode ? { approvalMode } : {}) }, modes: opened.agentConfig?.modes ?? thread.modes });
+      // The picker keeps showing the last catalog meanwhile; opening does not wait on it.
+      if (get().selectedSessionId === sessionId) void get().refreshModels();
     } catch (error) {
       update({ error: describeError("Could not open the thread", error), opened: false });
     } finally { update({ opening: false }); }
@@ -3176,7 +2275,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       // whatever agent or model an earlier draft left behind.
       set({ ...next, drafts: { ...next.drafts, [projectKey]: { ...next.drafts[projectKey], text: next.composer, images: next.images, config: undefined } }, error: null });
       scheduleMemory(get);
-      if (get().modelsAgentId !== activeAgentId(get())) void get().refreshModels();
+      if (!get().models.length) void get().refreshModels();
       rescope(get, set, scope);
     }
     set({ restoringSession: null, composerFocus: get().composerFocus + 1 });
@@ -3186,7 +2285,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     const state = get();
     const rank = new Map(state.workspaces.map((workspace, index) => [workspace.path, index]));
     const ordered = state.threads
-      .filter((thread) => !thread.archived && rank.has(thread.workspacePath) && agentEnabled(state, thread.agentId ?? "muse"))
+      .filter((thread) => !thread.archived && rank.has(thread.workspacePath))
       .sort((a, b) => rank.get(a.workspacePath)! - rank.get(b.workspacePath)! || Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || (b.order ?? 0) - (a.order ?? 0));
     const next = nextAttentionThread(ordered, state.selectedSessionId);
     if (next && next.sessionId !== state.selectedSessionId) await get().selectThread(next.sessionId);
@@ -3211,45 +2310,36 @@ export const useAppStore = create<AppStore>((set, get) => ({
     const fromProject = !get().selectedSessionId;
     const config = fromProject ? get().drafts[sourceKey]?.config ?? defaults(get()) : defaults(get());
     set({ starting: true, error: null });
-    const agentId = (config.agentId && agentEnabled(get(), config.agentId) ? config.agentId : undefined) ?? preferredAgent(get());
+    const agentId: AgentId = "harness";
     const approvalMode = approvalModeForAgent(agentId, config.approvalMode);
     try {
       let thread: Thread;
       const existingCount = get().threads.filter((t) => t.workspacePath === workspace.path && /^(New thread|Untitled thread)/.test(t.title)).length;
       const title = existingCount === 0 ? "New thread" : `New thread ${existingCount + 1}`;
-      if (agentId !== "muse" && get().preview) {
-        const modes = agentId === "opencode" ? OPENCODE_MODES : agentId === "harness" ? HARNESS_MODES : undefined;
-        thread = { sessionId: `preview-${uid()}`, agentId, workspacePath: workspace.path, title, order: Date.now(), updatedAt: new Date().toISOString(), status: "idle", unread: false, items: [], opened: true, config: { ...config, agentId, ...(modes ? { mode: "build" } : {}) }, modes };
-      } else if (agentId !== "muse") {
-        // Only hand over a model the agent itself listed; a Muse default means nothing to OpenCode.
-        // Gated OpenCode `*-free` rows fail on this account — let the bridge pick a usable default.
-        const ownModel = get().modelsAgentId === agentId && get().models.some((model) => model.modelId === config.modelId);
-        const gated = agentId === "opencode" && /(?:^|[/:])[^/]*-free$/i.test(config.modelId ?? "");
-        const mode = config.mode ?? get().agentModes[agentId]?.defaultMode;
-        // Orchestrator replaces the manual model and effort for built-in threads.
-        // A draft switched in the composer carries its own answer; otherwise Settings decides.
-        const orchestrator = agentId === "harness"
-          ? config.orchestrator !== undefined ? config.orchestrator ?? undefined : orchestratorStart(get())
-          : undefined;
-        if (agentId === "harness") await get().applyHarnessRules();
-        const opened = await bridge<{ sessionId: string; agentConfig?: AgentSessionConfig }>("startSession", { agentId, grantId: workspace.grantId ?? undefined, ...(orchestrator ? { orchestrator } : { modelId: ownModel && !gated ? config.modelId : undefined, reasoningEffort: config.effort }), ...(mode ? { mode } : {}), ...(approvalMode ? { approvalMode } : {}) });
-        thread = { sessionId: opened.sessionId, agentId, workspacePath: workspace.path, title, order: Date.now(), updatedAt: new Date().toISOString(), status: "idle", unread: false, items: [], opened: true, config: { ...config, ...agentConfigPatch(opened.agentConfig), ...(approvalMode ? { approvalMode } : {}), agentId }, modes: opened.agentConfig?.modes };
+      // The worktree exists before the session does, so the agent starts in it.
+      // A session that then fails to start takes its empty worktree with it.
+      const wanted = fromProject ? get().drafts[sourceKey]?.worktree : undefined;
+      const made = !wanted ? undefined : get().preview ? mockWorktree(wanted.base) : await gitWorktreeCreate(workspace.grantId ?? "preview", wanted.base);
+      const worktree: ThreadWorktree | undefined = made && { grantId: made.grantId, path: made.path, branch: made.branch, base: made.base, workspaceId: workspace.id };
+      const notice = made?.warning ? { notice: { level: "warning" as const, message: made.warning } } : {};
+      if (get().preview) {
+        thread = { sessionId: `preview-${uid()}`, agentId, workspacePath: workspace.path, worktree, title, order: Date.now(), updatedAt: new Date().toISOString(), status: "idle", unread: false, items: [], opened: true, config: { ...config, agentId, mode: "build" }, modes: HARNESS_MODES, ...notice };
       } else {
-        if (!get().preview) await get().startHost();
-        // The worktree exists before the session does, so the CLI starts in it.
-        // A session that then fails to start takes its empty worktree with it.
-        const wanted = fromProject ? get().drafts[sourceKey]?.worktree : undefined;
-        const made = !wanted ? undefined : get().preview ? mockWorktree(wanted.base) : await gitWorktreeCreate(workspace.grantId ?? "preview", wanted.base);
-        const worktree: ThreadWorktree | undefined = made && { grantId: made.grantId, path: made.path, branch: made.branch, base: made.base, workspaceId: workspace.id };
-        let opened: { sessionId: string } | SessionOpening;
+        // Only hand over a model the catalog listed.
+        const ownModel = get().models.some((model) => model.modelId === config.modelId);
+        const mode = config.mode ?? get().agentModes[agentId]?.defaultMode;
+        // Orchestrator replaces the manual model and effort. A draft switched in
+        // the composer carries its own answer; otherwise Settings decides.
+        const orchestrator = config.orchestrator !== undefined ? config.orchestrator ?? undefined : orchestratorStart(get());
+        await get().applyHarnessRules();
+        let opened: { sessionId: string; agentConfig?: AgentSessionConfig };
         try {
-          opened = get().preview ? { sessionId: `preview-${uid()}` } : await bridge<SessionOpening>("startSession", { grantId: worktree?.grantId ?? workspace.grantId ?? undefined, approvalMode, modelId: config.modelId || undefined, providerId: config.providerId || undefined });
+          opened = await bridge<{ sessionId: string; agentConfig?: AgentSessionConfig }>("startSession", { agentId, grantId: worktree?.grantId ?? workspace.grantId ?? undefined, ...(orchestrator ? { orchestrator } : { modelId: ownModel ? config.modelId : undefined, reasoningEffort: config.effort }), ...(mode ? { mode } : {}), ...(approvalMode ? { approvalMode } : {}) });
         } catch (error) {
-          if (worktree && !get().preview) await gitWorktreeRemove(worktree.grantId).catch(() => {});
+          if (worktree) await gitWorktreeRemove(worktree.grantId).catch(() => {});
           throw error;
         }
-        const metadata = "opening" in opened ? opened.opening?.result.session : undefined;
-        thread = { sessionId: opened.sessionId, workspacePath: workspace.path, worktree, title, order: Date.now(), updatedAt: new Date().toISOString(), status: "idle", unread: false, items: [], opened: true, config: metadata ? { ...metadataConfig(metadata, config.effort), ...(approvalMode ? { approvalMode } : {}) } : { ...config, approvalMode }, ...(made?.warning ? { notice: { level: "warning" as const, message: made.warning } } : {}) };
+        thread = { sessionId: opened.sessionId, agentId, workspacePath: workspace.path, worktree, title, order: Date.now(), updatedAt: new Date().toISOString(), status: "idle", unread: false, items: [], opened: true, config: { ...config, ...agentConfigPatch(opened.agentConfig), ...(approvalMode ? { approvalMode } : {}), agentId }, modes: opened.agentConfig?.modes, ...notice };
       }
       const opened = { sessionId: thread.sessionId };
       set({ threads: [thread, ...get().threads] });
@@ -3266,89 +2356,6 @@ export const useAppStore = create<AppStore>((set, get) => ({
       set({ error: sentenceAfter(describeError("Could not start the thread", error), "Your draft is unchanged.") });
       return null;
     } finally { set({ starting: false }); }
-  },
-
-  switchThreadAgent: async (agentId) => {
-    const state = get();
-    if (state.starting || state.submitting) return;
-    if (!agentEnabled(state, agentId)) return;
-    const thread = currentThread(state);
-    if (thread && (thread.status === "running" || thread.configPending || thread.opening || thread.snapshotPending || thread.rewindPending)) return;
-    // `commitSettings` reports its own write failures through the error banner,
-    // so a rejected save cannot silently skip the switch it was meant to persist.
-    await get().commitSettings({ defaultAgentId: agentId });
-    if (!thread) {
-      await get().setSessionConfig({ agentId });
-      return;
-    }
-    if ((thread.agentId ?? "muse") === agentId) return;
-    const workspace = activeWorkspace(get());
-    if (!workspace) return;
-    const previousId = thread.sessionId;
-    const previousName = state.agents.find((agent) => agent.id === (thread.agentId ?? "muse"))?.name ?? thread.agentId ?? "Muse";
-    const nextName = state.agents.find((agent) => agent.id === agentId)?.name ?? agentId;
-    const approvalMode = approvalModeForAgent(agentId, thread.config?.approvalMode);
-    set({ starting: true, error: null });
-    try {
-      let next: Thread;
-      if (agentId !== "muse" && get().preview) {
-        const modes = agentId === "opencode" ? OPENCODE_MODES : undefined;
-        next = { ...thread, agentId, opened: true, modes, config: { agentId, ...(approvalMode ? { approvalMode } : {}), ...(modes ? { mode: "build" } : {}) }, error: null, notice: null, status: "idle", configPending: false, pendingConfig: undefined, configNotice: `Now using ${nextName}` };
-      } else if (agentId !== "muse") {
-        const orchestrator = agentId === "harness" ? orchestratorStart(get()) : undefined;
-        if (agentId === "harness") await get().applyHarnessRules();
-        const opened = await bridge<{ sessionId: string; agentConfig?: AgentSessionConfig }>("startSession", { agentId, grantId: workspace.grantId ?? undefined, ...(orchestrator ? { orchestrator } : {}), ...(approvalMode ? { approvalMode } : {}) });
-        next = {
-          ...thread,
-          sessionId: opened.sessionId,
-          agentId,
-          opened: true,
-          opening: false,
-          config: { ...agentConfigPatch(opened.agentConfig), agentId, ...(approvalMode ? { approvalMode } : {}) },
-          modes: opened.agentConfig?.modes,
-          error: null,
-          notice: null,
-          status: "idle",
-          configPending: false,
-          pendingConfig: undefined,
-          configNotice: `Now using ${nextName}`,
-        };
-      } else if (get().preview) {
-        next = { ...thread, agentId: undefined, modes: undefined, config: { approvalMode, effort: thread.config?.effort }, error: null, notice: null, status: "idle", opened: true, configPending: false, pendingConfig: undefined, configNotice: `Now using ${nextName}` };
-      } else {
-        await get().startHost();
-        const opened = await bridge<SessionOpening>("startSession", { grantId: workspace.grantId ?? undefined, approvalMode });
-        next = {
-          ...thread,
-          sessionId: opened.sessionId,
-          agentId: undefined,
-          opened: true,
-          opening: false,
-          config: { approvalMode },
-          modes: undefined,
-          error: null,
-          notice: null,
-          status: "idle",
-          configPending: false,
-          pendingConfig: undefined,
-          configNotice: `Now using ${nextName}`,
-        };
-      }
-      if (thread.items.length) {
-        next = { ...next, notice: { level: "info", message: `Switched to ${nextName}. Earlier messages stay visible; ${nextName} does not have the ${previousName} history.` } };
-      }
-      // Saved file states belong to the original native session, even when
-      // its messages remain visible after switching agents.
-      next = { ...next, snapshots: undefined, snapshotPending: undefined, snapshotError: undefined, rewindPending: undefined, rewindError: undefined, rewindAttempt: undefined };
-      set(rekeyThreadState(get(), previousId, next));
-      if (next.configNotice) scheduleConfigNoticeClear(next.sessionId, next.configNotice);
-      scheduleMemory(get);
-      await get().refreshModels();
-    } catch (error) {
-      set({ error: sentenceAfter(describeError(`Could not switch to ${nextName}`, error), `This thread is still on ${previousName}.`) });
-    } finally {
-      set({ starting: false });
-    }
   },
 
   refreshTurnSnapshots: async (sessionId) => {
@@ -3404,8 +2411,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
     const initial = get();
     const active = currentThread(initial);
     if (initial.starting || initial.submitting || active?.opening || active?.configPending || active?.snapshotPending || active?.rewindPending) return false;
-    // Busy sends are Muse and Harness. ACP agents and preview keep the Stop-to-send lock.
-    const busySend = active?.status === "running" && acceptsBusySend(active.agentId) && !initial.preview;
+    // Harness accepts busy sends; preview keeps the Stop-to-send lock.
+    const busySend = active?.status === "running" && !initial.preview;
     if (active?.status === "running" && !busySend) return false;
     if (!currentWorkspace(initial)) { set({ error: "Open a workspace before sending." }); return false; }
     const text = initial.composer.trim();
@@ -3425,7 +2432,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     // held here and put back if it turns out it never went. Busy sends and the
     // shell escape keep their own text-matched retry handling.
     const sourceKey = draftKey(initial);
-    const held = !busySend && !parseShellEscape(text) ? { text: initial.composer, images, refs } : null;
+    const held = !busySend ? { text: initial.composer, images, refs } : null;
     let delivered = false;
     if (held) {
       set({ composer: "", images: [], contextRefs: [], drafts: { ...initial.drafts, [sourceKey]: { ...initial.drafts[sourceKey], text: "", images: [], refs: [] } }, ...(!sessionId && initial.selectedWorkspaceId ? { pendingSend: { workspaceId: initial.selectedWorkspaceId, text: text || payload, images } } : {}) });
@@ -3451,32 +2458,12 @@ export const useAppStore = create<AppStore>((set, get) => ({
       if (!sessionId) return false;
       const thread = get().threads.find((item) => item.sessionId === sessionId);
       if (!thread?.opened && !get().preview) throw new Error("Thread is not open. Select it again to reconnect before sending.");
-      // A leading `!command` is the TUI shell escape: it runs in the session's
-      // workspace via `session/userShell` and streams back as a `userShell`
-      // transcript item. Shells are not turn-scoped, so the escape bypasses
-      // the busy queue, skills, and optimistic turn state entirely.
-      const shell = parseShellEscape(text);
-      if (shell) {
-        if (thread?.agentId) throw new Error(`Shell escape is a Muse feature; this thread runs on ${thread.agentId}.`);
-        if (images.length || refs.length) throw new Error("Shell escape cannot carry images or references. Remove them, or send as a prompt.");
-        if (!get().preview && !(get().hostInfo?.compat?.granted ?? []).includes("userShell")) {
-          throw new Error("User shells are unavailable: the host did not grant the userShell capability. Reconnect from Settings.");
-        }
-        await bridge("userShell", { sessionId, commandText: shell.command });
-        recordPrompt(initial.selectedWorkspaceId, text);
-        const live = get();
-        const shellKey = `thread:${sessionId}`;
-        if (live.selectedSessionId === sessionId && live.composer.trim() === text) {
-          set({ composer: "", images: [], contextRefs: [], drafts: { ...live.drafts, [shellKey]: { ...live.drafts[shellKey], text: "", images: [], refs: [] } } });
-        }
-        return true;
-      }
-      if (thread?.agentId === "harness") await get().applyHarnessRules();
+      await get().applyHarnessRules();
       // A leading `/selector` invokes a session skill for real: the typed
       // spelling matches the catalog verbatim (unknown stays plain text),
       // and the invocation travels as a structured skill part.
       const invocation = parseSkillInvocation(text);
-      const skill = thread && supportsSkills(thread.agentId) && invocation
+      const skill = thread && invocation
         ? (thread.skills ?? []).find((row) => row.selector.replace(/^\//, "").toLowerCase() === invocation.selector.replace(/^\//, "").toLowerCase())
         : undefined;
       const skillPart = skill ? { selector: skill.selector, ...(invocation!.args ? { arguments: invocation!.args } : {}) } : undefined;
@@ -3485,25 +2472,17 @@ export const useAppStore = create<AppStore>((set, get) => ({
         return true;
       }
       const previousOutcome = thread?.lastOutcome;
-      // Idempotency keys are a Muse/MSP feature (ACP agents reject overlapping sends themselves).
-      const keyed = !thread?.agentId;
-      // A retry of a send whose result was unknown reuses its key AND its optimistic bubble
-      // (matched by text, so a reworded prompt still sends fresh instead of dropping words).
-      const keptOptimistic = keyed && thread?.pendingTurnKey
-        ? [...(thread?.items ?? [])].reverse().find((item) => item.kind === "userMessage" && item.optimistic && item.text === (text || payload))
-        : undefined;
-      const turnKey = keptOptimistic && thread?.pendingTurnKey ? thread.pendingTurnKey : uid();
-      const userItem: TranscriptItem = keptOptimistic ?? { itemId: uid(), kind: "userMessage", status: "completed", text: text || payload, images, refs, recordedAt: new Date().toISOString(), optimistic: !get().preview, ...(get().preview ? { turnId: `preview-turn-${uid()}` } : {}) };
-      set({ threads: get().threads.map((item) => item.sessionId === sessionId ? { ...applyItem(item, userItem), status: "running", error: null, activeTurnId: get().preview ? userItem.turnId : null, cancelRequested: false, activity: "working", lastOutcome: undefined, turnStartedAt: Date.now(), turnStartOutput: item.usage?.outputTokens ?? 0, turnStartPrompt: item.usage?.promptTokens ?? 0, turnStartCache: cacheTokens(item.usage), turnStats: undefined, tokenSpeed: undefined, turnCalls: [], ...(options?.resetTaskState ? { plan: undefined, planAnchor: undefined, goal: null } : {}) } : item) });
+      const userItem: TranscriptItem = { itemId: uid(), kind: "userMessage", status: "completed", text: text || payload, images, refs, recordedAt: new Date().toISOString(), optimistic: !get().preview, ...(get().preview ? { turnId: `preview-turn-${uid()}` } : {}) };
+      set({ threads: get().threads.map((item) => item.sessionId === sessionId ? { ...applyItem(item, userItem), status: "running", error: null, activeTurnId: get().preview ? userItem.turnId : null, cancelRequested: false, activity: "working", lastOutcome: undefined, recoveryDismissed: false, turnStartedAt: Date.now(), turnStartOutput: item.usage?.outputTokens ?? 0, turnStartPrompt: item.usage?.promptTokens ?? 0, turnStartCache: cacheTokens(item.usage), turnStats: undefined, tokenSpeed: undefined, turnCalls: [], ...(options?.resetTaskState ? { plan: undefined, planAnchor: undefined, goal: null } : {}) } : item) });
       try {
         if (get().preview) {
           const id = sessionId;
           previewTimers.set(id, window.setTimeout(() => {
             previewTimers.delete(id);
-            set({ threads: get().threads.map((item) => item.sessionId === id && item.status === "running" ? { ...applyItem(item, { itemId: uid(), kind: "agentMessage", status: "completed", turnId: userItem.turnId, recordedAt: new Date().toISOString(), text: "Preview response — connect the Muse CLI to work in a real workspace." }), status: "idle", lastTurnId: userItem.turnId, lastOutcome: "completed", activeTurnId: null, unread: get().selectedSessionId !== id, activity: undefined } : item) });
+            set({ threads: get().threads.map((item) => item.sessionId === id && item.status === "running" ? { ...applyItem(item, { itemId: uid(), kind: "agentMessage", status: "completed", turnId: userItem.turnId, recordedAt: new Date().toISOString(), text: "Preview response — open the desktop app and add a provider key to work in a real workspace." }), status: "idle", lastTurnId: userItem.turnId, lastOutcome: "completed", activeTurnId: null, unread: get().selectedSessionId !== id, activity: undefined } : item) });
           }, 1600));
         } else {
-          const result = await bridge<{ turnId: string; deduped?: boolean }>("sendTurn", { agentId: thread?.agentId, sessionId, text: skillPart ? composePrompt("", refs) : payload, reasoningEffort: thread?.config?.effort ?? (thread?.agentId ? undefined : initial.defaultEffort), images: images.map(({ mediaType, base64Data }) => ({ mediaType, base64Data })), ...(keyed ? { clientTurnId: turnKey } : {}), ...(skillPart ? { skill: skillPart } : {}), ...(thread?.agentId === "harness" && options?.shape ? { forcedShape: options.shape } : {}) });
+          const result = await bridge<{ turnId: string; deduped?: boolean }>("sendTurn", { agentId: "harness", sessionId, text: skillPart ? composePrompt("", refs) : payload, reasoningEffort: thread?.config?.effort, images: images.map(({ mediaType, base64Data }) => ({ mediaType, base64Data })), ...(skillPart ? { skill: skillPart } : {}), ...(options?.shape ? { forcedShape: options.shape } : {}) });
           const latest = get().threads.find((item) => item.sessionId === sessionId);
           if (latest?.status === "running" && latest.lastTurnId !== result.turnId) {
             set({ threads: get().threads.map((item) => item.sessionId === sessionId ? { ...item, activeTurnId: result.turnId, pendingTurnKey: null, notice: result.deduped ? { level: "info", message: "Resumed the pending turn instead of sending a duplicate." } : item.notice } : item) });
@@ -3515,19 +2494,11 @@ export const useAppStore = create<AppStore>((set, get) => ({
         recordPrompt(initial.selectedWorkspaceId, text);
         delivered = true;
       } catch (error) {
-        if (keyed && timeoutUnknown(error)) {
-          // The message is on screen as a pending bubble that Retry resends.
-          delivered = true;
-          // The turn may have started without the acknowledgement reaching us: stay running so
-          // its streamed events still land, keep the key so a later retry dedupes, and let Stop work.
-          set({ threads: get().threads.map((item) => item.sessionId === sessionId ? { ...item, pendingTurnKey: turnKey, notice: { level: "warning", message: "No acknowledgement yet — the turn may still be running. Stop, then retry safely." } } : item) });
-        } else {
-          // The classified reason (host detail + recovery) belongs on screen —
-          // the title alone used to answer "what happened" with "Send failed".
-          set({ threads: get().threads.map((item) => item.sessionId === sessionId ? { ...item, items: item.items.filter((entry) => entry.itemId !== userItem.itemId), status: "error", activeTurnId: null, pendingTurnKey: null, cancelRequested: false, activity: undefined, error: describeError("Send failed", error), lastOutcome: previousOutcome } : item) });
-          // The catalog moved under us: refresh it so the next pick is real.
-          if ((error as Error & { code?: string })?.code === "skillNotFound") void get().refreshSkills(sessionId).catch(() => {});
-        }
+        // The classified reason (host detail + recovery) belongs on screen —
+        // the title alone used to answer "what happened" with "Send failed".
+        set({ threads: get().threads.map((item) => item.sessionId === sessionId ? { ...item, items: item.items.filter((entry) => entry.itemId !== userItem.itemId), status: "error", activeTurnId: null, pendingTurnKey: null, cancelRequested: false, activity: undefined, error: describeError("Send failed", error), lastOutcome: previousOutcome } : item) });
+        // The catalog moved under us: refresh it so the next pick is real.
+        if ((error as Error & { code?: string })?.code === "skillNotFound") void get().refreshSkills(sessionId).catch(() => {});
       }
     } catch (error) { set({ error: describeError("Send failed", error) }); }
     finally { putBack(); set({ submitting: false }); }
@@ -3561,7 +2532,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       // Stop drains the queue too: queued turns would otherwise launch the
       // moment the active turn dies, contradicting the user's stop.
       const queued = thread.queuedTurns ?? [];
-      if (queued.length && acceptsBusySend(thread.agentId)) {
+      if (queued.length) {
         await Promise.allSettled(queued.map((entry) => bridge("unqueueTurn", { sessionId: thread.sessionId, turnId: entry.turnId, agentId: thread.agentId })));
         set({ threads: get().threads.map((item) => item.sessionId === thread.sessionId ? { ...item, queuedTurns: [] } : item) });
       }
@@ -3571,8 +2542,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
       const stuck = get().threads.find((item) => item.sessionId === thread.sessionId);
       if (stuck?.status === "running" && !stuck.cancelRequested) {
         const parked = stuck.pendingTurnKey
-          ? "Stop may not have reached Muse. Retry is safe — it resumes the pending turn."
-          : "Stop may not have reached Muse. Check the thread before retrying.";
+          ? "Stop may not have reached the agent. Retry is safe — it resumes the pending turn."
+          : "Stop may not have reached the agent. Check the thread before retrying.";
         set({ threads: get().threads.map((item) => item.sessionId === thread.sessionId ? { ...item, status: "idle", activity: undefined, error: parked, notice: null } : item) });
       }
     }
@@ -3580,7 +2551,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
   unqueueTurn: async (turnId) => {
     const thread = currentThread(get());
-    if (!thread || !acceptsBusySend(thread.agentId) || get().preview) return;
+    if (!thread || get().preview) return;
     if (!(thread.queuedTurns ?? []).some((entry) => entry.turnId === turnId)) return;
     try {
       await bridge("unqueueTurn", { sessionId: thread.sessionId, turnId, agentId: thread.agentId });
@@ -3610,7 +2581,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     }) });
     update({ approvalPending: true, error: null });
     try {
-      if (thread.agentId === "harness" && !choice.decision.startsWith("denied")) await get().applyHarnessRules();
+      if (!choice.decision.startsWith("denied")) await get().applyHarnessRules();
       if (!get().preview) await bridge("decideApproval", { approvalId, choiceId, sessionId: thread.sessionId });
       settle();
       if (explanation) {
@@ -3650,7 +2621,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     const update = (patch: Partial<Thread>) => set({ threads: get().threads.map((item) => item.sessionId === sessionId ? { ...item, ...patch } : item) });
     update({ userInputPending: userInputId, error: null });
     try {
-      if (thread.agentId === "harness") await get().applyHarnessRules();
+      await get().applyHarnessRules();
       if (!get().preview) await bridge("respondUserInput", { sessionId, userInputId, response });
       update({ userInputs: get().threads.find((item) => item.sessionId === sessionId)?.userInputs?.filter((request) => request.userInputId !== userInputId) });
     } catch (error) { update({ error: sentenceAfter(describeError("Could not respond", error), "Your answer is retained; retry or cancel the question.") }); }
@@ -3854,7 +2825,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     if (!comments.length) return;
     const thread = currentThread(state);
     const running = thread?.status === "running";
-    if (running && (!acceptsBusySend(thread?.agentId) || state.preview)) throw new Error("Stop the running turn first. This agent cannot take a message mid-turn.");
+    if (running && state.preview) throw new Error("Stop the running turn first. The preview cannot take a message mid-turn.");
     if (state.submitting || state.starting) throw new Error("Another message is being sent. Try again in a moment.");
     // The comments travel through the normal send path, which reads the
     // composer. The user's own draft is set aside and put back afterwards.
@@ -4052,9 +3023,15 @@ export const useAppStore = create<AppStore>((set, get) => ({
   },
   continueThread: async () => {
     const thread = currentThread(get());
-    if (!thread || thread.status === "running" || get().submitting) return;
-    set({ composer: "Continue from the last interruption. Finish remaining work.", images: [], contextRefs: [] });
+    if (!thread || thread.status === "running" || get().submitting || thread.recoveryDismissed) return;
+    set({ composer: continuationPrompt(thread.agentId, thread.lastOutcome), images: [], contextRefs: [] });
     await get().sendPrompt();
+  },
+  stopRecovery: () => {
+    const thread = currentThread(get());
+    if (!thread || thread.status === "running" || thread.lastOutcome !== "interrupted" || thread.recoveryDismissed) return;
+    set({ threads: get().threads.map((item) => item.sessionId === thread.sessionId ? { ...item, recoveryDismissed: true } : item) });
+    scheduleMemory(get);
   },
   setComposer: (value) => { set({ composer: value }); scheduleDraft(get); },
   setDraftWorktree: (worktree) => {
@@ -4133,7 +3110,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     set({ preview: false, error: null, models: [], ...(snapshot ?? { workspaces: [], selectedWorkspaceId: null, selectedSessionId: null, threads: [], drafts: {}, composer: "", images: [], contextRefs: [], git: null }) });
     try {
       await get().refreshDetection();
-      if (get().detection?.found && get().detection?.authenticated && currentWorkspace(get())) await get().startHost();
+      if (readyAgents(get()).length && currentWorkspace(get())) await get().startHost();
     } catch (error) {
       set({ error: sentenceAfter(describeError("Could not reconnect", error), "Open Settings to try again.") });
     }
@@ -4150,10 +3127,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       name: "Glitter",
       grantId: "preview",
     };
-    // The last demo thread shows how a thread from another installed agent looks.
-    const threads = mockThreads().map((thread, index, all) => index === all.length - 1 && all.length > 1
-      ? { ...thread, agentId: "grok" as const, config: { agentId: "grok" as const, modelId: "grok-4.6", effort: "high" as const }, opened: true }
-      : { ...thread, config: defaults(get()), opened: true });
+    const threads = mockThreads().map((thread) => ({ ...thread, agentId: "harness" as const, config: { ...defaults(get()), ...thread.config, agentId: "harness" as const }, opened: true }));
     set({
       preview: true,
       agents: MOCK_AGENTS,
@@ -4264,53 +3238,10 @@ function settleEndedTurn(sessionId: string, turnId?: string | null) {
   scheduleMemory(useAppStore.getState);
 }
 
-/**
- * Safety net for a missed turn end: while a Muse thread looks busy but has been quiet for a
- * while, ask the host whether its session is actually idle.
- */
-let reconcileInFlight: Promise<void> | null = null;
 
-export function reconcileRunningThreads(): Promise<void> {
-  if (reconcileInFlight) return reconcileInFlight;
-  const inFlight = (async () => {
-    const state = useAppStore.getState();
-    if (state.preview) return;
-    const quiet = state.threads.filter((thread) => !thread.agentId && thread.status === "running" && !thread.opening && !thread.pendingApproval && !thread.queuedApprovals?.length && !thread.userInputs?.length && Date.now() - Date.parse(thread.updatedAt) > 20000);
-    // Sessions are listed per folder, and a worktree thread lives in its own.
-    const homes = new Map<string, { grantId?: string | null; wanted: Set<string> }>();
-    for (const thread of quiet) {
-      const home = threadScope(state, thread);
-      const path = home?.path ?? thread.workspacePath;
-      homes.set(path, { grantId: home?.grantId, wanted: (homes.get(path)?.wanted ?? new Set<string>()).add(thread.sessionId) });
-    }
-    for (const [path, { grantId, wanted }] of homes) {
-      if (isTauri() && !grantId) continue;
-      try {
-        const { sessions } = await listWorkspaceSessions({ path, grantId }, undefined, 5, (all) => [...wanted].every((id) => all.some((session) => session.sessionId === id)));
-        for (const session of sessions) {
-          const thread = quiet.find((item) => item.sessionId === session.sessionId);
-          if (thread && session.status === "idle" && !session.activeTurnId) settleEndedTurn(thread.sessionId, thread.activeTurnId);
-        }
-      } catch { /* host busy or restarting; the next pass retries */ }
-    }
-  })();
-  const tracked = inFlight.finally(() => { reconcileInFlight = null; });
-  reconcileInFlight = tracked;
-  return tracked;
-}
-
-/** Muse and Harness have skills: a session catalog, and `/name` sent as a skill part. ACP agents do not. */
-export function supportsSkills(agentId: string | undefined): boolean {
-  return !agentId || agentId === "harness";
-}
-
-/** Muse and Harness accept a follow-up while a turn runs. ACP agents and preview do not. */
-export function acceptsBusySend(agentId: string | undefined): boolean {
-  return !agentId || agentId === "harness";
-}
 
 /**
- * Send while a turn runs (Muse and Harness). Queue parks the input for launch,
+ * Send while a Harness turn runs. Queue parks the input for launch,
  * steer folds it into the running turn, replace interrupts and starts over.
  * Runs under sendPrompt's submitting guard; clears the draft on success.
  */
@@ -4409,16 +3340,16 @@ async function deliverApprovalFeedback(sessionId: string): Promise<void> {
   if (!thread || thread.cancelRequested || (!thread.opened && !state.preview) || thread.approvalFeedback?.some((entry) => entry.state === "sending")) return;
   const feedback = thread.approvalFeedback?.find((entry) => entry.state === "queued");
   if (!feedback) return;
-  // ACP and preview have no busy-send. Harness can steer a denial into the running turn.
-  if ((!acceptsBusySend(thread.agentId) || state.preview) && thread.status === "running") return;
+  // Preview has no busy-send. Harness can steer a denial into the running turn.
+  if (state.preview && thread.status === "running") return;
   const patch = (update: (current: Thread) => Thread) => useAppStore.setState((current) => ({ threads: current.threads.map((item) => item.sessionId === sessionId ? update(item) : item) }));
   patch((current) => ({ ...current, approvalFeedback: current.approvalFeedback?.map((entry) => entry.id === feedback.id ? { ...entry, state: "sending" } : entry) }));
   let started = false;
   let before: Partial<Thread> = {};
   try {
-    if (thread.agentId === "harness") await useAppStore.getState().applyHarnessRules();
+    await useAppStore.getState().applyHarnessRules();
     let steered = false;
-    if (acceptsBusySend(thread.agentId) && thread.status === "running" && !state.preview) {
+    if (thread.status === "running" && !state.preview) {
       try {
         await bridge("steerTurn", { sessionId, agentId: thread.agentId, text: feedback.text });
         steered = true;
@@ -4436,7 +3367,7 @@ async function deliverApprovalFeedback(sessionId: string): Promise<void> {
       if (started) patch((current) => ({ ...current, status: "running", activeTurnId: null, lastOutcome: undefined, activity: "working", turnStartedAt: Date.now(), turnStartOutput: current.usage?.outputTokens ?? 0, turnStartPrompt: current.usage?.promptTokens ?? 0, turnStartCache: cacheTokens(current.usage), turnStats: undefined, tokenSpeed: undefined, turnCalls: [] }));
       const result = await bridge<{ turnId: string; disposition?: string }>("sendTurn", {
         sessionId, agentId: live.agentId, text: feedback.text,
-        ...(acceptsBusySend(live.agentId) ? { clientTurnId: feedback.id, ifBusy: "queue" as const } : {}),
+        clientTurnId: feedback.id, ifBusy: "queue" as const,
       });
       patch((current) => current.lastTurnId === result.turnId ? current : result.disposition === "queued"
         ? { ...current, queuedTurns: [...(current.queuedTurns ?? []), { turnId: result.turnId, text: feedback.text }] }
@@ -4595,30 +3526,17 @@ export function bindBridgeEvents() {
       modelsInFlight = null;
       harnessRulesApplied = null;
       harnessRulesGeneration += 1;
-      const payloadInfo = payload as BridgeEventPayloads["hostExit"] | undefined;
-      const closed = event === "hostStopping" ? null : payloadInfo?.kind === "crash"
-        ? `Muse exited unexpectedly${payloadInfo.exitCode != null ? ` (${payloadInfo.exitCode})` : ""}. Open Settings to reconnect; drafts are retained.`
-        : "Muse connection closed. Open Settings to reconnect; drafts are retained.";
-      modelCatalogs.delete("muse");
-      useAppStore.setState({ error: closed, ...(event === "hostStopping" ? {} : { hostInfo: null }), ...(store.modelsAgentId === "muse" ? { models: [], modelsLoading: false } : {}), threads: store.threads.map((thread) => thread.agentId ? thread : abandonThread(thread)) });
+      // The Harness runs inside the agent process, so its exit ends every
+      // session; a stopping notice comes before the exit itself.
+      const exited = event === "hostExit" || event === "bridgeExit";
+      const detail = (payload as BridgeEventPayloads["bridgeExit"] | undefined)?.error;
+      const closed = exited ? `The agent stopped${detail ? `: ${detail}` : ""}. Select a thread to reconnect; drafts are retained.` : null;
+      useAppStore.setState({ ...(closed ? { error: closed } : {}), ...(exited ? { hostInfo: null, threads: store.threads.map((thread) => abandonThread(thread)) } : {}) });
       scheduleMemory(useAppStore.getState);
-    }
-    if (event === "agentExit") {
-      const data = payload as BridgeEventPayloads["agentExit"];
-      const name = store.agents.find((agent) => agent.id === data.agentId)?.name ?? data.agentId;
-      useAppStore.setState({ threads: store.threads.map((thread) => thread.agentId !== data.agentId ? thread : abandonThread(thread, { notice: null, ...(thread.sessionId === store.selectedSessionId ? { error: `${name} stopped${data.error ? `: ${data.error}` : ""}. Select the thread again to reconnect.` } : {}) })) });
     }
     if (event === "agentNotice") {
       const data = payload as BridgeEventPayloads["agentNotice"];
       update(data.sessionId, (thread) => ({ ...thread, notice: data.message ? { level: data.level ?? "info", message: data.message } : null }));
-    }
-    if (event === "loginDone") {
-      useAppStore.setState({ loginPrompt: null, loginError: null });
-      void useAppStore.getState().refreshDetection();
-    }
-    if (event === "loginError") {
-      const data = payload as BridgeEventPayloads["loginError"];
-      useAppStore.setState({ loginPrompt: null, loginError: data?.error ?? "Sign-in failed." });
     }
     if (event === "sessionTitle") {
       const data = payload as BridgeEventPayloads["sessionTitle"];
@@ -4627,9 +3545,7 @@ export function bindBridgeEvents() {
     }
     if (event === "sessionName") {
       const data = payload as BridgeEventPayloads["sessionName"];
-      // In-flight renames accept the host name (the deferred RecoveryPending
-      // name would otherwise be dropped by the optimistic customTitle).
-      update(data.sessionId, (thread) => thread.customTitle && !renameInflight.has(data.sessionId) ? thread : { ...thread, title: titleFromText(data.name) });
+      update(data.sessionId, (thread) => thread.customTitle ? thread : { ...thread, title: titleFromText(data.name) });
       scheduleMemory(useAppStore.getState);
     }
     if (event === "sessionRow") {
@@ -4715,9 +3631,8 @@ export function bindBridgeEvents() {
       const data = payload as BridgeEventPayloads["agentConfig"];
       const prior = store.threads.find((thread) => thread.sessionId === data.sessionId)?.config;
       update(data.sessionId, (thread) => ({ ...thread, config: { ...thread.config, ...agentConfigPatch(data.config), agentId: thread.agentId }, modes: data.config.modes ?? thread.modes }));
-      // listModels is a serialized bridge round-trip on ACP agents (~1s on
-      // Grok). An effort echo changes nothing the catalog offers, so only a
-      // model or mode move justifies the refresh.
+      // An effort echo changes nothing the catalog offers, so only a model or
+      // mode change justifies a refresh.
       const shifted = (data.config.modelId !== undefined && data.config.modelId !== prior?.modelId) || (data.config.mode !== undefined && data.config.mode !== prior?.mode);
       if (store.selectedSessionId === data.sessionId && shifted) void useAppStore.getState().refreshModels();
     }
@@ -4736,13 +3651,6 @@ export function bindBridgeEvents() {
       const data = payload as BridgeEventPayloads["route"];
       // Kept per turn, so each receipt can name the shape it ran even after later turns or a resume.
       update(data.sessionId, (thread) => ({ ...thread, routes: { ...(thread.routes ?? {}), [data.turnId]: data.route } }));
-    }
-    if (event === "usageChanged") {
-      const usage = asSubscriptionUsage(payload);
-      if (usage) {
-        useAppStore.setState({ subscriptionUsage: usage, subscriptionUsageAt: Date.now(), subscriptionUsageError: null });
-        scheduleMemory(useAppStore.getState);
-      }
     }
     if (event === "userInputs") {
       const data = payload as BridgeEventPayloads["userInputs"];
@@ -4895,7 +3803,6 @@ export function bindBridgeEvents() {
       const selectedWorkspace = store.workspaces.find((item) => item.id === store.selectedWorkspaceId);
       if (completedThread && selectedWorkspace && sharesActiveScope(store, completedThread)) useAppStore.getState().refreshFileIndex();
       const terminal = data.outcome.params?.terminal;
-      const auth = !store.threads.find((thread) => thread.sessionId === data.sessionId)?.agentId && authRequired(data.outcome);
       const cancelled = terminal === "cancelled";
       const failed = !cancelled && (data.outcome.kind !== "completed" || terminal !== "completed");
       if (store.commitDrafting === data.sessionId) {
@@ -4903,16 +3810,16 @@ export function bindBridgeEvents() {
         const text = commitSubjectFromReply(reply ?? "");
         useAppStore.setState({ commitDrafting: null, ...(text ? { commitDraft: { text, seq: (store.commitDraft?.seq ?? 0) + 1, sessionId: data.sessionId } } : {}) });
       }
-      if (!cancelled) maybeNotify(data.sessionId, failed || auth ? "Turn failed" : "Turn finished");
+      if (!cancelled) maybeNotify(data.sessionId, failed ? "Turn failed" : "Turn finished");
       update(data.sessionId, (thread) => thread.activeTurnId && thread.activeTurnId !== data.turnId ? { ...thread, items: settleTurnItems(thread.items, data.turnId, terminal), queuedTurns: (thread.queuedTurns ?? []).filter((entry) => entry.turnId !== data.turnId), ...(thread.retry?.turnId === data.turnId ? { retry: null } : {}), ...(data.viewCursor ? { resumeCursor: data.viewCursor } : {}) } : ({
         ...thread,
         ...finishTurn(thread, data.turnId),
         retry: null,
         ...(data.viewCursor ? { resumeCursor: data.viewCursor } : {}),
-        status: failed || auth ? "error" : "idle",
+        status: failed ? "error" : "idle",
         queuedTurns: (thread.queuedTurns ?? []).filter((entry) => entry.turnId !== data.turnId),
-        error: auth ? "Muse needs a sign-in. Add an API key in Settings. The draft is kept." : failed ? data.outcome.params?.error?.message ?? data.outcome.params?.reason ?? `Turn ended: ${data.outcome.kind} (${terminal ?? "outcome unknown"})` : cancelled ? null : thread.error,
-        lastOutcome: auth ? "failed" : cancelled ? "cancelled" : failed ? "failed" : "completed",
+        error: failed ? data.outcome.params?.error?.message ?? data.outcome.params?.reason ?? `Turn ended: ${data.outcome.kind} (${terminal ?? "outcome unknown"})` : cancelled ? null : thread.error,
+        lastOutcome: cancelled ? "cancelled" : failed ? "failed" : "completed",
         plan: cancelled ? settlePlan(thread.plan, "cancelled") : failed ? settlePlan(thread.plan, "failed") : thread.plan,
         items: cancelled ? settleItems(thread.items, "cancelled", true) : failed ? settleItems(thread.items, "failed") : thread.items,
         activeTurnId: null,
@@ -4928,7 +3835,7 @@ export function bindBridgeEvents() {
         unread: store.selectedSessionId !== data.sessionId,
       }));
       recordUsage(useAppStore.getState, useAppStore.setState, data.sessionId);
-      if (!cancelled && !failed && !auth) void deliverApprovalFeedback(data.sessionId);
+      if (!cancelled && !failed) void deliverApprovalFeedback(data.sessionId);
       else update(data.sessionId, (thread) => ({ ...thread, approvalFeedback: thread.approvalFeedback?.map((entry) => entry.state === "queued" ? { ...entry, state: "failed" as const, error: "Turn ended. Feedback was not sent." } : entry) }));
       scheduleMemory(useAppStore.getState);
       if (sharesActiveScope(store, store.threads.find((thread) => thread.sessionId === data.sessionId))) void store.refreshGit();
@@ -5014,10 +3921,10 @@ function rescope(get: () => AppStore, set: (patch: Partial<AppStore>) => void, f
 }
 
 /** The selected workspace's threads as the sidebar lists them: pinned first, then newest position first. */
-function workspaceThreads(state: Pick<AppStore, "threads" | "workspaces" | "selectedWorkspaceId" | "enabledAgents">): Thread[] {
+function workspaceThreads(state: Pick<AppStore, "threads" | "workspaces" | "selectedWorkspaceId">): Thread[] {
   const path = currentWorkspace(state)?.path;
   return state.threads
-    .filter((thread) => thread.workspacePath === path && !thread.archived && agentEnabled(state, thread.agentId ?? "muse"))
+    .filter((thread) => thread.workspacePath === path && !thread.archived)
     .sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || (b.order ?? 0) - (a.order ?? 0));
 }
 
@@ -5061,29 +3968,9 @@ async function listWorkspaceSessions(workspace: Pick<Workspace, "path" | "grantI
   return { sessions, truncated };
 }
 
-/** Agents that can take work right now (Muse also needs its API key; disabled providers are skipped). */
-export function readyAgents(state: Pick<AppStore, "agents" | "detection" | "enabledAgents">): AgentInfo[] {
-  const agents = state.agents.length ? state.agents : state.detection ? [{ id: "muse", name: "Muse", protocol: "msp", found: state.detection.found, path: state.detection.path, version: state.detection.version, verified: true, signIn: "", authenticated: state.detection.authenticated } as AgentInfo] : [];
-  // Muse needs its credential and the harness a provider key; ACP agents report sign-in on connect.
-  return agents.filter((agent) => agent.found && agentEnabled(state, agent.id) && ((agent.id !== "muse" && agent.id !== "harness") || agent.authenticated));
-}
-
-/** The agent new threads use: the saved default when ready, else the built-in harness, else Muse, else the first ready agent. */
-export function preferredAgent(state: Pick<AppStore, "agents" | "detection" | "enabledAgents" | "defaultAgentId">): AgentId {
-  const ready = readyAgents(state);
-  if (state.defaultAgentId && ready.some((agent) => agent.id === state.defaultAgentId)) return state.defaultAgentId;
-  // With nothing ready yet (before detection, or with no key or CLI set up) the
-  // app keeps addressing Muse, as every pre-detection path expects.
-  return ready.find((agent) => agent.id === "harness")?.id ?? ready.find((agent) => agent.id === "muse")?.id ?? ready[0]?.id ?? "muse";
-}
-
-/** The agent behind the composer: the open thread's, else the draft's choice. */
-export function activeAgentId(state: Pick<AppStore, "threads" | "selectedSessionId" | "drafts" | "selectedWorkspaceId" | "enabledAgents" | "agents" | "detection" | "defaultAgentId">): AgentId {
-  const thread = currentThread(state);
-  if (thread) return thread.agentId ?? "muse";
-  const draftId = state.drafts[`project:${state.selectedWorkspaceId}`]?.config?.agentId;
-  if (draftId && agentEnabled(state, draftId)) return draftId;
-  return preferredAgent(state);
+/** The agent when it can take work: it ships with the app and is ready once a provider has a key. */
+export function readyAgents(state: Pick<AppStore, "agents">): AgentInfo[] {
+  return state.agents.filter((agent) => agent.found && agent.authenticated);
 }
 
 function agentConfigPatch(config?: AgentSessionConfig): Partial<SessionConfig> {
@@ -5092,7 +3979,6 @@ function agentConfigPatch(config?: AgentSessionConfig): Partial<SessionConfig> {
     ...(config.modelId ? { modelId: config.modelId, providerId: config.modelId.includes("/") ? config.modelId.split("/")[0] : undefined } : {}),
     ...(config.effort ? { effort: config.effort } : {}),
     ...(config.mode ? { mode: config.mode } : {}),
-    // The built-in agent always reports it; an agent CLI never does.
     ...("orchestrator" in config ? { orchestrator: config.orchestrator ?? null } : {}),
   };
 }
@@ -5104,7 +3990,7 @@ function fitEffort(config: SessionConfig, models: Model[]): SessionConfig {
 }
 
 /** The config the composer shows: the thread's, else this workspace's draft, else defaults. */
-export function activeConfig(state: Pick<AppStore, "threads" | "selectedSessionId" | "drafts" | "selectedWorkspaceId" | "defaultAgentId" | "defaultModel" | "defaultProviderId" | "defaultApprovalMode" | "defaultEffort" | "enabledAgents">): SessionConfig {
+export function activeConfig(state: Pick<AppStore, "threads" | "selectedSessionId" | "drafts" | "selectedWorkspaceId" | "defaultModel" | "defaultProviderId" | "defaultApprovalMode" | "defaultEffort">): SessionConfig {
   return currentThread(state)?.config ?? state.drafts[`project:${state.selectedWorkspaceId}`]?.config ?? defaults(state);
 }
 

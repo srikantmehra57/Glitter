@@ -130,7 +130,7 @@ function buildStep(item: TranscriptItem): AgentStep {
     return { id: item.itemId, kind: "error", status: "failed", title: "System", detail: item.text || item.fallbackText, item };
   }
   if (item.kind === "agentMessage") {
-    return { id: item.itemId, kind: "message", status: itemStatus(item.status), title: "Muse", detail: item.text || item.fallbackText, item };
+    return { id: item.itemId, kind: "message", status: itemStatus(item.status), title: "Agent", detail: item.text || item.fallbackText, item };
   }
   // Open enum: unknown kinds render generically (kind + status + fallbackText), never as a reply.
   return { id: item.itemId, kind: "other", status: itemStatus(item.status), title: humanizeKind(item.kind), detail: item.text || item.fallbackText, item };

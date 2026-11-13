@@ -21,7 +21,7 @@ vi.mock("./Orb", () => ({ Orb: ({ state, paused, "aria-label": label }: { state:
 describe("thinking orb preference", () => {
   beforeEach(resetStore);
 
-  it("updates a live indicator, keeps automatic effort states and preserves paused and ACP indicators", () => {
+  it("updates a live indicator, keeps automatic effort states and preserves the paused indicator", () => {
     const view = render(<WorkingIndicator label="Thinking" />);
     expect(screen.getByTestId("thinking-orb")).toHaveAttribute("data-state", "working");
     view.rerender(<WorkingIndicator label="Thinking" peak />);
@@ -31,11 +31,8 @@ describe("thinking orb preference", () => {
     view.rerender(<WorkingIndicator label="Waiting for approval" paused />);
     expect(screen.getByTestId("thinking-orb")).toHaveAttribute("data-state", "breathing");
     expect(screen.getByTestId("thinking-orb")).toHaveAttribute("data-paused", "true");
-    view.rerender(<WorkingIndicator label="Thinking" agentId="harness" />);
+    view.rerender(<WorkingIndicator label="Thinking" />);
     expect(screen.getByTestId("thinking-orb")).toBeInTheDocument();
-    view.rerender(<WorkingIndicator label="Thinking" agentId="opencode" />);
-    expect(screen.queryByTestId("thinking-orb")).toBeNull();
-    expect(screen.getByTestId("agent-mark")).toBeInTheDocument();
   });
 });
 
@@ -132,83 +129,37 @@ describe("message editing", () => {
     item({ itemId: "u2", kind: "userMessage", turnId: "t2", text: "Second prompt" }),
   ];
 
-  it("forks an edited Muse message with an optional reset and keeps a failed edit open", async () => {
-    const rewind = vi.fn(async () => false);
-    seedStore({ rewindMessage: rewind, composer: "Unsent draft" });
-    mount(thread({ historyExhausted: true, items: prompts(), snapshots: { t2: { snapshotId: "snap-2", sessionId: "s1", turnId: "t2", state: "ready", files: ["a.txt"], reason: null, createdAt: 1 } } }));
-    const user = userEvent.setup();
-    await user.click(screen.getAllByRole("button", { name: "Edit and rewind" })[1]);
-    expect(screen.getByText(/Creates a fork before this message/)).toBeInTheDocument();
-    await user.clear(screen.getByRole("textbox", { name: "Edit message" }));
-    await user.type(screen.getByRole("textbox", { name: "Edit message" }), "Revised prompt");
-    await user.click(screen.getByRole("checkbox", { name: "Reset files too" }));
-    expect(screen.getByText(/Resets only this turn’s saved files/)).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Fork and send" }));
-    expect(rewind).toHaveBeenCalledWith("s1", "u2", "Revised prompt", true);
-    expect(screen.getByRole("textbox", { name: "Edit message" })).toHaveValue("Revised prompt");
-    expect(useAppStore.getState().composer).toBe("Unsent draft");
-    seedStore({ threads: [thread({ items: prompts(), rewindError: { itemId: "u2", message: "Nothing was restored." } })] });
-    expect(await screen.findByRole("alert")).toHaveTextContent("Nothing was restored.");
-  });
 
-  it("labels the first message as starting a fresh thread and hides unavailable resets", async () => {
-    mount(thread({ historyExhausted: true, items: [prompts()[0]], snapshots: { t1: { snapshotId: "snap-1", sessionId: "s1", turnId: "t1", state: "unavailable", files: [], reason: "Expired", createdAt: 1 } } }));
-    await userEvent.setup().click(screen.getByRole("button", { name: "Edit and rewind" }));
-    expect(screen.getByText(/First message: starts a new thread/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Start and send" })).toBeInTheDocument();
-    expect(screen.queryByRole("checkbox", { name: "Reset files too" })).toBeNull();
-  });
 
   it("cancels inline editing without touching the composer or sending", async () => {
-    const rewind = vi.fn(async () => false); const send = vi.fn(async () => true);
-    seedStore({ rewindMessage: rewind, sendPrompt: send, composer: "Keep this draft" });
+    const send = vi.fn(async () => true);
+    seedStore({ sendPrompt: send, composer: "Keep this draft" });
     mount(thread({ items: prompts() }));
     const user = userEvent.setup();
-    await user.click(screen.getAllByRole("button", { name: "Edit and rewind" })[1]);
+    await user.click(screen.getAllByRole("button", { name: "Edit and resend" })[1]);
     await user.type(screen.getByRole("textbox", { name: "Edit message" }), " edited{Escape}");
     expect(screen.queryByRole("textbox", { name: "Edit message" })).toBeNull();
-    expect(rewind).not.toHaveBeenCalled(); expect(send).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
     expect(useAppStore.getState().composer).toBe("Keep this draft");
   });
 
-  it("shows a history-boundary error instead of appending a legacy message", async () => {
-    const send = vi.fn(async () => true); seedStore({ sendPrompt: send });
-    mount(thread({ items: [item({ itemId: "old", kind: "userMessage", text: "Historical prompt" })], historyExhausted: true }));
-    const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "Edit and rewind" }));
-    await user.click(screen.getByRole("button", { name: "Fork and send" }));
-    expect(screen.getByRole("alert")).toHaveTextContent(/no confirmed turn boundary/);
-    expect(screen.getByRole("textbox", { name: "Edit message" })).toHaveValue("Historical prompt");
-    expect(send).not.toHaveBeenCalled();
-  });
 
-  it("keeps ACP editing as resend with the original attachments", async () => {
-    const send = vi.fn(async () => true); const rewind = vi.fn(async () => false);
+  it("resends an edited message with the original attachments", async () => {
+    const send = vi.fn(async () => true);
     const images = [{ name: "a.png", mediaType: "image/png", base64Data: "aW1hZ2U=" }];
     const refs = [{ id: "r", kind: "file" as const, path: "a.ts" }];
-    seedStore({ sendPrompt: send, rewindMessage: rewind });
-    mount(thread({ agentId: "opencode", items: [item({ itemId: "u", kind: "userMessage", text: "Original", images, refs })] }));
+    seedStore({ sendPrompt: send });
+    mount(thread({ agentId: "harness", items: [item({ itemId: "u", kind: "userMessage", text: "Original", images, refs })] }));
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Edit and resend" }));
     await user.clear(screen.getByRole("textbox", { name: "Edit message" }));
     await user.type(screen.getByRole("textbox", { name: "Edit message" }), "Revised");
     await user.click(screen.getByRole("button", { name: "Resend" }));
-    expect(send).toHaveBeenCalledWith({ resetTaskState: true }); expect(rewind).not.toHaveBeenCalled();
+    expect(send).toHaveBeenCalledWith({ resetTaskState: true });
     expect(useAppStore.getState().composer).toBe("Revised");
     expect(useAppStore.getState().images).toEqual(images); expect(useAppStore.getState().contextRefs).toEqual(refs);
   });
 
-  it("does not send while composing text or while a rewind is pending", async () => {
-    const rewind = vi.fn(async () => false); seedStore({ rewindMessage: rewind });
-    const source = thread({ items: prompts() }); mount(source);
-    await userEvent.setup().click(screen.getAllByRole("button", { name: "Edit and rewind" })[1]);
-    fireEvent.keyDown(screen.getByRole("textbox", { name: "Edit message" }), { key: "Enter", ctrlKey: true, isComposing: true });
-    expect(rewind).not.toHaveBeenCalled();
-    seedStore({ threads: [{ ...source, rewindPending: "u2" }] });
-    expect(await screen.findByRole("button", { name: "Fork and send" })).toBeDisabled();
-    fireEvent.keyDown(screen.getByRole("textbox", { name: "Edit message" }), { key: "Enter", metaKey: true });
-    expect(rewind).not.toHaveBeenCalled();
-  });
 });
 
 describe("AgentTimeline", () => {
@@ -254,7 +205,7 @@ describe("AgentTimeline", () => {
       item({ itemId: "u1", kind: "userMessage", turnId: "t1", text: "go" }),
       item({ itemId: "m1", kind: "agentMessage", turnId: "t1", text: "Done." }),
     ];
-    for (const agentId of ["harness", "opencode", "grok"] as const) {
+    for (const agentId of ["harness"] as const) {
       for (const state of [{ status: "running" as const, activeTurnId: "t1" }, { status: "idle" as const, lastTurnId: "t1", lastOutcome: "completed" as const }]) {
         const view = mount(thread({ agentId, items, ...state }));
         expect(document.querySelector(".agent-message-head")).toBeNull();
@@ -284,11 +235,11 @@ describe("AgentTimeline", () => {
       item({ itemId: "m2", kind: "agentMessage", turnId: "t1", text: "Found the race" }),
     ];
     const actions = (id: string) => document.querySelector(`[data-item="${id}"] .msg-actions`);
-    const view = mount(thread({ agentId: "grok", status: "running", activeTurnId: "t1", items }));
+    const view = mount(thread({ agentId: "harness", status: "running", activeTurnId: "t1", items }));
     expect(actions("m1"), "a note between steps").toBeNull();
     expect(actions("m2"), "the newest note of a turn still running").toBeNull();
     view.unmount();
-    mount(thread({ agentId: "grok", lastTurnId: "t1", lastOutcome: "completed", items }));
+    mount(thread({ agentId: "harness", lastTurnId: "t1", lastOutcome: "completed", items }));
     expect(actions("m1")).toBeNull();
     expect(actions("m2")).not.toBeNull();
     expect(screen.getByRole("button", { name: "Retry last turn" })).toBeInTheDocument();
@@ -350,9 +301,31 @@ describe("AgentTimeline", () => {
     expect(within(screen.getByRole("region", { name: "Done" })).getByText("Undone")).toBeInTheDocument();
   });
 
+  it("shows a Harness interruption and leaving it stopped sends nothing", () => {
+    mount(thread({
+      agentId: "harness",
+      lastOutcome: "interrupted",
+      lastTurnId: "t1",
+      notice: { level: "warning", message: "The previous turn was interrupted before it finished. It was not resumed, and nothing was replayed." },
+      items: [
+        item({ itemId: "u1", kind: "userMessage", turnId: "t1", text: "do it" }),
+        item({ itemId: "m1", kind: "agentMessage", turnId: "t1", text: "partial", status: "cancelled" }),
+      ],
+    }));
+    const receipt = screen.getByRole("region", { name: "Interrupted" });
+    expect(receipt).toHaveTextContent("was not resumed");
+    expect(within(receipt).queryByRole("button", { name: "Undo" })).toBeNull();
+    fireEvent.click(within(receipt).getByRole("button", { name: "Leave stopped" }));
+    expect(useAppStore.getState().threads[0].recoveryDismissed).toBe(true);
+    expect(useAppStore.getState().composer).toBe("");
+    expect(screen.queryByRole("button", { name: "Continue" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Leave stopped" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+  });
+
   it("fills a host that reports no turn usage with the derived step time", () => {
     mount(thread({
-      agentId: "grok",
+      agentId: "harness",
       lastTurnId: "t1",
       lastOutcome: "completed",
       items: [

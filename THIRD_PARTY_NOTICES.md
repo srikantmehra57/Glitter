@@ -13,8 +13,7 @@ Meta's separately distributed CLI.
 
 | Component | Version | License | Notes |
 |---|---|---|---|
-| Node.js runtime | 26.8.2 | MIT (OpenJS Foundation) | Staged as the `glitter-node` sidecar by `packages/glitter-bridge/scripts/stage-sidecar.mjs`; only `bin/node` is extracted from the official archive |
-| `@muse-code/sdk` | 1.3.0 | MIT — © Meta Platforms, Inc. and affiliates | Bundled into `glitter-bridge/dist/index.js` |
+| Node.js runtime | 26.8.2 | MIT (OpenJS Foundation) | Staged as the `glitter-node` sidecar by `packages/glitter-harness/scripts/stage-sidecar.mjs`; only `bin/node` is extracted from the official archive |
 | `playwright-core` | 1.64.1 | Apache-2.0 — © Microsoft Corporation | Browser automation, bundled into the bridge with its registry metadata; Chromium itself is installed separately, not redistributed by Glitter |
 | `chromium-bidi` | 12.1.0 | Apache-2.0 — © Google LLC and contributors | Playwright's browser-protocol dependency, bundled into the bridge |
 | `@fontsource-variable/google-sans` | 5.3.2 | OFL-1.1 — © 2017 Google, Inc. | Google Sans variable font, bundled locally into the webview |

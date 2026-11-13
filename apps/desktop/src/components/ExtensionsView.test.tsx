@@ -37,13 +37,9 @@ const thread = (partial: Partial<Thread> = {}): Thread => ({
 });
 
 function mount(partial: Partial<Thread>, extra: Partial<ReturnType<typeof useAppStore.getState>> = {}) {
-  // The view refreshes the CLI inventories on mount; these tests are about the session catalog.
   seedStore({
     threads: [thread(partial)],
     selectedSessionId: "s1",
-    refreshManagedSkills: vi.fn(async () => {}),
-    refreshPlugins: vi.fn(async () => {}),
-    refreshMcpServers: vi.fn(async () => {}),
     refreshHarnessMcp: vi.fn(async () => {}),
     refreshHarnessMcpConfig: vi.fn(async () => {}),
     addHarnessMcpServer: vi.fn(async () => {}),
@@ -65,7 +61,7 @@ describe("ExtensionsView skills", () => {
     mount({ agentId: "harness", skills: [{ selector: "review", description: "Reviews a diff for bugs.", source: "project" }] });
     expect(screen.getByText("/review")).toBeInTheDocument();
     expect(screen.getByText("Reviews a diff for bugs.")).toBeInTheDocument();
-    expect(screen.getByText(/Harness loads skills from/)).toHaveTextContent(".glitter/skills and .agents/skills, in the workspace and in your home folder");
+    expect(screen.getByText(/The agent loads skills from/)).toHaveTextContent(".glitter/skills and .agents/skills, in the workspace and in your home folder");
     const section = screen.getByRole("region", { name: "Skills" });
     expect(within(section).getByRole("button", { name: /^Refresh$/ })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "Use" }));
@@ -77,11 +73,6 @@ describe("ExtensionsView skills", () => {
     expect(screen.getByText(/No skills yet\..*SKILL\.md/)).toBeInTheDocument();
   });
 
-  it("names the agents that have skills when the thread runs on another one", () => {
-    mount({ agentId: "opencode" });
-    expect(screen.getByText("Skills work with Muse and Harness; this thread runs on another agent.")).toBeInTheDocument();
-    expect(screen.queryByText(/Harness loads skills from/)).toBeNull();
-  });
 });
 
 describe("ExtensionsView MCP servers", () => {
@@ -216,9 +207,4 @@ describe("ExtensionsView MCP servers", () => {
     expect(confirm).toHaveBeenCalledWith(expect.objectContaining({ title: "Remove broken?", danger: true }));
   });
 
-  it("offers the CLI list, not the add form, on a thread that is not the Harness", () => {
-    mount({ agentId: "opencode" });
-    expect(screen.queryByRole("button", { name: "Add server" })).toBeNull();
-    expect(screen.getByText(/Servers configured for the Muse CLI/)).toBeInTheDocument();
-  });
 });

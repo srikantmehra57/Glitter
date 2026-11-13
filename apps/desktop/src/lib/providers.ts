@@ -1,6 +1,6 @@
 /**
  * The model providers the built-in harness can use, as Settings shows them.
- * The bridge (`packages/glitter-bridge/src/harness/providers.ts`) holds the wire
+ * The bridge (`packages/glitter-harness/src/harness/providers.ts`) holds the wire
  * details and the native shell the list of ids it will store keys for; a test
  * keeps the three in step. Custom endpoints are not listed here: the native
  * shell mints their ids (`custom-1`…) and they arrive with the keychain

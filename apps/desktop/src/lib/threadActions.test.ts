@@ -45,7 +45,7 @@ describe("thread support actions", () => {
     await copySessionId("h-thread-123");
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith("h-thread-123");
     await copyThreadLogPath("h-thread-123");
-    expect(native.supportPaths).toHaveBeenCalledWith("h-thread-123", "harness");
+    expect(native.supportPaths).toHaveBeenCalledWith("h-thread-123");
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith("/data/harness/sessions/h-thread-123.jsonl");
   });
 

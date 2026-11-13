@@ -54,7 +54,7 @@
     },
     "externalBin": ["binaries/glitter-node"],
     "resources": {
-      "../../../packages/glitter-bridge/dist/index.js": "glitter-bridge/index.js",
+      "../../../packages/glitter-harness/dist/index.js": "glitter-harness/index.js",
       "resources/THIRD_PARTY_LICENSES.txt": "THIRD_PARTY_LICENSES.txt"
     }
   }

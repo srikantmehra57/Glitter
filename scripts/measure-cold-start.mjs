@@ -11,11 +11,11 @@ import { performance } from "node:perf_hooks";
 import { join, resolve } from "node:path";
 import { build } from "esbuild";
 
-const temporary = await mkdtemp(join(tmpdir(), "muse-cold-"));
+const temporary = await mkdtemp(join(tmpdir(), "glitter-cold-"));
 const outfile = join(temporary, "bridge.mjs");
 try {
   await build({
-    entryPoints: [resolve("packages/glitter-bridge/src/index.ts")],
+    entryPoints: [resolve("packages/glitter-harness/src/index.ts")],
     bundle: true,
     platform: "node",
     format: "esm",

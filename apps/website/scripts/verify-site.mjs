@@ -80,7 +80,8 @@ try {
   assert.match(body, /macOS 13\+/, "the supported OS is explicit");
   assert.match(body, /View releases|Build from source/, "release and source actions remain available");
   assert.doesNotMatch(body, /macOS and Windows/i, "unsupported platforms are not advertised");
-  assert.doesNotMatch(body, /Requires the `muse` CLI/i, "Muse is optional, not required");
+  assert.doesNotMatch(body, /Muse Code subscription|Muse CLI|OpenCode and Grok are verified/i, "retired agent integrations are not advertised");
+  assert.deepEqual(await page.locator("#install .step h3").allTextContents(), ["Get the app", "Connect a model provider"], "setup steps follow the order they can be completed");
   const links = await page.locator("a[href]").evaluateAll((anchors) => anchors.map((anchor) => anchor.href));
   assert.equal(links.some((href) => href.includes("/releases/download/")), false, "download CTAs must not point to a nonexistent release asset");
 } finally {

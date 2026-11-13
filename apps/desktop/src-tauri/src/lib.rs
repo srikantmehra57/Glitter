@@ -18,7 +18,6 @@ mod catalog;
 mod credentials;
 mod dto;
 mod exec;
-mod export_markdown;
 mod framing;
 mod legacy;
 mod mcp_consent;
@@ -98,7 +97,7 @@ struct AppState {
     /// entry the renderer cannot write); the renderer can reference an id but
     /// never create or widen one.
     grants: Mutex<HashMap<String, PathBuf>>,
-    /// Live session bindings: MSP/ACP session id -> grant id. Learned ONLY by
+    /// Live session bindings: Harness session id -> grant id. Learned ONLY by
     /// snooping bridge responses for calls the native side authorized, so a
     /// renderer-nominated session id outside every grant stays unusable.
     sessions: Mutex<HashMap<String, String>>,
@@ -115,18 +114,9 @@ struct AppState {
     snapshots: Mutex<snapshots::Snapshots>,
     /// Interactive shells behind the terminal pane.
     terminals: Mutex<terminal::Terminals>,
-    /// The posture of the last host start: with shell execution disabled, the terminal is off too.
-    shell_disabled: std::sync::atomic::AtomicBool,
     dropped_paths: Mutex<HashSet<PathBuf>>,
-    /// One-time install authorizations: folders the USER chose in a native
-    /// picker. `skill_install` / `plugin_install` accept exactly these paths
-    /// and consume them, so a compromised renderer can reference a pick but
-    /// never nominate an arbitrary directory to install from.
-    picked_installs: Mutex<HashSet<PathBuf>>,
-    /// SHA-256 pins for every spawned executable (sidecar, muse, agent CLIs).
+    /// SHA-256 pins for every spawned executable (the bundled runtime, Chromium).
     exec_pins: exec::ExecPins,
-    /// Cross-restart ACP identity pins (path + digest per agent).
-    agent_pins: exec::AgentPins,
     /// Workspace trust and configuration-bound MCP startup permission.
     workspace_security: mcp_consent::WorkspaceSecurity,
 }
@@ -142,11 +132,8 @@ impl AppState {
             pending: Mutex::new(HashMap::new()),
             snapshots: Mutex::new(snapshots::Snapshots::default()),
             terminals: Mutex::new(terminal::Terminals::default()),
-            shell_disabled: std::sync::atomic::AtomicBool::new(false),
             dropped_paths: Mutex::new(HashSet::new()),
-            picked_installs: Mutex::new(HashSet::new()),
             exec_pins: exec::ExecPins::new(),
-            agent_pins: exec::AgentPins::new(HashMap::new()),
             workspace_security: mcp_consent::WorkspaceSecurity::default(),
         }
     }
@@ -161,7 +148,6 @@ struct PendingCall {
 const BRIDGE_METHODS: &[&str] = &[
     "ping",
     "detect",
-    "status",
     "startHost",
     "stopHost",
     "listSessions",
@@ -169,12 +155,9 @@ const BRIDGE_METHODS: &[&str] = &[
     "suggest",
     "startSession",
     "resumeSession",
-    "forkSession",
     "compactSession",
     "closeSession",
-    "readSession",
     "readChildSession",
-    "pageHistory",
     "listSkills",
     "harnessMcp",
     "harnessMcpConfig",
@@ -183,17 +166,9 @@ const BRIDGE_METHODS: &[&str] = &[
     "testModel",
     "harnessRules",
     "orchestratorProbe",
-    "mcpServers",
-    "userShell",
-    "readOutput",
     "browserOpen",
     "browserControl",
     "browserClose",
-    "setReasoningEffort",
-    "subagentControl",
-    "taskControl",
-    "workflowControl",
-    "goalControl",
     "sendTurn",
     "steerTurn",
     "unqueueTurn",
@@ -204,12 +179,6 @@ const BRIDGE_METHODS: &[&str] = &[
     "setModel",
     "setOrchestrator",
     "setSessionOption",
-    "usage",
-    "startLogin",
-    "cancelLogin",
-    "renameSession",
-    "checkCliUpdate",
-    "updateCli",
 ];
 
 const DIFF_LIMIT: usize = 1_500_000;
@@ -638,7 +607,6 @@ fn extra_bin_dirs() -> Vec<PathBuf> {
     if let Some(home) = dirs::home_dir() {
         dirs.extend([
             home.join(".local/bin"),
-            home.join(".muse/bin"),
             home.join(".volta/bin"),
             home.join(".asdf/shims"),
             home.join(".nodenv/shims"),
@@ -669,100 +637,6 @@ fn command(program: impl AsRef<std::ffi::OsStr>) -> Command {
     cmd
 }
 
-/// Resolve the Muse CLI to a canonical pinned path. Custom paths validate the
-/// canonical target (name, temp, regular executable file); an empty request
-/// searches the augmented PATH. A custom path inside an open workspace is
-/// refused: agent sessions write there, so a prompt-injected `./muse` must
-/// never become the binary this app spawns with the keyring credential.
-/// Every winner pins its SHA-256 digest, so a same-path replacement between
-/// spawns fails closed.
-fn resolve_muse_bin(state: &AppState, requested: &str) -> Result<PathBuf, String> {
-    let custom = !requested.trim().is_empty();
-    let found = if custom {
-        PathBuf::from(requested)
-    } else {
-        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        which::which_in("muse", Some(augmented_path()), cwd).map_err(|_| "Muse CLI was not found. Install it or set its path in Settings.".to_string())?
-    };
-    let canonical = exec::validate_exec(&found.to_string_lossy(), &exec::muse_name_allowed, "The Muse CLI")?;
-    if custom {
-        if let Ok(grants) = state.grants.lock() {
-            if grants.values().any(|root| canonical.starts_with(root)) {
-                return Err("The Muse CLI cannot live inside an open workspace folder. Move it to a bin directory and set the path again.".into());
-            }
-        }
-    }
-    state.exec_pins.check(&canonical, "The Muse CLI")?;
-    Ok(canonical)
-}
-
-/// Resolve the Muse binary natively and overwrite the renderer string with the
-/// canonical pinned path. A custom path validates or fails the call; an absent
-/// path resolves via the augmented PATH and injects when found, otherwise the
-/// bridge reports "not found" itself as before.
-fn inject_muse_bin(state: &AppState, params: &mut Value) -> Result<(), String> {
-    let requested = params.get("museBin").and_then(Value::as_str).unwrap_or("").to_string();
-    let object = params.as_object_mut().ok_or("Bridge parameters must be an object")?;
-    if !requested.trim().is_empty() {
-        let canonical = resolve_muse_bin(state, &requested)?;
-        object.insert("museBin".into(), Value::String(canonical.to_string_lossy().into_owned()));
-        return Ok(());
-    }
-    match resolve_muse_bin(state, "") {
-        Ok(canonical) => {
-            object.insert("museBin".into(), Value::String(canonical.to_string_lossy().into_owned()));
-        }
-        Err(_) => {
-            object.remove("museBin");
-        }
-    }
-    Ok(())
-}
-
-/// Resolve an ACP agent binary natively, verify its pinned identity, and
-/// inject the canonical path for the bridge to spawn. The bridge never
-/// resolves agent paths itself when this field is present, so a newly
-/// shadowing PATH entry cannot redirect a spawn without confirmation.
-fn inject_agent_bin(state: &AppState, params: &mut Value) -> Result<(), String> {
-    let agent_id = params.get("agentId").and_then(Value::as_str).unwrap_or("").to_string();
-    // Harness sessions are `h-` ids minted by the bridge; their session verbs
-    // need the keys even when the renderer leaves `agentId` out.
-    let harness_session = params.get("sessionId").and_then(Value::as_str).is_some_and(|id| id.starts_with("h-"));
-    if agent_id == "harness" || (agent_id.is_empty() && harness_session) {
-        return inject_provider_keys(params);
-    }
-    if agent_id.is_empty() || agent_id == "muse" {
-        return Ok(());
-    }
-    if !credentials::acp_consent_value().unwrap_or(false) {
-        return Err("Third-party agents run without an OS sandbox. Confirm that in Settings → Agents before using them.".into());
-    }
-    let spec = exec::agent_spec(&agent_id).ok_or_else(|| format!("Unknown agent: {agent_id}"))?;
-    let canonical = exec::resolve_agent_bin(spec)?;
-    state.exec_pins.check(&canonical, &format!("The {} CLI", spec.name))?;
-    // Authorize the identity before any execution. The stored version is only
-    // metadata, so ordinary requests never respawn an unchanged agent.
-    let previous_version = state.agent_pins.get(&agent_id).and_then(|pin| pin.version);
-    let outcome = state.agent_pins.check(&agent_id, &canonical, previous_version)?;
-    if outcome.changed() {
-        persist_agent_pins(state);
-    }
-    if outcome.changed() || state.agent_pins.get(&agent_id).and_then(|pin| pin.version).is_none() {
-        let version = exec::probe_version_cached(&canonical);
-        if state.agent_pins.refresh_version(&agent_id, &canonical, version)? {
-            persist_agent_pins(state);
-        }
-    }
-    if let exec::PinCheck::VendorUpdate { from, team } = &outcome {
-        // Accepted without asking, so it is recorded where trust decisions go.
-        let _ = write_security_audit(&format!("agent-update\t{agent_id}\t{team}\t{from}\t{}", canonical.to_string_lossy()));
-        native_log("info", "agent.vendor_update", &format!("{agent_id} updated by its signer {team}"));
-    }
-    let object = params.as_object_mut().ok_or("Bridge parameters must be an object")?;
-    object.insert("agentBin".into(), Value::String(canonical.to_string_lossy().into_owned()));
-    Ok(())
-}
-
 /// The built-in harness runs in the bridge (a trusted native-side process) and
 /// calls providers itself, so its requests carry the keychain's provider keys.
 /// The renderer never sees them: it reads masks through `provider_keys_get`.
@@ -771,29 +645,6 @@ fn inject_provider_keys(params: &mut Value) -> Result<(), String> {
     let object = params.as_object_mut().ok_or("Bridge parameters must be an object")?;
     object.insert("providerKeys".into(), serde_json::to_value(&keys).map_err(|err| err.to_string())?);
     Ok(())
-}
-
-fn load_agent_pins() -> HashMap<String, exec::AgentPin> {
-    match credentials::agent_pins_value() {
-        Ok(Some(raw)) => exec::parse_agent_pins(&raw),
-        Ok(None) => HashMap::new(),
-        Err(err) => {
-            native_log("warn", "pins.load_failed", &format!("agent pins unavailable: {err}"));
-            HashMap::new()
-        }
-    }
-}
-
-fn persist_agent_pins(state: &AppState) {
-    let snapshot = state.agent_pins.snapshot();
-    match serde_json::to_string(&snapshot) {
-        Ok(raw) => {
-            if let Err(err) = credentials::agent_pins_store(&raw) {
-                native_log("warn", "pins.persist_failed", &format!("could not persist agent pins: {err}"));
-            }
-        }
-        Err(err) => native_log("warn", "pins.persist_failed", &format!("could not persist agent pins: {err}")),
-    }
 }
 
 /// Debug builds run the bridge from the working tree through the developer's
@@ -819,7 +670,7 @@ fn bridge_script<R: Runtime>(_app: &AppHandle<R>) -> Result<PathBuf, String> {
             return Ok(path);
         }
     }
-    let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../packages/glitter-bridge/dist/index.js");
+    let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../packages/glitter-harness/dist/index.js");
     if dev.exists() {
         return Ok(dev);
     }
@@ -830,7 +681,7 @@ fn bridge_script<R: Runtime>(_app: &AppHandle<R>) -> Result<PathBuf, String> {
 /// baked at compile time, so a swapped script fails before it ever runs.
 #[cfg(not(debug_assertions))]
 fn bridge_script<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
-    let script = app.path().resolve("glitter-bridge/index.js", BaseDirectory::Resource).map_err(|err| err.to_string())?;
+    let script = app.path().resolve("glitter-harness/index.js", BaseDirectory::Resource).map_err(|err| err.to_string())?;
     verify_bridge_script(&script)?;
     Ok(script)
 }
@@ -1064,22 +915,10 @@ fn bridge_request_impl<R: Runtime>(state: &AppState, app: &AppHandle<R>, id: Str
     // or bridge spawn, and forward only the canonical shape from here on.
     dto::validate_request_id(&id)?;
     let mut params = dto::validate_params(&method, &params)?;
-    // Executable identity (SEC-02): the native side resolves every binary and
-    // overwrites renderer strings with canonical pinned paths before the
-    // bridge spawns anything.
-    if matches!(method.as_str(), "detect" | "status" | "startHost" | "startLogin" | "checkCliUpdate" | "updateCli") {
-        inject_muse_bin(state, &mut params)?;
-    }
-    if matches!(
-        method.as_str(),
-        "startHost" | "stopHost" | "listSessions" | "listModels" | "suggest" | "startSession" | "resumeSession" | "forkSession" | "compactSession" | "readSession" | "readChildSession" | "pageHistory" | "listSkills" | "harnessMcp" | "harnessMcpConfig" | "harnessMcpAddServer" | "harnessMcpRemoveServer" | "testModel" | "orchestratorProbe" | "mcpServers" | "readOutput" | "setReasoningEffort" | "subagentControl" | "taskControl" | "workflowControl" | "goalControl" | "sendTurn" | "steerTurn" | "unqueueTurn" | "cancelTurn" | "setModel" | "setSessionOption"
-    ) {
-        inject_agent_bin(state, &mut params)?;
-    }
-    if matches!(method.as_str(), "detect" | "status" | "startHost") {
-        let key = credentials::credential_value()?.unwrap_or_default();
-        let object = params.as_object_mut().ok_or("Bridge parameters must be an object")?;
-        object.insert("museApiKey".into(), Value::String(key));
+    // Every Harness verb carries the keychain's provider keys; the renderer
+    // never sees them. Detection and browser control call no provider.
+    if !matches!(method.as_str(), "ping" | "detect" | "browserOpen" | "browserControl" | "browserClose") {
+        inject_provider_keys(&mut params)?;
     }
     if method == "detect" {
         // Detection learns which providers are set up, by id only.
@@ -1122,10 +961,9 @@ fn bridge_request_impl<R: Runtime>(state: &AppState, app: &AppHandle<R>, id: Str
     if method == "resumeSession" {
         let session_id = params.get("sessionId").and_then(Value::as_str).unwrap_or("");
         let grant_id = require_session(state, session_id)?;
-        // ACP resume takes a workspace root for its cwd: always substitute the
+        // Resume takes a workspace root for its cwd: always substitute the
         // bound grant's root, so a nominated path can never widen the resume
-        // and a missing one can never silently empty the cwd. (Muse resume
-        // ignores the extra field.)
+        // and a missing one can never silently empty the cwd.
         let root = grant_root(state, &grant_id)?;
         let object = params.as_object_mut().ok_or("Bridge parameters must be an object")?;
         object.insert("workspaceRoot".into(), Value::String(root.to_string_lossy().into_owned()));
@@ -1133,16 +971,7 @@ fn bridge_request_impl<R: Runtime>(state: &AppState, app: &AppHandle<R>, id: Str
     }
     if method == "suggest" {
         // Suggestions are grant-scoped like a session start: the renderer names
-        // a grant, and only the canonical root is forwarded. Muse suggestions
-        // also take the key from the keychain, never the renderer's mask.
-        let agent = params.get("agentId").and_then(Value::as_str).unwrap_or("muse");
-        let muse = agent.is_empty() || agent == "muse";
-        if muse {
-            inject_muse_bin(state, &mut params)?;
-            let key = credentials::credential_value()?.unwrap_or_default();
-            let object = params.as_object_mut().ok_or("Bridge parameters must be an object")?;
-            object.insert("museApiKey".into(), Value::String(key));
-        }
+        // a grant, and only the canonical root is forwarded.
         let grant_id = params.get("grantId").and_then(Value::as_str).unwrap_or("").to_string();
         if grant_id.is_empty() {
             return Err("A workspace grant is required for suggestions.".into());
@@ -1151,16 +980,7 @@ fn bridge_request_impl<R: Runtime>(state: &AppState, app: &AppHandle<R>, id: Str
         let object = params.as_object_mut().ok_or("Bridge parameters must be an object")?;
         object.insert("workspaceRoot".into(), Value::String(root.to_string_lossy().into_owned()));
     }
-    if matches!(method.as_str(), "decideApproval" | "closeSession" | "setApprovalMode") {
-        let harness_session = params.get("sessionId").and_then(Value::as_str).is_some_and(|id| id.starts_with("h-"));
-        if harness_session {
-            inject_provider_keys(&mut params)?;
-        }
-    }
-    let native_mcp = (method == "startSession" && params.get("agentId").and_then(Value::as_str) == Some("harness"))
-        || (matches!(method.as_str(), "resumeSession" | "sendTurn" | "harnessMcp" | "harnessMcpConfig")
-            && params.get("sessionId").and_then(Value::as_str).is_some_and(|id| id.starts_with("h-")));
-    if native_mcp {
+    if matches!(method.as_str(), "startSession" | "resumeSession" | "sendTurn" | "harnessMcp" | "harnessMcpConfig") {
         let grant_id = if method == "startSession" {
             params.get("grantId").and_then(Value::as_str).unwrap_or("").to_string()
         } else {
@@ -1188,7 +1008,7 @@ fn bridge_request_impl<R: Runtime>(state: &AppState, app: &AppHandle<R>, id: Str
     }
     if matches!(
         method.as_str(),
-        "forkSession" | "compactSession" | "closeSession" | "readSession" | "readChildSession" | "pageHistory" | "listSkills" | "harnessMcp" | "harnessMcpConfig" | "harnessMcpAddServer" | "harnessMcpRemoveServer" | "userShell" | "readOutput" | "setReasoningEffort" | "subagentControl" | "taskControl" | "workflowControl" | "goalControl" | "sendTurn" | "steerTurn" | "unqueueTurn" | "cancelTurn" | "respondUserInput" | "setApprovalMode" | "setModel" | "setOrchestrator" | "setSessionOption" | "renameSession"
+        "compactSession" | "closeSession" | "readChildSession" | "listSkills" | "harnessMcp" | "harnessMcpConfig" | "harnessMcpAddServer" | "harnessMcpRemoveServer" | "sendTurn" | "steerTurn" | "unqueueTurn" | "cancelTurn" | "respondUserInput" | "setApprovalMode" | "setModel" | "setOrchestrator" | "setSessionOption"
     ) {
         let session_id = params.get("sessionId").and_then(Value::as_str).unwrap_or("");
         require_session(state, session_id)?;
@@ -1198,17 +1018,11 @@ fn bridge_request_impl<R: Runtime>(state: &AppState, app: &AppHandle<R>, id: Str
             require_session(state, session_id)?;
         }
     }
-    if method == "forkSession" {
-        // The fork inherits its source's workspace: bind the new session id
-        // to the source's grant when the response lands.
-        let session_id = params.get("sessionId").and_then(Value::as_str).unwrap_or("");
-        call_grant = Some(require_session(state, session_id)?);
-    }
-    let tracked = matches!(method.as_str(), "startSession" | "resumeSession" | "forkSession" | "listSessions");
+    let tracked = matches!(method.as_str(), "startSession" | "resumeSession" | "listSessions");
     if tracked {
         track_pending(state, &id, &method, call_grant)?;
     }
-    if method == "sendTurn" || method == "userShell" {
+    if method == "sendTurn" {
         let session = params.get("sessionId").and_then(Value::as_str).unwrap_or("");
         let grant = require_session(state, session)?;
         let root = grant_root(state, &grant)?;
@@ -1219,25 +1033,17 @@ fn bridge_request_impl<R: Runtime>(state: &AppState, app: &AppHandle<R>, id: Str
             // receipt explains why Undo is unavailable instead.
             let opened = app.path().app_data_dir().ok().map(|dir| snapshots.open(dir.join("turn-snapshots")));
             if matches!(opened, Some(Ok(()))) {
-                if method == "sendTurn" {
-                    // `ifBusy` lets a queued (or steering) submit keep the
-                    // running turn's baseline: it cannot overlap its own
-                    // session's turn, only a run in another session.
-                    snapshots.prepare(&id, &grant, &root, session, params.get("clientTurnId").and_then(Value::as_str), params.get("agentId").and_then(Value::as_str).unwrap_or("muse"), params.get("ifBusy").and_then(Value::as_str));
-                } else {
-                    snapshots.shell_request(&id, session, &root);
-                }
+                // `ifBusy` lets a queued (or steering) submit keep the running
+                // turn's baseline: it cannot overlap its own session's turn,
+                // only a run in another session.
+                snapshots.prepare(&id, &grant, &root, session, params.get("clientTurnId").and_then(Value::as_str), params.get("ifBusy").and_then(Value::as_str));
             }
         }
-    }
-    if method == "startHost" {
-        // "Disable shell" is a promise about this app, not only about the agent.
-        state.shell_disabled.store(params.get("disableShell").and_then(Value::as_bool).unwrap_or(false), std::sync::atomic::Ordering::Relaxed);
     }
     if method == "stopHost" {
         let _write = git_write_lock();
         if let Ok(mut snapshots) = state.snapshots.lock() {
-            snapshots.stop_request(&id, params.get("agentId").and_then(Value::as_str).unwrap_or("muse"));
+            snapshots.stop_request(&id);
         }
     }
     let sent = send_bridge_request(state, app, &id, &method, params);
@@ -2958,69 +2764,6 @@ struct TrustPreview {
 
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
-struct EnterpriseSource {
-    plane: String,
-    source_class: String,
-    state: String,
-}
-
-#[derive(Debug, Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct EnterpriseStatus {
-    generation: Option<String>,
-    sources: Vec<EnterpriseSource>,
-}
-
-#[derive(Debug, Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct SkillDetail {
-    id: String,
-    name: String,
-    description: String,
-    scope: String,
-    activation: String,
-    path: Option<String>,
-}
-
-#[derive(Debug, Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct SkillEntry {
-    id: String,
-    name: String,
-    description: String,
-    scope: String,
-    activation: String,
-}
-
-#[derive(Debug, Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct PluginEntry {
-    id: String,
-    version: Option<String>,
-    description: String,
-    enabled: Option<bool>,
-}
-
-#[derive(Debug, Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct PluginCapability {
-    id: String,
-    kind: Option<String>,
-    description: String,
-    enabled: Option<bool>,
-}
-
-#[derive(Debug, Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct PluginDetail {
-    id: String,
-    version: Option<String>,
-    description: String,
-    capabilities: Vec<PluginCapability>,
-}
-
-#[derive(Debug, Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
 struct FolderGrant {
     path: String,
     grant_id: String,
@@ -3137,75 +2880,6 @@ async fn verify_grants(app: AppHandle, entries: Vec<GrantCheck>) -> Result<Vec<G
     .await
 }
 
-#[derive(Debug, Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct AgentIdentity {
-    agent_id: String,
-    name: String,
-    /// Canonical binary on disk, if installed.
-    path: Option<String>,
-    version: Option<String>,
-    /// Whether an identity pin exists for this agent.
-    pinned: bool,
-    /// Pinned, but the binary on disk drifted (path or bytes changed).
-    changed: bool,
-}
-
-fn agent_identity(state: &AppState, spec: &exec::AgentSpec) -> AgentIdentity {
-    let resolved = exec::resolve_agent_bin(spec).ok();
-    let digest = resolved.as_deref().and_then(|path| exec::digest_of(path).ok());
-    let pinned = state.agent_pins.get(spec.id);
-    let unchanged = match (&pinned, &resolved, &digest) {
-        (Some(pin), Some(path), Some(digest)) => pin.path == path.to_string_lossy() && pin.sha256 == *digest,
-        _ => false,
-    };
-    AgentIdentity {
-        agent_id: spec.id.to_string(),
-        name: spec.name.to_string(),
-        path: resolved.map(|path| path.to_string_lossy().into_owned()),
-        version: if unchanged { pinned.as_ref().and_then(|pin| pin.version.clone()) } else { None },
-        pinned: pinned.is_some(),
-        changed: pinned.is_some() && !unchanged,
-    }
-}
-
-/// Display-only agent identities for Settings: canonical path, version, and
-/// pin/drift state. Resolves without recording — first sighting pins when the
-/// agent is actually used. Hashing can take real time on a cold disk, so this
-/// runs on the blocking pool rather than the UI thread.
-#[tauri::command]
-async fn agent_identities(app: AppHandle) -> Result<Vec<AgentIdentity>, String> {
-    blocking(move || {
-        let state = app.state::<AppState>();
-        Ok(exec::AGENTS.iter().filter(|spec| spec.id != "muse").map(|spec| agent_identity(&state, spec)).collect())
-    })
-    .await
-}
-
-/// Confirm a drifted (or new) agent binary after the user reviewed its path.
-/// The binary is resolved fresh from disk — the renderer confirms, never
-/// nominates — then pinned and returned for display.
-#[tauri::command]
-async fn confirm_agent_bin(app: AppHandle, agent_id: String) -> Result<AgentIdentity, String> {
-    blocking(move || {
-        let state = app.state::<AppState>();
-        if !credentials::acp_consent_value().unwrap_or(false) {
-            return Err("Third-party agents run without an OS sandbox. Confirm that in Settings → Agents before using them.".into());
-        }
-        let spec = exec::agent_spec(&agent_id).filter(|spec| spec.id != "muse").ok_or("Unknown agent.")?;
-        let canonical = exec::resolve_agent_bin(spec)?;
-        state.exec_pins.check(&canonical, &format!("The {} CLI", spec.name))?;
-        state.agent_pins.confirm(&agent_id, &canonical, None)?;
-        persist_agent_pins(&state);
-        let version = exec::probe_version_cached(&canonical);
-        if state.agent_pins.refresh_version(&agent_id, &canonical, version)? {
-            persist_agent_pins(&state);
-        }
-        Ok(agent_identity(&state, spec))
-    })
-    .await
-}
-
 /// Run blocking native work (subprocesses, hashing, big file reads, keyring
 /// I/O) on the blocking pool. A plain `#[tauri::command] fn` executes on the
 /// main thread, which is also the window's event loop: anything slow in there
@@ -3277,134 +2951,6 @@ async fn remove_grant(app: AppHandle, grant_id: String) -> Result<(), String> {
     .await
 }
 
-/// Deletes a temporary export when the conversion finishes or fails.
-struct ExportTemp(PathBuf);
-
-impl Drop for ExportTemp {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
-    }
-}
-
-fn export_file_name(title: &str, extension: &str) -> String {
-    let stem: String = title
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
-                ch
-            } else {
-                '-'
-            }
-        })
-        .collect::<String>()
-        .split('-')
-        .filter(|part| !part.is_empty())
-        .take(8)
-        .collect::<Vec<_>>()
-        .join("-")
-        .to_ascii_lowercase();
-    format!(
-        "{}.{}",
-        if stem.is_empty() {
-            "muse-session"
-        } else {
-            &stem
-        },
-        extension
-    )
-}
-
-/// Export uses Muse's canonical offline exporter. The destination comes from a
-/// native save dialog inside this command, so the renderer never receives a
-/// generic write-to-path primitive.
-#[tauri::command]
-async fn export_session(app: AppHandle, window: tauri::WebviewWindow, session_id: String, title: String, muse_bin: String, redacted: bool, markdown: bool) -> Result<Option<String>, String> {
-    // The save dialog waits on the user and `muse export` is a bounded
-    // subprocess, so the whole call runs on the blocking pool.
-    blocking(move || {
-        let state = app.state::<AppState>();
-        if !valid_session_id(&session_id) {
-            return Err("The session identifier is not valid for export.".into());
-        }
-        // Only sessions bound to a live grant may be exported: the id alone must
-        // not reach into workspaces the user never opened (or already removed).
-        require_session(&state, &session_id)?;
-        let (dialog_title, extension, filter_name, filters): (&str, &str, &str, &[&str]) = if markdown {
-            (
-                if redacted {
-                    "Export share-safe Markdown"
-                } else {
-                    "Export raw Markdown"
-                },
-                "md",
-                "Markdown",
-                &["md"],
-            )
-        } else {
-            (
-                if redacted {
-                    "Export share-safe Muse session"
-                } else {
-                    "Export raw Muse session"
-                },
-                "json",
-                "Muse session export",
-                &["json"],
-            )
-        };
-        let selected = app.dialog().file().set_parent(&window).set_title(dialog_title).set_file_name(export_file_name(&title, extension)).add_filter(filter_name, filters).blocking_save_file();
-        let Some(path) = selected.and_then(|value| value.into_path().ok()) else {
-            return Ok(None);
-        };
-        export_to_path(&state, &session_id, &path.to_string_lossy(), &muse_bin, &title, redacted, markdown).map(Some)
-    })
-    .await
-}
-
-/// The post-dialog half of `export_session`: session-binding gate, canonical
-/// pinned binary, then `muse export`. Markdown is rendered from that document
-/// and the JSON is removed. Separated so tests exercise it without a save dialog.
-fn export_to_path(state: &AppState, session_id: &str, out: &str, muse_bin: &str, title: &str, redacted: bool, markdown: bool) -> Result<String, String> {
-    if !valid_session_id(session_id) {
-        return Err("The session identifier is not valid for export.".into());
-    }
-    // Only sessions bound to a live grant may be exported: the id alone must
-    // not reach into workspaces the user never opened (or already removed).
-    require_session(state, session_id)?;
-    let bin = resolve_muse_bin(state, muse_bin)?;
-    let temp = markdown.then(|| {
-        let path = std::env::temp_dir().join(format!("muse-export-{}.json", uuid::Uuid::new_v4()));
-        ExportTemp(path)
-    });
-    let export_out = temp.as_ref().map(|item| item.0.to_string_lossy().into_owned()).unwrap_or_else(|| out.to_string());
-    let mut args = vec!["export", "--session", session_id, "--out", export_out.as_str()];
-    if redacted {
-        args.push("--redacted");
-    }
-    // Bounded like every other CLI call: a wedged export must not pin a
-    // worker thread forever. Exports of very large sessions still fit.
-    let output = run_cli(&bin, &args, None, Duration::from_secs(300))?;
-    if !output.status.success() {
-        let detail = String::from_utf8_lossy(&output.stderr);
-        let detail = detail.lines().next().unwrap_or("Muse export failed").trim();
-        return Err(format!("Muse could not export this session: {detail}"));
-    }
-    if markdown {
-        let path = temp.as_ref().map(|item| item.0.as_path()).ok_or("The Markdown export lost its temporary file.")?;
-        let len = std::fs::metadata(path).map_err(|err| format!("Muse export did not produce a file: {err}"))?.len();
-        if len > export_markdown::EXPORT_JSON_CAP {
-            return Err("This session export is too large to turn into Markdown (over 64 MiB). Export JSON instead.".into());
-        }
-        let bytes = std::fs::read(path).map_err(|err| format!("Muse export could not be read: {err}"))?;
-        // The parser's own error can quote the document, so the user sees a fixed line.
-        let doc: Value = serde_json::from_slice(&bytes).map_err(|_| "Muse export was not valid JSON, so it could not be turned into Markdown.".to_string())?;
-        let transcript = export_markdown::render_session_markdown(&doc, title)?;
-        // Direct write: the bytes are already complete, so there is nothing to stage.
-        std::fs::write(out, transcript.as_bytes()).map_err(|err| format!("Could not write the transcript: {err}"))?;
-    }
-    Ok(out.to_string())
-}
-
 /// Full tool output the viewer offers to save: large enough for several
 /// `item/readOutput` pages, small enough to keep one dialog write sane.
 const OUTPUT_SAVE_LIMIT: usize = 32 * 1024 * 1024;
@@ -3434,58 +2980,102 @@ fn read_rules_preview(root: &Path) -> Option<TrustRules> {
     })
 }
 
+/// Project skill folders the Harness loads from a trusted workspace, in its
+/// discovery order (`harness/skills.ts`).
+const PROJECT_SKILL_DIRS: &[&str] = &[".glitter/skills", ".agents/skills"];
+/// Bytes read from one `SKILL.md`; the name and description sit in its front matter.
+const SKILL_PREVIEW_LIMIT: u64 = 16 * 1024;
+const SKILL_PREVIEW_COUNT: usize = 200;
+
+/// The `name` and `description` fields of a `SKILL.md` front matter block.
+fn skill_front_matter(text: &str) -> (Option<String>, Option<String>) {
+    let mut lines = text.lines();
+    if lines.next().map(str::trim) != Some("---") {
+        return (None, None);
+    }
+    let (mut name, mut description) = (None, None);
+    for line in lines {
+        if line.trim() == "---" {
+            break;
+        }
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
+        let value = value.trim().trim_matches(|ch| ch == '"' || ch == '\'').trim().to_string();
+        if value.is_empty() {
+            continue;
+        }
+        match key.trim() {
+            "name" => name = Some(value),
+            "description" => description = Some(value),
+            _ => {}
+        }
+    }
+    (name, description)
+}
+
+/// The skills a trusted workspace would contribute: one per folder holding a
+/// `SKILL.md` under the project skill roots. A nearer root wins a duplicate
+/// name, as in the Harness. Symlinks out of the workspace are skipped.
+fn project_skills(root: &Path) -> Vec<TrustSkill> {
+    let Ok(root) = root.canonicalize() else {
+        return Vec::new();
+    };
+    let mut seen = HashSet::new();
+    let mut skills = Vec::new();
+    for dir in PROJECT_SKILL_DIRS {
+        let Ok(entries) = std::fs::read_dir(root.join(dir)) else {
+            continue;
+        };
+        let mut folders: Vec<PathBuf> = entries.filter_map(Result::ok).map(|entry| entry.path()).collect();
+        folders.sort();
+        for folder in folders {
+            let Ok(file) = folder.join("SKILL.md").canonicalize() else {
+                continue;
+            };
+            if !file.starts_with(&root) || !file.is_file() {
+                continue;
+            }
+            let Ok(handle) = std::fs::File::open(&file) else {
+                continue;
+            };
+            let mut bytes = Vec::new();
+            if std::io::Read::read_to_end(&mut std::io::Read::take(handle, SKILL_PREVIEW_LIMIT), &mut bytes).is_err() {
+                continue;
+            }
+            let (name, description) = skill_front_matter(&String::from_utf8_lossy(&bytes));
+            let name = name.or_else(|| folder.file_name().map(|value| value.to_string_lossy().into_owned())).unwrap_or_default();
+            if name.is_empty() || !seen.insert(name.clone()) {
+                continue;
+            }
+            skills.push(TrustSkill {
+                name,
+                description: description.unwrap_or_default(),
+            });
+            if skills.len() >= SKILL_PREVIEW_COUNT {
+                return skills;
+            }
+        }
+    }
+    skills
+}
+
 /// Trusted-content preview for the workspace trust decision: the workspace
-/// skills the host would load plus the workspace rules file. Grant-gated
+/// skills the Harness would load plus the workspace rules file. Grant-gated
 /// and read-only; both halves are best-effort (an unreadable side yields
 /// an empty list, never a half-invented one).
 #[tauri::command]
-async fn trust_preview(app: AppHandle, grant_id: String, muse_bin: String) -> Result<TrustPreview, String> {
-    // `skills list` is a bounded subprocess and the rules file is disk I/O;
-    // keep both off the async workers.
+async fn trust_preview(app: AppHandle, grant_id: String) -> Result<TrustPreview, String> {
+    // Disk I/O only, but keep it off the async workers.
     blocking(move || {
         let state = app.state::<AppState>();
         let root = grant_root(&state, &grant_id)?;
-        let bin = resolve_muse_bin(&state, &muse_bin)?;
-        let root_dir = root.to_string_lossy().into_owned();
-        let listed = run_cli(&bin, &["skills", "list", "--source", "project", "--workspace", root_dir.as_str(), "--trust-workspace", "--json"], None, std::time::Duration::from_secs(60))?;
-        if !listed.status.success() {
-            let detail = String::from_utf8_lossy(&listed.stderr);
-            let detail = detail.lines().next().unwrap_or("skill listing failed").trim();
-            return Err(format!("Muse could not list project skills: {detail}"));
-        }
-        let stdout = String::from_utf8_lossy(&listed.stdout);
-        let skills = parse_skill_list(&stdout);
-        let rules = read_rules_preview(&root);
         Ok(TrustPreview {
-            skills,
-            rules,
+            skills: project_skills(&root),
+            rules: read_rules_preview(&root),
         })
     })
     .await
-}
-
-/// Validate a CLI-side identifier the renderer nominates (MCP server name,
-/// skill id, plugin id): plain keys, never flags or paths.
-fn check_cli_name(field: &str, value: &str) -> Result<(), String> {
-    if value.is_empty() || value.len() > 200 || value.starts_with('-') || value.contains(|ch: char| ch.is_whitespace() || ch == '/' || ch == '\\') {
-        return Err(format!("That {field} is not valid."));
-    }
-    Ok(())
-}
-
-/// Run a Muse CLI command to completion, bounding its wait. OAuth logins
-/// wait on the user's browser, so callers pick the ceiling. A command that
-/// outlives its ceiling is killed (whole tree) instead of leaking a live
-/// pinned `muse` with held pipes.
-fn run_cli(bin: &Path, args: &[&str], cwd: Option<&Path>, timeout: std::time::Duration) -> Result<std::process::Output, String> {
-    let mut cmd = command(bin);
-    process::apply_minimal_env(&mut cmd);
-    cmd.env("PATH", augmented_path());
-    cmd.args(args);
-    if let Some(dir) = cwd {
-        cmd.current_dir(dir);
-    }
-    run_bounded(cmd, "Muse", timeout)
 }
 
 /// Spawn a prepared command, wait at most `timeout`, and kill its whole tree
@@ -3512,380 +3102,6 @@ fn run_bounded(mut cmd: Command, what: &str, timeout: std::time::Duration) -> Re
             Err(format!("{what} took too long. Try again."))
         }
     }
-}
-
-fn cli_failure(what: &str, output: &std::process::Output) -> String {
-    let detail = String::from_utf8_lossy(&output.stderr);
-    let detail = detail.lines().next().unwrap_or(what).trim();
-    format!("{what}: {}", redact_log_detail(detail))
-}
-
-/// Authorize an MCP server with OAuth: the CLI opens the browser and serves
-/// the loopback callback itself; the desktop waits for it to finish.
-#[tauri::command]
-async fn mcp_login(app: AppHandle, server: String, muse_bin: String) -> Result<(), String> {
-    // OAuth can wait on the user's browser for minutes; run the subprocess
-    // wait on the blocking pool, not a shared async worker.
-    blocking(move || {
-        let state = app.state::<AppState>();
-        check_cli_name("server name", &server)?;
-        let bin = resolve_muse_bin(&state, &muse_bin)?;
-        let output = run_cli(&bin, &["mcp", "login", server.as_str()], None, std::time::Duration::from_secs(900))?;
-        if !output.status.success() {
-            return Err(cli_failure("MCP sign-in failed", &output));
-        }
-        Ok(())
-    })
-    .await
-}
-
-/// Drop an MCP server's OAuth credential.
-#[tauri::command]
-async fn mcp_logout(app: AppHandle, server: String, muse_bin: String) -> Result<(), String> {
-    blocking(move || {
-        let state = app.state::<AppState>();
-        check_cli_name("server name", &server)?;
-        let bin = resolve_muse_bin(&state, &muse_bin)?;
-        let output = run_cli(&bin, &["mcp", "logout", server.as_str()], None, std::time::Duration::from_secs(60))?;
-        if !output.status.success() {
-            return Err(cli_failure("MCP sign-out failed", &output));
-        }
-        Ok(())
-    })
-    .await
-}
-
-/// Remove the saved Meta credential (API key or account login).
-#[tauri::command]
-async fn cli_logout(app: AppHandle, muse_bin: String) -> Result<(), String> {
-    blocking(move || {
-        let state = app.state::<AppState>();
-        let bin = resolve_muse_bin(&state, &muse_bin)?;
-        let output = run_cli(&bin, &["logout"], None, std::time::Duration::from_secs(60))?;
-        if !output.status.success() {
-            return Err(cli_failure("Sign-out failed", &output));
-        }
-        Ok(())
-    })
-    .await
-}
-
-/// Scaffold agent config (`AGENTS.md`) in a granted workspace. Dry runs
-/// return the would-be file text for preview instead of writing.
-#[tauri::command]
-async fn project_init(app: AppHandle, grant_id: String, muse_bin: String, dry_run: bool, force: bool) -> Result<String, String> {
-    blocking(move || {
-        let state = app.state::<AppState>();
-        let root = grant_root(&state, &grant_id)?;
-        let bin = resolve_muse_bin(&state, &muse_bin)?;
-        let mut args = vec!["init"];
-        if dry_run {
-            args.push("--dry-run");
-        }
-        if force {
-            args.push("--force");
-        }
-        let output = run_cli(&bin, &args, Some(root.as_path()), std::time::Duration::from_secs(60))?;
-        if !output.status.success() {
-            return Err(cli_failure("Project setup failed", &output));
-        }
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        Ok(stdout.chars().take(8000).collect())
-    })
-    .await
-}
-
-/// Read enterprise configuration status: the policy generation plus each
-/// plane's source and state, so managed locks are visible, not silent.
-#[tauri::command]
-async fn enterprise_status(app: AppHandle, muse_bin: String) -> Result<EnterpriseStatus, String> {
-    blocking(move || {
-        let state = app.state::<AppState>();
-        let bin = resolve_muse_bin(&state, &muse_bin)?;
-        let output = run_cli(&bin, &["config", "status"], None, std::time::Duration::from_secs(30))?;
-        if !output.status.success() {
-            return Err(cli_failure("Could not read enterprise configuration", &output));
-        }
-        Ok(parse_enterprise_status(&String::from_utf8_lossy(&output.stdout)))
-    })
-    .await
-}
-
-/// List CLI skills for lifecycle management: the global inventory plus the
-/// open workspace's project skills when a grant is given. Listing never
-/// loads skill bodies, so no trust flag is needed.
-#[tauri::command]
-async fn skill_list(app: AppHandle, muse_bin: String, grant_id: String) -> Result<Vec<SkillEntry>, String> {
-    blocking(move || {
-        let state = app.state::<AppState>();
-        let bin = resolve_muse_bin(&state, &muse_bin)?;
-        let output = run_cli(&bin, &["skills", "list", "--json"], None, std::time::Duration::from_secs(60))?;
-        if !output.status.success() {
-            return Err(cli_failure("Could not list skills", &output));
-        }
-        let mut entries = parse_skill_inventory(&String::from_utf8_lossy(&output.stdout));
-        if !grant_id.is_empty() {
-            let root = grant_root(&state, &grant_id)?;
-            let scoped = run_cli(&bin, &["skills", "list", "--source", "project", "--workspace", root.to_string_lossy().as_ref(), "--json"], None, std::time::Duration::from_secs(60))?;
-            if !scoped.status.success() {
-                return Err(cli_failure("Could not list project skills", &scoped));
-            }
-            for entry in parse_skill_inventory(&String::from_utf8_lossy(&scoped.stdout)) {
-                if !entries.iter().any(|known| known.id == entry.id) {
-                    entries.push(entry);
-                }
-            }
-        }
-        Ok(entries)
-    })
-    .await
-}
-
-/// Install a skill bundle from a folder (`skills install --scope user`).
-/// Naming and force-overwrite stay CLI-side; CLI errors surface verbatim.
-#[tauri::command]
-async fn skill_install(app: AppHandle, muse_bin: String, path: String) -> Result<String, String> {
-    blocking(move || {
-        let state = app.state::<AppState>();
-        let bin = resolve_muse_bin(&state, &muse_bin)?;
-        if !PathBuf::from(&path).is_dir() {
-            return Err("Pick the skill's folder to install it.".into());
-        }
-        let picked = take_picked_install(&state, &path)?;
-        // `--` keeps a folder whose name starts with `-` from being read as a flag;
-        // options precede `--` so standard CLI parsers still recognize them.
-        let output = run_cli(&bin, &["skills", "install", "--scope", "user", "--json", "--", picked.as_str()], None, std::time::Duration::from_secs(120))?;
-        if !output.status.success() {
-            return Err(cli_failure("Could not install the skill", &output));
-        }
-        Ok(String::from_utf8_lossy(&output.stdout).chars().take(2000).collect())
-    })
-    .await
-}
-
-/// Import skills from another agent (`skills import --from claude|codex`).
-/// Dry runs return the would-be result for preview instead of importing.
-#[tauri::command]
-async fn skill_import(app: AppHandle, muse_bin: String, from: String, dry_run: bool) -> Result<String, String> {
-    blocking(move || {
-        let state = app.state::<AppState>();
-        if !["claude", "codex"].contains(&from.as_str()) {
-            return Err("Import source must be claude or codex.".into());
-        }
-        let bin = resolve_muse_bin(&state, &muse_bin)?;
-        let mut args = vec!["skills", "import", "--from", from.as_str(), "--scope", "user"];
-        if dry_run {
-            args.push("--dry-run");
-        }
-        args.push("--json");
-        let output = run_cli(&bin, &args, None, std::time::Duration::from_secs(120))?;
-        if !output.status.success() {
-            return Err(cli_failure("Could not import skills", &output));
-        }
-        Ok(String::from_utf8_lossy(&output.stdout).chars().take(8000).collect())
-    })
-    .await
-}
-
-/// Ask the native folder picker for a skill bundle directory. The choice is
-/// recorded natively as a one-time install authorization, so `skill_install`
-/// accepts only exactly this folder (see `take_picked_install`).
-#[tauri::command]
-async fn pick_skill_source(app: AppHandle, window: tauri::WebviewWindow) -> Result<Option<String>, String> {
-    // The native folder dialog waits on the user; it must not pin an async
-    // worker for the duration.
-    blocking(move || {
-        let state = app.state::<AppState>();
-        let selected = app.dialog().file().set_parent(&window).set_title("Pick a skill folder").blocking_pick_folder();
-        let Some(path) = selected.and_then(|value| value.into_path().ok()) else {
-            return Ok(None);
-        };
-        if let Ok(canonical) = path.canonicalize() {
-            if let Ok(mut picked) = state.picked_installs.lock() {
-                picked.insert(canonical);
-            }
-        }
-        Ok(Some(path.to_string_lossy().into_owned()))
-    })
-    .await
-}
-
-/// Inspect one skill (`skills inspect`): identity, scope, activation, and
-/// the on-disk path, so enable/disable decisions have provenance.
-#[tauri::command]
-async fn skill_inspect(app: AppHandle, muse_bin: String, skill: String) -> Result<SkillDetail, String> {
-    blocking(move || {
-        let state = app.state::<AppState>();
-        check_cli_name("skill", &skill)?;
-        let bin = resolve_muse_bin(&state, &muse_bin)?;
-        let output = run_cli(&bin, &["skills", "inspect", skill.as_str(), "--json"], None, std::time::Duration::from_secs(60))?;
-        if !output.status.success() {
-            return Err(cli_failure("Could not inspect the skill", &output));
-        }
-        Ok(parse_skill_detail(&skill, &String::from_utf8_lossy(&output.stdout)))
-    })
-    .await
-}
-
-/// Uninstall a skill by id (`skills uninstall`). Bundled skills are not
-/// offered in the UI; the CLI validates the rest.
-#[tauri::command]
-async fn skill_uninstall(app: AppHandle, muse_bin: String, skill: String) -> Result<String, String> {
-    blocking(move || {
-        let state = app.state::<AppState>();
-        check_cli_name("skill", &skill)?;
-        let bin = resolve_muse_bin(&state, &muse_bin)?;
-        let output = run_cli(&bin, &["skills", "uninstall", skill.as_str(), "--json"], None, std::time::Duration::from_secs(120))?;
-        if !output.status.success() {
-            return Err(cli_failure("Could not uninstall the skill", &output));
-        }
-        Ok(String::from_utf8_lossy(&output.stdout).chars().take(2000).collect())
-    })
-    .await
-}
-
-/// Enable or disable a skill in one scope. Project scope resolves its root
-/// from the grant, like every other workspace operation.
-#[tauri::command]
-async fn skill_set(app: AppHandle, skill: String, scope: String, enabled: bool, grant_id: String, muse_bin: String) -> Result<(), String> {
-    blocking(move || {
-        let state = app.state::<AppState>();
-        check_cli_name("skill", &skill)?;
-        if !["user", "project", "built-in", "plugin"].contains(&scope.as_str()) {
-            return Err("That skill scope is not valid.".into());
-        }
-        let bin = resolve_muse_bin(&state, &muse_bin)?;
-        let root = if scope == "project" {
-            Some(grant_root(&state, &grant_id)?)
-        } else {
-            None
-        };
-        let mut args = vec![
-            "skills",
-            if enabled {
-                "enable"
-            } else {
-                "disable"
-            },
-            skill.as_str(),
-            "--scope",
-            scope.as_str(),
-        ];
-        let root_dir = root.as_ref().map(|dir| dir.to_string_lossy().into_owned());
-        if let Some(dir) = &root_dir {
-            args.push("--workspace");
-            args.push(dir.as_str());
-            args.push("--trust-workspace");
-        }
-        args.push("--json");
-        let output = run_cli(&bin, &args, None, std::time::Duration::from_secs(60))?;
-        if !output.status.success() {
-            return Err(cli_failure(
-                if enabled {
-                    "Could not enable the skill"
-                } else {
-                    "Could not disable the skill"
-                },
-                &output,
-            ));
-        }
-        Ok(())
-    })
-    .await
-}
-
-/// List installed plugins (or marketplace-available ones) for management.
-#[tauri::command]
-async fn plugin_list(app: AppHandle, muse_bin: String, available: bool) -> Result<Vec<PluginEntry>, String> {
-    blocking(move || {
-        let state = app.state::<AppState>();
-        let bin = resolve_muse_bin(&state, &muse_bin)?;
-        let mut args = vec!["plugins", "list"];
-        if available {
-            args.push("--available");
-        }
-        args.push("--json");
-        let output = run_cli(&bin, &args, None, std::time::Duration::from_secs(60))?;
-        if !output.status.success() {
-            return Err(cli_failure("Could not list plugins", &output));
-        }
-        Ok(parse_plugin_list(&String::from_utf8_lossy(&output.stdout)))
-    })
-    .await
-}
-
-/// Inspect one installed plugin: metadata plus its runtime capabilities.
-#[tauri::command]
-async fn plugin_inspect(app: AppHandle, muse_bin: String, id: String) -> Result<PluginDetail, String> {
-    blocking(move || {
-        let state = app.state::<AppState>();
-        check_cli_name("plugin id", &id)?;
-        let bin = resolve_muse_bin(&state, &muse_bin)?;
-        let output = run_cli(&bin, &["plugins", "inspect", id.as_str(), "--json"], None, std::time::Duration::from_secs(60))?;
-        if !output.status.success() {
-            return Err(cli_failure("Could not inspect the plugin", &output));
-        }
-        Ok(parse_plugin_detail(&id, &String::from_utf8_lossy(&output.stdout)))
-    })
-    .await
-}
-
-/// Trust review: approve (enable) or reject (disable) a plugin's current
-/// runtime capability definitions.
-#[tauri::command]
-async fn plugin_review(app: AppHandle, muse_bin: String, id: String, approve: bool) -> Result<(), String> {
-    blocking(move || {
-        let state = app.state::<AppState>();
-        check_cli_name("plugin id", &id)?;
-        let bin = resolve_muse_bin(&state, &muse_bin)?;
-        let output = run_cli(
-            &bin,
-            &[
-                "plugins",
-                if approve {
-                    "approve"
-                } else {
-                    "reject"
-                },
-                id.as_str(),
-                "--json",
-            ],
-            None,
-            std::time::Duration::from_secs(60),
-        )?;
-        if !output.status.success() {
-            return Err(cli_failure(
-                if approve {
-                    "Could not approve the plugin"
-                } else {
-                    "Could not reject the plugin"
-                },
-                &output,
-            ));
-        }
-        Ok(())
-    })
-    .await
-}
-
-/// Install a local plugin bundle from a user-picked directory.
-#[tauri::command]
-async fn plugin_install(app: AppHandle, muse_bin: String, path: String) -> Result<(), String> {
-    blocking(move || {
-        let state = app.state::<AppState>();
-        let bin = resolve_muse_bin(&state, &muse_bin)?;
-        let candidate = PathBuf::from(&path);
-        if !candidate.is_dir() {
-            return Err("Pick the plugin bundle's folder to install it.".into());
-        }
-        let picked = take_picked_install(&state, &path)?;
-        let output = run_cli(&bin, &["plugins", "install", "--json", "--", picked.as_str()], None, std::time::Duration::from_secs(300))?;
-        if !output.status.success() {
-            return Err(cli_failure("Could not install the plugin", &output));
-        }
-        Ok(())
-    })
-    .await
 }
 
 /// The bundled store: popular skills, plugins and MCP servers that install with
@@ -3947,13 +3163,23 @@ fn plugin_git(dir: &Path, args: &[String]) -> Result<String, String> {
 
 /// The repository owner's GitHub avatar, for the thumbnail. Best effort.
 fn plugin_avatar(owner: &str, dest: &Path) {
+    github_avatar(owner, dest, 128);
+}
+
+/// A source listing's owner avatar: the tile is at most 40px, so a smaller
+/// image keeps a few hundred of them light.
+fn listing_avatar(owner: &str, dest: &Path) {
+    github_avatar(owner, dest, 80);
+}
+
+fn github_avatar(owner: &str, dest: &Path, size: u32) {
     if owner.is_empty() || !owner.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-') {
         return;
     }
     let mut cmd = command("curl");
     cmd.args(["-fsSL", "--proto", "=https", "--proto-redir", "=https", "--max-time", "15", "--max-filesize", "524288", "-o"])
         .arg(dest)
-        .arg(format!("https://github.com/{owner}.png?size=128"));
+        .arg(format!("https://github.com/{owner}.png?size={size}"));
     let fetched = run_bounded(cmd, "curl", Duration::from_secs(20)).map(|output| output.status.success()).unwrap_or(false);
     if !fetched {
         let _ = std::fs::remove_file(dest);
@@ -4044,62 +3270,18 @@ async fn marketplace_refresh(id: String) -> Result<plugins::MarketplaceView, Str
     blocking(move || plugins::refresh_marketplace(&home, &id, &plugin_git, &plugin_avatar)).await
 }
 
+/// Fetch the avatars of the repositories the added sources' listings point
+/// at, for their Discover thumbnails. Returns how many were fetched.
+#[tauri::command]
+async fn marketplace_avatars() -> Result<usize, String> {
+    let home = home_folder()?;
+    blocking(move || Ok(plugins::fetch_listing_avatars(&home, &listing_avatar))).await
+}
+
 #[tauri::command]
 async fn marketplace_remove(id: String) -> Result<(), String> {
     let home = home_folder()?;
     blocking(move || plugins::remove_marketplace(&home, &id)).await
-}
-
-/// Ask the native folder picker for a plugin bundle directory. The choice is
-/// recorded natively as a one-time install authorization (see
-/// `take_picked_install`), so `plugin_install` accepts only this folder.
-#[tauri::command]
-async fn pick_plugin_bundle(app: AppHandle, window: tauri::WebviewWindow) -> Result<Option<String>, String> {
-    blocking(move || {
-        let state = app.state::<AppState>();
-        let selected = app.dialog().file().set_parent(&window).set_title("Pick a plugin bundle folder").blocking_pick_folder();
-        let Some(path) = selected.and_then(|value| value.into_path().ok()) else {
-            return Ok(None);
-        };
-        if let Ok(canonical) = path.canonicalize() {
-            if let Ok(mut picked) = state.picked_installs.lock() {
-                picked.insert(canonical);
-            }
-        }
-        Ok(Some(path.to_string_lossy().into_owned()))
-    })
-    .await
-}
-
-/// Parse `muse skills list --json` leniently: the envelope may be
-/// `{ skills: [...] }` or a bare array, and entries name themselves with
-/// any of several keys. Unknown shapes yield no skills rather than guesses.
-fn parse_skill_list(stdout: &str) -> Vec<TrustSkill> {
-    let value: Value = match serde_json::from_str(stdout) {
-        Ok(value) => value,
-        Err(_) => return Vec::new(),
-    };
-    let entries = match &value {
-        Value::Array(items) => items.clone(),
-        Value::Object(map) => map.get("skills").and_then(Value::as_array).cloned().unwrap_or_default(),
-        _ => Vec::new(),
-    };
-    entries
-        .iter()
-        .filter_map(|entry| {
-            let object = entry.as_object()?;
-            let name = ["selector", "displayName", "name", "id"].iter().filter_map(|key| object.get(*key)?.as_str()).next()?.to_string();
-            if name.is_empty() {
-                return None;
-            }
-            let description = object.get("description").and_then(Value::as_str).unwrap_or("").chars().take(280).collect();
-            Some(TrustSkill {
-                name,
-                description,
-            })
-        })
-        .take(100)
-        .collect()
 }
 
 /// Save fetched full output through a native save dialog. The renderer
@@ -4286,22 +3468,6 @@ fn inspect_dropped_files(paths: Vec<String>) -> Result<Vec<DroppedFile>, String>
         }
     }
     Ok(out)
-}
-
-/// Consume a one-time picker authorization for an install path. Mirrors
-/// `read_dropped_files`: the path must have been minted by a native picker in
-/// this process and is single-use, so a renderer cannot replay or invent one.
-fn take_picked_install(state: &State<'_, AppState>, path: &str) -> Result<String, String> {
-    let mut picked = state.picked_installs.lock().map_err(|err| err.to_string())?;
-    take_picked_install_in(&mut picked, path)
-}
-
-fn take_picked_install_in(picked: &mut HashSet<PathBuf>, path: &str) -> Result<String, String> {
-    let canonical = PathBuf::from(path).canonicalize().map_err(|_| "That folder is no longer available. Pick it again.".to_string())?;
-    if !picked.remove(&canonical) {
-        return Err("Installing needs a folder chosen with this app's picker. Pick it again.".into());
-    }
-    Ok(canonical.to_string_lossy().into_owned())
 }
 
 #[tauri::command]
@@ -4715,6 +3881,26 @@ fn repair_store_files(target: &Path) -> Result<StoreRepair, String> {
 static STORE_WRITE_LOCK: Mutex<()> = Mutex::new(());
 static STORE_TEMP_SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
+/// The native side enforces this preference even when the renderer asks to
+/// open a PTY directly. Older settings used `disableShell` for this pane.
+fn terminal_is_disabled(path: &Path) -> Result<bool, String> {
+    let _read = STORE_WRITE_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        _ => return Err("Could not read the Terminal preference.".into()),
+    };
+    let mut bytes = Vec::new();
+    file.take(STORE_DOCUMENT_LIMIT as u64 + 1).read_to_end(&mut bytes).map_err(|_| "Could not read the Terminal preference.".to_string())?;
+    if bytes.len() > STORE_DOCUMENT_LIMIT { return Err("Could not read the Terminal preference.".into()); }
+    let document: Value = serde_json::from_slice(&bytes).map_err(|_| "Could not read the Terminal preference.".to_string())?;
+    if !document.is_object() { return Err("Could not read the Terminal preference.".into()); }
+    let settings = document.get("settings");
+    Ok(settings.and_then(|row| row.get("disableTerminal")).and_then(Value::as_bool)
+        .or_else(|| settings.and_then(|row| row.get("disableShell")).and_then(Value::as_bool))
+        .unwrap_or(false))
+}
+
 /// Does the temp name belong to an interrupted atomic store write? The plain
 /// `.tmp` covers files written before the per-call suffix existed.
 fn is_store_temp_name(name: &str) -> bool {
@@ -4901,17 +4087,16 @@ struct SupportPaths {
     session_log_path: Option<String>,
 }
 
-/// App-owned paths only. Other agents do not expose a canonical per-session log
-/// to Glitter, so the menu offers Copy task path for Harness sessions alone.
+/// App-owned paths only: the app log and a Harness session's own log file.
 #[tauri::command]
-fn support_paths(app: AppHandle, session_id: Option<String>, agent_id: Option<String>) -> Result<SupportPaths, String> {
-    let session_log_path = match (agent_id.as_deref(), session_id) {
-        (Some("harness"), Some(session_id)) => {
+fn support_paths(app: AppHandle, session_id: Option<String>) -> Result<SupportPaths, String> {
+    let session_log_path = match session_id {
+        Some(session_id) => {
             let base = app.path().app_data_dir().map_err(|err| format!("Could not resolve the session log path: {err}"))?;
             let path = harness_session_log_file(&base, &session_id)?;
             path.is_file().then(|| path.to_string_lossy().into_owned())
         }
-        _ => None,
+        None => None,
     };
     Ok(SupportPaths { app_log_path: app_log_path(&app)?.to_string_lossy().into_owned(), session_log_path })
 }
@@ -4972,8 +4157,8 @@ fn set_menu_shortcuts(app: AppHandle, accelerators: HashMap<String, String>) -> 
 async fn terminal_open(app: AppHandle, grant_id: String, cols: u16, rows: u16) -> Result<String, String> {
     blocking(move || {
         let state = app.state::<AppState>();
-        if state.shell_disabled.load(std::sync::atomic::Ordering::Relaxed) {
-            return Err("The terminal is off because shell commands are disabled in Settings → Permissions.".into());
+        if terminal_is_disabled(&store_document_path(&app)?)? {
+            return Err("The Terminal pane is disabled in Settings → Permissions.".into());
         }
         let root = grant_root(&state, &grant_id)?;
         let handle = app.clone();
@@ -5101,8 +4286,8 @@ fn shutdown_bridge(state: &AppState) {
     }
     if let Ok(mut guard) = state.bridge.lock() {
         if let Some(bridge) = guard.take() {
-            // EOF first: the bridge treats stdin end as all-host shutdown,
-            // which reaps ACP process groups before the Node process exits.
+            // EOF first: the agent process treats stdin end as shutdown, which
+            // reaps its shell and MCP process groups before Node exits.
             process::shutdown_tree(bridge.child, bridge.stdin, Duration::from_secs(2));
         }
     }
@@ -5219,8 +4404,6 @@ pub fn run() {
                 bridge_request,
                 verify_grants,
                 remove_grant,
-                agent_identities,
-                confirm_agent_bin,
                 git_snapshot,
                 git_graph,
                 git_review,
@@ -5244,30 +4427,12 @@ pub fn run() {
                 git_stage,
                 git_commit,
                 pick_folder,
-                export_session,
                 save_output_text,
                 trust_preview,
                 mcp_consent::review_mcp,
                 mcp_consent::consent_mcp,
                 mcp_consent::workspace_trust,
                 mcp_consent::workspace_trust_set,
-                mcp_login,
-                mcp_logout,
-                cli_logout,
-                project_init,
-                enterprise_status,
-                skill_list,
-                skill_set,
-                skill_install,
-                skill_import,
-                skill_inspect,
-                skill_uninstall,
-                pick_skill_source,
-                plugin_list,
-                plugin_inspect,
-                plugin_review,
-                plugin_install,
-                pick_plugin_bundle,
                 catalog_list,
                 catalog_install,
                 catalog_remove,
@@ -5280,6 +4445,7 @@ pub fn run() {
                 library_check_updates,
                 marketplace_add,
                 marketplace_refresh,
+                marketplace_avatars,
                 marketplace_remove,
                 read_dropped_files,
                 open_path,
@@ -5292,6 +4458,7 @@ pub fn run() {
                 terminal_resize,
                 terminal_close,
                 persist_store_atomic,
+                credentials::preserve_legacy_muse_key,
                 repair_store_document,
                 append_app_log,
                 open_log_folder,
@@ -5299,10 +4466,6 @@ pub fn run() {
                 open_config_file,
                 diagnostics_snapshot,
                 haptic,
-                credentials::credential_get,
-                credentials::credential_set,
-                credentials::acp_isolation_consent_get,
-                credentials::acp_isolation_consent_set,
                 credentials::provider_keys_get,
                 credentials::provider_key_set
             ];
@@ -5336,7 +4499,6 @@ pub fn run() {
             if let Ok(data) = handle.path().app_data_dir() {
                 state.workspace_security.load_from(&data.join("workspace-security.json"));
             }
-            state.agent_pins.replace(load_agent_pins());
             // Warm the bridge beside the webview instead of before it. Starting it
             // means hashing the bundled Node runtime (~150 MB) and spawning it, which
             // used to run here, holding the window back on every launch. A request
@@ -5397,165 +4559,6 @@ pub fn run() {
         });
 }
 
-/// Lenient `plugins list --json` rows: `{ plugins: [...] }` or a bare
-/// array, entries named by id, pluginId, or name.
-fn parse_plugin_list(stdout: &str) -> Vec<PluginEntry> {
-    let value: Value = match serde_json::from_str(stdout) {
-        Ok(value) => value,
-        Err(_) => return Vec::new(),
-    };
-    let entries = match &value {
-        Value::Array(items) => items.clone(),
-        Value::Object(map) => map.get("plugins").and_then(Value::as_array).cloned().unwrap_or_default(),
-        _ => Vec::new(),
-    };
-    fn text(object: &serde_json::Map<String, Value>, keys: &[&str]) -> Option<String> {
-        keys.iter().filter_map(|key| object.get(*key)?.as_str()).next().map(str::to_string)
-    }
-    entries
-        .iter()
-        .filter_map(|entry| {
-            let object = entry.as_object()?;
-            let id = text(object, &["id", "pluginId", "name"])?;
-            if id.is_empty() {
-                return None;
-            }
-            Some(PluginEntry {
-                id,
-                version: text(object, &["version"]),
-                description: text(object, &["description", "summary"]).unwrap_or_default().chars().take(280).collect(),
-                enabled: object.get("enabled").and_then(Value::as_bool),
-            })
-        })
-        .take(200)
-        .collect()
-}
-
-/// Lenient `plugins inspect --json`: metadata plus runtime capabilities.
-fn parse_plugin_detail(id: &str, stdout: &str) -> PluginDetail {
-    let value: Value = serde_json::from_str(stdout).unwrap_or(Value::Null);
-    let object = value.as_object().cloned().unwrap_or_default();
-    let text = |keys: &[&str]| -> Option<String> { keys.iter().filter_map(|key| object.get(*key)?.as_str()).next().map(str::to_string) };
-    let capabilities = object
-        .get("capabilities")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default()
-        .iter()
-        .filter_map(|entry| {
-            let cap = entry.as_object()?;
-            let cid = ["id", "capabilityId", "stableId", "name"].iter().filter_map(|key| cap.get(*key)?.as_str()).next()?;
-            if cid.is_empty() {
-                return None;
-            }
-            Some(PluginCapability {
-                id: cid.to_string(),
-                kind: cap.get("kind").and_then(Value::as_str).map(str::to_string),
-                description: cap.get("description").and_then(Value::as_str).unwrap_or("").chars().take(280).collect(),
-                enabled: cap.get("enabled").and_then(Value::as_bool),
-            })
-        })
-        .take(200)
-        .collect();
-    PluginDetail {
-        id: text(&["id", "pluginId"]).unwrap_or_else(|| id.to_string()),
-        version: text(&["version"]),
-        description: text(&["description", "summary"]).unwrap_or_default().chars().take(280).collect(),
-        capabilities,
-    }
-}
-
-/// Lenient `skills list --json` rows: `{ skills: [...] }` or a bare
-/// array, identified by id with name/scope/activation alongside.
-fn parse_skill_inventory(stdout: &str) -> Vec<SkillEntry> {
-    let value: Value = match serde_json::from_str(stdout) {
-        Ok(value) => value,
-        Err(_) => return Vec::new(),
-    };
-    let entries = match &value {
-        Value::Array(items) => items.clone(),
-        Value::Object(map) => map.get("skills").and_then(Value::as_array).cloned().unwrap_or_default(),
-        _ => Vec::new(),
-    };
-    entries
-        .iter()
-        .filter_map(|entry| {
-            let object = entry.as_object()?;
-            let id = object.get("id")?.as_str()?;
-            if id.is_empty() {
-                return None;
-            }
-            Some(SkillEntry {
-                id: id.to_string(),
-                name: object.get("name").and_then(Value::as_str).unwrap_or(id).to_string(),
-                description: object.get("description").or_else(|| object.get("short_description")).and_then(Value::as_str).unwrap_or("").chars().take(280).collect(),
-                scope: object.get("scope").and_then(Value::as_str).unwrap_or("").to_string(),
-                activation: object.get("activation").and_then(Value::as_str).unwrap_or("").to_string(),
-            })
-        })
-        .take(200)
-        .collect()
-}
-
-/// Lenient `config status` text: a `Generation:` line plus `plane=…`
-/// source rows. Unknown lines are ignored so new CLI output never breaks
-/// the read.
-fn parse_enterprise_status(stdout: &str) -> EnterpriseStatus {
-    let mut generation = None;
-    let mut sources = Vec::new();
-    for line in stdout.lines() {
-        let trimmed = line.trim();
-        if let Some(value) = trimmed.strip_prefix("Generation:") {
-            let value = value.trim();
-            if !value.is_empty() {
-                generation = Some(value.chars().take(128).collect());
-            }
-            continue;
-        }
-        if trimmed.starts_with("plane=") {
-            let mut plane = String::new();
-            let mut source_class = String::new();
-            let mut state = String::new();
-            for part in trimmed.split_whitespace() {
-                let (key, value) = part.split_once('=').unwrap_or(("", ""));
-                match key {
-                    "plane" => plane = value.to_string(),
-                    "source_class" => source_class = value.to_string(),
-                    "state" => state = value.to_string(),
-                    _ => {}
-                }
-            }
-            if !plane.is_empty() {
-                sources.push(EnterpriseSource {
-                    plane,
-                    source_class,
-                    state,
-                });
-            }
-        }
-    }
-    EnterpriseStatus {
-        generation,
-        sources: sources.into_iter().take(32).collect(),
-    }
-}
-
-/// Lenient `skills inspect --json`: a flat object or a `{ skill: … }`
-/// envelope, keyed by id with scope/activation/path alongside.
-fn parse_skill_detail(fallback_id: &str, stdout: &str) -> SkillDetail {
-    let value: Value = serde_json::from_str(stdout).unwrap_or(Value::Null);
-    let object = value.get("skill").or(Some(&value)).and_then(Value::as_object);
-    let text = |keys: &[&str]| -> Option<String> { object.and_then(|map| keys.iter().find_map(|key| map.get(*key)?.as_str())).map(str::to_string) };
-    SkillDetail {
-        id: text(&["id"]).unwrap_or_else(|| fallback_id.to_string()),
-        name: text(&["name"]).unwrap_or_else(|| fallback_id.to_string()),
-        description: text(&["description", "short_description"]).unwrap_or_default().chars().take(280).collect(),
-        scope: text(&["scope"]).unwrap_or_default(),
-        activation: text(&["activation"]).unwrap_or_default(),
-        path: text(&["path"]),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5599,6 +4602,20 @@ mod tests {
         std::fs::write(&target, "{\"settings\":{").expect("write");
         assert!(!store_document_is_valid(&target), "truncated JSON must not be accepted");
         assert!(!store_document_is_valid(&dir.join("glitter.json.missing")));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn terminal_preference_keeps_the_legacy_disable_shell_choice() {
+        let dir = store_dir("terminal-preference");
+        let target = dir.join("glitter.json");
+        assert!(!terminal_is_disabled(&target).expect("missing settings"));
+        std::fs::write(&target, r#"{"settings":{"disableShell":true}}"#).expect("write");
+        assert!(terminal_is_disabled(&target).expect("legacy preference"));
+        std::fs::write(&target, r#"{"settings":{"disableShell":true,"disableTerminal":false}}"#).expect("write");
+        assert!(!terminal_is_disabled(&target).expect("new preference"));
+        std::fs::write(&target, "{").expect("write");
+        assert!(terminal_is_disabled(&target).is_err(), "damaged settings never enable a terminal");
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -5717,65 +4734,6 @@ mod tests {
     }
 
     #[test]
-    fn cli_names_reject_flags_paths_and_blanks() {
-        assert!(check_cli_name("server name", "acme-tools").is_ok());
-        assert!(check_cli_name("server name", "").is_err());
-        assert!(check_cli_name("server name", "--json").is_err());
-        assert!(check_cli_name("server name", "a/b").is_err());
-        assert!(check_cli_name("server name", "a b").is_err());
-    }
-
-    #[test]
-    fn plugin_parsers_cover_envelopes_details_and_garbage() {
-        let listed = parse_plugin_list(r#"{"plugins": [{"id": "acme", "version": "1.2", "description": "Tools", "enabled": true}, {}]}"#);
-        assert_eq!(listed.len(), 1);
-        assert_eq!(listed[0].id, "acme");
-        assert_eq!(listed[0].enabled, Some(true));
-        assert!(parse_plugin_list("nope").is_empty());
-        let detail = parse_plugin_detail("acme", r#"{"id": "acme", "capabilities": [{"stableId": "s1", "kind": "tool", "description": "Runs shell"}]}"#);
-        assert_eq!(detail.capabilities.len(), 1);
-        let skills = parse_skill_inventory(r#"{"skills": [{"id": "bundled:git", "name": "git", "description": "Git help", "scope": "bundled", "activation": "on"}, {}]}"#);
-        assert_eq!(skills.len(), 1);
-        assert_eq!(skills[0].id, "bundled:git");
-        assert_eq!(skills[0].activation, "on");
-        assert!(parse_skill_inventory("nope").is_empty());
-        let enterprise = parse_enterprise_status("Enterprise configuration status\nGeneration: sha256:abc123\nSources:\n  plane=defaults source_class=system_file state=absent\n  plane=policy source_class=macos_managed_preferences state=active\n");
-        assert_eq!(enterprise.generation.as_deref(), Some("sha256:abc123"));
-        assert_eq!(enterprise.sources.len(), 2);
-        assert_eq!(enterprise.sources[1].state, "active");
-        assert!(parse_enterprise_status("nothing useful").generation.is_none());
-        let flat = parse_skill_detail("bundled:git", r#"{"id": "bundled:git", "name": "git", "scope": "bundled", "activation": "on", "path": "bundled://skills/git/SKILL.md"}"#);
-        assert_eq!(flat.path.as_deref(), Some("bundled://skills/git/SKILL.md"));
-        let wrapped = parse_skill_detail("x", r#"{"skill": {"id": "user:acme", "scope": "user", "activation": "off"}}"#);
-        assert_eq!(wrapped.id, "user:acme");
-        assert_eq!(wrapped.activation, "off");
-        assert!(parse_skill_detail("x", "nope").path.is_none());
-        let diff = "diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -1,3 +1,3 @@\n a\n-b\n+c\n d\n@@ -10,2 +10,2 @@\n x\n-y\n+z\n";
-        let patch = single_hunk_patch(diff, 1).expect("second hunk");
-        assert!(patch.contains("diff --git a/f.txt b/f.txt"));
-        assert!(patch.contains("@@ -10,2 +10,2 @@"));
-        assert!(!patch.contains("@@ -1,3"));
-        assert!(single_hunk_patch(diff, 2).is_err());
-        assert_eq!(detail.capabilities[0].id, "s1");
-        let fallback = parse_plugin_detail("acme", "nope");
-        assert_eq!(fallback.id, "acme");
-        assert!(fallback.capabilities.is_empty());
-    }
-
-    #[test]
-    fn skill_list_parses_envelopes_and_skips_nameless() {
-        let enveloped = parse_skill_list(r#"{"skills": [{"selector": "/review", "description": "Review code"}, {"description": "nameless"}]}"#);
-        assert_eq!(enveloped.len(), 1);
-        assert_eq!(enveloped[0].name, "/review");
-        assert_eq!(enveloped[0].description, "Review code");
-        let bare = parse_skill_list(r#"[{"displayName": "Plan", "description": "x"}]"#);
-        assert_eq!(bare.len(), 1);
-        assert_eq!(bare[0].name, "Plan");
-        assert!(parse_skill_list("not json").is_empty());
-        assert!(parse_skill_list(r#"{"other": []}"#).is_empty());
-    }
-
-    #[test]
     fn extra_bin_dirs_include_user_local_bin() {
         let home = dirs::home_dir().expect("home directory");
         assert!(extra_bin_dirs().contains(&home.join(".local/bin")));
@@ -5787,20 +4745,6 @@ mod tests {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let found = which::which_in("node", Some(path), cwd);
         assert!(found.is_ok(), "node should be in well-known bin dirs: {found:?}");
-    }
-
-    #[test]
-    fn muse_bin_rejects_missing_temp_and_wrong_names() {
-        let state = AppState::new();
-        // Nothing exists at these paths (or temp forbids them): all fail.
-        assert!(resolve_muse_bin(&state, "/tmp/muse").is_err());
-        assert!(resolve_muse_bin(&state, "/tmp/muse-audit-probe.sh").is_err());
-        assert!(resolve_muse_bin(&state, "muse").is_err());
-        assert!(resolve_muse_bin(&state, "/definitely/not/here").is_err());
-        // Canonical validation (temp symlink smuggling, name checks, exec bit)
-        // is covered in `exec.rs`; auto-discovery finds a real install or errs.
-        let found = resolve_muse_bin(&state, "");
-        assert!(found.is_ok() || found.unwrap_err().contains("not found"));
     }
 
     fn fixture_repo(tag: &str) -> (AppState, String, PathBuf) {
@@ -6129,7 +5073,7 @@ mod tests {
         let _ = std::fs::remove_file(&swap);
         // The worktree bundle verifies when it exists, proving the baked
         // digest tracks the packaged script.
-        let dist = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../packages/glitter-bridge/dist/index.js");
+        let dist = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../packages/glitter-harness/dist/index.js");
         if dist.exists() {
             assert!(verify_bridge_script(&dist).is_ok());
         }
@@ -6397,37 +5341,6 @@ mod tests {
         // Node-count abuse still fails closed.
         let swarm: Value = (0..IPC_NODE_LIMIT + 1).map(|_| json!(0)).collect();
         assert!(ipc_body_oversized(&InvokeBody::Json(swarm)));
-    }
-
-    #[test]
-    fn export_names_are_safe_and_readable() {
-        assert_eq!(export_file_name("Fix auth / retry bug", "json"), "fix-auth-retry-bug.json");
-        assert_eq!(export_file_name("  ", "json"), "muse-session.json");
-        assert_eq!(export_file_name("Fix auth", "md"), "fix-auth.md");
-        assert!(!export_file_name("../../secret", "json").contains('/'));
-    }
-
-    #[test]
-    fn picked_install_is_single_use_and_picker_bound() {
-        let dir = std::env::temp_dir().join(format!("muse-pick-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let raw = dir.to_string_lossy().into_owned();
-
-        // Unpicked paths are refused, even for a real directory.
-        let mut picked = HashSet::new();
-        assert!(take_picked_install_in(&mut picked, &raw).is_err());
-
-        // A pick authorizes exactly once: the second install must re-pick.
-        picked.insert(dir.canonicalize().unwrap());
-        assert!(take_picked_install_in(&mut picked, &raw).is_ok());
-        assert!(take_picked_install_in(&mut picked, &raw).is_err());
-
-        // A missing folder is refused before any authorization is consumed.
-        picked.insert(dir.canonicalize().unwrap());
-        assert!(take_picked_install_in(&mut picked, &format!("{raw}/gone")).is_err());
-        assert!(take_picked_install_in(&mut picked, &raw).is_ok());
-
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
@@ -6862,26 +5775,6 @@ mod tests {
     }
 
     #[test]
-    fn a_muse_binary_inside_a_granted_workspace_is_refused() {
-        #[cfg(unix)]
-        {
-            let state = AppState::new();
-            let scratch = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target").join(format!("muse-resolve-{}", std::process::id()));
-            let workspace = scratch.join("workspace");
-            std::fs::create_dir_all(&workspace).unwrap();
-            let bin = workspace.join("muse");
-            std::fs::write(&bin, b"#!/bin/sh\n").unwrap();
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
-            let grant = mint_grant_id();
-            state.grants.lock().unwrap().insert(grant, workspace.canonicalize().unwrap());
-            let err = resolve_muse_bin(&state, &bin.to_string_lossy()).unwrap_err();
-            assert!(err.contains("cannot live inside"), "{err}");
-            let _ = std::fs::remove_dir_all(&scratch);
-        }
-    }
-
-    #[test]
     fn snoop_binds_nothing_without_attribution_or_on_failure() {
         let state = AppState::new();
         let grant = mint_grant_id();
@@ -6964,7 +5857,7 @@ while :; do sleep 1; done
     }
 
     #[test]
-    fn native_shell_e2e_grant_session_approval_export_relaunch() {
+    fn native_shell_e2e_grant_session_approval_relaunch() {
         if which::which("node").is_err() {
             eprintln!("skipping native e2e: node is not on PATH");
             return;
@@ -7065,43 +5958,6 @@ while :; do sleep 1; done
         assert!(tauri::async_runtime::block_on(turn_snapshot_restore(handle.clone(), grant.grant_id.clone(), "s-nope".into(), saved[0].snapshot_id.clone(), true)).is_err());
         tauri::async_runtime::block_on(turn_snapshot_restore(handle.clone(), grant.grant_id.clone(), "s-1".into(), saved[0].snapshot_id.clone(), true)).unwrap();
         assert_eq!(std::fs::read(canon.join("checkpoint.txt")).unwrap(), b"agent edit\n");
-
-        // Export: a fixture `muse` under target/ (non-temp, executable, right
-        // name) satisfies exec validation and writes the export file. The
-        // fixture is a POSIX script, so this half only runs on unix.
-        #[cfg(unix)]
-        {
-            let bin_dir = scratch.join("bin");
-            std::fs::create_dir_all(&bin_dir).unwrap();
-            let fake = bin_dir.join("muse");
-            std::fs::write(&fake, "#!/bin/sh\nout=\"\"\nsess=\"\"\nwhile [ $# -gt 0 ]; do case \"$1\" in --out) shift; out=\"$1\";; --session) shift; sess=\"$1\";; esac; shift; done\nprintf '{\"exported\":true,\"session\":\"%s\"}\\n' \"$sess\" > \"$out\"\n").unwrap();
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
-            let out = scratch.join("export.json");
-            let written = export_to_path(&state, "s-1", out.to_str().unwrap(), fake.to_str().unwrap(), "Alpha", false, false).unwrap();
-            assert_eq!(written, out.to_string_lossy());
-            assert!(std::fs::read_to_string(&out).unwrap().contains("\"exported\":true"));
-            assert!(export_to_path(&state, "s-nope", out.to_str().unwrap(), fake.to_str().unwrap(), "Alpha", false, false).is_err());
-
-            let bin_md = scratch.join("bin-md");
-            std::fs::create_dir_all(&bin_md).unwrap();
-            let fake_md = bin_md.join("muse");
-            std::fs::write(
-                &fake_md,
-                "#!/bin/sh\nout=\"\"\nred=raw\nwhile [ $# -gt 0 ]; do case \"$1\" in --out) shift; out=\"$1\";; --redacted) red=redacted;; esac; shift; done\ncat > \"$out\" <<EOF\n{\"export_schema_version\":1,\"redaction\":\"$red\",\"sessions\":[{\"session_id\":\"s-1\",\"turn_count\":1}],\"events\":[{\"kind\":\"record\",\"envelope\":{\"payload_type\":\"runtime.user_intent.accepted\",\"payload\":{\"refill_blocks\":[{\"kind\":\"text\",\"text\":\"hello\"}]}}},{\"kind\":\"record\",\"envelope\":{\"payload_type\":\"runtime.session\",\"payload\":{\"kind\":\"run\",\"event\":{\"kind\":\"assistant_message_committed\",\"text\":\"hi there\",\"encrypted_content\":\"cipher-blob\"}}}}]}\nEOF\n",
-            )
-            .unwrap();
-            std::fs::set_permissions(&fake_md, std::fs::Permissions::from_mode(0o755)).unwrap();
-            let md = scratch.join("export.md");
-            let written = export_to_path(&state, "s-1", md.to_str().unwrap(), fake_md.to_str().unwrap(), "Alpha", true, true).unwrap();
-            let body = std::fs::read_to_string(&md).unwrap();
-            assert_eq!(written, md.to_string_lossy());
-            assert!(body.contains("# Alpha\n"), "{body}");
-            assert!(body.contains("Share-safe"), "{body}");
-            assert!(body.contains("## You\n\nhello"), "{body}");
-            assert!(body.contains("## Muse\n\nhi there"), "{body}");
-            assert!(!body.contains("cipher-blob"), "{body}");
-        }
 
         // Relaunch: grants reload from the persisted blob; live session
         // bindings do not survive a restart.

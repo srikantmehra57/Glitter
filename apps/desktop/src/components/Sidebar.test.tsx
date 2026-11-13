@@ -8,8 +8,6 @@ import { sidebarWidthBounds, sidebarWidthFor } from "../lib/reviewLayout";
 import { resetStore, seedStore } from "../test/store";
 import type { ApprovalRequest, Thread } from "../lib/types";
 
-const exporter = vi.hoisted(() => ({ exportSession: vi.fn() }));
-vi.mock("../lib/bridge", async (original) => ({ ...(await original<typeof import("../lib/bridge")>()), exportSession: exporter.exportSession }));
 const threadActions = vi.hoisted(() => ({ openThreadFolder: vi.fn(), copyThreadPath: vi.fn(), copyThreadLogPath: vi.fn(), copyAppLogPath: vi.fn(), copySessionId: vi.fn(), openAppConfig: vi.fn(), reportThreadIssue: vi.fn() }));
 vi.mock("../lib/threadActions", () => threadActions);
 
@@ -215,18 +213,6 @@ describe("Sidebar", () => {
     }
   });
 
-  it("opens a thread-filtered trajectory and hides task logs for other agents", async () => {
-    seed([thread("a", { title: "Alpha" })]);
-    const user = userEvent.setup();
-    render(<Sidebar />);
-    await user.click(screen.getByRole("button", { name: "Actions for Alpha" }));
-    expect(screen.queryByRole("menuitem", { name: "Copy task path" })).toBeNull();
-    expect(screen.getByRole("menuitem", { name: "Copy log path" })).toBeInTheDocument();
-    await user.click(screen.getByRole("menuitem", { name: "View model trajectory" }));
-    expect(useAppStore.getState().settingsOpen).toBe(true);
-    expect(useAppStore.getState().settingsTab).toBe("Usage");
-    expect(useAppStore.getState().trajectoryThreadId).toBe("a");
-  });
 
   it("does not re-render while a reply streams into the open thread", () => {
     seed([thread("a", { status: "running", items: [{ itemId: "m", kind: "agentMessage", status: "inProgress", text: "Hel" }] }), thread("b"), thread("c")]);
@@ -275,30 +261,27 @@ describe("Sidebar", () => {
     expect(screen.queryByText("Beta")).toBeNull();
   });
 
-  it("does not claim 'No agent CLI found' before detection has answered", async () => {
+  it("does not ask for a provider key before detection has answered", async () => {
     seed([]);
     seedStore({ detectionChecked: false, detection: null, agents: [] });
     render(<Sidebar />);
-    expect(screen.getByText("Checking agents…")).toBeInTheDocument();
-    expect(screen.queryByText("No agent CLI found")).toBeNull();
+    expect(screen.getByText("Starting the agent…")).toBeInTheDocument();
+    expect(screen.queryByText("Add a provider key")).toBeNull();
     // An empty list reads as loading, not as "No threads yet", until then.
     expect(screen.getByText("Loading threads…")).toBeInTheDocument();
     act(() => { useAppStore.setState({ detectionChecked: true }); });
-    expect(screen.getByText("No agent CLI found")).toBeInTheDocument();
+    expect(screen.getByText("Add a provider key")).toBeInTheDocument();
     expect(screen.getByText("No threads yet")).toBeInTheDocument();
-    await userEvent.setup().click(screen.getByRole("button", { name: "No agent CLI found" }));
+    await userEvent.setup().click(screen.getByRole("button", { name: "Add a provider key" }));
     expect(useAppStore.getState().settingsOpen).toBe(true);
-    expect(useAppStore.getState().settingsTab).toBe("Agents");
+    expect(useAppStore.getState().settingsTab).toBe("Providers");
   });
 
   it("opens Usage straight from the footer beside the profile and Settings controls", async () => {
     seed([]);
-    seedStore({
-      detection: { found: true, path: "/bin/muse", version: "Muse Code 3.14.3", authenticated: true, method: "auth.json", accountName: "Ada" },
-      agents: [{ id: "muse", name: "Muse", protocol: "msp", found: true, path: "/bin/muse", version: "3.14.3", verified: true, signIn: "", authenticated: true }],
-    });
+    seedStore({ agents: [{ id: "harness", name: "Harness", protocol: "native", found: true, path: null, version: null, verified: true, signIn: "", authenticated: true }] });
     render(<Sidebar />);
-    expect(screen.getByRole("button", { name: "Profile menu, Ada" })).toHaveTextContent("Ada");
+    expect(screen.getByRole("button", { name: "Profile menu, Profile" })).toHaveTextContent("Profile");
     expect(screen.queryByText("Ready")).not.toBeInTheDocument();
     expect(screen.queryByText("Glitter")).not.toBeInTheDocument();
     const usage = screen.getByRole("button", { name: "Usage" });
@@ -313,25 +296,21 @@ describe("Sidebar", () => {
 
   it("opens App theme, Usage stats and shortcuts from the profile menu", async () => {
     seed([]);
-    seedStore({
-      detection: { found: true, path: "/bin/muse", version: "3.14.3", authenticated: true, method: "auth.json", accountName: "Ada", accountEmail: "ada@example.com" },
-      agents: [{ id: "muse", name: "Muse", protocol: "msp", found: true, path: "/bin/muse", version: "3.14.3", verified: true, signIn: "", authenticated: true }],
-    });
+    seedStore({ agents: [{ id: "harness", name: "Harness", protocol: "native", found: true, path: null, version: null, verified: true, signIn: "", authenticated: true }] });
     const user = userEvent.setup();
     render(<Sidebar />);
-    await user.click(screen.getByRole("button", { name: "Profile menu, Ada" }));
+    await user.click(screen.getByRole("button", { name: "Profile menu, Profile" }));
     const menu = screen.getByRole("menu", { name: "Profile" });
-    expect(within(menu).getByText("ada@example.com")).toBeInTheDocument();
     expect(within(menu).getByRole("menuitem", { name: "Usage stats" })).toBeInTheDocument();
     expect(within(menu).getByRole("menuitem", { name: "Commands & shortcuts" })).toBeInTheDocument();
     expect(within(menu).getByRole("menuitem", { name: /^Settings/ })).toBeInTheDocument();
 
     await user.click(within(menu).getByRole("menuitem", { name: "App theme" }));
     expect(useAppStore.getState().settingsTab).toBe("Theme");
-    await user.click(screen.getByRole("button", { name: "Profile menu, Ada" }));
+    await user.click(screen.getByRole("button", { name: "Profile menu, Profile" }));
     await user.click(screen.getByRole("menuitem", { name: "Usage stats" }));
     expect(useAppStore.getState().settingsTab).toBe("Usage");
-    await user.click(screen.getByRole("button", { name: "Profile menu, Ada" }));
+    await user.click(screen.getByRole("button", { name: "Profile menu, Profile" }));
     await user.click(screen.getByRole("menuitem", { name: "Commands & shortcuts" }));
     expect(useAppStore.getState().settingsTab).toBe("Shortcuts");
   });
@@ -353,24 +332,6 @@ describe("Sidebar", () => {
     expect(screen.queryByRole("menu", { name: "Profile" })).not.toBeInTheDocument();
   });
 
-  it("offers Muse sign-out only for an authenticated account", async () => {
-    seed([]);
-    const signOut = vi.fn(async () => {});
-    seedStore({
-      signOut,
-      detection: { found: true, path: "/bin/muse", version: "3.14.3", authenticated: true, method: "auth.json", accountName: "Ada" },
-      agents: [{ id: "muse", name: "Muse", protocol: "msp", found: true, path: "/bin/muse", version: "3.14.3", verified: true, signIn: "", authenticated: true }],
-    });
-    const user = userEvent.setup();
-    render(<Sidebar />);
-    await user.click(screen.getByRole("button", { name: "Profile menu, Ada" }));
-    await user.click(screen.getByRole("menuitem", { name: "Sign out of Muse" }));
-    expect(signOut).toHaveBeenCalledTimes(1);
-
-    act(() => useAppStore.setState({ detection: { found: true, path: "/bin/muse", version: "3.14.3", authenticated: false, method: null } }));
-    await user.click(screen.getByRole("button", { name: "Profile menu, Profile" }));
-    expect(screen.queryByRole("menuitem", { name: "Sign out of Muse" })).not.toBeInTheDocument();
-  });
 
   it("puts New thread and Settings in the sidebar, and leaves Extensions to Settings", async () => {
     seed([]);
@@ -464,87 +425,9 @@ describe("Sidebar", () => {
     expect(screen.getByRole("button", { name: "Usage" })).toHaveTextContent("");
   });
 
-  it("shows the CLI update row with release notes when an update is available", async () => {
-    seed([]);
-    const refreshCliUpdate = vi.fn();
-    const updateCli = vi.fn();
-    seedStore({
-      detection: { found: true, path: "/bin/muse", version: "Muse Code 3.14.3", authenticated: true, method: "auth.json" },
-      cliUpdate: { available: true, current: "3.14.3-R1", latest: "3.14.4-R2", urgency: "encouraged", notification: "Faster startup.", channel: "muse-stable" },
-      cliUpdateAt: Date.now(),
-      refreshCliUpdate,
-      updateCli,
-    });
-    render(<Sidebar />);
-    const user = userEvent.setup();
-    const update = screen.getByRole("button", { name: /Muse CLI update available/ });
-    const updateWrap = update.closest(".update-wrap");
-    expect(updateWrap?.parentElement).toHaveClass("sidebar-bottom");
-    expect(updateWrap?.nextElementSibling).toHaveClass("sidebar-foot");
-    await user.click(update);
-    const dialog = screen.getByRole("dialog", { name: "Muse CLI update" });
-    expect(within(dialog).getByText("Faster startup.")).toBeInTheDocument();
-    expect(within(dialog).getByText("Recommended")).toBeInTheDocument();
-    expect(within(dialog).getByText("v3.14.3-R1")).toBeInTheDocument();
-    expect(within(dialog).getByText("v3.14.4-R2")).toBeInTheDocument();
-    await user.click(within(dialog).getByRole("button", { name: "Update now" }));
-    expect(updateCli).toHaveBeenCalledTimes(1);
-    await user.click(within(dialog).getByRole("button", { name: "Check again" }));
-    expect(refreshCliUpdate).toHaveBeenCalledWith(true);
-  });
 
-  it("hides the CLI update row when the channel has nothing newer", () => {
-    seed([]);
-    seedStore({ cliUpdate: { available: false, current: "3.14.4-R2", latest: "3.14.4-R2", urgency: "none", notification: "", channel: "muse-stable" } });
-    render(<Sidebar />);
-    expect(screen.queryByRole("button", { name: /Muse CLI update available/ })).toBeNull();
-    expect(screen.queryByText("CLI update")).toBeNull();
-  });
 
-  it("flags the CLI update in the collapsed rail", async () => {
-    seed([]);
-    seedStore({
-      sidebarCollapsed: true,
-      cliUpdate: { available: true, current: "3.14.3-R1", latest: "3.14.4-R2", urgency: "must_download", notification: "", channel: "muse-stable" },
-    });
-    render(<Sidebar />);
-    const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "CLI update available — show sidebar" }));
-    expect(screen.getByRole("button", { name: /Muse CLI update available/ })).toBeInTheDocument();
-  });
 
-  it("reports an export through the app's own dialog rather than a native alert", async () => {
-    const alert = vi.spyOn(window, "alert").mockImplementation(() => {});
-    seed([thread("a", { title: "Alpha" })]);
-    render(<Sidebar />);
-    const user = userEvent.setup();
-
-    exporter.exportSession.mockResolvedValueOnce("/tmp/alpha.json");
-    await user.click(screen.getByRole("button", { name: "Actions for Alpha" }));
-    await user.click(await screen.findByRole("menuitem", { name: "Export" }));
-    await user.click(await screen.findByRole("menuitem", { name: /Export raw JSON/ }));
-    await waitFor(() => expect(useAppStore.getState().confirmDialog).toMatchObject({ title: "Session exported", body: "/tmp/alpha.json", info: true }));
-    act(() => useAppStore.getState().resolveConfirm(true));
-    expect(exporter.exportSession).toHaveBeenLastCalledWith(expect.objectContaining({ sessionId: "a", title: "Alpha", redacted: false, markdown: false }));
-
-    exporter.exportSession.mockResolvedValueOnce("/tmp/alpha.md");
-    await user.click(screen.getByRole("button", { name: "Actions for Alpha" }));
-    await user.click(await screen.findByRole("menuitem", { name: "Export" }));
-    await user.click(await screen.findByRole("menuitem", { name: /Export share-safe Markdown/ }));
-    await waitFor(() => expect(useAppStore.getState().confirmDialog).toMatchObject({ title: "Session exported", body: "/tmp/alpha.md", info: true }));
-    act(() => useAppStore.getState().resolveConfirm(true));
-    expect(exporter.exportSession).toHaveBeenLastCalledWith(expect.objectContaining({ sessionId: "a", title: "Alpha", redacted: true, markdown: true }));
-
-    exporter.exportSession.mockRejectedValueOnce(new Error("disk full"));
-    await user.click(screen.getByRole("button", { name: "Actions for Alpha" }));
-    await user.click(await screen.findByRole("menuitem", { name: "Export" }));
-    await user.click(await screen.findByRole("menuitem", { name: /Export share-safe JSON/ }));
-    await waitFor(() => expect(useAppStore.getState().confirmDialog?.title).toBe("Could not export this Muse thread"));
-    expect(useAppStore.getState().confirmDialog?.body).toContain("disk full");
-    expect(useAppStore.getState().confirmDialog?.info).toBe(true);
-    expect(alert).not.toHaveBeenCalled();
-    alert.mockRestore();
-  });
 });
 
 describe("collapsed sidebar", () => {

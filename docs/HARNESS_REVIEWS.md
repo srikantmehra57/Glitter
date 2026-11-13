@@ -9,7 +9,7 @@ acting on any recommendation here.
 The current forward roadmap is
 [HARNESS_UPGRADE_PLAN.md](HARNESS_UPGRADE_PLAN.md); its phase numbers do not
 refer to the old integration plan. At the time of this review, our built-in
-harness (`packages/glitter-bridge/src/harness`) was 1,469 lines. This is the
+harness (`packages/glitter-harness/src/harness`) was 1,469 lines. This is the
 index and the original combined ranking.
 
 | Review | Harness | License | Agent core | Core size vs. ours |

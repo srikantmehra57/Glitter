@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useSyncExternalStore, type CSSProperties } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { LoaderCircle } from "lucide-react";
-import { activeAgentId, activeConfig, applyTheme, bindBridgeEvents, currentThread, reconcileRunningThreads, useAppStore } from "./lib/store";
+import { activeConfig, applyTheme, bindBridgeEvents, currentThread, useAppStore } from "./lib/store";
 import { isTauri } from "./lib/format";
 import { defaultTier, isPeak, modelFor, tiersFor } from "./lib/effort";
 import { sidebarWidthFor, subscribeResize } from "./lib/reviewLayout";
@@ -10,11 +10,8 @@ import { ConfirmDialog } from "./components/ConfirmDialog";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { ImageViewer } from "./components/ImageViewer";
 import { Onboarding } from "./components/Onboarding";
-import { OutputModal } from "./components/OutputModal";
 import { Presence } from "./components/Presence";
-import { PreviewModal } from "./components/PreviewModal";
 import { SubagentModal } from "./components/SubagentModal";
-import { InitModal } from "./components/InitModal";
 import { TrustModal } from "./components/TrustModal";
 import { Sidebar } from "./components/Sidebar";
 import { ThreadView } from "./components/ThreadView";
@@ -178,19 +175,15 @@ export default function App() {
   const sidebarStyle = savedSidebarWidth == null ? undefined : { "--sidebar-width": `${sidebarWidthFor(viewport, false, savedSidebarWidth)}px` } as CSSProperties;
   const settingsOpen = useAppStore((s) => s.settingsOpen);
   const paletteOpen = useAppStore((s) => s.paletteOpen);
-  const previewSession = useAppStore((s) => s.previewSession);
-  const outputViewer = useAppStore((s) => s.outputViewer);
   const viewingChildAgent = useAppStore((s) => s.childSession);
   const trustDialog = useAppStore((s) => s.trustDialog);
   const confirmDialog = useAppStore((s) => s.confirmDialog);
-  const initDialog = useAppStore((s) => s.initDialog);
   const enterPreview = useAppStore((s) => s.enterPreview);
   const showBootPreview = import.meta.env.DEV && new URLSearchParams(window.location.search).has("boot");
   const showUsagePreview = import.meta.env.DEV && new URLSearchParams(window.location.search).get("usage") === "preview";
   const peak = useAppStore((s) => {
     const config = activeConfig(s);
-    const agentId = activeAgentId(s);
-    const model = s.modelsAgentId === agentId ? modelFor(s.models, config) : undefined;
+    const model = modelFor(s.models, config);
     const tiers = tiersFor(model);
     return isPeak(config.effort ?? defaultTier(model, tiers), tiers);
   });
@@ -200,8 +193,6 @@ export default function App() {
   useEffect(() => {
     const unbind = bindBridgeEvents();
     void hydrate();
-    // Clears a thread stuck on "Thinking" when the host finished its turn but the end was missed.
-    const reconcile = window.setInterval(() => void reconcileRunningThreads(), 30000);
     const media = window.matchMedia("(prefers-color-scheme: dark)");
     const updateTheme = () => {
       const state = useAppStore.getState();
@@ -222,7 +213,7 @@ export default function App() {
     window.addEventListener("online", online);
     window.addEventListener("offline", online);
     window.addEventListener("focus", onFocus);
-    return () => { window.clearInterval(reconcile); unbind(); media.removeEventListener("change", updateTheme); transparency.removeEventListener("change", updateTransparency); window.removeEventListener("online", online); window.removeEventListener("offline", online); window.removeEventListener("focus", onFocus); };
+    return () => { unbind(); media.removeEventListener("change", updateTheme); transparency.removeEventListener("change", updateTransparency); window.removeEventListener("online", online); window.removeEventListener("offline", online); window.removeEventListener("focus", onFocus); };
   }, [hydrate]);
 
   useEffect(() => {
@@ -240,7 +231,7 @@ export default function App() {
           </div>
           <div className="boot-copy">
             <h1>Preparing your workspace</h1>
-            <p>Restoring your workspaces and connecting to local agents.</p>
+            <p>Restoring your workspaces and starting the agent.</p>
           </div>
           <div className="boot-progress" aria-hidden="true"><span /></div>
           <div className="boot-status">
@@ -261,12 +252,9 @@ export default function App() {
         <ThreadView />
         {/* Each dialog stays mounted for one exit after it closes, so it can animate out. */}
         <Presence open={settingsOpen}><Suspense fallback={null}><SettingsModal /></Suspense></Presence>
-        <Presence open={Boolean(previewSession)}><PreviewModal /></Presence>
-        <Presence open={Boolean(outputViewer)}><OutputModal /></Presence>
         <Presence open={Boolean(viewingChildAgent)}><SubagentModal /></Presence>
         <Presence open={Boolean(trustDialog)}><TrustModal /></Presence>
         <Presence open={Boolean(confirmDialog)}><ConfirmDialog /></Presence>
-        <Presence open={Boolean(initDialog)}><InitModal /></Presence>
         <Onboarding />
         <Presence open={paletteOpen}><CommandPalette /></Presence>
         <ImageViewer />

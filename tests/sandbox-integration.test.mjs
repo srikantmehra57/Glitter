@@ -13,10 +13,10 @@ const outdir = join(temporary, 'bundle');
 await mkdir(outdir);
 await build({
   entryPoints: {
-    tools: resolve('packages/glitter-bridge/src/harness/tools.ts'),
-    mcp: resolve('packages/glitter-bridge/src/harness/mcp.ts'),
-    'mcp-config': resolve('packages/glitter-bridge/src/harness/mcp-config.ts'),
-    isolation: resolve('packages/glitter-bridge/src/isolation.ts'),
+    tools: resolve('packages/glitter-harness/src/harness/tools.ts'),
+    mcp: resolve('packages/glitter-harness/src/harness/mcp.ts'),
+    'mcp-config': resolve('packages/glitter-harness/src/harness/mcp-config.ts'),
+    isolation: resolve('packages/glitter-harness/src/isolation.ts'),
   },
   outdir,
   bundle: true,

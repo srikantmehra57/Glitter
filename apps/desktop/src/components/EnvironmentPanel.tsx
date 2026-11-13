@@ -49,9 +49,6 @@ export function EnvironmentPanel({ onCommitOrPush }: { onCommitOrPush: () => voi
     selectedWorkspaceId: state.selectedWorkspaceId,
     threads: state.threads,
     selectedSessionId: state.selectedSessionId,
-    mcpServers: state.mcpServers,
-    mcpLoading: state.mcpLoading,
-    mcpError: state.mcpError,
     harnessMcp: state.harnessMcp,
     harnessMcpConfig: state.harnessMcpConfig,
     harnessMcpLoading: state.harnessMcpLoading,
@@ -60,7 +57,6 @@ export function EnvironmentPanel({ onCommitOrPush }: { onCommitOrPush: () => voi
     harnessMcpConfigError: state.harnessMcpConfigError,
     browserState: state.browserState,
     git: state.git,
-    refreshMcpServers: state.refreshMcpServers,
     refreshHarnessMcp: state.refreshHarnessMcp,
     refreshHarnessMcpConfig: state.refreshHarnessMcpConfig,
     setSettingsOpen: state.setSettingsOpen,
@@ -71,17 +67,13 @@ export function EnvironmentPanel({ onCommitOrPush }: { onCommitOrPush: () => voi
   })));
   const workspace = activeWorkspace(s);
   const thread = currentThread(s);
-  const agentId = thread ? thread.agentId ?? "muse" : null;
   const sessionId = thread?.sessionId ?? null;
 
   useEffect(() => {
-    if (agentId === "harness" && sessionId) {
-      void s.refreshHarnessMcp(sessionId);
-      void s.refreshHarnessMcpConfig(sessionId);
-    } else if (agentId === "muse") {
-      void s.refreshMcpServers();
-    }
-  }, [agentId, sessionId, s.refreshHarnessMcp, s.refreshHarnessMcpConfig, s.refreshMcpServers]);
+    if (!sessionId) return;
+    void s.refreshHarnessMcp(sessionId);
+    void s.refreshHarnessMcpConfig(sessionId);
+  }, [sessionId, s.refreshHarnessMcp, s.refreshHarnessMcpConfig]);
 
   const context = thread?.context;
   const contextPercent = context?.windowTokens && context.usedTokens != null
@@ -99,14 +91,10 @@ export function EnvironmentPanel({ onCommitOrPush }: { onCommitOrPush: () => voi
     return rows;
   }, [thread?.items]);
 
-  const connectors = agentId === "harness" ? s.harnessMcpConfig?.servers ?? [] : agentId === "muse" ? s.mcpServers : [];
-  const connectorsLoading = agentId === "harness"
-    ? Boolean(s.harnessMcpLoading || s.harnessMcpConfigLoading)
-    : agentId === "muse" ? s.mcpLoading : false;
-  const connectorError = agentId === "harness"
-    ? s.harnessMcpConfigError ?? s.harnessMcpError ?? s.harnessMcpConfig?.error ?? s.harnessMcp?.error
-    : agentId === "muse" ? s.mcpError : null;
-  const connectorSummary = !agentId ? "No thread" : connectorsLoading && !connectors.length ? "Loading…" : connectorError ? "Needs attention" : connectors.length ? `${connectors.length} configured` : "None";
+  const connectors = thread ? s.harnessMcpConfig?.servers ?? [] : [];
+  const connectorsLoading = Boolean(thread && (s.harnessMcpLoading || s.harnessMcpConfigLoading));
+  const connectorError = thread ? s.harnessMcpConfigError ?? s.harnessMcpError ?? s.harnessMcpConfig?.error ?? s.harnessMcp?.error : null;
+  const connectorSummary = !thread ? "No thread" : connectorsLoading && !connectors.length ? "Loading…" : connectorError ? "Needs attention" : connectors.length ? `${connectors.length} configured` : "None";
   const server = localServer(s.browserState);
   const branch = s.git?.branch || thread?.hostBranch || "";
   const gitFiles = s.git?.files ?? [];
@@ -161,17 +149,17 @@ export function EnvironmentPanel({ onCommitOrPush }: { onCommitOrPush: () => voi
     <EnvironmentSection title="Connectors" summary={connectorSummary}>{() => <>
       {connectorError ? <p className="environment-error" role="alert">{connectorError}</p> : null}
       {connectors.map((connector) => {
-        const running = agentId === "harness" ? s.harnessMcp?.servers.find((item) => item.name === connector.name) : null;
-        const detail = "source" in connector ? `${connector.source === "workspace" ? "Workspace" : "Home"} · ${connector.transport}` : `${connector.transport}${connector.oauth ? " · OAuth" : ""}`;
+        const running = s.harnessMcp?.servers.find((item) => item.name === connector.name);
+        const detail = `${connector.source === "workspace" ? "Workspace" : "Home"} · ${connector.transport}`;
         return <div className="environment-row" key={connector.name}>
           <span className="environment-icon"><Plug size={15} aria-hidden="true" /></span>
           <span className="environment-primary">{connector.name}</span>
           <span className="environment-secondary" title={detail}>{running ? `${running.tools} tools` : detail}</span>
         </div>;
       })}
-      {!connectors.length && !connectorsLoading && !connectorError ? <p className="environment-empty">{agentId === "harness" || agentId === "muse" ? "No MCP connectors configured." : agentId ? "This agent does not expose MCP connectors." : "Open a thread to see its connectors."}</p> : null}
+      {!connectors.length && !connectorsLoading && !connectorError ? <p className="environment-empty">{thread ? "No MCP connectors configured." : "Open a thread to see its connectors."}</p> : null}
       {connectorsLoading && !connectors.length ? <p className="environment-empty">Loading connectors…</p> : null}
-      {agentId === "harness" || agentId === "muse" ? <div className="environment-card-actions"><button type="button" className="text-btn" onClick={() => s.setSettingsOpen(true, "Extensions")}>Manage connectors</button></div> : null}
+      {thread ? <div className="environment-card-actions"><button type="button" className="text-btn" onClick={() => s.setSettingsOpen(true, "Extensions")}>Manage connectors</button></div> : null}
     </>}</EnvironmentSection>
 
     <EnvironmentSection title="Outputs" defaultOpen>{() => <>

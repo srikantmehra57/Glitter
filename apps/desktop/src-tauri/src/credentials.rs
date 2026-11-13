@@ -6,11 +6,6 @@ static CREDENTIAL_LOCK: Mutex<()> = Mutex::new(());
 /// The keychain service every entry lives under: the bundle identifier.
 pub const SERVICE: &str = "com.glitter.desktop";
 
-#[cfg(target_os = "macos")]
-fn entry() -> Result<keyring::Entry, String> {
-    keyring::Entry::new(SERVICE, "muse-api-key").map_err(|_| "Could not access the system credential store".into())
-}
-
 /// Workspace grants live in the OS keyring — NOT in a file under AppData,
 /// where the store plugin (renderer-reachable, unscopable) could rewrite them.
 /// The renderer has no command that writes this entry; it only ever holds ids.
@@ -23,107 +18,6 @@ fn grants_entry() -> Result<keyring::Entry, String> {
     #[cfg(not(debug_assertions))]
     let account = "workspace-grants";
     keyring::Entry::new(SERVICE, &account).map_err(|_| "Could not access the system credential store".into())
-}
-
-/// ACP agent identity pins (path + digest per agent). The renderer can read
-/// them for display and confirm a drifted binary, but only the native side
-/// resolves and records paths — a confirm accepts the actual binary on disk,
-/// never a renderer-nominated string.
-#[cfg(target_os = "macos")]
-fn agent_pins_entry() -> Result<keyring::Entry, String> {
-    keyring::Entry::new(SERVICE, "agent-pins").map_err(|_| "Could not access the system credential store".into())
-}
-
-pub fn agent_pins_value() -> Result<Option<String>, String> {
-    let _guard = CREDENTIAL_LOCK.lock().map_err(|_| "Credential store lock failed")?;
-    #[cfg(target_os = "macos")]
-    match agent_pins_entry()?.get_password() {
-        Ok(value) => Ok(Some(value)),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(_) => Err("Could not read agent pins from the system credential store.".into()),
-    }
-    #[cfg(not(target_os = "macos"))]
-    Err("Secure credential storage is unavailable on this platform".into())
-}
-
-#[cfg(target_os = "macos")]
-fn acp_consent_entry() -> Result<keyring::Entry, String> {
-    keyring::Entry::new(SERVICE, "acp-isolation-consent").map_err(|_| "Could not access the system credential store".into())
-}
-
-/// Last consent value read from or written to the credential store. Only this
-/// process writes the entry, and every write goes through `acp_consent_store`
-/// (which updates the cache), so the cache cannot drift. The gate runs on every
-/// bridge request that names a third-party agent; without the cache each one
-/// paid a keyring round trip on the UI thread.
-static ACP_CONSENT: Mutex<Option<bool>> = Mutex::new(None);
-
-pub fn acp_consent_value() -> Result<bool, String> {
-    if let Some(known) = ACP_CONSENT.lock().ok().and_then(|cached| *cached) {
-        return Ok(known);
-    }
-    let _guard = CREDENTIAL_LOCK.lock().map_err(|_| "Credential store lock failed")?;
-    #[cfg(target_os = "macos")]
-    let read = match acp_consent_entry()?.get_password() {
-        Ok(value) => Ok(value == "1" || value.eq_ignore_ascii_case("true")),
-        Err(keyring::Error::NoEntry) => Ok(false),
-        Err(_) => Err("Could not read ACP isolation consent from the system credential store.".to_string()),
-    };
-    #[cfg(not(target_os = "macos"))]
-    let read: Result<bool, String> = Ok(false);
-    if let Ok(value) = &read {
-        if let Ok(mut cached) = ACP_CONSENT.lock() {
-            *cached = Some(*value);
-        }
-    }
-    read
-}
-
-pub fn acp_consent_store(consented: bool) -> Result<(), String> {
-    let _guard = CREDENTIAL_LOCK.lock().map_err(|_| "Credential store lock failed")?;
-    #[cfg(target_os = "macos")]
-    let written: Result<(), String> = {
-        let entry = acp_consent_entry()?;
-        if consented {
-            entry.set_password("1").map_err(|_| "Could not save ACP isolation consent.".into())
-        } else {
-            match entry.delete_credential() {
-                Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-                Err(_) => Err("Could not clear ACP isolation consent.".into()),
-            }
-        }
-    };
-    #[cfg(not(target_os = "macos"))]
-    let written: Result<(), String> = {
-        let _ = consented;
-        Err("Secure credential storage is unavailable on this platform".into())
-    };
-    if written.is_ok() {
-        if let Ok(mut cached) = ACP_CONSENT.lock() {
-            *cached = Some(consented);
-        }
-    }
-    written
-}
-
-#[tauri::command]
-pub async fn acp_isolation_consent_get() -> Result<bool, String> {
-    tauri::async_runtime::spawn_blocking(acp_consent_value).await.map_err(|_| "Credential store task failed".to_string())?
-}
-
-#[tauri::command]
-pub async fn acp_isolation_consent_set(consented: bool) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || acp_consent_store(consented)).await.map_err(|_| "Credential store task failed".to_string())?
-}
-
-pub fn agent_pins_store(raw: &str) -> Result<(), String> {
-    let _guard = CREDENTIAL_LOCK.lock().map_err(|_| "Credential store lock failed")?;
-    #[cfg(target_os = "macos")]
-    {
-        agent_pins_entry()?.set_password(raw).map_err(|_| "Could not save agent pins in the system credential store.".into())
-    }
-    #[cfg(not(target_os = "macos"))]
-    Err("Secure credential storage is unavailable on this platform".into())
 }
 
 pub fn grants_value() -> Result<Option<String>, String> {
@@ -146,65 +40,6 @@ pub fn grants_store(raw: &str) -> Result<(), String> {
     }
     #[cfg(not(target_os = "macos"))]
     Err("Secure credential storage is unavailable on this platform".into())
-}
-
-pub fn credential_value() -> Result<Option<String>, String> {
-    let _guard = CREDENTIAL_LOCK.lock().map_err(|_| "Credential store lock failed")?;
-    #[cfg(target_os = "macos")]
-    match entry()?.get_password() {
-        Ok(value) => Ok(Some(value)),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(_) => Err("Could not read the API key from the system credential store. Unlock it and try again.".into()),
-    }
-    #[cfg(not(target_os = "macos"))]
-    Err("Secure credential storage is unavailable on this platform".into())
-}
-
-#[tauri::command]
-pub async fn credential_get() -> Result<Option<String>, String> {
-    tauri::async_runtime::spawn_blocking(|| {
-        // The renderer only learns that a key exists. The native bridge injects
-        // the actual value into trusted Muse lifecycle requests.
-        credential_value().map(|value| value.map(|_| "••••••••".to_string()))
-    })
-    .await
-    .map_err(|_| "Credential store task failed".to_string())?
-}
-
-/// Real API keys are far smaller than this. A renderer-supplied blob of
-/// several MiB would sit in a keyring write while every key-dependent verb
-/// (`detect`/`status`/`startHost`/`suggest`) waits on `CREDENTIAL_LOCK`.
-const CREDENTIAL_VALUE_LIMIT: usize = 8 * 1024;
-
-fn check_credential_value(value: &str) -> Result<(), String> {
-    if value.len() > CREDENTIAL_VALUE_LIMIT {
-        return Err("That credential is too long to save (over 8 KiB).".into());
-    }
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn credential_set(value: String) -> Result<(), String> {
-    check_credential_value(&value)?;
-    tauri::async_runtime::spawn_blocking(move || {
-        let _guard = CREDENTIAL_LOCK.lock().map_err(|_| "Credential store lock failed")?;
-        #[cfg(target_os = "macos")]
-        {
-            let entry = entry()?;
-            if value.is_empty() {
-                match entry.delete_credential() {
-                    Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-                    Err(_) => Err("Could not remove the API key from the system credential store".into()),
-                }
-            } else {
-                entry.set_password(&value).map_err(|_| "Could not save the API key in the system credential store. Unlock it and try again.".into())
-            }
-        }
-        #[cfg(not(target_os = "macos"))]
-        Err("Secure credential storage is unavailable on this platform".into())
-    })
-    .await
-    .map_err(|_| "Credential store task failed".to_string())?
 }
 
 /// Model providers the built-in harness may hold a key for. The bridge's
@@ -560,6 +395,40 @@ trait Vault {
     fn delete(&self, service: &str, account: &str) -> Result<(), String>;
 }
 
+/// Preserve a legacy plaintext key without replacing an existing keychain item.
+#[cfg(any(target_os = "macos", test))]
+fn preserve_legacy_key(vault: &impl Vault, service: &str, value: &str) -> Result<(), String> {
+    if value.is_empty() || value.len() > 8 * 1024 {
+        return Err("The old API key could not be moved to the keychain.".into());
+    }
+    for account in ["muse-api-key", "muse-api-key-legacy"] {
+        match vault.get(service, account)? {
+            Some(existing) if existing == value => return Ok(()),
+            Some(_) => continue,
+            None => {
+                vault.set(service, account, value)?;
+                return if vault.get(service, account)?.as_deref() == Some(value) { Ok(()) } else { Err("The old API key could not be verified in the keychain.".into()) };
+            }
+        }
+    }
+    Err("The old API key could not be moved without replacing another keychain entry.".into())
+}
+
+/// One-time migration for settings written before provider keys used Keychain.
+#[tauri::command]
+pub async fn preserve_legacy_muse_key(value: String) -> Result<(), String> {
+    if value.is_empty() || value.len() > 8 * 1024 {
+        return Err("The old API key could not be moved to the keychain.".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = CREDENTIAL_LOCK.lock().map_err(|_| "Credential store lock failed")?;
+        #[cfg(target_os = "macos")]
+        { preserve_legacy_key(&Keychain, SERVICE, &value).map_err(|_| "The old API key could not be moved to the keychain.".into()) }
+        #[cfg(not(target_os = "macos"))]
+        { let _ = value; Err("Secure credential storage is unavailable on this platform".into()) }
+    }).await.map_err(|_| "Credential store task failed".to_string())?
+}
+
 /// Move every account from service `from` to `to`. A value already saved under
 /// `to` wins. The old entry is deleted only once the new one reads back
 /// intact, so a failure leaves it for the next launch. Returns the accounts
@@ -633,17 +502,6 @@ pub fn carry_over_legacy_entries() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn credential_set_refuses_values_over_8_kib() {
-        // The boundary is inclusive: exactly 8 KiB is a (generous) credential.
-        assert!(check_credential_value(&"k".repeat(CREDENTIAL_VALUE_LIMIT)).is_ok());
-        let over = check_credential_value(&"k".repeat(CREDENTIAL_VALUE_LIMIT + 1));
-        assert!(over.is_err());
-        assert!(over.unwrap_err().contains("8 KiB"));
-        // Empty stays legal: it clears the stored credential.
-        assert!(check_credential_value("").is_ok());
-    }
 
     #[test]
     fn provider_keys_bind_to_their_address_and_never_leave_as_text() {
@@ -831,5 +689,17 @@ mod tests {
         assert_eq!(vault.value("new", "muse-api-key").as_deref(), Some("current"), "a value saved by this build wins");
         assert_eq!(vault.value("old", "muse-api-key"), None);
         assert_eq!(vault.value("old", "agent-pins").as_deref(), Some("pins"), "a failed copy keeps the original for the next launch");
+    }
+
+    #[test]
+    fn old_plaintext_key_is_preserved_without_overwriting_existing_entries() {
+        let vault = MapVault::with(&[("new", "muse-api-key", "newer")]);
+        assert!(preserve_legacy_key(&vault, "new", "older").is_ok());
+        assert_eq!(vault.value("new", "muse-api-key").as_deref(), Some("newer"));
+        assert_eq!(vault.value("new", "muse-api-key-legacy").as_deref(), Some("older"));
+        assert!(preserve_legacy_key(&vault, "new", "older").is_ok(), "migration is idempotent");
+        assert!(preserve_legacy_key(&vault, "new", "another").is_err(), "never replace either existing key");
+        let locked = MapVault { broken: Some("muse-api-key"), ..MapVault::default() };
+        assert!(preserve_legacy_key(&locked, "new", "older").is_err());
     }
 }

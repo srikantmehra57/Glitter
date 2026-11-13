@@ -76,7 +76,7 @@ describe("CommandPalette", () => {
   });
 
   it("offers thread commands only where they apply", () => {
-    seedStore({ threads: [{ ...thread("s1", "/repo", "Fix login"), agentId: "opencode" }], enabledAgents: { opencode: true } });
+    seedStore({ threads: [{ ...thread("s1", "/repo", "Fix login"), agentId: "harness" }] });
     render(<CommandPalette />);
     expect(screen.getByRole("option", { name: "Rename thread" })).toBeInTheDocument();
     expect(screen.queryByRole("option", { name: "Fork thread" })).toBeNull();

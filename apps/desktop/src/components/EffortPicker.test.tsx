@@ -34,8 +34,7 @@ function seed(extra: Record<string, unknown> = {}) {
     threads: [thread({ config: { modelId: "muse-spark-1.3-contributor", effort: "xhigh", approvalMode: "promptUnmatched" } })],
     selectedSessionId: "s1",
     models: MOCK_MODELS,
-    modelsAgentId: "muse",
-    agents: [{ id: "muse", name: "Muse", protocol: "msp", found: true, path: "/usr/local/bin/muse", version: "1.3.0", verified: true, signIn: "", authenticated: true }],
+    agents: [{ id: "harness", name: "Harness", protocol: "native", found: true, path: null, version: null, verified: true, signIn: "", authenticated: true }],
     ready: true,
     ...extra,
   });
@@ -157,7 +156,7 @@ describe("EffortPicker", () => {
   });
 
   it("is visible and shows the default effort level for a model without effort levels", () => {
-    seed({ models: [{ modelId: "plain", isActive: true, reasoningEfforts: [], effortSource: "host" }], threads: [thread({ agentId: "grok", config: { agentId: "grok", modelId: "plain" } })], modelsAgentId: "grok", agents: [{ id: "grok", name: "Grok", protocol: "acp", found: true, path: "/bin/grok", version: "1", verified: true, signIn: "" }], enabledAgents: { grok: true } });
+    seed({ models: [{ modelId: "plain", isActive: true, reasoningEfforts: [], effortSource: "host" }], threads: [thread({ agentId: "harness", config: { agentId: "harness", modelId: "plain" } })] });
     render(<Composer />);
     expect(screen.getByRole("button", { name: /^Reasoning effort/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^Reasoning effort/ })).toHaveAccessibleName("Reasoning effort, High, model default");

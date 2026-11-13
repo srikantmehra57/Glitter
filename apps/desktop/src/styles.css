@@ -3059,7 +3059,6 @@ dialog[data-closing]:not([open]) {
 .hero .brand { display: flex; align-items: center; gap: 8px; margin-bottom: 18px; font-weight: 600; }
 .hero .brand img { width: 22px; height: 22px; }
 .hero { width: min(540px, calc(100vw - 48px)); padding: 32px; }
-/* A second way in (Muse) folds under the main action instead of competing with it. */
 .onboarding-alt { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); }
 .onboarding-alt summary { width: max-content; color: var(--secondary); font-size: var(--text-sm); font-weight: 500; cursor: pointer; user-select: none; transition: color var(--dur-1) var(--ease); }
 .onboarding-alt summary:hover { color: var(--ink); }

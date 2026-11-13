@@ -1,12 +1,12 @@
 import { useMemo, useState } from "react";
 import { describeError } from "../lib/errors";
-import { Bot, Check, CircleAlert, CircleSlash, FileText, GitBranch, GitCompareArrows, ImageIcon, LoaderCircle, Monitor, Pause, Pencil, Play, Plus, X } from "lucide-react";
+import { Bot, Check, CircleAlert, CircleSlash, FileText, GitBranch, GitCompareArrows, ImageIcon, LoaderCircle, Monitor } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { openPath } from "../lib/bridge";
 import { isTauri } from "../lib/format";
 import { activeWorkspace, currentThread, useAppStore } from "../lib/store";
 import { agentCounts, itemStatus } from "../lib/agent";
-import type { GoalState, TranscriptItem } from "../lib/types";
+import type { TranscriptItem } from "../lib/types";
 
 type MonitorSource =
   | { key: string; kind: "file"; name: string; path: string }
@@ -52,111 +52,6 @@ function SubagentMark({ status }: { status: Subagent["status"] }) {
 
 function fileName(path: string) {
   return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
-}
-
-/** Session-goal controls (`goal/*`): set/edit/pause/resume/clear with the settled block echoed back. */
-function GoalControls({ sessionId, goal }: { sessionId: string; goal: GoalState | null | undefined }) {
-  const controlGoal = useAppStore((s) => s.controlGoal);
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [driving, setDriving] = useState(false);
-  const run = (action: string, objective?: string) => {
-    setBusy(true);
-    setError(null);
-    setDriving(false);
-    void controlGoal(sessionId, action, objective)
-      .then((ack) => {
-        setEditing(false);
-        setDraft("");
-        if (ack.turnId) setDriving(true);
-      })
-      .catch((cause) => setError(describeError("Could not open that", cause)))
-      .finally(() => setBusy(false));
-  };
-  const paused = goal?.status === "paused";
-  return (
-    <div className="goal-controls">
-      {goal?.objective ? (
-        <>
-          <p title={goal.objective}>{goal.objective}</p>
-          <div className="monitor-task-meta">
-            {goal.status ? <span>{goal.status}</span> : null}
-            {goal.percentComplete != null ? <span>{goal.percentComplete}%</span> : null}
-            {driving ? <span>Driving turn started</span> : null}
-          </div>
-        </>
-      ) : (
-        <p className="monitor-empty">No goal set.</p>
-      )}
-      {editing ? (
-        <form
-          className="goal-compose"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (draft.trim()) run(goal?.objective ? "edit" : "set", draft.trim());
-          }}
-        >
-          <input type="text" value={draft} autoFocus disabled={busy} maxLength={100000} placeholder="Goal objective…" aria-label="Goal objective" onChange={(event) => setDraft(event.target.value)} />
-          <button type="submit" className="agent-btn emphasis" disabled={busy || !draft.trim()}>{goal?.objective ? "Save" : "Set"}</button>
-          <button type="button" className="agent-btn" disabled={busy} onClick={() => { setEditing(false); setDraft(""); }}>Cancel</button>
-        </form>
-      ) : (
-        <div className="agent-buttons" role="toolbar" aria-label="Goal controls">
-          {goal?.objective ? <button type="button" className="agent-btn" disabled={busy} onClick={() => run(paused ? "resume" : "pause")} title={paused ? "Resume the goal" : "Pause the goal"}>{paused ? <Play size={12} /> : <Pause size={12} />}{paused ? "Resume" : "Pause"}</button> : null}
-          {goal?.objective ? <button type="button" className="agent-btn" disabled={busy} onClick={() => { setDraft(goal.objective); setEditing(true); }} title="Edit the goal objective"><Pencil size={12} />Edit</button> : null}
-          {goal?.objective ? <button type="button" className="agent-btn" disabled={busy} onClick={() => run("clear")} title="Clear the goal"><X size={12} />Clear</button> : null}
-          {!goal?.objective ? <button type="button" className="agent-btn" disabled={busy} onClick={() => setEditing(true)} title="Set a goal"><Plus size={12} />Set goal</button> : null}
-        </div>
-      )}
-      {error ? <p className="monitor-error" role="alert">{error}</p> : null}
-    </div>
-  );
-}
-
-const LIVE_TASK = new Set(["inProgress", "running", "pending"]);
-
-/** Backgrounded tool tasks (`task/*`): stop one, or stop them all. */
-function BackgroundTasks() {
-  const thread = useAppStore(currentThread);
-  const controlTask = useAppStore((s) => s.controlTask);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const tasks = useMemo(
-    () => (thread?.items ?? []).filter((item) => item.background && LIVE_TASK.has(item.status) && (item.kind === "toolCall" || item.kind === "userShell")),
-    [thread?.items],
-  );
-  if (thread?.agentId) return null;
-  const run = (action: string, taskId?: string) => {
-    if (!thread) return;
-    setBusy(true);
-    setError(null);
-    void controlTask(thread.sessionId, action, taskId)
-      .catch((cause) => setError(describeError("Could not open that", cause)))
-      .finally(() => setBusy(false));
-  };
-  return (
-    <section className="monitor-section">
-      <div className="monitor-heading"><span>Background tasks</span><span className="monitor-count">{tasks.length}</span></div>
-      {tasks.map((item) => (
-        <div key={item.itemId} className="monitor-row task-row">
-          <span className="monitor-icon"><LoaderCircle size={14} className="spin" aria-label="Running in background" /></span>
-          <span className="monitor-copy">
-            <strong title={item.commandText || item.tool || "Task"}>{item.commandText || item.tool || "Task"}</strong>
-            {item.backgroundInitiator ? <small>Backgrounded by {item.backgroundInitiator}</small> : null}
-          </span>
-          <button type="button" className="agent-btn danger" disabled={busy} onClick={() => run("stop", item.itemId)} title="Stop this background task"><X size={12} />Stop</button>
-        </div>
-      ))}
-      {!tasks.length ? <p className="monitor-empty">Running tool tasks can move here.</p> : (
-        <div className="agent-buttons" role="toolbar" aria-label="Background task controls">
-          <button type="button" className="agent-btn danger" disabled={busy} onClick={() => run("stopAll")} title="Stop every background task"><X size={12} />Stop all</button>
-        </div>
-      )}
-      {error ? <p className="monitor-error" role="alert">{error}</p> : null}
-    </section>
-  );
 }
 
 /** A line count; a zero recedes instead of drawing the eye in red or green. */
@@ -231,11 +126,9 @@ export function TaskMonitor() {
             <span>{thread.status === "running" ? thread.activity === "composing" ? "Writing a reply" : thread.goal?.currentWork || "Working" : thread.status === "error" ? "Needs attention" : "Idle"}</span>
             {contextPercent != null ? <span>{contextPercent}% context</span> : null}
           </div>
-          {thread.agentId ? (thread.goal?.objective ? <p>{thread.goal.objective}</p> : null) : <GoalControls sessionId={thread.sessionId} goal={thread.goal} />}
+          {thread.goal?.objective ? <p>{thread.goal.objective}</p> : null}
         </div> : <p className="monitor-empty">Select a thread to inspect its task.</p>}
       </section>
-
-      <BackgroundTasks />
 
       <section className="monitor-section">
         <div className="monitor-heading"><span>Subagents</span><span className="monitor-count" title={`${activeSubagents} running`}>{activeSubagents ? `${activeSubagents} running` : subagents.length}</span></div>

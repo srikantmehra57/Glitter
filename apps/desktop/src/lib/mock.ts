@@ -90,7 +90,7 @@ const inspectItems: TranscriptItem[] = [
     kind: "agentMessage",
     status: "completed",
     turnId: "turn-1",
-    text: "Implemented the command-center shell: sidebar threads, an agent timeline, and a per-file review dock.\n\n## What changed\n\nThe layout now follows a **workspace → thread → run** model. `App.tsx` only composes the shell; state lives in `lib/store.ts` and streams from the bridge over NDJSON.\n\n### Layers\n\n- **UI** (`apps/desktop/src/components/`) — `Sidebar.tsx`, `ThreadView.tsx`, `AgentTimeline.tsx`, `Composer.tsx`, and `ReviewDock.tsx`. Each renders store state; none talk to the bridge directly.\n- **State** (`lib/store.ts`) — a zustand store holding workspaces, threads, the composer draft, and git status. Selectors like `currentThread` keep renders scoped.\n- **Bridge** (`packages/glitter-bridge/`) — hosts `@muse-code/sdk` over `muse serve` stdio and forwards session events as NDJSON lines.\n\n### Data flow\n\n1. The composer calls `sendPrompt`, which writes a `userMessage` item and opens a turn.\n2. Bridge events fold into `thread.items` — tool calls, reasoning, and agent messages stream in order.\n3. `AgentTimeline` groups items into runs and renders steps, plans, and the final reply.\n\n```ts\nconst thread = useAppStore(currentThread);\nconst send = useAppStore((s) => s.sendPrompt);\nawait send({ resetTaskState: true });\n```\n\n| Surface | File | Renders |\n|---|---|---|\n| Timeline | `AgentTimeline.tsx` | Steps, plans, receipts |\n| Composer | `Composer.tsx` | Draft, attachments, effort |\n| Review | `ReviewDock.tsx` | Changed files, diffs |\n\n> Threads persist across launches, and an interrupted run is labeled rather than silently dropped.\n\nNext up:\n\n- [ ] Streaming diffs in the review dock\n- [ ] Plan pinning during long runs",
+    text: "Implemented the command-center shell: sidebar threads, an agent timeline, and a per-file review dock.\n\n## What changed\n\nThe layout now follows a **workspace → thread → run** model. `App.tsx` only composes the shell; state lives in `lib/store.ts` and streams from the bridge over NDJSON.\n\n### Layers\n\n- **UI** (`apps/desktop/src/components/`) — `Sidebar.tsx`, `ThreadView.tsx`, `AgentTimeline.tsx`, `Composer.tsx`, and `ReviewDock.tsx`. Each renders store state; none talk to the bridge directly.\n- **State** (`lib/store.ts`) — a zustand store holding workspaces, threads, the composer draft, and git status. Selectors like `currentThread` keep renders scoped.\n- **Bridge** (`packages/glitter-harness/`) — runs the built-in Harness and forwards session events as NDJSON lines.\n\n### Data flow\n\n1. The composer calls `sendPrompt`, which writes a `userMessage` item and opens a turn.\n2. Bridge events fold into `thread.items` — tool calls, reasoning, and agent messages stream in order.\n3. `AgentTimeline` groups items into runs and renders steps, plans, and the final reply.\n\n```ts\nconst thread = useAppStore(currentThread);\nconst send = useAppStore((s) => s.sendPrompt);\nawait send({ resetTaskState: true });\n```\n\n| Surface | File | Renders |\n|---|---|---|\n| Timeline | `AgentTimeline.tsx` | Steps, plans, receipts |\n| Composer | `Composer.tsx` | Draft, attachments, effort |\n| Review | `ReviewDock.tsx` | Changed files, diffs |\n\n> Threads persist across launches, and an interrupted run is labeled rather than silently dropped.\n\nNext up:\n\n- [ ] Streaming diffs in the review dock\n- [ ] Plan pinning during long runs",
   },
 ];
 
@@ -110,11 +110,13 @@ export const MOCK_THREADS: Thread[] = [
     skills: [
       { selector: "review", displayName: "Review", description: "Review the working tree", source: "user" },
       { selector: "plan", displayName: "Plan", description: "Plan before coding", source: "user" },
+      // A skill that ships its own logo (`agents/openai.yaml` → `icon_large`).
+      { selector: "ship-check", description: "Check a deploy before it goes out", source: "user", icon: `data:image/svg+xml;base64,${btoa('<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96"><rect width="96" height="96" rx="22" fill="#3B2F8F"/><path d="M48 20 74 70H22z" fill="none" stroke="#fff" stroke-width="7" stroke-linejoin="round"/></svg>')}` },
     ],
     plan: [
       { id: "p1", text: "Inspect the shell", status: "completed" },
       { id: "p2", text: "Introduce the sidebar and review inspector", status: "completed" },
-      { id: "p3", text: "Wire Muse sessions", status: "completed" },
+      { id: "p3", text: "Wire agent sessions", status: "completed" },
     ],
     goal: { objective: "Ship a desktop command center", currentWork: "Reviewing the inspector", nextWork: "Persist threads" },
     context: { usedTokens: 18400, windowTokens: 128000, pressure: "ok" },
@@ -125,7 +127,7 @@ export const MOCK_THREADS: Thread[] = [
   {
     sessionId: "preview-2",
     workspacePath: "/Users/you/Glitter",
-    title: "Wire muse serve",
+    title: "Stream agent events",
     updatedAt: new Date(Date.now() - 3600_000).toISOString(),
     status: "running",
     unread: true,
@@ -136,28 +138,28 @@ export const MOCK_THREADS: Thread[] = [
       sessionId: "preview-2",
       turnId: "turn-live",
       toolName: "bash",
-      rawArgs: '{"command":"muse serve --workspace ."}',
+      rawArgs: '{"command":"npm run typecheck"}',
       availableChoices: [
         { choiceId: "allow-once", label: "Allow once", decision: "approved", scope: "once" },
         { choiceId: "allow-session", label: "Allow this command in this thread", decision: "approved", scope: "session", scopeLabel: "This exact command" },
-        { choiceId: "allow-session-prefix", label: "Allow `muse serve …` in this thread", decision: "approved", scope: "session", scopeLabel: "muse serve …" },
-        { choiceId: "allow-session-program", label: "Allow every `muse` command in this thread", decision: "approved", scope: "session", scopeLabel: "Any muse command" },
+        { choiceId: "allow-session-prefix", label: "Allow `npm run …` in this thread", decision: "approved", scope: "session", scopeLabel: "npm run …" },
+        { choiceId: "allow-session-program", label: "Allow every `npm` command in this thread", decision: "approved", scope: "session", scopeLabel: "Any npm command" },
         { choiceId: "deny", label: "Deny", decision: "denied", scope: "once" },
       ],
     },
     plan: [
-      { id: "s1", text: "Start muse serve", status: "completed" },
+      { id: "s1", text: "Open the agent session", status: "completed" },
       { id: "s2", text: "Fold live item events", status: "inProgress", activeForm: "Folding live item events" },
       { id: "s3", text: "Restore session facts", status: "pending" },
     ],
-    goal: { objective: "Stream Muse turns into the thread", currentWork: "Opening the workspace session", nextWork: "Subscribe to item events" },
+    goal: { objective: "Stream agent turns into the thread", currentWork: "Opening the workspace session", nextWork: "Subscribe to item events" },
     items: [
       {
         itemId: "u2",
         kind: "userMessage",
         status: "completed",
         turnId: "turn-live",
-        text: "Spawn muse serve and stream turn items into the thread.",
+        text: "Stream agent turn items into the thread.",
       },
       {
         itemId: "r2",
@@ -172,7 +174,7 @@ export const MOCK_THREADS: Thread[] = [
         status: "completed",
         turnId: "turn-live",
         tool: "read_file",
-        args: '{"path":"packages/glitter-bridge/src/host.ts"}',
+        args: '{"path":"packages/glitter-harness/src/harness/host.ts"}',
         durationMs: 90,
         visibleOutput: "export async function startHost() { … }",
       },
@@ -227,8 +229,8 @@ export const MOCK_THREADS: Thread[] = [
         status: "inProgress",
         turnId: "turn-live",
         tool: "bash",
-        commandText: "muse serve --workspace .",
-        args: '{"command":"muse serve --workspace ."}',
+        commandText: "npm run typecheck",
+        args: '{"command":"npm run typecheck"}',
         visibleOutput: "listening on 127.0.0.1…",
       },
     ],
@@ -270,7 +272,7 @@ export const MOCK_THREADS: Thread[] = [
         args: '{"command":"npm test tests/auth.test.mjs"}',
         exitCode: 1,
         durationMs: 1300,
-        failureReason: "Test file not found. The run stopped when Muse disconnected.",
+        failureReason: "Test file not found. The run stopped when the agent disconnected.",
       },
     ],
   },
@@ -384,8 +386,6 @@ export const MOCK_THREADS: Thread[] = [
     ],
   },
   {
-    // The preview rewrites the last demo thread as Grok, so another installed
-    // agent stays represented while Orchestrator keeps its Harness thread.
     sessionId: "preview-5",
     workspacePath: "/Users/you/Glitter",
     title: "Tighten the reducer",
@@ -393,20 +393,20 @@ export const MOCK_THREADS: Thread[] = [
     status: "idle",
     unread: false,
     lastOutcome: "completed",
-    lastTurnId: "turn-grok",
+    lastTurnId: "turn-reducer",
     items: [
       {
-        itemId: "grok-user",
+        itemId: "reducer-user",
         kind: "userMessage",
         status: "completed",
-        turnId: "turn-grok",
+        turnId: "turn-reducer",
         text: "Tighten the reducer without changing behaviour.",
       },
       {
-        itemId: "grok-answer",
+        itemId: "reducer-answer",
         kind: "agentMessage",
         status: "completed",
-        turnId: "turn-grok",
+        turnId: "turn-reducer",
         text: "The reducer now derives the next state in one pass and keeps every branch identical.",
       },
     ],
@@ -435,7 +435,7 @@ export const MOCK_GIT: GitSnapshot = {
   files: [
     { path: "apps/desktop/src/App.tsx", status: " M", added: 24, removed: 6 },
     { path: "apps/desktop/src/styles.css", status: "M ", added: 180, removed: 0 },
-    { path: "packages/glitter-bridge/src/host.ts", status: "M ", added: 96, removed: 0 },
+    { path: "packages/glitter-harness/src/harness/host.ts", status: "M ", added: 96, removed: 0 },
     { path: "docs/review-plan.md", status: "??", added: 4, removed: 0 },
     { path: "dist/bundle.bin", status: "??", added: 0, removed: 0, previewSkipped: "binary" },
   ],
@@ -445,7 +445,7 @@ export const MOCK_GIT: GitSnapshot = {
 @@ -1,6 +1,18 @@
  export function App() {
 -  const splash = buildShortMessage();
--  return <div>Muse</div>
+-  return <div>Glitter</div>
 -}
 +  const splash = buildLaunchMessage({ width: window.innerWidth, density: "comfortable", announceReviewPane: true, fallbackCopy: "Changes dock ready" });
 +  return (
@@ -476,7 +476,7 @@ new file mode 100644
 };
 
 /** Demo file index: the changed files from `MOCK_GIT` plus a few neighbours. */
-export const MOCK_FILES = ["README.md", "apps/desktop/src/App.tsx", "apps/desktop/src/styles.css", "apps/desktop/src/lib/store.ts", "apps/desktop/src/components/Composer.tsx", "package.json", "packages/glitter-bridge/src/host.ts", "packages/glitter-bridge/src/index.ts"];
+export const MOCK_FILES = ["README.md", "apps/desktop/src/App.tsx", "apps/desktop/src/styles.css", "apps/desktop/src/lib/store.ts", "apps/desktop/src/components/Composer.tsx", "package.json", "packages/glitter-harness/src/harness/host.ts", "packages/glitter-harness/src/index.ts"];
 
 /** Demo file contents for the viewer; nothing is read from disk. */
 export function mockWorkspaceFile(path: string): WorkspaceFile {
@@ -503,8 +503,8 @@ export function mockGitReview(request: GitReviewRequest): GitReview {
   }
   const patch = (path: string, before: string, after: string) => `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -1 +1 @@\n-${before}\n+${after}\n`;
   if (request.scope === "staged") return {
-    files: [{ path: "apps/desktop/src/styles.css", status: "M", added: 1, removed: 1 }, { path: "packages/glitter-bridge/src/host.ts", status: "M", added: 1, removed: 1 }],
-    diff: patch("apps/desktop/src/styles.css", ".surface { color: var(--ink); }", ".surface { color: var(--ink); background: var(--surface-2); }") + patch("packages/glitter-bridge/src/host.ts", "const history = [];", "const history = opening.items;"), truncated: false,
+    files: [{ path: "apps/desktop/src/styles.css", status: "M", added: 1, removed: 1 }, { path: "packages/glitter-harness/src/harness/host.ts", status: "M", added: 1, removed: 1 }],
+    diff: patch("apps/desktop/src/styles.css", ".surface { color: var(--ink); }", ".surface { color: var(--ink); background: var(--surface-2); }") + patch("packages/glitter-harness/src/harness/host.ts", "const history = [];", "const history = opening.items;"), truncated: false,
   };
   if (request.scope === "lastTurn") {
     const snapshot = Object.values(MOCK_THREADS.find((thread) => thread.sessionId === request.sessionId)?.snapshots ?? {}).find((item) => item.snapshotId === request.snapshotId);
@@ -515,72 +515,22 @@ export function mockGitReview(request: GitReviewRequest): GitReview {
   return { files: request.base === "HEAD" ? [] : [{ path: "src/review.ts", status: "M", added: 1, removed: 1 }], diff: request.base === "HEAD" ? "" : patch("src/review.ts", "export const scope = 'all';", "export const scope = 'branch';"), truncated: false, baseCommit: "1111111111111111111111111111111111111111", headCommit: "2222222222222222222222222222222222222222" };
 }
 
-export const MOCK_MODELS: Model[] = [
-  { modelId: "muse-spark-1.3", displayLabel: "muse-spark-1.3", isActive: true, contextLimit: 1007997, cost: { input: "1.25", output: "4.25", currency: "USD" }, reasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh", "max"], defaultReasoningEffort: "high", effortSource: "vocabulary" },
-  { modelId: "muse-spark-1.3-contributor", displayLabel: "muse-spark-1.3-contributor", isDefault: true, contextLimit: 1007997, cost: { input: "0.10", output: "0.20", currency: "USD" }, description: "Discounted tokens: your content, including inter-session messages, may be used for product improvement.", reasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh", "max"], defaultReasoningEffort: "high", effortSource: "vocabulary" },
-  { modelId: "muse-spark-1.2", displayLabel: "muse-spark-1.2", isActive: false, contextLimit: 1007997, cost: { input: "1.25", output: "4.25", currency: "USD" }, reasoningEfforts: ["low", "medium", "high", "max"], defaultReasoningEffort: "medium", effortSource: "host" },
-];
-
 export const MOCK_AGENTS: AgentInfo[] = [
   { id: "harness", name: "Harness", protocol: "native", found: true, path: null, version: null, verified: true, signIn: "Add an API key for a model provider in Settings → Providers.", authenticated: true },
-  { id: "muse", name: "Muse", protocol: "msp", found: true, path: "/usr/local/bin/muse", version: "1.3.0", verified: true, signIn: "", authenticated: true },
-  { id: "opencode", name: "OpenCode", protocol: "acp", found: true, path: "/opt/homebrew/bin/opencode", version: "2.0.25", verified: true, signIn: "" },
-  { id: "grok", name: "Grok", protocol: "acp", found: true, path: "~/.grok/bin/grok", version: "1.0.52", verified: true, signIn: "" },
-  { id: "gemini", name: "Gemini CLI", protocol: "acp", found: false, path: null, version: null, verified: false, signIn: "" },
-  { id: "qwen", name: "Qwen Code", protocol: "acp", found: false, path: null, version: null, verified: false, signIn: "" },
-  { id: "goose", name: "Goose", protocol: "acp", found: false, path: null, version: null, verified: false, signIn: "" },
-  { id: "cline", name: "Cline CLI", protocol: "acp", found: true, path: "/opt/homebrew/bin/cline", version: "3.0.73", verified: false, signIn: "" },
 ];
 
-const zen = (id: string, name: string, input: string, output: string, efforts: Model["reasoningEfforts"] = [], context = 200000): Model =>
-  ({ modelId: `opencode/${id}`, displayLabel: name, providerId: "opencode", contextLimit: context, cost: { input, output, currency: "USD" }, description: input === "0" && output === "0" ? "Free" : null, reasoningEfforts: efforts, effortSource: "host" });
-
-export const MOCK_AGENT_MODELS: Record<string, Model[]> = {
-  harness: [
-    { modelId: "anthropic/claude-sonnet-5", displayLabel: "Claude Sonnet 5", providerId: "anthropic", description: "Anthropic", contextLimit: 200000, reasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"], defaultReasoningEffort: "medium", effortSource: "host", isDefault: true },
-    { modelId: "anthropic/claude-haiku-4-5", displayLabel: "Claude Haiku 4.5", providerId: "anthropic", description: "Anthropic", contextLimit: 200000, reasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"], defaultReasoningEffort: "medium", effortSource: "host" },
-    { modelId: "openai/gpt-5.5", displayLabel: "gpt-5.5", providerId: "openai", description: "OpenAI", contextLimit: 400000, reasoningEfforts: ["minimal", "low", "medium", "high"], defaultReasoningEffort: "medium", effortSource: "host" },
-    { modelId: "nvidia/moonshotai/kimi-k2.6", displayLabel: "moonshotai/kimi-k2.6", providerId: "nvidia", description: "NVIDIA NIM", contextLimit: null, reasoningEfforts: ["none", "high"], defaultReasoningEffort: "high", effortSource: "host" },
-    { modelId: "nvidia/openai/gpt-oss-120b", displayLabel: "openai/gpt-oss-120b", providerId: "nvidia", description: "NVIDIA NIM", contextLimit: null, reasoningEfforts: ["low", "medium", "high"], defaultReasoningEffort: "medium", effortSource: "host" },
-    { modelId: "cline/anthropic/claude-sonnet-5.5", displayLabel: "anthropic/claude-sonnet-5.5", providerId: "cline", description: "Cline API", contextLimit: 200000, reasoningEfforts: ["none", "low", "medium", "high", "xhigh"], defaultReasoningEffort: "medium", effortSource: "host" },
-    { modelId: "kilo/anthropic/claude-sonnet-4.6", displayLabel: "anthropic/claude-sonnet-4.6", providerId: "kilo", description: "Kilo API", contextLimit: 200000, reasoningEfforts: ["none", "low", "medium", "high", "xhigh"], defaultReasoningEffort: "medium", effortSource: "host" },
-    { modelId: "ollama/qwen3-coder", displayLabel: "qwen3-coder", providerId: "ollama", description: "Ollama", contextLimit: null, reasoningEfforts: [], effortSource: "host" },
-  ],
-  opencode: [
-    zen("claude-opus-5", "Claude Opus 5", "5", "25", ["low", "medium", "high", "xhigh", "max"], 1000000),
-    zen("claude-sonnet-5", "Claude Sonnet 5", "3", "15", ["low", "medium", "high", "xhigh", "max"], 1000000),
-    zen("claude-haiku-4-5", "Claude Haiku 4.5", "1", "5", ["high", "max"]),
-    zen("gpt-5.5", "GPT-5.5", "1.25", "10", ["low", "medium", "high", "xhigh"], 400000),
-    zen("gemini-3.5-flash", "Gemini 3.5 Flash", "0.3", "2.5", ["low", "medium", "high"], 1000000),
-    zen("big-pickle", "Big Pickle", "0", "0"),
-    zen("mimo-v2.5-free", "MiMo V2.5 (free)", "0", "0"),
-    zen("nemotron-3.5-lightning-free", "Nemotron 3.5 Lightning (free)", "0", "0"),
-    zen("muse-spark-1.3-contributor-free", "Muse Spark 1.3 Contributor (free)", "0", "0"),
-    zen("glm-5.3", "GLM-5.3", "0.6", "2.2", [], 200000),
-    { modelId: "openrouter/qwen/qwen3.8-27b:free", displayLabel: "Qwen3.8 27B (free)", providerId: "openrouter", reasoningEfforts: [], effortSource: "host", description: "Free" },
-  ],
-  cline: [
-    ...[
-      ["nvidia/nemotron-3.5-super", "Nemotron 3.5 Super", "NVIDIA’s latest mixture-of-experts reasoning model", true],
-      ["upstage/solar-mini4", "Solar Mini 4", "Compact 35-billion parameter model", true],
-      ["reflection/beam-1.0-501b-a23b", "Beam", null, true],
-      ["nvidia/nemotron-3.5-lightning", "Nemotron 3.5 Lightning", null, true],
-      ["poolside/laguna-s-2.1", "Laguna S 2.1", null, true],
-      ["anthropic/claude-haiku-5.5", "Claude Haiku 5.5", null, false],
-      ["anthropic/claude-sonnet-5.5", "Claude Sonnet 5.5", null, false],
-      ["openai/gpt-6.1-sol", "GPT-6.1 Sol", null, false],
-      ["google/gemini-4-argon", "Gemini 4 Argon", null, false],
-      ["z-ai/glm-5.3-prime", "GLM 5.3 Prime", null, false],
-      ["meta/muse-spark-open", "Muse Spark Open", null, false],
-    ].map(([modelId, displayLabel, description, free]): Model => ({ modelId: modelId as string, displayLabel: displayLabel as string, providerId: (modelId as string).split("/")[0], description: description as string | null, free: free as boolean, reasoningEfforts: ["none", "low", "medium", "high", "xhigh"], defaultReasoningEffort: "medium", effortSource: "host" })),
-  ],
-  grok: [
-    { modelId: "grok-4.7", displayLabel: "Grok 4.7", providerId: "grok", contextLimit: 256000, isDefault: true, reasoningEfforts: ["low", "medium", "high", "xhigh"], defaultReasoningEffort: "high", effortSource: "host" },
-    { modelId: "grok-4.7-build-fast", displayLabel: "Grok 4.7 Fast", providerId: "grok", contextLimit: 256000, description: "Fast variant. 2x the price.", reasoningEfforts: ["low", "medium", "high", "xhigh"], defaultReasoningEffort: "high", effortSource: "host" },
-    { modelId: "grok-4.6", displayLabel: "Grok 4.6", providerId: "grok", contextLimit: 256000, reasoningEfforts: ["low", "medium", "high", "xhigh"], defaultReasoningEffort: "high", effortSource: "host" },
-    { modelId: "grok-4.5", displayLabel: "Grok 4.5", providerId: "grok", contextLimit: 256000, reasoningEfforts: ["low", "medium", "high"], defaultReasoningEffort: "high", effortSource: "host" },
-  ],
-};
+/** The preview's Harness catalog: models from several providers, as the real catalog lists them. */
+export const MOCK_MODELS: Model[] = [
+  { modelId: "anthropic/claude-sonnet-5", displayLabel: "Claude Sonnet 5", providerId: "anthropic", description: "Anthropic", contextLimit: 200000, reasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"], defaultReasoningEffort: "medium", effortSource: "host", isDefault: true },
+  { modelId: "anthropic/claude-haiku-4-5", displayLabel: "Claude Haiku 4.5", providerId: "anthropic", description: "Anthropic", contextLimit: 200000, reasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"], defaultReasoningEffort: "medium", effortSource: "host" },
+  { modelId: "openai/gpt-5.5", displayLabel: "gpt-5.5", providerId: "openai", description: "OpenAI", contextLimit: 400000, reasoningEfforts: ["minimal", "low", "medium", "high"], defaultReasoningEffort: "medium", effortSource: "host" },
+  { modelId: "nvidia/moonshotai/kimi-k2.6", displayLabel: "moonshotai/kimi-k2.6", providerId: "nvidia", description: "NVIDIA NIM", contextLimit: null, reasoningEfforts: ["none", "high"], defaultReasoningEffort: "high", effortSource: "host" },
+  { modelId: "nvidia/openai/gpt-oss-120b", displayLabel: "openai/gpt-oss-120b", providerId: "nvidia", description: "NVIDIA NIM", contextLimit: null, reasoningEfforts: ["low", "medium", "high"], defaultReasoningEffort: "medium", effortSource: "host" },
+  { modelId: "cline/anthropic/claude-sonnet-5.5", displayLabel: "anthropic/claude-sonnet-5.5", providerId: "cline", description: "Cline API", contextLimit: 200000, reasoningEfforts: ["none", "low", "medium", "high", "xhigh"], defaultReasoningEffort: "medium", effortSource: "host" },
+  { modelId: "kilo/anthropic/claude-sonnet-4.6", displayLabel: "anthropic/claude-sonnet-4.6", providerId: "kilo", description: "Kilo API", contextLimit: 200000, reasoningEfforts: ["none", "low", "medium", "high", "xhigh"], defaultReasoningEffort: "medium", effortSource: "host" },
+  { modelId: "xai/grok-4.7", displayLabel: "grok-4.7", providerId: "xai", description: "xAI", contextLimit: 256000, reasoningEfforts: ["low", "medium", "high"], defaultReasoningEffort: "high", effortSource: "host" },
+  { modelId: "ollama/qwen3-coder", displayLabel: "qwen3-coder", providerId: "ollama", description: "Ollama", contextLimit: null, reasoningEfforts: [], effortSource: "host" },
+];
 
 /** The preview's usage record: two weeks of turns and a year of daily totals, the same on every load. */
 export function mockUsageLedger(at = Date.now()): UsageLedger {
@@ -588,10 +538,10 @@ export function mockUsageLedger(at = Date.now()): UsageLedger {
   const mixes: Array<Pick<UsageTurn, "agentId" | "providerId" | "modelId"> & { input: number; output: number; cached: number }> = [
     { agentId: "harness", providerId: "anthropic", modelId: "anthropic/claude-sonnet-5", input: 46_000, output: 3_800, cached: 0.7 },
     { agentId: "harness", providerId: "openai", modelId: "openai/gpt-5.5", input: 31_000, output: 2_600, cached: 0.4 },
-    { agentId: "muse", providerId: "meta", modelId: "muse-spark-1.3-contributor", input: 28_000, output: 2_900, cached: 0 },
+    { agentId: "harness", providerId: "deepseek", modelId: "deepseek/deepseek-chat", input: 28_000, output: 2_900, cached: 0.2 },
     { agentId: "harness", providerId: "anthropic", modelId: "anthropic/claude-haiku-4-5", input: 18_000, output: 1_400, cached: 0.6 },
-    { agentId: "grok", providerId: "xai", modelId: "grok-4.7", input: 22_000, output: 2_100, cached: 0 },
-    { agentId: "opencode", providerId: "opencode", modelId: "opencode/big-pickle", input: 15_000, output: 1_500, cached: 0 },
+    { agentId: "harness", providerId: "xai", modelId: "xai/grok-4.7", input: 22_000, output: 2_100, cached: 0 },
+    { agentId: "harness", providerId: "ollama", modelId: "ollama/qwen3-coder", input: 15_000, output: 1_500, cached: 0 },
   ];
   // Earlier entries come up more often, so the breakdown has a clear order.
   const weights = [6, 4, 4, 2, 2, 1];
@@ -617,7 +567,7 @@ export function mockUsageLedger(at = Date.now()): UsageLedger {
       const scale = 0.45 + noise(n + 5) * 1.3;
       const used: Record<string, number> = {};
       for (let tool = 0; tool < 1 + Math.floor(noise(n + 9) * 4); tool += 1) used[tools[(n + tool) % tools.length]] = 1 + Math.floor(noise(n + tool) * 3);
-      const entry: UsageTurn = { key: `preview:${n}`, at: when, agentId: mix.agentId, providerId: mix.providerId, modelId: mix.modelId, effort: efforts[n % efforts.length], inputTokens: Math.round(mix.input * scale), cachedTokens: Math.round(mix.input * scale * mix.cached), outputTokens: Math.round(mix.output * scale), estimated: false, durationMs: Math.round((40 + noise(n + 11) * 900) * 1000), threadId: `preview-thread-${n % 9}`, workspace: n % 3 ? "/Users/you/code/muse" : "/Users/you/code/site", tools: used };
+      const entry: UsageTurn = { key: `preview:${n}`, at: when, agentId: mix.agentId, providerId: mix.providerId, modelId: mix.modelId, effort: efforts[n % efforts.length], inputTokens: Math.round(mix.input * scale), cachedTokens: Math.round(mix.input * scale * mix.cached), outputTokens: Math.round(mix.output * scale), estimated: false, durationMs: Math.round((40 + noise(n + 11) * 900) * 1000), threadId: `preview-thread-${n % 9}`, workspace: n % 3 ? "/Users/you/code/app" : "/Users/you/code/site", tools: used };
       // Only the Harness reports its own calls, so only its turns carry a trajectory.
       if (entry.agentId === "harness") {
         // Preview routes cover every shape, so route labels and the by-role split
@@ -736,7 +686,9 @@ const MOCK_REPOS: Record<string, MockRepo> = {
   },
 };
 
-let mockLibrary: PluginLibrary = { plugins: [], marketplaces: [], pluginsRoot: "~/.glitter/plugins", problems: [] };
+let mockLibrary: PluginLibrary = { plugins: [], marketplaces: [], pluginsRoot: "~/.glitter/plugins", problems: [], avatars: {}, avatarsPending: false };
+/** Owners whose avatars `mockMarketplaceAvatars` has "fetched". */
+const mockAvatars = new Set<string>();
 const mockStaged = new Map<string, { preview: GithubPreview; repo: string }>();
 const SHA = "4f2c8e1a9b7d6c5e3f1a2b4c6d8e0f1a2b3c4d5e";
 
@@ -797,8 +749,31 @@ export async function mockGithubInstall(token: string, selected?: string[] | nul
   return { id: installed.id, skills, commands, servers, problems: [] };
 }
 
+/** Owners of listings that live outside their source's own repositories. */
+function mockListingOwners(): string[] {
+  const owners = new Set<string>();
+  for (const market of mockLibrary.marketplaces) {
+    for (const plugin of market.plugins) {
+      const owner = /^([A-Za-z0-9-]+)\/[^/]+$/.exec(plugin.location)?.[1]?.toLowerCase();
+      if (owner && owner !== market.origin.owner.toLowerCase()) owners.add(owner);
+    }
+  }
+  return [...owners];
+}
+
 export function mockLibraryList(): PluginLibrary {
-  return mockLibrary;
+  const owners = mockListingOwners();
+  const avatars = Object.fromEntries(owners.filter((owner) => mockAvatars.has(owner)).map((owner) => {
+    const hue = [...owner].reduce((sum, char) => (sum * 31 + char.charCodeAt(0)) % 360, 0);
+    return [owner, avatarSvg(owner.slice(0, 1).toUpperCase(), hue)];
+  }));
+  return { ...mockLibrary, avatars, avatarsPending: owners.some((owner) => !mockAvatars.has(owner)) };
+}
+
+export function mockMarketplaceAvatars(): number {
+  const pending = mockListingOwners().filter((owner) => !mockAvatars.has(owner));
+  for (const owner of pending) mockAvatars.add(owner);
+  return pending.length;
 }
 
 export function mockSetPluginEnabled(id: string, enabled: boolean): PluginInstallOutcome {

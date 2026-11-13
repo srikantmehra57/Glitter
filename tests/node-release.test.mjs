@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { resolve } from 'node:path';
-import { checksumMap, NODE_RELEASE_FINGERPRINT, verifySignedChecksums } from '../packages/glitter-bridge/scripts/verify-node-release.mjs';
+import { checksumMap, NODE_RELEASE_FINGERPRINT, verifySignedChecksums } from '../packages/glitter-harness/scripts/verify-node-release.mjs';
 
 test('the vendored Node release key verifies the pinned v26.8.2 checksums', async () => {
   const asc = resolve('tests/fixtures/node-v26.8.2-SHASUMS256.txt.asc');

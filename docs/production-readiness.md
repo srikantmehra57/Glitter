@@ -1,5 +1,10 @@
 # Production readiness
 
+> Historical audit: the profile and findings below predate the Harness-only
+> transition and are not evidence of the current app's release readiness.
+> Use [ARCHITECTURE.md](ARCHITECTURE.md) for the current architecture and
+> repeat this audit before release.
+
 Audit of Glitter against a 111-item production-readiness checklist,
 done on 2026-10-18 at `d6b4725` (branch `audit/fixes-round-1`). Every item has a
 status, its evidence, and the action taken. Re-run this review before the first

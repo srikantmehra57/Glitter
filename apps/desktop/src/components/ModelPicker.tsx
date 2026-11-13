@@ -10,7 +10,7 @@ import { leadingBrandSlug, modelBrand } from "../lib/brands";
 import { pickerModels } from "../lib/modelVisibility";
 import { ORCHESTRATOR_GOAL_COPY } from "../lib/orchestrator";
 import { providerIds, providerName, type ProviderEntry } from "../lib/providers";
-import { AGENT_IDS, AGENT_LABELS, type AgentId, type AgentInfo, type Model, type OrchestratorConfig } from "../lib/types";
+import { AGENT_LABELS, type Model, type OrchestratorConfig } from "../lib/types";
 import { AgentMark, ModelIcon, ModelMark, ProviderMark, SourceRail, type RailSource } from "./AgentPicker";
 
 export function modelKey(model: { modelId: string; providerId?: string }) {
@@ -37,55 +37,26 @@ function unlistedNote(names: string[]) {
   return `${names.join(" and ")} ${many ? "are" : "is"} not in the current model list. ${many ? "They stay" : "It stays"} here because this thread or your default model uses ${many ? "them" : "it"}.`;
 }
 
-function isFree(model: Model, agentId: AgentId) {
-  // Cline retires promotions without renaming the id, so only its live list counts.
-  if (agentId === "cline") return model.free === true;
-  return model.description === "Free" || /[-:]free$/i.test(model.modelId) || freeModelCost(model.cost);
+function isFree(model: Model) {
+  return model.free === true || model.description === "Free" || /[-:]free$/i.test(model.modelId) || freeModelCost(model.cost);
 }
 
-/** Drop a retired "(free)" from what a search can match. The live free rows keep it. */
-function searchText(model: Model, agentId: AgentId, source: string, customs: ProviderEntry[]) {
-  const name = modelName(model);
-  const provider = providerName(model.providerId, customs);
-  // Only a model Cline has positively retired loses the word. An unknown mark
-  // still matches, so a failed promotion lookup cannot hide every free row.
-  if (agentId !== "cline" || model.free !== false) return `${model.modelId} ${name} ${provider} ${source}${model.free ? " free" : ""}`;
-  const strip = (value: string) => value.replace(/\s*\(free\)/gi, " ").replace(/\bfree\b/gi, "");
-  return `${strip(model.modelId)} ${strip(name)} ${strip(provider)} ${strip(source)}`;
-}
-
-function shownName(model: Model, agentId: AgentId) {
-  const name = modelName(model);
-  if (agentId === "cline" && model.free === false) return name.replace(/\s*\(free\)/gi, "").replace(/[ \t]{2,}/g, " ").trim();
-  return name;
-}
-
-/** Cline's promoted free models get their own section at the top; the rest group by lab. */
-function sectionOf(model: Model, agentId: AgentId) {
-  return agentId === "cline" && model.free === true ? "free" : model.providerId ?? "";
+function searchText(model: Model, source: string, customs: ProviderEntry[]) {
+  return `${model.modelId} ${modelName(model)} ${providerName(model.providerId, customs)} ${source}${isFree(model) ? " free" : ""}`;
 }
 
 function contextLabel(limit?: number | null) {
-  if (!limit) return null;
+  if (!limit) return "Context unknown";
   return limit >= 1_000_000 ? `${Math.round(limit / 100_000) / 10}M context`.replace(".0M", "M") : `${Math.round(limit / 1000)}K context`;
 }
 
 type Catalog = { models: Model[]; loading: boolean; error?: string | null };
 
-/**
- * One provider in the rail. A Harness provider (Anthropic, OpenRouter…) is the
- * built-in agent calling that provider with the user's key; every other agent
- * (Muse, Cline CLI…) is a provider of its own models. Picking a model from a
- * provider on another agent moves the thread to that agent.
- */
-type Source = RailSource & { agentId: AgentId; providerId?: string; catalog: Catalog; models: Model[]; hidden: number };
+/** One provider in the rail: the agent calling that provider with the user's key. */
+type Source = RailSource & { providerId?: string; catalog: Catalog; models: Model[]; hidden: number };
 
 type Props = {
   models: Model[];
-  agentId: AgentId;
-  agents?: AgentInfo[];
-  /** Other agents' providers cannot be picked (a turn is running, no workspace). */
-  agentDisabled?: boolean;
   /** The custom endpoints the keychain holds, so their names and marks are the user's own. */
   customProviders?: ProviderEntry[];
   value?: string;
@@ -98,12 +69,7 @@ type Props = {
   /** Providers switched off as a whole, as `providerKey` strings. */
   hiddenProviders?: readonly string[];
   onChange: (model: Model) => void;
-  /** A model from a provider on another agent: the thread switches agent, then model. */
-  onChooseOther?: (agentId: AgentId, model: Model) => void;
-  /** Another agent's catalog, read when its provider is opened or a search needs it. */
-  loadCatalog?: (agentId: AgentId) => Promise<Model[]>;
   onRescan?: () => Promise<void>;
-  onShowCapabilities?: () => void;
   onManageModels?: () => void;
   /** Settings → Providers, to add a key. */
   onManageProviders?: () => void;
@@ -111,7 +77,7 @@ type Props = {
   orchestrator?: OrchestratorConfig | null;
   /** False while Settings holds no Lead and Builder, so the row leads there first. */
   orchestratorReady?: boolean;
-  /** Turns Orchestrator on or off for this thread. Present only for built-in agent threads. */
+  /** Turns Orchestrator on or off for this thread. */
   onOrchestratorChange?: (enabled: boolean) => void;
   /** Settings → Orchestrator, opened when the roles are incomplete. */
   onManageOrchestrator?: () => void;
@@ -125,7 +91,7 @@ const PLAIN_SIZE = { width: 420, height: 460 };
  * it and closes. The rail lists providers and the list shows that provider's
  * models — two levels, nothing nested. Effort is its own control (EffortPicker).
  */
-export function ModelPicker({ models, agentId, agents = [], agentDisabled, customProviders: customs = [], value, loading, disabled, applying, title, hidden, hiddenProviders, onChange, onChooseOther, loadCatalog, onRescan, onShowCapabilities, onManageModels, onManageProviders, orchestrator, orchestratorReady = false, onOrchestratorChange, onManageOrchestrator }: Props) {
+export function ModelPicker({ models, customProviders: customs = [], value, loading, disabled, applying, title, hidden, hiddenProviders, onChange, onRescan, onManageModels, onManageProviders, orchestrator, orchestratorReady = false, onOrchestratorChange, onManageOrchestrator }: Props) {
   const root = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
@@ -139,68 +105,30 @@ export function ModelPicker({ models, agentId, agents = [], agentDisabled, custo
   const [query, setQuery] = useState("");
   const [pinned, setPinned] = useState<string | null>(null);
   const [position, setPosition] = useState<ReturnType<typeof menuPosition> | null>(null);
-  const [catalogs, setCatalogs] = useState<Partial<Record<AgentId, Catalog>>>({});
-  const requested = useRef(new Set<AgentId>());
   const selected = models.find((model) => modelKey(model) === value);
   const needle = query.trim().toLowerCase();
   const selectionLocked = disabled || loading || applying;
   const orchestratorOn = Boolean(orchestrator);
 
-  // Agents shown as providers: the current one always, then every other installed one, in a fixed order.
-  const shownAgents = useMemo(() => {
-    const ids = new Set<AgentId>([agentId, ...agents.filter((agent) => agent.found).map((agent) => agent.id)]);
-    return AGENT_IDS.filter((id) => ids.has(id));
-  }, [agentId, agents]);
-  const others = onChooseOther && loadCatalog ? shownAgents.filter((id) => id !== agentId) : [];
-
-  const fetchCatalog = (id: AgentId) => {
-    if (!loadCatalog || requested.current.has(id)) return;
-    requested.current.add(id);
-    setCatalogs((all) => ({ ...all, [id]: { models: all[id]?.models ?? [], loading: true } }));
-    void loadCatalog(id).then(
-      (list) => setCatalogs((all) => ({ ...all, [id]: { models: list, loading: false } })),
-      (error) => { requested.current.delete(id); setCatalogs((all) => ({ ...all, [id]: { models: [], loading: false, error: error instanceof Error ? error.message : String(error) } })); },
-    );
-  };
-  // Harness providers are listed from the start: they are local and cheap to read. CLI agents load when opened.
-  useEffect(() => { if (open && others.includes("harness")) fetchCatalog("harness"); }, [open, others.join(",")]);
-  useEffect(() => { if (open && needle) for (const id of others) fetchCatalog(id); }, [open, needle.length > 0]);
-  useEffect(() => { if (!open) requested.current.clear(); }, [open]);
-
   const sources: Source[] = useMemo(() => {
-    const list: Source[] = [];
-    for (const id of shownAgents) {
-      const current = id === agentId;
-      if (!current && !others.includes(id)) continue;
-      const catalog: Catalog = current ? { models, loading } : catalogs[id] ?? { models: [], loading: false };
-      const info = agents.find((agent) => agent.id === id);
-      const signIn = !current && (id === "muse" || id === "harness") && info?.authenticated === false;
-      const visibleModels = pickerModels(catalog.models, id, hidden, current ? selected : undefined);
-      if (id === "harness") {
-        const providers = providerIds(catalog.models);
-        if (!providers.length) {
-          // With no key yet, the built-in agent still gets a row that leads to Providers.
-          if (current || catalog.loading) list.push({ id: "harness:", agentId: id, name: catalog.loading ? "Your providers" : "Add a provider", mark: <span className="rail-key"><KeyRound size={12} aria-hidden="true" /></span>, catalog, models: [], hidden: 0, disabled: !current && Boolean(agentDisabled) });
-          continue;
-        }
-        for (const providerId of providers) {
-          const own = visibleModels.filter((model) => model.providerId === providerId);
-          const providerLabel = providerName(providerId, customs);
-          list.push({ id: `harness:${providerId}`, agentId: id, providerId, name: providerLabel, mark: <ProviderMark id={providerId} size={18} name={providerLabel} />, count: own.length, catalog, models: own, hidden: catalog.models.filter((model) => model.providerId === providerId).length - own.length, disabled: !current && (Boolean(agentDisabled) || signIn), live: current && selected?.providerId === providerId });
-        }
-        continue;
-      }
-      list.push({ id: `${id}:`, agentId: id, name: info?.name ?? AGENT_LABELS[id], mark: <AgentMark id={id} size={18} />, count: catalog.models.length ? visibleModels.length : undefined, catalog, models: visibleModels, hidden: catalog.models.length - visibleModels.length, disabled: !current && (Boolean(agentDisabled) || signIn), title: signIn ? `${info?.name ?? AGENT_LABELS[id]} · sign in from Settings → Agents` : undefined, live: current });
-    }
+    const catalog: Catalog = { models, loading };
+    const visibleModels = pickerModels(models, "harness", hidden, selected);
+    const providers = providerIds(models);
+    // With no key yet, the agent still gets a row that leads to Providers.
+    if (!providers.length) return [{ id: "harness:", name: loading ? "Your providers" : "Add a provider", mark: <span className="rail-key"><KeyRound size={12} aria-hidden="true" /></span>, catalog, models: [], hidden: 0 }];
+    const list: Source[] = providers.map((providerId) => {
+      const own = visibleModels.filter((model) => model.providerId === providerId);
+      const providerLabel = providerName(providerId, customs);
+      return { id: `harness:${providerId}`, providerId, name: providerLabel, mark: <ProviderMark id={providerId} size={18} name={providerLabel} />, count: own.length, catalog, models: own, hidden: models.filter((model) => model.providerId === providerId).length - own.length, live: selected?.providerId === providerId };
+    });
     // A provider switched off in Settings → Models, or one with every model off, leaves the
     // rail — except the one the thread's model comes from, which stays reachable.
     return list.filter((item) => item.live || (!hiddenProviders?.includes(item.id) && !(item.hidden > 0 && !item.models.length)));
-  }, [shownAgents, others.join(","), agentId, models, loading, catalogs, agents, hidden, hiddenProviders, selected, agentDisabled, customs]);
+  }, [models, loading, hidden, hiddenProviders, selected, customs]);
 
-  const homeId = agentId === "harness" ? `harness:${selected?.providerId ?? ""}` : `${agentId}:`;
-  const sourceId = pinned && sources.some((source) => source.id === pinned) ? pinned : sources.some((source) => source.id === homeId) ? homeId : sources.find((source) => source.agentId === agentId)?.id ?? sources[0]?.id;
+  const homeId = `harness:${selected?.providerId ?? ""}`;
+  const sourceId = pinned && sources.some((source) => source.id === pinned) ? pinned : sources.some((source) => source.id === homeId) ? homeId : sources[0]?.id;
   const source = sources.find((item) => item.id === sourceId);
-  useEffect(() => { if (open && source && source.agentId !== agentId) fetchCatalog(source.agentId); }, [open, source?.agentId]);
 
   const railed = sources.length > 1 || Boolean(onRescan);
   const searchable = sources.reduce((total, item) => total + item.models.length, 0) > 6;
@@ -211,28 +139,27 @@ export function ModelPicker({ models, agentId, agents = [], agentDisabled, custo
     const pool = needle ? sources : source ? [source] : [];
     const out: Array<{ model: Model; source: Source }> = [];
     for (const item of pool) {
-      const matches = item.models.filter((model) => !needle || searchText(model, item.agentId, item.name, customs).toLowerCase().includes(needle));
+      const matches = item.models.filter((model) => !needle || searchText(model, item.name, customs).toLowerCase().includes(needle));
       const order = [...new Set([selected?.providerId, ...matches.map((model) => model.providerId)])];
       const sorted = matches.slice().sort((a, b) => {
         const unavailable = Number(Boolean(a.unavailable)) - Number(Boolean(b.unavailable));
-        const promoted = item.agentId === "cline" ? Number(b.free === true) - Number(a.free === true) : 0;
-        return unavailable || promoted || order.indexOf(a.providerId) - order.indexOf(b.providerId);
+        return unavailable || order.indexOf(a.providerId) - order.indexOf(b.providerId);
       });
       for (const model of sorted) out.push({ model, source: item });
     }
     return out;
   }, [sources, source, needle, selected?.providerId]);
-  const isSelected = (row: { model: Model; source: Source }) => row.source.agentId === agentId && modelKey(row.model) === value;
+  const isSelected = (row: { model: Model; source: Source }) => modelKey(row.model) === value;
   const selectedIndex = rows.findIndex(isSelected);
   const activeIndex = Math.max(0, Math.min(active, rows.length - 1));
   const listModels = rows.map((row) => row.model);
   const unlisted = listModels.filter((model) => model.unlisted);
-  // Headings: per provider while searching, per lab inside an agent that mixes labs.
-  const groupOf = (row: { model: Model; source: Source }) => needle ? row.source.id : sectionOf(row.model, row.source.agentId);
+  // Headings: per provider while searching.
+  const groupOf = (row: { model: Model; source: Source }) => needle ? row.source.id : row.model.providerId ?? "";
   const grouped = new Set(rows.map(groupOf)).size > 1;
   // A list that mixes providers marks each row's provider in the corner of its icon.
   const mixed = new Set(listModels.map((item) => item.providerId)).size > 1;
-  const freeCount = rows.filter((row) => isFree(row.model, row.source.agentId)).length;
+  const freeCount = rows.filter((row) => isFree(row.model)).length;
   const sourceLoading = Boolean(source?.catalog.loading && !source.models.length);
   const contains = (target: Node | null) => Boolean(root.current?.contains(target) || panel.current?.contains(target));
 
@@ -261,16 +188,15 @@ export function ModelPicker({ models, agentId, agents = [], agentDisabled, custo
       window.removeEventListener("resize", update);
       document.removeEventListener("scroll", dismissOnScroll, true);
     };
-  }, [open, models, agentId, value, query, railed, tall]);
+  }, [open, models, value, query, railed, tall]);
 
   // Once positioned, focus lands in the list: the search field, or the selected row.
   useEffect(() => {
     if (!open) { setQuery(""); return; }
     if (!position || disabled) return;
     (searchable ? search.current : items.current[activeIndex])?.focus();
-  }, [open, loading, agentId, searchable, disabled, position !== null]);
+  }, [open, loading, searchable, disabled, position !== null]);
 
-  useEffect(() => { setQuery(""); setActive(0); setPinned(null); }, [agentId]);
   useEffect(() => { if (!open) setPinned(null); }, [open]);
   useEffect(() => {
     if (!open) return;
@@ -287,8 +213,7 @@ export function ModelPicker({ models, agentId, agents = [], agentDisabled, custo
   const close = () => { setOpen(false); trigger.current?.focus(); };
   const choose = (row: { model: Model; source: Source }) => {
     if (selectionLocked || row.source.disabled) return;
-    if (row.source.agentId !== agentId) onChooseOther?.(row.source.agentId, row.model);
-    else if (orchestratorOn || modelKey(row.model) !== value) onChange(row.model);
+    if (orchestratorOn || modelKey(row.model) !== value) onChange(row.model);
     close();
   };
   const openPanel = () => {
@@ -304,19 +229,18 @@ export function ModelPicker({ models, agentId, agents = [], agentDisabled, custo
     if (catalog) catalog.scrollTop = 0;
   };
 
-  const chipProvider = agentId === "harness" ? selected?.providerId : undefined;
-  const label = selected ? shownName(selected, agentId) : loading ? "Loading…" : !models.length ? "No models" : "Choose model";
+  const chipProvider = selected?.providerId;
+  const label = selected ? modelName(selected) : loading ? "Loading…" : !models.length ? "No models" : "Choose model";
   const selectedBrand = selected ? modelBrand(selected.modelId, selected.providerId) : null;
-  const showModelIcon = Boolean(selected && selectedBrand && "slug" in selectedBrand && selectedBrand.slug !== leadingBrandSlug(agentId, chipProvider));
-  const chipSource = chipProvider ? providerName(chipProvider, customs) : agents.find((agent) => agent.id === agentId)?.name ?? AGENT_LABELS[agentId];
+  const showModelIcon = Boolean(selected && selectedBrand && "slug" in selectedBrand && selectedBrand.slug !== leadingBrandSlug(chipProvider));
+  const chipSource = chipProvider ? providerName(chipProvider, customs) : AGENT_LABELS.harness;
   const headTitle = needle ? "All providers" : source?.name ?? chipSource;
-  const headMark: ReactNode = needle ? <span className="rail-key"><Search size={13} aria-hidden="true" /></span> : source?.mark ?? <AgentMark id={agentId} size={28} />;
+  const headMark: ReactNode = needle ? <span className="rail-key"><Search size={13} aria-hidden="true" /></span> : source?.mark ?? <AgentMark size={28} />;
   const summary = sourceLoading ? "Loading…" : needle ? `${rows.length} ${rows.length === 1 ? "match" : "matches"}` : `${rows.length} ${rows.length === 1 ? "model" : "models"}${freeCount ? ` · ${freeCount} free` : ""}`;
   const emptyText = query ? `No models match “${query}”.`
     : source?.catalog.error ? `${source.name} could not list its models. ${source.catalog.error}`
-    : source?.agentId === "harness" ? "No models yet. Add a provider key to see its models."
     : source?.hidden ? "Every model here is switched off. Turn some back on in Settings → Models."
-    : "No models available. Rescan agents to try again.";
+    : "No models yet. Add a provider key to see its models.";
 
   return (
     <div ref={root} className="picker model-picker" title={title}>
@@ -337,7 +261,7 @@ export function ModelPicker({ models, agentId, agents = [], agentDisabled, custo
         }}
       >
         {orchestrator ? <span className="model-orchestrator-mark"><Activity size={15} aria-hidden="true" /></span>
-          : chipProvider ? <ProviderMark id={chipProvider} size={16} name={providerName(chipProvider, customs)} /> : <AgentMark id={agentId} size={16} />}
+          : chipProvider ? <ProviderMark id={chipProvider} size={16} name={providerName(chipProvider, customs)} /> : <AgentMark size={16} />}
         {!orchestrator && showModelIcon && selected ? <ModelMark modelId={selected.modelId} providerId={selected.providerId} size={16} /> : null}
         <span className="picker-value">{orchestrator ? "Orchestrator" : label}</span>
         {!orchestrator && selected && isFastModel(selected) ? <Zap size={12} className="model-fast" aria-label="Fast" /> : null}
@@ -368,8 +292,6 @@ export function ModelPicker({ models, agentId, agents = [], agentDisabled, custo
               sourceId={needle ? undefined : sourceId}
               onSourceChange={pickSource}
               onRescan={onRescan}
-              onShowCapabilities={onShowCapabilities ? () => { close(); onShowCapabilities(); } : undefined}
-              capabilitiesLabel={`${AGENT_LABELS[agentId]} capabilities`}
             />
           ) : null}
           <div className="model-main">
@@ -439,12 +361,11 @@ export function ModelPicker({ models, agentId, agents = [], agentDisabled, custo
                 {sourceLoading && !needle ? <p className="picker-empty" role="status">Loading {source?.name ?? "models"}…</p> : !rows.length ? <p className="picker-empty">{emptyText}</p> : null}
                 {rows.map((row, index) => {
                   const { model } = row;
-                  const owner = row.source.agentId;
                   const price = modelPriceParts(model.cost);
                   const contributor = CONTRIBUTOR.test(model.modelId);
                   const specs = [contextLabel(model.contextLimit), !contributor && model.description !== "Free" && model.description !== providerName(model.providerId, customs) ? model.description : null].filter(Boolean).join(" · ");
-                  const free = isFree(model, owner);
-                  const name = shownName(model, owner);
+                  const free = isFree(model);
+                  const name = modelName(model);
                   const group = groupOf(row);
                   const heading = grouped && (index === 0 || groupOf(rows[index - 1]) !== group);
                   const rowSelected = isSelected(row);
@@ -461,7 +382,7 @@ export function ModelPicker({ models, agentId, agents = [], agentDisabled, custo
                         type="button"
                         role="option"
                         aria-selected={rowSelected}
-                        aria-description={[model.unlisted ? unlistedNote([name]) : "", contributor ? dataNote(model) : model.description ?? "", owner !== agentId ? `Switches this thread to ${row.source.agentId === "harness" ? "the built-in agent" : row.source.name}` : ""].filter(Boolean).join(" ") || undefined}
+                        aria-description={[model.unlisted ? unlistedNote([name]) : "", contributor ? dataNote(model) : model.description ?? ""].filter(Boolean).join(" ") || undefined}
                         tabIndex={index === activeIndex ? 0 : -1}
                         disabled={Boolean(selectionLocked || row.source.disabled)}
                         className={`model-option ${index === activeIndex ? "active" : ""} ${model.unavailable ? "unavailable" : ""}`}
@@ -474,7 +395,7 @@ export function ModelPicker({ models, agentId, agents = [], agentDisabled, custo
                           event.preventDefault(); setActive(next); items.current[next]?.focus();
                         }}
                       >
-                        <span className="model-icon"><ModelIcon modelId={model.modelId} providerId={model.providerId} size={22} badge={mixed} hostName={providerName(model.providerId, customs)} fallback={<AgentMark id={owner} size={22} />} /></span>
+                        <span className="model-icon"><ModelIcon modelId={model.modelId} providerId={model.providerId} size={22} badge={mixed} hostName={providerName(model.providerId, customs)} fallback={<AgentMark size={22} />} /></span>
                         <span className="model-copy">
                           <span className="model-name">
                             <span className="model-label" title={name}>{name}</span>
@@ -492,7 +413,7 @@ export function ModelPicker({ models, agentId, agents = [], agentDisabled, custo
                 })}
               </div>
               {listModels.some((model) => modelPriceParts(model.cost)) ? <p className="model-pricing-note">Prices per 1M tokens</p> : null}
-              {unlisted.length ? <p className="picker-note"><Info size={11} aria-hidden="true" />{unlistedNote(unlisted.map((model) => shownName(model, agentId)))}</p> : null}
+              {unlisted.length ? <p className="picker-note"><Info size={11} aria-hidden="true" />{unlistedNote(unlisted.map((model) => modelName(model)))}</p> : null}
               {listModels.some((model) => CONTRIBUTOR.test(model.modelId)) ? <p className="picker-note"><Info size={11} aria-hidden="true" />Contributor models are discounted because your content, including inter-session messages, may be used for product improvement.</p> : null}
             </div>
             {onManageModels || onManageProviders ? (

@@ -20,15 +20,18 @@ describe("TerminalPane", () => {
     expect(useAppStore.getState().terminalOpen).toBe(false);
   });
 
-  it("stays off, with the reason, when shell commands are disabled or there is no desktop shell", () => {
-    seedStore({ terminalOpen: true, disableShell: true });
-    const view = render(<TerminalPane />);
-    expect(screen.getByRole("status")).toHaveTextContent("shell commands are disabled in Settings → Permissions");
-    expect(document.querySelector(".terminal-host")).toBeNull();
-    seedStore({ disableShell: false });
-    view.rerender(<TerminalPane />);
+  it("stays off, with the reason, when there is no desktop shell", () => {
+    seedStore({ terminalOpen: true });
+    render(<TerminalPane />);
     // The test environment is a browser, not the desktop shell.
     expect(screen.getByRole("status")).toHaveTextContent("needs the desktop app");
+    expect(document.querySelector(".terminal-host")).toBeNull();
+  });
+
+  it("keeps the terminal closed when the saved preference disables it", () => {
+    seedStore({ terminalOpen: true, disableTerminal: true });
+    render(<TerminalPane />);
+    expect(screen.getByRole("status")).toHaveTextContent("disabled in Settings → Permissions");
     expect(document.querySelector(".terminal-host")).toBeNull();
   });
 });

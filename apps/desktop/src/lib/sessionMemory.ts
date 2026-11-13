@@ -2,7 +2,7 @@ import { normalizeLineComments, type LineComment } from "./lineComments";
 import { RECENT_COMMANDS_MAX } from "./palette";
 import { normalizeZoom } from "./zoom";
 import { normalizeDockWidth, normalizeSidebarWidth, DOCK_DEFAULT_WIDTH } from "./reviewLayout";
-import { SETTINGS_TABS, type ComposerImage, type ContextRef, type SessionConfig, type SettingsTab, type SubscriptionUsage, type ThreadWorktree } from "./types";
+import { SETTINGS_TABS, type ComposerImage, type ContextRef, type SessionConfig, type SettingsTab, type ThreadWorktree } from "./types";
 
 export type Draft = {
   text: string;
@@ -154,7 +154,6 @@ export type SessionMemory = {
   sidebarCollapsed: boolean;
   /** The dragged sidebar width; null keeps the default. */
   sidebarWidth: number | null;
-  subscriptionUsage: SubscriptionUsage | null;
 };
 
 export const EMPTY_MEMORY: SessionMemory = {
@@ -172,7 +171,6 @@ export const EMPTY_MEMORY: SessionMemory = {
   zoom: 1,
   sidebarCollapsed: false,
   sidebarWidth: null,
-  subscriptionUsage: null,
 };
 
 type Store = {
@@ -181,9 +179,9 @@ type Store = {
   save(): Promise<unknown>;
 };
 
-/** Account was folded into Agents, where Muse's connection now lives with the other agents. */
+/** Account, then Agents, held the agent connection; the built-in agent is set up under Providers. */
 function settingsTabOf(saved: string | undefined): SettingsTab {
-  if (saved === "Account") return "Agents";
+  if (saved === "Account" || saved === "Agents") return "Providers";
   return SETTINGS_TABS.find((tab) => tab === saved) ?? "Models";
 }
 

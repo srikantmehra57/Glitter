@@ -8,7 +8,7 @@ import { pathToFileURL } from 'node:url';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 
-const dir = await mkdtemp(join(tmpdir(), 'muse-framing-'));
+const dir = await mkdtemp(join(tmpdir(), 'glitter-framing-'));
 after(() => rm(dir, { recursive: true, force: true }));
 // Exercise the real transport with a small ceiling so malicious fixtures stay cheap.
 const options = { bundle: true, platform: 'node', format: 'esm', logLevel: 'silent', plugins: [{
@@ -18,11 +18,10 @@ const options = { bundle: true, platform: 'node', format: 'esm', logLevel: 'sile
     }));
   },
 }] };
-for (const name of ['framing', 'acp', 'index']) {
-  await build({ ...options, entryPoints: [resolve(`packages/glitter-bridge/src/${name}.ts`)], outfile: join(dir, `${name}.mjs`) });
+for (const name of ['framing', 'index']) {
+  await build({ ...options, entryPoints: [resolve(`packages/glitter-harness/src/${name}.ts`)], outfile: join(dir, `${name}.mjs`) });
 }
 const { LineFrames, encodeFrame } = await import(pathToFileURL(join(dir, 'framing.mjs')).href);
-const { AcpAgentHost } = await import(pathToFileURL(join(dir, 'acp.mjs')).href);
 
 test('framing preserves split UTF-8 and coalesced lines, with byte rather than character limits', () => {
   const reader = new LineFrames(4);
@@ -81,12 +80,4 @@ test('bridge fails closed on an oversized unterminated frame', { timeout: 5000 }
     assert.ok(output.includes('bridgeExit'));
     assert.ok(!output.includes('x'.repeat(100)));
   } finally { child.kill(); }
-});
-
-test('ACP oversized output rejects pending initialization promptly', { timeout: 5000 }, async () => {
-  const spec = { id: 'fake', name: 'Fake', protocol: 'acp', bins: [], verified: true, signIn: '',
-    acpArgs: ['-e', "process.stdin.once('data', () => process.stdout.write('x'.repeat(1025))); setInterval(() => {}, 1000)"] };
-  const host = new AcpAgentHost(spec, process.execPath, () => {});
-  try { await assert.rejects(host.start(), /byte limit/); }
-  finally { await host.stop(); }
 });

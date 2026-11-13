@@ -11,11 +11,11 @@ const keyOf = (request: UserInputRequest) => `${request.sessionId}:${request.use
 /** Every open question of the current thread, as cards. */
 export function UserInputCards() {
   // Questions and the flags that lock them, not the thread that changes every token.
-  const { requests, agentId, disabled } = useAppStore(useShallow((state) => {
+  const { requests, disabled } = useAppStore(useShallow((state) => {
     const thread = currentThread(state);
-    return { requests: thread?.userInputs, agentId: thread?.agentId ?? "muse", disabled: Boolean(thread?.userInputPending || thread?.cancelRequested || !thread?.opened) };
+    return { requests: thread?.userInputs, disabled: Boolean(thread?.userInputPending || thread?.cancelRequested || !thread?.opened) };
   }));
-  const agentName = useAppStore((state) => state.agents.find((agent) => agent.id === agentId)?.name ?? AGENT_LABELS[agentId]);
+  const agentName = AGENT_LABELS.harness;
   const live = useMemo(() => new Map((requests ?? []).map((request) => [keyOf(request), request])), [requests]);
   // Answered requests keep rendering for one exit, so the card animates out
   // instead of vanishing on the same frame — the shared `closing` convention.

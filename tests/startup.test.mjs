@@ -38,6 +38,7 @@ const replacements = {
     export const openLogFolder=async()=>globalThis.testInvoke ? globalThis.testInvoke('open_log_folder') : '/preview/logs/app.log';
     export const providerKeysGet=async(ids)=>ids.map((id)=>({id,configured:false,keyHint:null,baseUrl:null}));
     export const persistStoreDocument=async()=>{};
+    export const preserveLegacyMuseKey=async()=>{};
     export const repairStoreDocument=async()=>({status:'ok'});
     export const bridge=(...args)=>globalThis.storeBridge(...args);
     export const gitReview=async(...args)=>globalThis.readReview?.(...args) ?? {files:[],diff:"",truncated:false};
@@ -69,7 +70,7 @@ const replacements = {
     export const trustPreview=async()=>({ skills: [], rules: null });
     export const listWorkspaceFiles=async()=>[];
     export const cliLogout=async()=>{};export const pluginList=async()=>[];export const skillList=async()=>[];
-    export const catalogList=async()=>({entries:[],skillsRoot:'',error:null});export const catalogInstall=async()=>({installedSkills:[],installedServers:[],skipped:[],errors:[]});export const catalogRemove=async()=>({removed:[],skipped:[],errors:[]});export const githubInstall=async()=>({id:'',skills:[],commands:[],servers:[],problems:[]});export const libraryList=async()=>({plugins:[],marketplaces:[],pluginsRoot:'',problems:[]});export const librarySetEnabled=async()=>({id:'',skills:[],commands:[],servers:[],problems:[]});export const libraryRemove=async()=>[];export const libraryCheckUpdates=async()=>[];export const marketplaceAdd=async()=>({});export const marketplaceRefresh=async()=>({});export const marketplaceRemove=async()=>{};
+    export const catalogList=async()=>({entries:[],skillsRoot:'',error:null});export const catalogInstall=async()=>({installedSkills:[],installedServers:[],skipped:[],errors:[]});export const catalogRemove=async()=>({removed:[],skipped:[],errors:[]});export const githubInstall=async()=>({id:'',skills:[],commands:[],servers:[],problems:[]});export const libraryList=async()=>({plugins:[],marketplaces:[],pluginsRoot:'',problems:[]});export const librarySetEnabled=async()=>({id:'',skills:[],commands:[],servers:[],problems:[]});export const libraryRemove=async()=>[];export const libraryCheckUpdates=async()=>[];export const marketplaceAdd=async()=>({});export const marketplaceRefresh=async()=>({});export const marketplaceRemove=async()=>{};export const marketplaceAvatars=async()=>0;
     export const projectInit=async()=>'';export const enterpriseStatus=async()=>({ generation: null, sources: [] });
     export const pickPluginBundle=async()=>null;export const pluginInstall=async()=>{};
     export const pickSkillSource=async()=>null;export const skillInstall=async()=>'';export const skillImport=async()=>'';export const skillUninstall=async()=>'';`,
@@ -313,64 +314,7 @@ test('an image-only first send carries its images into the pending card', async 
   assert.equal(store.getState().pendingSend, null);
 });
 
-test('startHost asks the bridge once, then trusts a host that already matches', async () => {
-  globalThis.modelRows = [{ modelId: 'muse-spark', providerId: 'meta' }];
-  const { store, calls } = await bootedStore();
-  store.setState({ workspaces: [{ id: 'w', path: '/repo', name: 'repo', grantId: 'g1' }], selectedWorkspaceId: 'w', preview: false });
-  await store.getState().startHost(true);
-  assert.equal(count(calls, 'startHost'), 1);
-  const statusCalls = count(calls, 'status');
-  const modelCalls = count(calls, 'listModels');
-  await store.getState().startHost();
-  await store.getState().startHost();
-  assert.equal(count(calls, 'status'), statusCalls, 'no status round trip for a host the renderer knows is running');
-  assert.equal(count(calls, 'startHost'), 1, 'and no restart');
-  assert.equal(count(calls, 'listModels'), modelCalls, 'the catalog is not refetched when nothing moved');
-  // A changed posture is not "already matching": the host must be told.
-  store.setState({ disableShell: true });
-  await store.getState().startHost();
-  assert.equal(count(calls, 'startHost'), 2, 'a posture change still restarts the host');
-  // After the host dies the renderer no longer trusts what it held.
-  globalThis.storeEvent('hostExit', { kind: 'crash' });
-  assert.equal(store.getState().hostInfo, null);
-  await store.getState().startHost();
-  assert.ok(count(calls, 'status') > statusCalls, 'a host that exited is checked again');
-  globalThis.modelRows = undefined;
-});
 
-test('a shared host start revalidates trust for every waiter', async () => {
-  const { store, calls } = await bootedStore();
-  store.setState({
-    workspaces: [
-      { id: 'trusted', path: '/trusted', name: 'trusted', grantId: 'gt', trusted: true },
-      { id: 'untrusted', path: '/untrusted', name: 'untrusted', grantId: 'gu', trusted: false },
-    ],
-    selectedWorkspaceId: 'trusted', preview: false, hostInfo: null, hostTrust: null,
-  });
-  const gate = deferred();
-  let running = false;
-  let hostTrust = false;
-  globalThis.storeBridge = async (method, params) => {
-    calls.push([method, params]);
-    if (method === 'status') return { running, trustWorkspace: hostTrust, posture: POSTURE };
-    if (method === 'startHost') {
-      if (!running) await gate.promise;
-      running = true;
-      hostTrust = params.trustWorkspace === true;
-      return { trustWorkspace: hostTrust, posture: POSTURE };
-    }
-    if (method === 'listModels') return { models: [] };
-    return {};
-  };
-  const first = store.getState().startHost();
-  await settle();
-  store.setState({ selectedWorkspaceId: 'untrusted' });
-  const second = store.getState().startHost();
-  gate.resolve();
-  await Promise.all([first, second]);
-  assert.deepEqual(calls.filter(([method]) => method === 'startHost').map(([, params]) => params.trustWorkspace), [true, false], 'the untrusted waiter cannot use the trusted host');
-  assert.equal(store.getState().hostTrust, false);
-});
 
 test('concurrent model refreshes share one listing and never blank a picker that already has models', async () => {
   globalThis.modelsGate = deferred();
@@ -396,15 +340,15 @@ test('concurrent model refreshes share one listing and never blank a picker that
 
 test('a model listing that lands late cannot replace a newer catalog in the cache', async () => {
   const { store, calls } = await bootedStore();
-  const thread = (sessionId) => ({ sessionId, agentId: 'grok', workspacePath: '/repo', status: 'idle', opened: true, unread: false, items: [], config: { agentId: 'grok' } });
+  const thread = (sessionId) => ({ sessionId, agentId: 'harness', workspacePath: '/repo', status: 'idle', opened: true, unread: false, items: [], config: { agentId: 'harness' } });
   store.setState({
     workspaces: [{ id: 'w', path: '/repo', name: 'repo', grantId: 'g1' }], selectedWorkspaceId: 'w', preview: false,
-    threads: [thread('s1'), thread('s2')], selectedSessionId: 's1', models: [], modelsAgentId: 'grok',
+    threads: [thread('s1'), thread('s2')], selectedSessionId: 's1', models: [],
   });
   const gates = new Map();
   const previous = globalThis.storeBridge;
   globalThis.storeBridge = async (method, params) => {
-    if (method !== 'listModels' || params.agentId !== 'grok') return previous(method, params);
+    if (method !== 'listModels' || !params.sessionId) return previous(method, params);
     calls.push([method, params]);
     const gate = deferred();
     gates.set(params.sessionId, gate);
@@ -423,16 +367,6 @@ test('a model listing that lands late cannot replace a newer catalog in the cach
     gates.get('s1').resolve();
     await first;
     assert.deepEqual(store.getState().models.map((model) => model.modelId), ['new'], 'the late answer never reaches the picker');
-    // Leave the agent and come back: the cache feeds the picker while the fresh listing loads.
-    store.setState({ selectedSessionId: null });
-    await store.getState().refreshModels();
-    assert.equal(store.getState().modelsAgentId, 'muse');
-    store.setState({ selectedSessionId: 's1' });
-    const back = store.getState().refreshModels();
-    await settle();
-    assert.deepEqual(store.getState().models.map((model) => model.modelId), ['new'], 'the cache kept the newer catalog, not the late one');
-    gates.get('s1').resolve();
-    await back;
   } finally { globalThis.storeBridge = previous; }
 });
 
@@ -440,8 +374,8 @@ test('an explicit catalog refresh reaches the agent and a failed refresh preserv
   const { store, calls } = await bootedStore();
   store.setState({
     workspaces: [{ id: 'w', path: '/repo', name: 'repo', grantId: 'g1' }], selectedWorkspaceId: 'w', preview: false,
-    selectedSessionId: 'grok-1', threads: [{ sessionId: 'grok-1', agentId: 'grok', workspacePath: '/repo', status: 'idle', opened: true, items: [] }],
-    modelsAgentId: 'grok', models: [{ modelId: 'grok-4.7', providerId: 'grok' }],
+    selectedSessionId: 'h-1', threads: [{ sessionId: 'h-1', agentId: 'harness', workspacePath: '/repo', status: 'idle', opened: true, items: [] }],
+    models: [{ modelId: 'xai/grok-4.7', providerId: 'xai' }],
   });
   const previous = globalThis.storeBridge;
   globalThis.storeBridge = async (method, params) => {
@@ -451,49 +385,28 @@ test('an explicit catalog refresh reaches the agent and a failed refresh preserv
   try {
     await store.getState().refreshModels(true);
     const request = calls.find(([method]) => method === 'listModels')[1];
-    assert.equal(request.agentId, 'grok');
+    assert.equal(request.agentId, 'harness');
     assert.equal(request.refresh, true);
-    assert.deepEqual(store.getState().models.map((model) => model.modelId), ['grok-4.7']);
+    assert.deepEqual(store.getState().models.map((model) => model.modelId), ['xai/grok-4.7']);
     assert.match(store.getState().modelsError, /Authentication required/);
     assert.equal(store.getState().modelsLoading, false);
   } finally { globalThis.storeBridge = previous; }
 });
 
-test('Muse loads the global model catalog while ACP catalogs remain session-scoped', async () => {
-  globalThis.modelRows = [{ modelId: 'muse-spark-1.3', providerId: 'meta' }];
-  const { store, calls } = await bootedStore();
-  const base = { sessionId: 's1', workspacePath: '/repo', title: 'Thread', updatedAt: new Date().toISOString(), status: 'idle', unread: false, items: [], opened: true };
-  store.setState({
-    workspaces: [{ id: 'w', path: '/repo', name: 'repo', grantId: 'g1' }], selectedWorkspaceId: 'w', preview: false,
-    threads: [base], selectedSessionId: 's1', models: [], modelsAgentId: null,
-  });
-  await store.getState().refreshModels();
-  const muse = calls.filter(([method]) => method === 'listModels').at(-1)[1];
-  assert.equal(muse.agentId, 'muse');
-  assert.equal(muse.sessionId, undefined);
-
-  store.setState({ threads: [{ ...base, agentId: 'grok', config: { agentId: 'grok' } }], models: [], modelsAgentId: null });
-  await store.getState().refreshModels();
-  const acp = calls.filter(([method]) => method === 'listModels').at(-1)[1];
-  assert.equal(acp.agentId, 'grok');
-  assert.equal(acp.sessionId, 's1');
-  globalThis.modelRows = undefined;
-});
 
 test('Settings can query the fresh global defaults catalog without replacing a conversation catalog', async () => {
-  globalThis.modelRows = [{ modelId: 'muse-wonder-1.0', providerId: 'meta' }];
+  globalThis.modelRows = [{ modelId: 'anthropic/claude-opus-5', providerId: 'anthropic' }];
   const { store, calls } = await bootedStore();
-  const grok = [{ modelId: 'grok-4.7', providerId: 'grok' }];
-  store.setState({ preview: false, modelsAgentId: 'grok', models: grok, selectedSessionId: 's1', threads: [{ sessionId: 's1', agentId: 'grok' }] });
+  const conversation = [{ modelId: 'xai/grok-4.7', providerId: 'xai' }];
+  store.setState({ preview: false, models: conversation, selectedSessionId: 's1', threads: [{ sessionId: 's1', agentId: 'harness' }] });
   try {
-    const rows = await store.getState().loadModelCatalog('muse');
+    const rows = await store.getState().loadModelCatalog('harness');
     assert.deepEqual(rows, globalThis.modelRows);
     const params = calls.find(([method]) => method === 'listModels')[1];
-    assert.equal(params.agentId, 'muse');
+    assert.equal(params.agentId, 'harness');
     assert.equal(params.sessionId, undefined);
     assert.equal(params.refresh, true);
-    assert.equal(store.getState().models, grok);
-    assert.equal(store.getState().modelsAgentId, 'grok');
+    assert.equal(store.getState().models, conversation);
   } finally { globalThis.modelRows = undefined; }
 });
 

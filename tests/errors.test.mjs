@@ -11,7 +11,7 @@ import { pathToFileURL } from 'node:url';
  * plus the timeout-unknown detector the send-retry path relies on.
  */
 
-const temporary = await mkdtemp(join(tmpdir(), 'muse-errors-'));
+const temporary = await mkdtemp(join(tmpdir(), 'glitter-errors-'));
 after(() => rm(temporary, { recursive: true, force: true }));
 
 const outfile = join(temporary, 'errors.mjs');
@@ -21,23 +21,18 @@ await build({
 });
 const { classifyError, describeError, timeoutUnknown } = await import(pathToFileURL(outfile).href);
 
-test('classifyError routes auth failures to settings', () => {
-  const classified = classifyError(new Error('authRequired: not logged in, run /login'));
-  assert.equal(classified.code, 'auth');
-  assert.equal(classified.action, 'settings');
-  assert.match(classified.lost, /draft is kept/i);
+test('classifyError routes a rejected or missing provider key to settings by its code', () => {
+  for (const code of ['MISSING_CREDENTIAL', 'INVALID_CREDENTIAL']) {
+    const classified = classifyError(Object.assign(new Error('The provider rejected the request.'), { code }));
+    assert.equal(classified.code, 'auth');
+    assert.equal(classified.action, 'settings');
+    assert.match(classified.lost, /draft is kept/i);
+  }
 });
 
-test('classifyError recognizes Muse credential failures without claiming provider setup errors', () => {
-  assert.equal(classifyError(new Error('No Muse API key was found. Paste one above and try again.')).code, 'auth');
+test('a provider setup error keeps its own wording', () => {
   const detail = 'Harness has no model provider yet. Add an API key in Settings → Providers.';
   assert.equal(describeError('Could not load Harness models', new Error(detail)), `Could not load Harness models: ${detail}`);
-});
-
-test('classifyError routes a missing CLI to settings', () => {
-  const classified = classifyError(new Error('Could not find the Muse CLI'));
-  assert.equal(classified.code, 'cli');
-  assert.equal(classified.action, 'settings');
 });
 
 test('classifyError treats timeouts as retryable-unknown', () => {
@@ -48,7 +43,7 @@ test('classifyError treats timeouts as retryable-unknown', () => {
 });
 
 test('classifyError routes disconnects to reconnect', () => {
-  const classified = classifyError(new Error('Muse connection closed. Reconnect from Settings.'));
+  const classified = classifyError(new Error('The agent connection closed. Reconnect from Settings.'));
   assert.equal(classified.code, 'host');
   assert.equal(classified.action, 'reconnect');
 });
@@ -68,30 +63,17 @@ test('timeoutUnknown recognizes the tagged bridge timeout', () => {
 
 test('timeoutUnknown falls back to the result-unknown wording', () => {
   assert.equal(timeoutUnknown(new Error('sendTurn timed out. Its result is unknown; check before retrying.')), true);
-  assert.equal(timeoutUnknown(new Error('Muse connection closed.')), false);
+  assert.equal(timeoutUnknown(new Error('The agent connection closed.')), false);
   assert.equal(timeoutUnknown(new Error('weird failure')), false);
   assert.equal(timeoutUnknown(null), false);
 });
 
-test('classifyError prefers the structured MSP kind over message text', () => {
+test('classifyError prefers the Harness failure code over message text', () => {
   const coded = (code) => Object.assign(new Error('friendly wrapper'), { code });
-  assert.deepEqual(
-    [classifyError(coded('overloaded')).code, classifyError(coded('overloaded')).action],
-    ['busy', 'retry'],
-  );
-  assert.deepEqual(
-    [classifyError(coded('sessionNotFound')).code, classifyError(coded('sessionNotFound')).action],
-    ['gone', 'reconnect'],
-  );
-  assert.deepEqual(
-    [classifyError(coded('cancelled')).code, classifyError(coded('cancelled')).action],
-    ['stopped', 'dismiss'],
-  );
-  assert.deepEqual(
-    [classifyError(coded('inputTooLarge')).code, classifyError(coded('inputTooLarge')).action],
-    ['invalid', 'retry'],
-  );
-  // Unknown kinds still fall through to the message matchers.
+  assert.deepEqual([classifyError(coded('RATE_LIMIT')).code, classifyError(coded('RATE_LIMIT')).action], ['busy', 'retry']);
+  assert.deepEqual([classifyError(coded('SERVER')).code, classifyError(coded('SERVER')).action], ['busy', 'retry']);
+  assert.deepEqual([classifyError(coded('CONTEXT_WINDOW_EXCEEDED')).code, classifyError(coded('CONTEXT_WINDOW_EXCEEDED')).action], ['invalid', 'retry']);
+  // Unknown codes still fall through to the message matchers.
   assert.equal(classifyError(coded('noBoundary')).code, 'unknown');
 });
 
@@ -107,9 +89,7 @@ test('describeError keeps the reason for an unrecognized failure', () => {
 });
 
 test('describeError replaces a recognized failure with its recovery', () => {
-  const auth = Object.assign(new Error('authRequired: no credential'), { code: 'authRequired' });
-  assert.equal(describeError('Could not commit the staged changes', auth),
-    'Muse needs a sign-in. authRequired: no credential The draft is kept. Nothing was sent.');
-  const missing = describeError('Could not start Muse', new Error('Muse CLI was not found'));
-  assert.equal(missing, 'Muse CLI not found. Muse CLI was not found No thread work was changed.');
+  const auth = Object.assign(new Error('401 from the provider'), { code: 'INVALID_CREDENTIAL' });
+  assert.equal(describeError('Could not send', auth),
+    'The provider rejected the API key. 401 from the provider The draft is kept. Replace the key in Settings → Providers.');
 });

@@ -5,7 +5,7 @@ import { modelPriceParts } from "../lib/cost";
 import { humanizeModelLabel } from "../lib/format";
 import { modelVisibilityKey, withModelsHidden } from "../lib/modelVisibility";
 import { providerIds, providerName, type ProviderEntry } from "../lib/providers";
-import { AGENT_IDS, type AgentId, type AgentInfo, type Model, type ModelTestResult } from "../lib/types";
+import { type AgentId, type AgentInfo, type Model, type ModelTestResult } from "../lib/types";
 import { AgentMark, ModelIcon, ProviderMark } from "./AgentPicker";
 import { Collapse } from "./Presence";
 
@@ -27,7 +27,7 @@ function seconds(ms: number) {
 }
 
 function contextLabel(limit?: number | null) {
-  if (!limit) return null;
+  if (!limit) return "Context unknown";
   return limit >= 1_000_000 ? `${Math.round(limit / 100_000) / 10}M context`.replace(".0M", "M") : `${Math.round(limit / 1000)}K context`;
 }
 
@@ -49,7 +49,7 @@ export function ModelLibrary({ agents, customProviders: customs = [], hidden, on
   testModel: (agentId: AgentId, model: Model) => Promise<ModelTestResult>;
   onManageProviders: () => void;
 }) {
-  const ids = useMemo(() => AGENT_IDS.filter((id) => agents.some((agent) => agent.id === id)), [agents]);
+  const ids = useMemo<AgentId[]>(() => (agents.some((agent) => agent.id === "harness") ? ["harness"] : []), [agents]);
   const [catalogs, setCatalogs] = useState<Partial<Record<AgentId, Catalog>>>({});
   const [tests, setTests] = useState<Record<string, TestState>>({});
   const [query, setQuery] = useState("");
@@ -72,15 +72,10 @@ export function ModelLibrary({ agents, customProviders: customs = [], hidden, on
   const groups: Group[] = [];
   for (const id of ids) {
     const catalog = catalogs[id] ?? { models: [], loading: true, error: null };
-    const info = agents.find((agent) => agent.id === id);
-    if (id === "harness") {
-      for (const providerId of providerIds(catalog.models)) {
-        const providerLabel = providerName(providerId, customs);
-        groups.push({ id: `harness:${providerId}`, agentId: id, name: providerLabel, mark: <ProviderMark id={providerId} size={22} name={providerLabel} />, models: catalog.models.filter((model) => model.providerId === providerId), catalog, testable: true });
-      }
-      continue;
+    for (const providerId of providerIds(catalog.models)) {
+      const providerLabel = providerName(providerId, customs);
+      groups.push({ id: `harness:${providerId}`, agentId: id, name: providerLabel, mark: <ProviderMark id={providerId} size={22} name={providerLabel} />, models: catalog.models.filter((model) => model.providerId === providerId), catalog, testable: true });
     }
-    groups.push({ id: `${id}:`, agentId: id, name: info?.name ?? id, mark: <AgentMark id={id} size={22} />, models: catalog.models, catalog, testable: false });
   }
   const harnessCatalog = catalogs.harness;
   const noProviders = ids.includes("harness") && harnessCatalog && !harnessCatalog.loading && !harnessCatalog.models.length;

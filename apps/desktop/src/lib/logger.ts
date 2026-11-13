@@ -1,4 +1,4 @@
-import { diagnostics, DIAGNOSTIC_LIMIT } from "../../../../packages/glitter-bridge/src/redaction";
+import { diagnostics, DIAGNOSTIC_LIMIT } from "../../../../packages/glitter-harness/src/redaction";
 import { invoke } from "@tauri-apps/api/core";
 import { isTauri } from "./format";
 

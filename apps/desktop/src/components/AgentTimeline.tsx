@@ -1,18 +1,16 @@
 import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { describeError } from "../lib/errors";
 import {
-  BellRing, Bot, Brain, Check, CircleDot, ChevronRight, ChevronUp, CircleAlert, CircleSlash, Copy, Eye, FilePen, FileText, GitFork, Globe, Info, Layers, ListChecks,
-  LoaderCircle, Maximize2, MessageCircle, Pencil, Play, RotateCcw, Search, Send, SkipForward, SquareTerminal, Target, Undo2, Workflow, Wrench, X,
+  BellRing, Bot, Brain, Check, CircleDot, ChevronRight, ChevronUp, CircleAlert, CircleSlash, Copy, FilePen, FileText, Globe, Info, Layers, ListChecks,
+  LoaderCircle, Pencil, Play, RotateCcw, Search, SquareTerminal, Target, Undo2, Workflow, Wrench, X,
 } from "lucide-react";
 import { Orb } from "./Orb";
-import { ACTIVITY_KINDS, activitySummary, activityTitle, agentCounts, backgroundAgents, computeVirtualWindow, estimateRunHeight, groupAgentRuns, messageRewindBoundary, parseWorkflowMessage, relativeToWorkspace, runSummary, showTerminalReceipt, stabilizeRuns, type AgentState, type AgentRun, type AgentStep, type AgentStepKind } from "../lib/agent";
-import { copyText, formatArgs, formatBytes, formatDuration, formatTokens, humanizeModelLabel, humanizeProvider, humanizeToolName, shortcutLabel, summarizeArgs } from "../lib/format";
+import { ACTIVITY_KINDS, activitySummary, activityTitle, agentCounts, backgroundAgents, computeVirtualWindow, estimateRunHeight, groupAgentRuns, parseWorkflowMessage, relativeToWorkspace, runSummary, showTerminalReceipt, stabilizeRuns, type AgentState, type AgentRun, type AgentStep, type AgentStepKind } from "../lib/agent";
+import { copyText, formatArgs, formatDuration, formatTokens, humanizeModelLabel, humanizeProvider, humanizeToolName, shortcutLabel, summarizeArgs } from "../lib/format";
 import { estimateCallCost, formatCost } from "../lib/cost";
 import { formatTokenSpeed, readTokenSpeed, TOKEN_SPEED_ESTIMATE } from "../lib/tokenSpeed";
 import { modelFor } from "../lib/effort";
 import { orchestratorRouteCallFact, orchestratorRouteExecution, orchestratorRouteFacts, orchestratorRouteFallback, orchestratorRouteFloor, orchestratorRouteLabel, orchestratorRouteTitle } from "../lib/orchestrator";
 import { currentThread, useAppStore } from "../lib/store";
-import { agentEnabled } from "../lib/types";
 import { AGENT_LABELS, type AgentId, type PlanItem, type Thread, type TokenSpeed } from "../lib/types";
 import { approvalPreview } from "../lib/approvalPreview";
 import { EditPreview } from "./EditPreview";
@@ -224,56 +222,11 @@ export function PlanMenu({ items, live = true }: { items: PlanItem[]; live?: boo
   );
 }
 
-const OUTPUT_UNAVAILABLE: Record<string, string> = {
-  missing: "no longer stored",
-  unsupported: "not servable by this host",
-  accessFailed: "could not be read",
-};
 
-/** Running tool tasks can move to the background or stop (`task/*`); the flip folds back onto the step. */
-function TaskButtons({ step }: { step: AgentStep }) {
-  const sessionId = useAppStore((s) => s.selectedSessionId);
-  const controlTask = useAppStore((s) => s.controlTask);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const item = step.item;
-  if (!sessionId) return null;
-  const run = (action: string) => {
-    setBusy(true);
-    setError(null);
-    void controlTask(sessionId, action, item.itemId)
-      .catch((cause) => setError(describeError("Could not load that", cause)))
-      .finally(() => setBusy(false));
-  };
-  return (
-    <span className="task-buttons">
-      {!item.background ? <button type="button" className="agent-btn" disabled={busy} onClick={() => run("background")} title="Keep running in the background">Background</button> : null}
-      {item.background ? <button type="button" className="agent-btn danger" disabled={busy} onClick={() => run("stop")} title="Stop this background task"><X size={12} />Stop task</button> : null}
-      {error ? <span className="agent-error" role="alert">{error}</span> : null}
-    </span>
-  );
-}
-
-/** Truncated tool output offers the stored full bytes (`item/readOutput`) in a viewer. */
+/** Truncated tool output says so; the Harness saves the full text in the workspace and names it in the result. */
 function FullOutputLink({ step }: { step: AgentStep }) {
-  const sessionId = useAppStore((s) => s.selectedSessionId);
-  const openOutput = useAppStore((s) => s.openOutput);
-  const ref = step.item.outputRef;
-  if (!step.item.truncated && !ref) return null;
-  if (!ref || ref.availability !== "available") {
-    const reason = ref ? OUTPUT_UNAVAILABLE[ref.availability] ?? "unavailable" : "unavailable";
-    return <span className="output-truncated">Output truncated · full output {reason}</span>;
-  }
-  return (
-    <button
-      type="button"
-      className="output-full"
-      onClick={() => { if (sessionId) void openOutput(sessionId, step.item.itemId); }}
-      title={`View the full stored output (${formatBytes(ref.byteLen)})`}
-    >
-      <Maximize2 size={12} aria-hidden="true" />View full output · {formatBytes(ref.byteLen)}
-    </button>
-  );
+  if (!step.item.truncated) return null;
+  return <span className="output-truncated">Output truncated</span>;
 }
 
 /** A write that replaced an existing file shows the saved before/after. Other edits keep the preview parsed from the call arguments. */
@@ -354,7 +307,6 @@ function StepRowView({ step }: { step: AgentStep }) {
         {step.item.presentation?.artifactPath ? <button type="button" className="ghost-btn small step-open" onClick={() => void openFile(step.item.presentation!.artifactPath!)}>Open saved output</button> : null}
         <FullOutputLink step={step} />
         </>}</Collapse>
-        {running && (step.item.kind === "toolCall" || step.item.kind === "userShell") && !step.item.failureReason ? <TaskButtons step={step} /> : null}
       </div>
     </li>
   );
@@ -478,22 +430,9 @@ function UserMessageView({ step }: { step: AgentStep }) {
   const openFile = useAppStore((state) => state.openFile);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
-  const [resetFiles, setResetFiles] = useState(false);
-  const [firstMessage, setFirstMessage] = useState(false);
   const editRef = useRef<HTMLTextAreaElement>(null);
   const openViewer = useAppStore((state) => state.openViewer);
   const sendPrompt = useAppStore((state) => state.sendPrompt);
-  const rewindMessage = useAppStore((state) => state.rewindMessage);
-  const sessionId = useAppStore((state) => state.selectedSessionId);
-  const canRewind = useAppStore((state) => !currentThread(state)?.agentId);
-  const canReset = useAppStore((state) => {
-    const snapshot = step.item.turnId ? currentThread(state)?.snapshots?.[step.item.turnId] : undefined;
-    return snapshot?.state === "ready" && snapshot.files.length > 0;
-  });
-  const rewindError = useAppStore((state) => {
-    const error = currentThread(state)?.rewindError;
-    return error?.itemId === step.id ? error.message : undefined;
-  });
   const busy = useAppStore(selectThreadBusy);
   const text = step.detail ?? "";
   const resendable = Boolean(text || step.item.images?.length || step.item.refs?.length);
@@ -509,11 +448,10 @@ function UserMessageView({ step }: { step: AgentStep }) {
     useAppStore.setState({ composer: value, images: step.item.images ?? [], contextRefs: step.item.refs ?? [] });
     void sendPrompt({ resetTaskState: true });
   };
-  const save = async () => {
+  const save = () => {
     if (!draft.trim() || busy) return;
-    if (canRewind && sessionId) {
-      if (await rewindMessage(sessionId, step.id, draft, resetFiles)) setEditing(false);
-    } else { setEditing(false); resend(draft.trim()); }
+    setEditing(false);
+    resend(draft.trim());
   };
   return (
     <article className="msg user" data-item={step.id}>
@@ -541,18 +479,12 @@ function UserMessageView({ step }: { step: AgentStep }) {
                   setEditing(false);
                 } else if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && !event.nativeEvent.isComposing && draft.trim() && !busy) {
                   event.preventDefault();
-                  void save();
+                  save();
                 }
               }}
             />
-            {canRewind ? <>
-              <p className="msg-edit-note">{firstMessage ? "First message: starts a new thread with no earlier history." : "Creates a fork before this message. The original thread is kept."}</p>
-              {canReset || resetFiles ? <label className="msg-edit-reset"><input type="checkbox" checked={resetFiles} disabled={busy} onChange={(event) => setResetFiles(event.target.checked)} />Reset files too</label> : null}
-              {resetFiles ? <p className="msg-edit-note">Resets only this turn’s saved files. Other later changes remain; changed files can block the reset.</p> : null}
-              {rewindError ? <p className="msg-edit-error" role="alert">{rewindError}</p> : null}
-            </> : null}
             <div className="msg-edit-row">
-              <button type="button" className="chip small" disabled={!draft.trim() || busy} title={canRewind ? "Send the edited message from this point in a new thread" : "Send the edited message as a new turn"} onClick={() => void save()}>{canRewind ? firstMessage ? "Start and send" : "Fork and send" : "Resend"}</button>
+              <button type="button" className="chip small" disabled={!draft.trim() || busy} title="Send the edited message as a new turn" onClick={save}>Resend</button>
               <button type="button" className="ghost-btn small" disabled={busy} onClick={() => setEditing(false)}>Cancel</button>
               <span className="msg-edit-hint">{shortcutLabel("↵")} to send</span>
             </div>
@@ -566,14 +498,10 @@ function UserMessageView({ step }: { step: AgentStep }) {
           tooltipAlign="end"
           busy={busy}
           onEdit={text ? () => {
-            const thread = currentThread(useAppStore.getState());
-            const boundary = thread ? messageRewindBoundary(thread, step.id) : null;
-            setFirstMessage(Boolean(boundary && !("error" in boundary) && !boundary.lastTurnId));
-            setResetFiles(false);
             setDraft(text);
             setEditing(true);
           } : undefined}
-          editLabel={canRewind ? "Edit and rewind" : "Edit and resend"}
+          editLabel="Edit and resend"
           onRetry={resendable ? () => resend(text) : undefined}
           retryLabel="Resend this message"
         />
@@ -748,28 +676,28 @@ function tokenFact(stats: { inputTokens?: number; cachedTokens?: number; outputT
 
 function ReceiptView({ run, isLast }: { run: AgentRun; isLast: boolean }) {
   const continueThread = useAppStore((state) => state.continueThread);
+  const stopRecovery = useAppStore((state) => state.stopRecovery);
   const retryLast = useAppStore((state) => state.retryLast);
-  const switchThreadAgent = useAppStore((state) => state.switchThreadAgent);
   const sessionId = useAppStore((state) => state.selectedSessionId);
   const workspacePath = useAppStore((state) => currentThread(state)?.workspacePath);
   const threadError = useAppStore((state) => currentThread(state)?.error);
-  const agentId: AgentId = useAppStore((state) => currentThread(state)?.agentId ?? "muse");
-  const grokReady = useAppStore((state) => state.agents.some((agent) => agent.id === "grok" && agent.found && agentEnabled(state, "grok")));
+  const recoveryDismissed = useAppStore((state) => currentThread(state)?.recoveryDismissed);
+  const recoveryNotice = useAppStore((state) => currentThread(state)?.notice?.message);
+  const agentId: AgentId = "harness";
   const busy = useAppStore(selectThreadBusy);
   const openFileDiff = useAppStore((state) => state.openFileDiff);
   const setInspectorTab = useAppStore((state) => state.setInspectorTab);
   const setDockOpen = useAppStore((state) => state.setDockOpen);
-  const forkThread = useAppStore((state) => state.forkThread);
   const [filesOpen, setFilesOpen] = useState(false);
   const snapshot = useAppStore((state) => run.turnId ? currentThread(state)?.snapshots?.[run.turnId] : undefined);
   const snapshotPending = useAppStore((state) => currentThread(state)?.snapshotPending);
   const snapshotError = useAppStore((state) => currentThread(state)?.snapshotError?.turnId === run.turnId ? currentThread(state)?.snapshotError?.message : undefined);
   const restoreSnapshot = useAppStore((state) => state.restoreSnapshot);
-  const agentName = useAppStore((state) => state.agents.find((agent) => agent.id === agentId)?.name ?? AGENT_LABELS[agentId]);
+  const agentName = AGENT_LABELS[agentId];
   const stats = useAppStore((state) => completedTurnStats(currentThread(state), run, isLast));
   const costModel = useAppStore((state) => {
     const thread = currentThread(state);
-    return state.modelsAgentId === (thread?.agentId ?? "muse") ? modelFor(state.models, thread?.config ?? {}) : undefined;
+    return modelFor(state.models, thread?.config ?? {});
   });
   const route = useAppStore((state) => (run.turnId ? currentThread(state)?.routes?.[run.turnId] : undefined));
   const routeExecution = route ? orchestratorRouteExecution(route) : undefined;
@@ -804,7 +732,7 @@ function ReceiptView({ run, isLast }: { run: AgentRun; isLast: boolean }) {
     {turnCost != null && costModel ? <span title={turnCost.partial ? "Partial estimated cost; unpriced tokens are excluded" : "Estimated cost for this turn"}>≈{formatCost(turnCost.amount, turnCost.currency)}{turnCost.partial ? " partial" : ""}</span> : null}
     {route ? <span className="turn-route" title={orchestratorRouteTitle(route)}>{orchestratorRouteLabel(route)}{routeFloor ? " · floor" : routeFallback ? " · fallback" : ""}</span> : null}
     {routeCallFact ? <span className="turn-route-calls" title="Model calls this turn made">{routeCallFact}</span> : null}
-    {receiptModel && receiptModelLabel ? <span className="turn-model" title={receiptModelTitle}><ModelIcon modelId={receiptModel.modelId} providerId={receiptModel.providerId} size={12} fallback={<ProductAgentMark id={agentId} size={12} />} />{receiptModelLabel}</span> : null}
+    {receiptModel && receiptModelLabel ? <span className="turn-model" title={receiptModelTitle}><ModelIcon modelId={receiptModel.modelId} providerId={receiptModel.providerId} size={12} fallback={<ProductAgentMark size={12} />} />{receiptModelLabel}</span> : null}
   </span> : derivedMs > 0 ? <span className="turn-stats" aria-label="Turn duration">
     <span className="turn-duration" title="Sum of the step times the agent reported">~{formatDuration(derivedMs)}</span>
   </span> : null;
@@ -825,7 +753,6 @@ function ReceiptView({ run, isLast }: { run: AgentRun; isLast: boolean }) {
   if (run.status === "completed") {
     const hasAnswer = Boolean(settledAnswerId(run.steps));
     if (!fileCount && !stats && !hasAnswer) return null;
-    const cuttable = agentId === "muse" && run.turnId != null && !run.turnId.startsWith("local:") && run.turnId !== "history";
     return (
       <section className="receipt completed" aria-label="Done">
         <div className="receipt-head">
@@ -835,7 +762,6 @@ function ReceiptView({ run, isLast }: { run: AgentRun; isLast: boolean }) {
           <span className="receipt-actions">
             {snapshotActions}
             {reviewAction}
-            {cuttable && sessionId ? <button type="button" className="ghost-btn small" title="Fork the thread with history up to this turn" onClick={() => void forkThread(sessionId, run.turnId)}><GitFork size={12} aria-hidden="true" />Fork here</button> : null}
           </span>
         </div>
         {routeFacts.length ? (
@@ -881,8 +807,8 @@ function ReceiptView({ run, isLast }: { run: AgentRun; isLast: boolean }) {
     );
   }
   const label = run.status === "cancelled" ? "Stopped" : run.status === "failed" ? "Run failed" : "Interrupted";
-  const zenStuck = agentId === "opencode" && /rate limit|access is disabled|insufficient (?:account )?funds|didn't respond|stopped responding/i.test(threadError ?? "");
-  const detail = run.status === "interrupted" ? `${agentName} disconnected mid-run. Completed steps are kept.`
+  const detail = run.status === "interrupted" && recoveryNotice ? recoveryNotice
+    : run.status === "interrupted" ? `${agentName} disconnected mid-run. Completed steps are kept.`
     : run.status === "cancelled" ? "You stopped this run. Completed steps are kept."
     : threadError || "Review the last step, then retry or continue.";
   return (
@@ -891,10 +817,11 @@ function ReceiptView({ run, isLast }: { run: AgentRun; isLast: boolean }) {
       <span className="receipt-text"><strong>{label}</strong> <span className="muted">{detail}</span></span>
       {metrics}
       <span className="receipt-actions">
-        {zenStuck && grokReady ? (
-          <button className="ghost-btn small" onClick={() => void switchThreadAgent("grok").then(() => retryLast())}>Switch to Grok</button>
-        ) : (
-          <button className="ghost-btn small" onClick={() => void continueThread()}><Play size={11} />Continue</button>
+        {recoveryDismissed ? null : (
+          <>
+            <button className="ghost-btn small" onClick={() => void continueThread()}><Play size={11} />Continue</button>
+            {run.status === "interrupted" ? <button className="ghost-btn small" onClick={() => stopRecovery()}>Leave stopped</button> : null}
+          </>
         )}
         <button className="ghost-btn small" onClick={() => void retryLast()}><RotateCcw size={11} />Retry</button>
         {snapshotActions}
@@ -924,71 +851,17 @@ function AgentStateMark({ state }: { state: AgentState }) {
   return <CircleDot size={13} aria-label="Waiting" />;
 }
 
-/**
- * Lifecycle controls for one child (`subagent/*`): message a runner, consume a
- * ready result, or resume/reopen/close it. Outcomes fold back onto the card.
- */
+/** A delegated child's card drills into its read-only transcript. */
 function SubagentControls({ step }: { step: AgentStep }) {
   const sessionId = useAppStore((s) => s.selectedSessionId);
-  const controlSubagent = useAppStore((s) => s.controlSubagent);
   const openChild = useAppStore((s) => s.openChild);
-  const [composing, setComposing] = useState<"sendMessage" | "followupTask" | null>(null);
-  const [draft, setDraft] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const item = step.item;
-  const subagentId = item.subagentId;
-  // A harness child has no subagent lifecycle to control; its card only drills
-  // into the read-only transcript.
-  if (item.readOnly) {
-    return sessionId && item.childSessionId ? (
-      <div className="agent-controls">
-        <div className="agent-buttons" role="toolbar" aria-label="Subagent controls">
-          <button type="button" className="agent-btn" onClick={() => void openChild(sessionId, item.itemId)} title="Read the child transcript without attaching"><FileText size={12} />Transcript</button>
-        </div>
-      </div>
-    ) : null;
-  }
-  if (!subagentId || !sessionId) return null;
-  const control = item.controlStatus;
-  const running = step.status === "running" || control === "running" || control === "starting" || control === "accepted";
-  const ready = control === "resultReady" || (!running && item.result != null);
-  const recoverable = control === "recoveryPending" || control === "manualReconciliation";
-  const ended = !running && !ready && !recoverable;
-  const run = (action: string, extra?: { body?: string; reason?: string }) => {
-    setBusy(true);
-    setError(null);
-    void controlSubagent(sessionId, subagentId, action, extra)
-      .then(() => { setComposing(null); setDraft(""); })
-      .catch((cause) => setError(describeError("Could not load that", cause)))
-      .finally(() => setBusy(false));
-  };
+  if (!sessionId || !item.childSessionId) return null;
   return (
     <div className="agent-controls">
       <div className="agent-buttons" role="toolbar" aria-label="Subagent controls">
-        {running ? <button type="button" className="agent-btn" disabled={busy} onClick={() => setComposing(composing ? null : "sendMessage")} title="Send the running child a note"><MessageCircle size={12} />Message</button> : null}
-        {running ? <button type="button" className="agent-btn" disabled={busy} onClick={() => run("interrupt")} title="Ask the child to yield at its next boundary">Interrupt</button> : null}
-        {running ? <button type="button" className="agent-btn danger" disabled={busy} onClick={() => run("stop")} title="Stop the running child"><X size={12} />Stop</button> : null}
-        {ready ? <button type="button" className="agent-btn" disabled={busy} onClick={() => void openChild(sessionId, item.itemId)} title="Read the result and the child transcript"><Eye size={12} />Result</button> : null}
-        {ready || ended ? <button type="button" className="agent-btn" disabled={busy} onClick={() => setComposing(composing ? null : "followupTask")} title="Queue a follow-up task for the child">Follow up</button> : null}
-        {recoverable ? <button type="button" className="agent-btn" disabled={busy} onClick={() => run("resume")} title="Resume the child as a later attempt"><Play size={12} />Resume</button> : null}
-        {ended ? <button type="button" className="agent-btn" disabled={busy} onClick={() => run("reopen")} title="Reopen the child as a later attempt"><RotateCcw size={12} />Reopen</button> : null}
-        {item.childSessionId ? <button type="button" className="agent-btn" disabled={busy} onClick={() => void openChild(sessionId, item.itemId)} title="Read the child transcript without attaching"><FileText size={12} />Transcript</button> : null}
-        {control !== "closed" && control !== "closing" ? <button type="button" className="agent-btn" disabled={busy} onClick={() => run("close")} title="Close the child">Close</button> : null}
+        <button type="button" className="agent-btn" onClick={() => void openChild(sessionId, item.itemId)} title="Read the child transcript without attaching"><FileText size={12} />Transcript</button>
       </div>
-      {composing ? (
-        <form
-          className="agent-compose"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (draft.trim()) run(composing, { body: draft.trim() });
-          }}
-        >
-          <input type="text" value={draft} autoFocus disabled={busy} maxLength={100000} placeholder={composing === "sendMessage" ? "Note for the running child…" : "Follow-up task for the child…"} aria-label={composing === "sendMessage" ? "Note for the child" : "Follow-up task"} onChange={(event) => setDraft(event.target.value)} />
-          <button type="submit" className="agent-btn emphasis" disabled={busy || !draft.trim()}><Send size={12} />Send</button>
-        </form>
-      ) : null}
-      {error ? <p className="agent-error" role="alert">{error}</p> : null}
     </div>
   );
 }
@@ -999,25 +872,12 @@ function SubagentControls({ step }: { step: AgentStep }) {
  */
 function AgentsCardView({ step }: { step: AgentStep }) {
   const workflow = step.kind === "workflow";
-  const sessionId = useAppStore((s) => s.selectedSessionId);
-  const controlWorkflow = useAppStore((s) => s.controlWorkflow);
   const counts = workflow ? agentCounts(step.item) : null;
   const state: AgentState = step.status === "running" ? "running" : step.status === "failed" ? "failed" : step.status === "cancelled" ? "cancelled" : "completed";
   const [open, setOpen] = useState(true);
   // Only a click animates the card body; a remount in the virtual list does not.
   const [toggled, setToggled] = useState(false);
-  const [wfBusy, setWfBusy] = useState(false);
-  const [wfError, setWfError] = useState<string | null>(null);
   const outcome = useMemo(() => workflow && state !== "running" ? parseWorkflowMessage(step.item.message) : null, [workflow, state, step.item.message]);
-  const runId = step.item.workflowRunId;
-  const runWorkflow = (action: string, child?: { childId: string; attempt: number }) => {
-    if (!sessionId || !runId) return;
-    setWfBusy(true);
-    setWfError(null);
-    void controlWorkflow(sessionId, runId, action, child)
-      .catch((cause) => setWfError(describeError("Could not load that", cause)))
-      .finally(() => setWfBusy(false));
-  };
   const rows = workflow
     ? (step.item.children ?? []).map((child, index) => {
         const activity = outcome?.activity.get(child.childId);
@@ -1053,12 +913,6 @@ function AgentsCardView({ step }: { step: AgentStep }) {
               <span className="agent-name" title={row.title}>{row.title}</span>
               {row.detail ? <span className="agent-detail">{row.detail}</span> : null}
               <span className="agent-meta">{[row.durationMs ? seconds(row.durationMs) : "", row.tokens ? `${row.tokens.toLocaleString("en-US")} tokens` : ""].filter(Boolean).join(" · ")}</span>
-              {workflow && runId && row.childId != null && row.attempt != null && (row.state === "pending" || row.state === "running") ? (
-                <button type="button" className="agent-btn" disabled={wfBusy} onClick={() => runWorkflow("skip", { childId: row.childId as string, attempt: row.attempt as number })} title={`Skip ${row.title} (attempt ${row.attempt})`}><SkipForward size={12} />Skip</button>
-              ) : null}
-              {workflow && runId && row.childId != null && row.attempt != null && row.state === "failed" ? (
-                <button type="button" className="agent-btn" disabled={wfBusy} onClick={() => runWorkflow("retry", { childId: row.childId as string, attempt: row.attempt as number })} title={`Retry ${row.title} (attempt ${row.attempt})`}><RotateCcw size={12} />Retry</button>
-              ) : null}
             </li>
           ))}
           {workflow && !rows.length ? <li className="agent-message">{state === "running" ? "Starting agents…" : "No agents ran."}</li> : null}
@@ -1067,16 +921,6 @@ function AgentsCardView({ step }: { step: AgentStep }) {
           {outcome?.unresolved.length ? <li className="agent-message"><strong>Unresolved</strong><ul>{outcome.unresolved.map((entry, index) => <li key={index}>{entry}</li>)}</ul></li> : null}
           {outcome?.failure ? <li className="agent-message failed">{outcome.failure}</li> : null}
         </ol>
-      {workflow && runId && state === "running" ? (
-        <div className="agent-controls">
-          <div className="agent-buttons" role="toolbar" aria-label="Workflow controls">
-            <button type="button" className="agent-btn danger" disabled={wfBusy} onClick={() => runWorkflow("cancel")} title="Cancel this workflow run"><X size={12} />Cancel run</button>
-          </div>
-          {wfError ? <p className="agent-error" role="alert">{wfError}</p> : null}
-        </div>
-      ) : workflow && wfError ? (
-        <div className="agent-controls"><p className="agent-error" role="alert">{wfError}</p></div>
-      ) : null}
       {!workflow ? <SubagentControls step={step} /> : null}
       </>}</Collapse>
     </section>
@@ -1171,7 +1015,7 @@ function RunViewView({ run, header, inline, isLast, onHeightChange, tokenSpeed }
 const RunView = memo(RunViewView);
 
 /** The single live status line opens to show what the agent is doing right now. */
-export function WorkingIndicator({ label, paused, peak, meta, live, agentId = "muse", agentName = "Muse", closing = false }: { label: string; paused?: boolean; peak?: boolean; meta?: string; live?: AgentStep[]; agentId?: AgentId; agentName?: string; closing?: boolean }) {
+export function WorkingIndicator({ label, paused, peak, meta, live, agentName = AGENT_LABELS.harness, closing = false }: { label: string; paused?: boolean; peak?: boolean; meta?: string; live?: AgentStep[]; agentId?: AgentId; agentName?: string; closing?: boolean }) {
   const thinkingOrb = useAppStore((state) => state.thinkingOrb ?? "auto");
   const [open, setOpen] = useState(false);
   const thought = live?.find((step) => step.kind === "reasoning" && step.status === "running");
@@ -1180,7 +1024,7 @@ export function WorkingIndicator({ label, paused, peak, meta, live, agentId = "m
   return (
     <div className={`working-wrap${closing ? " closing" : ""}`} aria-live="polite">
       <button type="button" className={`working ${peak ? "peak" : ""}`} aria-expanded={live ? open : undefined} disabled={!live} onClick={() => setOpen(!open)}>
-        {agentId === "muse" || agentId === "harness" ? <Orb state={paused ? "breathing" : thinkingOrb !== "auto" ? thinkingOrb : peak ? "solving" : "working"} size={20} speed={peak && !paused ? 1.9 : 1} paused={paused} aria-label={agentName} /> : <span className={`working-agent ${paused ? "paused" : ""}`} aria-label={agentName}><ProductAgentMark id={agentId} size={20} /><i aria-hidden="true" /></span>}
+        <Orb state={paused ? "breathing" : thinkingOrb !== "auto" ? thinkingOrb : peak ? "solving" : "working"} size={20} speed={peak && !paused ? 1.9 : 1} paused={paused} aria-label={agentName} />
         <span className="working-label" title={label}>{label}</span>
         {meta ? <span className="working-meta">{meta}</span> : null}
         {live ? <ChevronRight size={12} className={`caret ${open ? "open" : ""}`} aria-hidden="true" /> : null}

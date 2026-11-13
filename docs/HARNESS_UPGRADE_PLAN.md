@@ -1,7 +1,7 @@
 # Harness upgrade plan
 
 The forward roadmap for the built-in agent in
-`packages/glitter-bridge/src/harness`. Created on 2026-10-24 after a review of
+`packages/glitter-harness/src/harness`. Created on 2026-10-24 after a review of
 the current working tree and comparisons with Pi, ZCode, Codex, Claude Code,
 MiniMax Code and Kimi Code.
 
@@ -87,8 +87,8 @@ These are inputs to this plan, not work to repeat:
   changelog/decision document, and an update to this file's status table.
 - A sandbox-dependent test must report **passed**, **failed**, or **skipped for
   a stated environment reason**. A nested-sandbox denial is not a product pass.
-- Keep changes compatible with Muse and ACP unless a capability is explicitly
-  Harness-only. Do not expose unsupported Harness actions in shared controls.
+- Do not expose unsupported Harness actions in shared controls. Muse and ACP
+  integrations were retired; their earlier roadmap references are historical.
 
 ## Status
 
@@ -97,8 +97,8 @@ These are inputs to this plan, not work to repeat:
 | 0 | Trust boundary and known correctness gaps closed | done |
 | 1 | Repeatable live conformance and task-quality baseline | in progress |
 | 2 | Context pressure handled with bounded, honest compaction | in progress |
-| 3 | Interrupted work recovered without unsafe replay | todo |
-| 4 | Provider capabilities and compatibility made explicit | todo |
+| 3 | Interrupted work recovered without unsafe replay | in progress |
+| 4 | Provider capabilities and compatibility made explicit | in progress |
 | 5 | Harness thread lifecycle reaches supported app parity | todo |
 | 6 | Measured extensibility and delegation improvements | todo |
 | 7 | Release evidence and sustained performance gates | todo |
@@ -161,7 +161,7 @@ tool capability.
       with 0 vulnerabilities.
 
 **Primary surfaces:** `harness/mcp.ts`, `harness/context.ts`, `harness/host.ts`,
-`packages/glitter-bridge/src/isolation.ts` only if actually needed, the existing
+`packages/glitter-harness/src/isolation.ts` only if actually needed, the existing
 native workspace trust/grant boundary, `lib.rs`, `dto.rs`, `store.ts`, the
 existing trust and MCP UI, and `tests/harness.test.mjs` /
 `tests/isolation.test.mjs`. Prefer extending `isolation.ts`; do not create
@@ -194,8 +194,9 @@ Phase 2 tradeoffs.
 The initial synthetic corpus and bounded Harness runner are in
 `evals/harness/`. They reuse shared fixtures, forbid model-requested shell and
 network tools, and report unobserved conformance cases rather than treating
-them as passes. Authenticated provider baselines, several conformance probes,
-and comparisons remain open; this phase has not met its exit gate.
+them as passes. Scripted protocol probes now exercise the conformance contract
+on both wire families without a provider. Authenticated provider baselines and
+comparisons remain open; this phase has not met its exit gate.
 The Anthropic and OpenAI-family live runs are blocked in this environment:
 the evaluator's environment credentials are not configured. The project
 maintainer with provider access owns selecting models and price bounds and
@@ -204,11 +205,16 @@ running them; this does not assert whether the app has keys in its keychain.
 Add repeatable evidence without introducing a hosted service, committed secrets
 or an always-on paid CI suite.
 
-- [ ] **1.1 Define a provider conformance contract.** A small matrix covers
+- [x] **1.1 Define a provider conformance contract.** A small matrix covers
       model listing, text and reasoning streaming, parallel tool calls,
       malformed/truncated calls, cancellation, idle streams, retries, usage and
       context overflow. Report unsupported capabilities explicitly instead of
       converting them into false passes.
+      Evidence (2026-11-13): `npm run eval:harness -- --probes` passed 12/12
+      conformance ids on a scripted Anthropic Messages stream and 12/12 on a
+      scripted OpenAI-family Chat Completions stream. `node --test
+      tests/harness-eval.test.mjs` passed 15/15, including that command. A
+      scripted pass is host behavior, not a live provider baseline.
 - [ ] **1.2 Add an opt-in live smoke runner.** Reuse the real `HarnessHost` and
       a temporary fixture workspace. Select providers/models explicitly, obtain
       credentials through the existing keychain path or a documented local-only
@@ -229,10 +235,15 @@ or an always-on paid CI suite.
       repeated samples for noisy comparisons. Where a comparison harness is
       available, give it the same model, workspace, permissions and task budget;
       otherwise report no ranking.
-- [ ] **1.6 Put deterministic coverage in CI and live coverage behind explicit
+- [x] **1.6 Put deterministic coverage in CI and live coverage behind explicit
       invocation.** No network or secret is required for `npm run verify`.
       Document how maintainers run the live suite and how a release records its
       result.
+      Evidence (2026-11-13): `--validate`, `--dry` and `--probes` make no
+      provider call. The probe command is covered by `tests/harness-eval.test.mjs`,
+      which `npm test` runs. Live runs still require `--yes`, a selected model,
+      an environment credential and `EVAL_PRICES`, and they write a redacted
+      `report.json`. `DEVELOPMENT.md` names the offline commands.
 
 **Primary surfaces:** new focused scripts/tests, `tests/fixtures`,
 `harness/host.ts`, `harness/wire.ts`, existing usage events, `DEVELOPMENT.md`
@@ -256,6 +267,9 @@ against it without inventing success metrics.
 
 Manual and automatic compaction have an implementation. Their quality and
 long-session exit gate still need comparison with the Phase 1 baseline.
+The current output reserve is a fitting estimate: provider wires do not all
+enforce it as an output limit, and an unknown window leaves input unfitted.
+Item 2.1 remains open until those behaviors have a documented, tested contract.
 
 Extend the current request-fitting work into context management that survives
 more than tool-output growth. Keep model history as a projection of the durable
@@ -309,36 +323,76 @@ transcript and showing a measured improvement over the Phase 1 baseline.
 
 ## Phase 3 — Recover interrupted work without unsafe replay
 
-**Status:** todo · **Depends on:** Phases 0 and 1; Phase 2 for compacted-history
-recovery.
+**Status:** in progress · items 3.1–3.5 are checked and `npm run verify` passed
+on the working tree. The phase still depends on Phase 1 and on Phase 2 for
+compacted-history recovery.
 
 Make restart semantics explicit. Do not build a general workflow engine or a
 second durable store.
 
-- [ ] **3.1 Persist a bounded turn/checkpoint record.** Identify the session,
+- [x] **3.1 Persist a bounded turn/checkpoint record.** Identify the session,
       turn, logical model call, tool call, preparation/approval state, start
       state and committed result. Retain the existing append-only session log
       and native snapshot ownership; add only the metadata needed to reconcile
       an interruption.
-- [ ] **3.2 Define replay semantics per tool and per state.** Only explicitly
+      Evidence (2026-11-13): a `checkpoint` record in the same JSONL marks a
+      turn `open` when it starts and `completed`, `cancelled` or `failed` when
+      it ends. An approval is `pending` before the card is shown and records
+      the decision before the tool may start. `toolStarted` remains the start
+      marker, and the tool result remains the committed outcome. A committed
+      model call is the assistant message already in the log; an in-flight call
+      is an open turn with no new assistant message, and resume does not send
+      it. `npm run typecheck -w @glitter/harness` passed. The new resume cases
+      in `tests/harness.test.mjs` passed.
+- [x] **3.2 Define replay semantics per tool and per state.** Only explicitly
       declared idempotent built-in reads may be safe to repeat; edits, shell,
       MCP and delegated work are not automatically safe, regardless of whether
       their result looks read-only. A started call with no committed outcome
       stays **outcome unknown** and is inspected before any retry. Never
       auto-approve because a process restarted.
-- [ ] **3.3 Reconcile on resume.** Distinguish completed, unstarted, cancelled,
+      Evidence (2026-11-13): `ToolDefinition.replay: "safe"` is declared only on
+      `read_file`, `list_files`, `grep` and `skill`; `markStarted` persists it in
+      the `toolStarted` record, `store.read` stamps `replaySafe`, and
+      `interruptedOutput`/`repairHistory` give a safe-read filler versus the
+      unknown-outcome warning. Grants stay in memory, so a restart never
+      auto-approves. Covered by five new tests in `tests/harness.test.mjs`.
+- [x] **3.3 Reconcile on resume.** Distinguish completed, unstarted, cancelled,
       expired, interrupted and unknown work. Settle pending approvals/questions
       truthfully, close open stream items, preserve model-valid tool pairing and
       surface recovery in the thread. Do not resume a queued or active model
       call invisibly after relaunch.
-- [ ] **3.4 Add explicit user continuation.** Let the user inspect the last
+      Evidence (2026-11-13): one fault-injection case resumes a log frozen at
+      each boundary — before the model call, during a stream, before approval,
+      after an allowed or expired approval, before a read starts, during a
+      started read, after an edit effect with no committed result, with a
+      committed result still open, during compaction before and after the
+      summary record, during child execution, and an old log with no checkpoint.
+      Each resume makes no model call, keeps a committed result, and a second
+      resume adds nothing. A summary is not applied unless its record was
+      written. An in-progress compaction item is stored when compaction starts,
+      so a crash closes it instead of leaving a finished summary. Compaction
+      tests in `tests/harness.test.mjs` passed with that change.
+- [x] **3.4 Add explicit user continuation.** Let the user inspect the last
       checkpoint and choose a safe next action: continue from known results,
       send a new instruction, or stop. Reuse existing turn snapshots for file
       recovery; chat rewind and file rollback remain separate choices.
-- [ ] **3.5 Handle delegation and MCP consistently.** A parent restart cannot
+      Evidence (2026-11-13): an interrupted Harness receipt shows the resume
+      notice, Continue, and Leave stopped. Continue sends a prompt that stays
+      on the recorded results and does not ask for unknown work or a second
+      child. Leave stopped sends nothing and hides those actions. Typing in the
+      composer remains the new instruction. Undo and Reapply stay the snapshot
+      controls. Covered by `continuation.test.ts` and the Harness receipt case
+      in `AgentTimeline.test.tsx`.
+- [x] **3.5 Handle delegation and MCP consistently.** A parent restart cannot
       duplicate a child whose outcome is unknown or silently widen its policy.
       External calls retain their unknown-outcome semantics even if the local
       process has a clean checkpoint.
+      Evidence (2026-11-13): resuming a parent with a started `task` call
+      reconciles the existing child and names that child in the filler. It
+      makes no model call. A second resume does not add another result. The
+      child keeps `promptUnmatched` when resume is asked for `allowAll`. A
+      started `mcp__` call stays outcome unknown even when the turn checkpoint
+      says completed. Covered by two cases in `tests/harness.test.mjs`.
 
 **Primary surfaces:** `harness/store.ts`, `harness/host.ts`,
 `harness/tools.ts`, `harness/delegation.ts`, existing native snapshots,
@@ -358,35 +412,78 @@ recover every interrupted fixture from known evidence.
 
 ## Phase 4 — Harden provider compatibility and efficiency
 
-**Status:** todo · **Depends on:** Phase 1; Phase 2 for context/output-limit
-integration.
+**Status:** in progress · items 4.1–4.5 are checked and `npm run verify` passed
+on the working tree. The phase still needs the live Phase 1 matrix and Phase 2
+context/output-limit integration.
 
 Improve the existing two-wire implementation before considering another provider
 abstraction. Do not add an SDK or provider framework solely for symmetry.
 
-- [ ] **4.1 Define a capability descriptor per resolved model.** Context and
+- [x] **4.1 Define a capability descriptor per resolved model.** Context and
       output limits, tools, images, reasoning, streaming usage and cache support
       come from catalog evidence, tested family overrides or explicit unknowns.
       Keep provider quirks at the provider/wire boundary rather than scattering
       model-name checks through the loop.
-- [ ] **4.2 Build conformance fixtures from sanitized real protocol behavior.**
+      Evidence (2026-11-13): `modelCapabilities` in `harness/capabilities.ts`
+      is the one descriptor. A listed value wins; a tested family override is
+      next; otherwise the field is null with source `unknown`. The host takes
+      its context window from it, and the wire takes Anthropic's output cap and
+      the Chat Completions usage flag from it. `npm run typecheck -w @glitter/harness`
+      passed. The new descriptor test and the OpenAI stream test passed. Live
+      provider conformance is still Phase 1.
+- [x] **4.2 Build conformance fixtures from sanitized real protocol behavior.**
       Cover text/reasoning ordering, tool-call IDs and argument deltas, empty or
       multiple content blocks, finish reasons, usage variants, malformed SSE,
       early EOF, rate limits and retries. Include models used through gateways,
       not just first-party endpoints.
-- [ ] **4.3 Normalize images and unsupported requests before sending.** Enforce
+      Evidence (2026-11-13): `tests/wire-protocol.test.mjs` drives `streamChat`
+      with sanitized frames. Anthropic covers reasoning-before-text, an empty
+      text block beside a real one, split tool-argument deltas, a malformed
+      SSE line, cache usage, and `tool_use`. Groq-shaped Chat Completions
+      covers the same split for tool ids and arguments, an empty content delta,
+      a `length` finish, and cached prompt tokens. OpenRouter is the gateway:
+      the request carries `reasoning.effort` and the stream still parses.
+      A 429 is `RATE_LIMIT` and retryable; an opened stream that ends early is
+      `STREAM_CLOSED` and not a finished answer; an empty body is
+      `EMPTY_RESPONSE`. The fixture key is not in the error. The host's bounded
+      retry consumes those transient codes and is already covered in
+      `tests/harness.test.mjs`. Both new tests passed.
+- [x] **4.3 Normalize images and unsupported requests before sending.** Enforce
       media type, decoded size, dimensions/count and provider support. Reject
       unsupported combinations before charging for a call where practical;
       preserve the exact approved tool arguments.
-- [ ] **4.4 Improve caching and retries with measurements.** Keep stable prompt
+      Evidence (2026-11-13): `imageRequestProblem` allows PNG, JPEG, GIF, and
+      WebP only, at most 20 images, 10 MB decoded, and 8000 pixels on a side.
+      A model whose capability is false is rejected before `fetch`. An SVG on
+      an Anthropic request throws and the stub is not called. The approved
+      tool input object is unchanged. `tests/wire-protocol.test.mjs` passed
+      3/3. Bridge typecheck passed.
+- [x] **4.4 Improve caching and retries with measurements.** Keep stable prompt
       and tool prefixes stable; use only provider-supported cache controls.
       Preserve signed reasoning across tool loops, compaction and provider
       limits. Respect bounded total retry time, cancellation and retry-after
       semantics without replaying uncertain tool effects.
-- [ ] **4.5 Report degradation precisely.** A model without tools, images,
+      Evidence (2026-11-13): Anthropic requests still set `cache_control` on
+      the stable system prefix; a Groq-shaped Chat Completions body has none.
+      Signed thinking is replayed inside a tool loop by the existing wire
+      tests, and compaction replaces history with a summary that does not
+      carry those signatures. A 429 with `Retry-After: 0` retries once, waits
+      0s instead of the 1.5s backoff, and does not run a tool twice. The wait
+      stays inside the 20s cap and the elapsed retry budget, and cancellation
+      still aborts it. Cache tokens and call duration are already on
+      `modelCall`. No improvement over a live baseline is claimed.
+- [x] **4.5 Report degradation precisely.** A model without tools, images,
       reasoning or a known window gets a truthful capability state. A fallback
       must be visible and must not silently switch provider or model in the
       middle of a turn.
+      Evidence (2026-11-13): `capabilityGaps` names an unknown context window
+      and explicit lack of tools or images. The first call with
+      `ollama/local-writer` says the window is unknown and that the turn still
+      uses that model; a second call does not repeat it, and the request model
+      stays `local-writer`. The model picker and model library show Context
+      unknown when no window is listed. An effort the model rejects is still
+      dropped with a notice, without changing the model. Bridge typecheck
+      passed. The new harness and wire tests passed.
 
 **Primary surfaces:** `harness/providers.ts`, `harness/wire.ts`,
 `harness/host.ts`, the context/capability types from Phase 2, provider/model UI
@@ -595,3 +692,13 @@ into this file.
 |---|---|---|---|
 | 2026-10-24 | Planning baseline, not completion | Current dirty working tree; macOS review environment | Bridge typecheck passed. Focused harness/isolation run: 128/133 tests passed; all five harness failures hit nested `sandbox-exec` denial, so shell/MCP sandbox behavior remains unverified here. No live-provider or comparative task benchmark was run. |
 | 2026-10-26 | Phase 0 complete (0.1–0.6) | `20b90a2` plus current working-tree changes; macOS arm64 with seatbelt available | `npm run test:sandbox`: 2/2 real shell/stdio-MCP checks, no skips. `node --test tests/isolation.test.mjs`: 14/14, no skips. `npm run verify`: 753 Node tests plus one environment-skipped Chromium test, 422 UI tests, 213 native tests, 0 vulnerabilities. Integration coverage is named in `tests/sandbox-integration.test.mjs`; no live-provider or comparative task benchmark was run. |
+| 2026-11-13 | Phase 1.1 and 1.6, not the phase exit | macOS arm64; scripted streams, no provider credentials | `npm run eval:harness -- --probes`: 12/12 Anthropic and 12/12 OpenAI-family (Groq-shaped) conformance ids. `node --test tests/harness-eval.test.mjs`: 15/15. Live Anthropic and OpenAI-family baselines remain blocked on maintainer credentials. `npm run verify` was not re-run for this slice. |
+| 2026-11-13 | Phase 3.1, and more of 3.3 | macOS arm64; no provider calls on the resume cases | Turn and approval checkpoints are in the session log. Resume of an open turn makes no model call and notices once. A lost approval is not replayed or kept. `npm run typecheck -w @glitter/harness` passed. Focused `node --test --test-name-pattern` recovery cases in `tests/harness.test.mjs` passed. `npm run verify` was not re-run. Three context-window tests already fail on `9c447d2` and were left as they are. |
+| 2026-11-13 | Phase 3.4 and 3.5 | macOS arm64 | Parent resume of an interrupted task names the existing child, makes no model call, and does not widen the child's mode. A started MCP call stays outcome unknown under a completed turn checkpoint. Harness Continue and Leave stopped covered by Vitest. `npm run verify` was not re-run. |
+| 2026-11-13 | Phase 3.3 fault injection | macOS arm64; scripted logs, no provider calls | `node --test --test-name-pattern 'crash at each persistence boundary|compact|open turn|lost approval|parent restart|wider mode' tests/harness.test.mjs`: 12/12. No boundary called the model, replayed an edit, or dropped a committed result. `npm run verify` was not re-run, so the phase is not closed. |
+| 2026-11-13 | Phase 4.1 capability descriptor | macOS arm64; no provider calls | `modelCapabilities` covers context, output, tools, images, reasoning, streaming usage and cache. Catalog overrides a family value; an unknown stays null. Bridge typecheck passed. Descriptor and OpenAI stream tests passed. `npm run verify` was not re-run. |
+| 2026-11-13 | Phase 4.2 protocol fixtures | macOS arm64; sanitized frames, no provider calls | `node --test tests/wire-protocol.test.mjs`: 2/2. Anthropic, Groq-shaped Chat Completions, and OpenRouter. Bridge typecheck passed. `npm run verify` was not re-run. |
+| 2026-11-13 | Phase 4.3 image gate | macOS arm64; no provider calls | `node --test tests/wire-protocol.test.mjs`: 3/3. SVG, oversize edge, count, and a model that does not accept images are rejected before fetch. Bridge typecheck passed. `npm run verify` was not re-run. |
+| 2026-11-13 | Phase 4.4 and 4.5 | macOS arm64; stubbed providers | Retry-After 0 retried once. Cache control is Anthropic-only in the wire fixture. Unknown-window notice fired once and the model id was unchanged. `capabilityGaps` unit test passed. Wire fixtures 4/4. Bridge typecheck passed. `npm run verify` was not re-run. |
+| 2026-11-13 | Phase 3.2 done; 3.3 partial (resume settlement) | HEAD `9c447d2` plus working-tree changes; macOS arm64. The tree was being edited concurrently (skill-icon and UI agent-type work), so verification is scoped to this change. | Bridge typecheck passed; seven new tests in `tests/harness.test.mjs` passed (replay classification, store stamping incl. Lead/Builder, once-only resume settlement, pending-question exclusion, end-to-end read-vs-edit declaration, torn-tail healing). A clean HEAD worktree confirmed three budget-tuned fit tests (`genuinely fitted window`, `unfittable tool-result`, `overflow is recovered`) already fail at `9c447d2` without this change: their hardcoded windows predates the grown tool-schema set, so Phase 2's evidence gate stays open. No live-provider run (paid gate). |
+| 2026-11-13 | Harness-only transition, deterministic checks | Working tree before the final signature-accounting and CLI metadata changes; macOS arm64 with seatbelt available | `npm run verify` passed: 766 Node tests passed, one opt-in real Chromium test skipped because the opt-in was not enabled; 494 UI and 207 native tests passed. Accessibility, contrast, audit and builds passed. Harness fixture validation and dry run passed; scripted probes passed 12/12 on each wire family. No authenticated provider or comparative quality run was made. |

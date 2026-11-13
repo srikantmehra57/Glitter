@@ -96,6 +96,19 @@ export function installedFromMarketplace(library: PluginLibrary | null, source: 
     && plugin.origin.repo.toLowerCase() === source.origin.repo.toLowerCase());
 }
 
+/**
+ * The thumbnail image for a marketplace listing: the logo of the copy already
+ * installed, else the avatar of the owner whose repository it lives in. A
+ * listing in the source's own repository (or its owner's) has none; its tile
+ * is generated and the source's avatar is its corner badge.
+ */
+export function listingImage(library: PluginLibrary | null, source: MarketplaceSource, plugin: MarketplacePlugin, installed?: InstalledPlugin): string | null {
+  if (installed?.icon) return installed.icon;
+  const owner = /^([A-Za-z0-9-]+)\/[^/]+$/.exec(plugin.location)?.[1]?.toLowerCase();
+  if (!owner || owner === source.origin.owner.toLowerCase()) return null;
+  return library?.avatars?.[owner] ?? null;
+}
+
 /** The marketplace a featured repository was added as, if it has been. */
 export function addedSource(library: PluginLibrary | null, spec: string): MarketplaceSource | undefined {
   const [owner, repo] = spec.toLowerCase().split("/");

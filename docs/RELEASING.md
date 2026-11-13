@@ -52,13 +52,13 @@ npm run check:versions    # fails on any drift
 ```
 
 Bump all of: `package.json`, `apps/desktop/package.json`, `apps/website/package.json`,
-`packages/glitter-bridge/package.json`, `apps/desktop/src-tauri/Cargo.toml`,
+`packages/glitter-harness/package.json`, `apps/desktop/src-tauri/Cargo.toml`,
 `apps/desktop/src-tauri/tauri.conf.json`.
 When bumping `NODE_VERSION`, update all six `PINNED_SHA256` entries in
-`packages/glitter-bridge/scripts/stage-sidecar.mjs` from that release's signed
+`packages/glitter-harness/scripts/stage-sidecar.mjs` from that release's signed
 `SHASUMS256.txt.asc`. The stage script checks the OpenPGP signature against the
 vendored key
-`packages/glitter-bridge/scripts/keys/5BE8A3F6C8A5C01D106C0AD820B1A390B168D356.asc`
+`packages/glitter-harness/scripts/keys/5BE8A3F6C8A5C01D106C0AD820B1A390B168D356.asc`
 (Antoine du Hamel, from [nodejs/release-keys](https://github.com/nodejs/release-keys)).
 If a different releaser signs the new version, replace the key file and
 `NODE_RELEASE_FINGERPRINT` in `verify-node-release.mjs`, and replace
@@ -80,11 +80,8 @@ Run the gates **serially**. `node --test` and `cargo test` each saturate the
 machine; run concurrently they starve each other's timers and produce spurious
 failures (observed: a bridge test sat 925 s behind a nominal 5 s deadline).
 
-Also run the live host probe when a `muse` CLI is available:
-
-```bash
-node scripts/live-muse-smoke.mjs
-```
+Run the opt-in [Harness provider evaluation](../evals/harness/README.md) with
+explicit models, credentials and cost bounds when release evidence is available.
 
 ## 4. Package
 

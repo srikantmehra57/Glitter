@@ -1,5 +1,5 @@
 export type ApprovalMode = "allowAll" | "promptUnmatched" | "onRequest" | "denyUnmatched" | "guarded";
-/** The modes the Muse CLI accepts. Auto (`guarded`) is translated before it is sent. */
+/** Approval modes excluding Auto (`guarded`). */
 export type CliApprovalMode = Exclude<ApprovalMode, "guarded">;
 /** A persistent built-in-agent rule, written `Tool(pattern)`. Allow grants, deny refuses in every mode. */
 export type PermissionRuleEffect = "allow" | "deny";
@@ -18,12 +18,9 @@ export const SIDEBAR_DENSITIES = ["standard", "comfortable", "compact"] as const
 export type SidebarDensity = (typeof SIDEBAR_DENSITIES)[number];
 export const THINKING_ORBS = ["auto", "working", "searching", "solving", "listening", "connecting", "weaving", "composing", "breathing", "shaping"] as const;
 export type ThinkingOrbStyle = (typeof THINKING_ORBS)[number];
-/** Which credential pays for a session: the Muse Code subscription sign-in, or a metered API key. */
-export type AuthSource = "subscription" | "apiKey";
-export type AuthMode = "auto" | AuthSource;
-import type { UserInputRequest, UserInputResponse, UserInputAnswer } from "../../../../packages/glitter-bridge/src/protocol";
+import type { UserInputRequest, UserInputResponse, UserInputAnswer } from "../../../../packages/glitter-harness/src/protocol";
 export type { UserInputRequest, UserInputResponse, UserInputAnswer };
-import type { BrowserControlInput, BrowserControlResult, BrowserFrame, BrowserState, BrowserStateEvent, BrowserViewport } from "../../../../packages/glitter-bridge/src/browser-types";
+import type { BrowserControlInput, BrowserControlResult, BrowserFrame, BrowserState, BrowserStateEvent, BrowserViewport } from "../../../../packages/glitter-harness/src/browser-types";
 export type { BrowserControlInput, BrowserControlResult, BrowserFrame, BrowserState, BrowserStateEvent, BrowserViewport };
 
 import type { ShortcutOverrides } from "./shortcuts";
@@ -65,56 +62,21 @@ export const EDITOR_CHOICES = ["default", "vscode", "cursor", "zed", "idea"] as 
 export type EditorChoice = (typeof EDITOR_CHOICES)[number];
 export const EDITOR_LABELS: Record<EditorChoice, string> = { default: "System default", vscode: "VS Code", cursor: "Cursor", zed: "Zed", idea: "IntelliJ IDEA" };
 /** Settings pages, in navigation order. Names and groups are in `lib/settingsNav.ts`. */
-export const SETTINGS_TABS = ["Models", "Orchestrator", "Providers", "Agents", "Extensions", "Permissions", "Threads", "General", "Theme", "Shortcuts", "Usage", "Diagnostics", "About"] as const;
+export const SETTINGS_TABS = ["Models", "Orchestrator", "Providers", "Extensions", "Permissions", "Threads", "General", "Theme", "Shortcuts", "Usage", "Diagnostics", "About"] as const;
 export type SettingsTab = (typeof SETTINGS_TABS)[number];
 
-/** `harness` is the app's own agent: it calls model providers with the user's keys (Settings → Providers). */
-export type AgentId = "harness" | "muse" | "opencode" | "grok" | "gemini" | "qwen" | "goose" | "cline";
-export const AGENT_IDS: AgentId[] = ["harness", "muse", "opencode", "grok", "gemini", "qwen", "goose", "cline"];
-export const AGENT_LABELS: Record<AgentId, string> = {
-  harness: "Harness",
-  muse: "Muse",
-  opencode: "OpenCode",
-  grok: "Grok",
-  gemini: "Gemini CLI",
-  qwen: "Qwen Code",
-  goose: "Goose",
-  cline: "Cline CLI",
-};
-/** OpenCode is off until the user turns it on — Zen free models fail on many accounts. */
-export const DEFAULT_ENABLED_AGENTS: Record<AgentId, boolean> = {
-  harness: true,
-  muse: true,
-  opencode: false,
-  grok: false,
-  gemini: false,
-  qwen: false,
-  goose: false,
-  cline: false,
-};
-export function agentEnabled(settings: { enabledAgents?: Partial<Record<AgentId, boolean>>; acpUnisolatedConsent?: boolean }, id: AgentId): boolean {
-  // Native consent also overrides stale per-agent choices; callers without
-  // consent state retain the per-agent preference behavior.
-  if (id !== "harness" && id !== "muse" && settings.acpUnisolatedConsent === false) return false;
-  return settings.enabledAgents?.[id] ?? DEFAULT_ENABLED_AGENTS[id];
-}
-
 /**
- * Map a `skills list` scope to the `skills enable|disable --scope` argument
- * (live-verified: list reports `bundled`, the mutator takes `built-in`).
- * Unknown scopes yield null: lifecycle buttons stay hidden rather than guess.
+ * The app's agent: the built-in Harness, which calls model providers with the
+ * user's own keys (Settings → Providers). The id stays a type so persisted
+ * threads and settings keep one spelling for it.
  */
-export function skillScopeArg(scope: string): string | null {
-  const normalized = scope.trim().toLowerCase();
-  if (normalized === "bundled" || normalized === "built-in") return "built-in";
-  if (normalized === "user" || normalized === "project" || normalized === "plugin") return normalized;
-  return null;
-}
-/** A coding-agent CLI found on this machine (Muse over MSP, the rest over ACP). */
+export type AgentId = "harness";
+export const AGENT_LABELS: Record<AgentId, string> = { harness: "Harness" };
+/** The agent as detection reports it: always present, ready once a provider has a key. */
 export type AgentInfo = {
   id: AgentId;
   name: string;
-  protocol: "msp" | "acp" | "native";
+  protocol: "native";
   found: boolean;
   path: string | null;
   version: string | null;
@@ -129,91 +91,17 @@ export type SessionPreview = {
   history?: { items?: TranscriptItem[] };
 };
 
-/** Native ACP identity: canonical binary, version, and pin/drift state. */
-export type AgentIdentity = {
-  agentId: AgentId;
-  name: string;
-  path: string | null;
-  version: string | null;
-  pinned: boolean;
-  changed: boolean;
-};
-
-export type Detection = {
-  found: boolean;
-  path: string | null;
-  version: string | null;
-  authenticated: boolean;
-  method: string | null;
-  /** Credential the next session will bill, after applying the chosen mode. */
-  activeAuth?: AuthSource | null;
-  subscriptionAvailable?: boolean;
-  apiKeyAvailable?: boolean;
-  /** Display name/email from the `muse /login` credential, when signed in. */
-  accountName?: string | null;
-  accountEmail?: string | null;
-  running?: boolean;
-  agents?: AgentInfo[];
-};
+export type Detection = { agents?: AgentInfo[] };
 
 export type DiagnosticsSnapshot = { os: string; arch: string; logTail: string[] };
 /** Native app-log and Harness session-log locations; no renderer-chosen paths. */
 export type SupportPaths = { appLogPath: string; sessionLogPath: string | null };
 
-/** Muse CLI release-channel urgency (`muse-launcher.sh` channel manifest). */
-export type CliUpdateUrgency = "none" | "encouraged" | "must_download";
-
-/** Installed CLI compared against its release channel (`checkCliUpdate` verb). */
-export type CliUpdateStatus = {
-  available: boolean;
-  /** Installed channel version (`3.14.4-R2`); null when not launcher-managed. */
-  current: string | null;
-  /** Channel version; null when the check could not run. */
-  latest: string | null;
-  urgency: CliUpdateUrgency;
-  /** Channel `notification_text`: the release notes shown beside the update. */
-  notification: string;
-  channel: string;
-};
-
-/** Outcome of one explicit CLI update run (`updateCli` verb). */
-export type CliUpdateOutcome = {
-  updated: boolean;
-  from: string | null;
-  to: string | null;
-  /** New channel version, else the `--version` print for display. */
-  version: string | null;
-};
-
-/** Protocol-compatibility snapshot from the `muse serve` handshake. */
-export type HostCompat = {
-  /** `@muse-code/sdk` the bridge was written against. */
-  sdk: string;
-  /** Stable-schema fingerprint the SDK pins. */
-  pinned: string;
-  /** Fingerprint the host served, when it sent one. */
-  served: string | null;
-  /** `unknown` when the host sent no fingerprint; never overclaims a match. */
-  state: "match" | "mismatch" | "unknown";
-  /** Capabilities granted for this connection. */
-  granted: string[];
-};
-
-/** Live `muse serve` host facts, captured at `startHost` and cleared when the host dies. */
+/** What the agent process reports when it starts: how the commands it runs are isolated. */
 export type HostInfo = {
-  server?: { name?: string; version?: string } | null;
-  museHome?: string | null;
-  durability?: string | null;
-  bin?: string | null;
-  activeAuth?: AuthSource | null;
-  compat?: HostCompat | null;
-  trustWorkspace?: boolean | null;
-  /** Posture the running host was constructed with; absent while stopped. */
-  posture?: HostPosture | null;
   isolation?: {
     env: "minimal";
-    /** cli-managed delegates shell isolation to Muse's per-session policy. */
-    osSandbox: "enforced" | "unavailable" | "cli-managed";
+    osSandbox: "enforced" | "unavailable";
     platform: string;
     cwd?: string;
     consentRequired: boolean;
@@ -234,10 +122,10 @@ export type SkillRow = {
   source?: string;
   pluginId?: string;
   argumentHint?: string;
+  /** A data URL for the skill's own logo (Harness skills that ship one). */
+  icon?: string | null;
 };
 
-/** A CLI-configured MCP server: OAuth applies to streamable-HTTP servers. */
-export type McpServer = { name: string; transport: string; oauth: boolean };
 /** A server the Harness started from `.glitter/mcp.json`; `tools` is what its last listing returned. */
 export type HarnessMcpServer = { name: string; transport: string; tools: number };
 export type HarnessMcpStatus = { servers: HarnessMcpServer[]; error: string | null };
@@ -393,22 +281,19 @@ export type MarketplaceSource = {
   avatar: string | null;
   plugins: MarketplacePlugin[];
 };
-export type PluginLibrary = { plugins: InstalledPlugin[]; marketplaces: MarketplaceSource[]; pluginsRoot: string; problems: string[] };
+export type PluginLibrary = {
+  plugins: InstalledPlugin[];
+  marketplaces: MarketplaceSource[];
+  pluginsRoot: string;
+  problems: string[];
+  /** Data URLs by lowercase GitHub owner, for listings that live in another owner's repository. */
+  avatars: Record<string, string>;
+  /** Some of those owners' avatars have not been fetched yet (`marketplaceAvatars`). */
+  avatarsPending: boolean;
+};
 export type PluginUpdate = { id: string; kind: "plugin" | "marketplace"; commit: string; latest: string };
 
-export type PluginEntry = { id: string; version?: string | null; description: string; enabled?: boolean | null };
-/** One CLI skill row (`skills list`): `activation` is `on`/`off`, `scope` is user/project/bundled/plugin. */
-export type SkillEntry = { id: string; name: string; description: string; scope: string; activation: string };
-/** One inspected skill (`skills inspect`): identity, scope, activation, and on-disk path. */
-export type SkillDetail = { id: string; name: string; description: string; scope: string; activation: string; path: string | null };
-/** One enterprise config plane source (`config status`): plane, source class, and state. */
-export type EnterpriseSource = { plane: string; sourceClass: string; state: string };
-/** Enterprise configuration status: policy generation plus plane sources. */
-export type EnterpriseStatus = { generation: string | null; sources: EnterpriseSource[] };
-export type PluginCapability = { id: string; kind?: string | null; description: string; enabled?: boolean | null };
-export type PluginDetail = { id: string; version?: string | null; description: string; capabilities: PluginCapability[] };
-
-/** Live options an ACP agent reports for a session. */
+/** Live options the agent reports for a session. */
 export type AgentSessionConfig = { modelId?: string; effort?: ReasoningEffort; mode?: string; modes?: Array<{ value: string; name?: string; description?: string }>; orchestrator?: OrchestratorConfig | null };
 
 export type ApprovalChoice = {
@@ -630,15 +515,6 @@ export type ModelCall = {
   attempt?: number;
   toolCalls: number;
 };
-/** Point-in-time subscription budget snapshot from `usage/read` / `usage/changed`. Percents may exceed 100. */
-export type UsageWindow = { usedPercent: number; resetsAtMs: number; windowDurationMins?: number };
-export type SubscriptionUsage = {
-  observedAtMs: number;
-  /** Opaque provider tier id — never displayed; the provider sends an id, not a plan name. */
-  tier: string;
-  window: UsageWindow;
-  weekly: { usedPercent: number; resetsAtMs: number };
-};
 export type ThreadOutcome = "completed" | "failed" | "cancelled" | "interrupted";
 
 export type ApprovalFeedback = { id: string; text: string; state: "queued" | "sending" | "failed" | "uncertain"; error?: string };
@@ -698,9 +574,9 @@ export type Thread = {
   /** Denial explanations waiting for delivery; never mixed into the composer's draft. */
   approvalFeedback?: ApprovalFeedback[];
   sessionId: string;
-  /** Which agent CLI owns this session; absent means Muse. */
+  /** Agent runtime recorded with the session. */
   agentId?: AgentId;
-  /** Agent modes (e.g. OpenCode build/plan), when the agent offers them. */
+  /** Agent modes, when the runtime offers them. */
   modes?: AgentSessionConfig["modes"];
   /** Live, transient status from the agent (rate limits, retries). `key` lets flows clear their own notice. */
   notice?: { level: "info" | "warning"; message: string; key?: string } | null;
@@ -724,11 +600,11 @@ export type Thread = {
   activeTurnId?: string | null;
   /** Idempotency key of a send whose result is unknown; the next send reuses it so the host dedupes. */
   pendingTurnKey?: string | null;
-  /** Submits admitted while a turn runs, awaiting launch (Muse and Harness; settled by `turnStarted`/`turnCompleted`). */
+  /** Submits admitted while a turn runs, settled by `turnStarted`/`turnCompleted`. */
   queuedTurns?: Array<{ turnId: string; text: string }>;
   config?: SessionConfig;
   configPending?: boolean;
-  /** Config patches merged while an ACP apply was in flight; the newest value per key wins when it drains. */
+  /** Config patches merged while an apply is in flight; the newest value per key wins when it drains. */
   pendingConfig?: Partial<SessionConfig>;
   configNotice?: string;
   opening?: boolean;
@@ -741,6 +617,8 @@ export type Thread = {
   activity?: "working" | "composing";
   lastTurnId?: string;
   lastOutcome?: ThreadOutcome;
+  /** The user chose not to continue an interrupted turn. Local only; a later send clears it. */
+  recoveryDismissed?: boolean;
   customTitle?: boolean;
   pinned?: boolean;
   /** Sidebar position key, fixed at creation so activity doesn't reorder threads. Higher sorts first. */
@@ -812,33 +690,7 @@ export type ReviewScope = typeof REVIEW_SCOPES[number];
 export type GitReview = Pick<GitSnapshot, "files" | "diff" | "truncated"> & { baseCommit?: string | null; headCommit?: string | null };
 export type GitReviewRequest = { scope: ReviewScope; base?: string; sessionId?: string; snapshotId?: string };
 
-/** `serve --sandbox-network` mode; proxy-only is the CLI default. */
-export type SandboxNetwork = "proxy-only" | "restricted" | "enabled";
-
-/** Host-construction posture (`serve` flags): ephemeral sessions plus sandbox hardening. */
-export type HostPosture = {
-  ephemeralSessions: boolean;
-  disableWrite: boolean;
-  disableShell: boolean;
-  sandboxNetwork: SandboxNetwork;
-  contributorMode?: "on" | "off";
-};
-
 export type Settings = {
-  museBin: string;
-  museApiKey: string;
-  /** Automatic prefers the subscription sign-in and falls back to the API key. */
-  museAuthMode: AuthMode;
-  /** Muse subscription routing override. Absent preserves the CLI's Contributor preference. */
-  contributorMode?: "on" | "off";
-  /** Memory-only sessions (`serve --no-session-log`): nothing persists to the session log. */
-  ephemeralSessions: boolean;
-  /** Disable non-shell workspace filesystem writes (`serve --disable-write`). */
-  disableWrite: boolean;
-  /** Disable workspace shell execution (`serve --disable-shell`). */
-  disableShell: boolean;
-  /** Sandbox network mode (`serve --sandbox-network`). */
-  sandboxNetwork: SandboxNetwork;
   theme: ThemeMode;
   /** Interface typeface. Code, diffs and the terminal stay on the monospace face. */
   uiFont: UiFont;
@@ -860,17 +712,8 @@ export type Settings = {
   defaultApprovalMode: ApprovalMode | undefined;
   /** Persistent allow and deny rules for every built-in agent thread. Syntax is checked by the harness. */
   harnessRules?: PermissionRule[];
-  /** Agent new threads start with; absent means the first ready agent. */
-  defaultAgentId?: AgentId;
-  /** Per-provider on/off. Missing keys use DEFAULT_ENABLED_AGENTS (ACP agents off). */
-  enabledAgents?: Partial<Record<AgentId, boolean>>;
-  /**
-   * Informed opt-in for third-party ACP agents. They are not OS-isolated;
-   * the native keyring copy of this flag is what actually gates spawn.
-   */
-  acpUnisolatedConsent?: boolean;
-  /** Hide the optional ACP adapter capability introduction. It remains in the Agent menu. */
-  hideAgentCapabilities?: boolean;
+  /** Prevent the app's interactive Terminal pane from starting a shell. */
+  disableTerminal?: boolean;
   /** OS notifications for turn completion and approvals while the app is unfocused or another thread is selected. */
   notifications?: boolean;
   /** Where "Open file" sends a file. The native side maps the id to a program; the renderer never names one. */
@@ -881,9 +724,7 @@ export type Settings = {
   customCommands?: CustomCommand[];
   /** Opt-in: draft starter prompts for the new-thread empty state from workspace state. */
   suggestionsEnabled?: boolean;
-  /** Agent that drafts predicted suggestions; absent means the first ready agent. */
-  suggestionsAgentId?: AgentId;
-  /** Model override for suggestions; absent means the agent's cheapest catalog model. */
+  /** Model override for suggestions; absent means the cheapest catalog model. */
   suggestionsModelId?: string;
   /** Route new built-in agent threads through the Orchestrator roles. */
   orchestratorEnabled?: boolean;
@@ -898,13 +739,6 @@ export type Settings = {
 };
 
 export const DEFAULT_SETTINGS: Settings = {
-  museBin: "",
-  museApiKey: "",
-  museAuthMode: "auto",
-  ephemeralSessions: false,
-  disableWrite: false,
-  disableShell: false,
-  sandboxNetwork: "proxy-only",
   theme: "system",
   uiFont: "system",
   darkIntensity: "mid",
@@ -919,14 +753,11 @@ export const DEFAULT_SETTINGS: Settings = {
   defaultEffort: undefined,
   defaultApprovalMode: "onRequest",
   harnessRules: [],
-  enabledAgents: { ...DEFAULT_ENABLED_AGENTS },
-  acpUnisolatedConsent: false,
-  hideAgentCapabilities: false,
+  disableTerminal: false,
   notifications: true,
   editor: "default",
   customCommands: [],
   suggestionsEnabled: false,
-  suggestionsAgentId: undefined,
   suggestionsModelId: undefined,
   shortcutOverrides: {},
   orchestratorEnabled: false,
@@ -966,31 +797,6 @@ export const APPROVAL_ORDER: ApprovalMode[] = ["onRequest", "guarded", "allowAll
  */
 export const approvalModeForAgent = (_agentId: AgentId | undefined, mode: ApprovalMode | undefined): ApprovalMode | undefined =>
   mode === "promptUnmatched" ? "onRequest" : mode;
-
-export const AUTH_MODE_ORDER: AuthMode[] = ["auto", "subscription", "apiKey"];
-
-export const AUTH_MODE_LABELS: Record<AuthMode, string> = {
-  auto: "Automatic",
-  subscription: "Muse Code subscription",
-  apiKey: "Muse API key",
-};
-
-export const AUTH_MODE_DESCRIPTIONS: Record<AuthMode, string> = {
-  auto: "Use the subscription you signed into with the Muse CLI, and fall back to the API key.",
-  subscription: "Bill sessions to your Muse Code plan. The API key is ignored, even if one is set in your shell.",
-  apiKey: "Bill sessions to the key below at pay-as-you-go API rates.",
-};
-
-export const AUTH_SOURCE_LABELS: Record<AuthSource, string> = {
-  subscription: "Muse Code subscription",
-  apiKey: "Muse API key",
-};
-
-/** Fits the one-line connection status in the settings footer. */
-export const AUTH_SOURCE_SHORT: Record<AuthSource, string> = {
-  subscription: "subscription",
-  apiKey: "API key",
-};
 
 export const EFFORT_LABELS: Record<ReasoningEffort, string> = {
   none: "None",

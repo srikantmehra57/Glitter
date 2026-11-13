@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { Check, Download, FolderGit2, RefreshCw, Search, Server, Trash2, WandSparkles, X } from "lucide-react";
 import { describeError } from "../lib/errors";
-import { FEATURED_SOURCES, discoverRows, pluginTitle, type DiscoverKind, type DiscoverRow } from "../lib/pluginLibrary";
+import { FEATURED_SOURCES, discoverRows, listingImage, pluginTitle, type DiscoverKind, type DiscoverRow } from "../lib/pluginLibrary";
 import { currentThread, currentWorkspace, useAppStore } from "../lib/store";
 import type { CatalogEntry, CatalogKind } from "../lib/types";
 import { ExtensionThumb } from "./ExtensionThumb";
@@ -180,7 +180,7 @@ export function ExtensionsStore({ source: controlledSource, onSource, onOpen }: 
     return (
       <li key={row.key} className={`catalog-card listing-card${installed ? " installed" : ""}`}>
         <div className="catalog-card-head">
-          <ExtensionThumb kind="plugin" id={plugin.name} name={plugin.name} category={plugin.category} size={40} badge={market.avatar} />
+          <ExtensionThumb kind="plugin" id={plugin.name} name={plugin.name} category={plugin.category} size={40} src={listingImage(s.library, market, plugin, installed)} badge={market.avatar} />
           <span className="catalog-card-copy">
             <span className="catalog-name">{title}
               {installed ? <span className="picker-tag free"><Check size={9} />Installed</span> : null}

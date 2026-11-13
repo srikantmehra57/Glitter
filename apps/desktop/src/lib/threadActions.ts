@@ -51,9 +51,8 @@ export function copySessionId(sessionId: string): Promise<void> {
 
 export function copyThreadLogPath(sessionId: string): Promise<void> {
   return perform("Could not copy the task log path", async () => {
-    const thread = actionThread(sessionId);
-    if (thread.agentId !== "harness") throw new Error("This agent does not expose a canonical session log.");
-    const paths = await supportPaths(sessionId, "harness");
+    actionThread(sessionId);
+    const paths = await supportPaths(sessionId);
     if (!paths.sessionLogPath) throw new Error("This thread has no saved session log yet.");
     await copyText(paths.sessionLogPath);
   });
@@ -82,7 +81,7 @@ export function threadIssueUrl(thread: ThreadActionTarget): string {
       "## Thread",
       `Title: ${thread.title}`,
       `Session ID: ${thread.sessionId}`,
-      `Agent: ${AGENT_LABELS[thread.agentId ?? "muse"]}`,
+      `Agent: ${AGENT_LABELS.harness}`,
       "",
       `Glitter: ${APP_VERSION}`,
     ].join("\n"),

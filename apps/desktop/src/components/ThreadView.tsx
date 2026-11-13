@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { backgroundAgents, describeAgents, describeLive, estimateTurnTokens, hasVisibleReply, trailingWork } from "../lib/agent";
-import { Activity as ActivityIcon, ArrowDown, TriangleAlert, Bug, ChevronRight, CircleAlert, FlaskConical, FolderOpen, GitBranch, GitCompareArrows, GitFork, Globe2, History, LoaderCircle, PanelRight, Pencil, RotateCcw, ScanSearch, Sparkles, SquareTerminal, WifiOff, X } from "lucide-react";
+import { GitFork, Activity as ActivityIcon, ArrowDown, TriangleAlert, Bug, ChevronRight, CircleAlert, FlaskConical, FolderOpen, GitBranch, GitCompareArrows, Globe2, LoaderCircle, PanelRight, Pencil, ScanSearch, Sparkles, SquareTerminal, WifiOff, X } from "lucide-react";
 import { Orb } from "./Orb";
 import { BranchMenu } from "./BranchMenu";
 import { FindBar } from "./FindBar";
@@ -46,7 +46,7 @@ function Activity({ thread, closing = false }: { thread: Thread; closing?: boole
   const model = modelFor(models, thread.config ?? {});
   const tiers = tiersFor(model);
   const peak = isPeak(thread.config?.effort ?? defaultTier(model, tiers), tiers);
-  const agentId: AgentId = thread.agentId ?? "muse";
+  const agentId: AgentId = "harness";
   const agentName = useAppStore((state) => state.agents.find((agent) => agent.id === agentId)?.name ?? AGENT_LABELS[agentId]);
   const retry = thread.retry && (!thread.activeTurnId || thread.activeTurnId === thread.retry.turnId) ? thread.retry : null;
   const retryIn = retry ? Math.max(0, Math.ceil((retry.retryAt - now) / 1000)) : 0;
@@ -70,7 +70,7 @@ function Activity({ thread, closing = false }: { thread: Thread; closing?: boole
 function BackgroundAgents({ thread, closing = false }: { thread: Thread; closing?: boolean }) {
   const running = useMemo(() => backgroundAgents(thread.items), [thread.items]);
   const label = describeAgents(running);
-  const agentId: AgentId = thread.agentId ?? "muse";
+  const agentId: AgentId = "harness";
   const agentName = useAppStore((state) => state.agents.find((agent) => agent.id === agentId)?.name ?? AGENT_LABELS[agentId]);
   if (!label) return null;
   return <WorkingIndicator label={`${label} in the background`} agentId={agentId} agentName={agentName} closing={closing} />;
@@ -98,18 +98,15 @@ export function ThreadView() {
     shortcutOverrides: state.shortcutOverrides,
     offline: state.offline,
     renameThread: state.renameThread,
-    forkThread: state.forkThread,
     setInspectorTab: state.setInspectorTab,
     setDockOpen: state.setDockOpen,
     chooseProject: state.chooseProject,
-    rebuildThread: state.rebuildThread,
     selectThread: state.selectThread,
     setSettingsOpen: state.setSettingsOpen,
     dismissError: state.dismissError,
     persistNotice: state.persistNotice,
     dismissPersistNotice: state.dismissPersistNotice,
     setComposer: state.setComposer,
-    loadOlderHistory: state.loadOlderHistory,
     suggestions: state.suggestions,
     suggestionsEnabled: state.suggestionsEnabled,
     refreshSuggestions: state.refreshSuggestions,
@@ -144,7 +141,6 @@ export function ThreadView() {
   const shownError = useRetained(error);
   const persistNotice = useRetained(s.persistNotice);
   const viewHealth = useRetained(thread?.viewHealth);
-  const viewGapAfter = useRetained(thread?.viewGap?.state === "failed" ? thread.viewGap.after : null);
   const jump = useCallback(() => {
     following.current = true;
     setShowLatest(false);
@@ -176,7 +172,7 @@ export function ThreadView() {
     observer.observe(inner);
     return () => observer.disconnect();
   }, [thread?.sessionId, empty]);
-  const activeAgentId: AgentId = thread?.agentId ?? "muse";
+  const activeAgentId: AgentId = "harness";
   const activeAgentName = s.agents.find((agent) => agent.id === activeAgentId)?.name ?? AGENT_LABELS[activeAgentId];
   useEffect(() => { document.title = `${thread?.title ?? (workspace ? "No thread selected" : "Welcome")} · ${activeAgentName}`; }, [activeAgentName, thread?.title, workspace?.name]);
 
@@ -268,7 +264,6 @@ export function ThreadView() {
         {thread?.status === "running" ? <span className="live-pill"><i aria-hidden="true" />Running</span> : null}
       </nav>
       <span className="grow" />
-      {thread && !thread.agentId ? <button className="icon-btn topbar-action" aria-label="Fork thread" data-tooltip="Fork into a new thread" onClick={() => void s.forkThread(thread.sessionId)}><GitFork size={15} /><span>Fork</span></button> : null}
       <WorkLocation />
       {branch ? <BranchMenu branch={branch} worktree={Boolean(thread?.worktree)} locked={thread?.status === "running"} /> : null}
       {workspace ? <button className="icon-btn topbar-action" aria-label="Toggle browser" aria-pressed={browserOpen} data-tooltip="Browser" onClick={() => setBrowserOpen(!browserOpen)}><Globe2 size={15} /></button> : null}
@@ -287,9 +282,7 @@ export function ThreadView() {
     {/* Banners grow in and shrink out, so the panel below them slides instead of jumping. */}
     <Collapse open={s.offline}>{() => <div className="banner warn" role="status"><WifiOff size={14} aria-hidden="true" /><span>You are offline. Agents can’t reach their model providers until the network returns.</span></div>}</Collapse>
     <Collapse open={Boolean(s.persistNotice)}>{() => <div className="banner warn" role="status"><TriangleAlert size={14} aria-hidden="true" /><span>{persistNotice}</span><button className="icon-btn small" aria-label="Dismiss" onClick={s.dismissPersistNotice}><X size={13} /></button></div>}</Collapse>
-    <Collapse open={Boolean(error)}>{() => <div className="banner" role="alert"><CircleAlert size={14} aria-hidden="true" /><span>{shownError}</span>{needsGrant(shownError ?? "") && <button className="ghost-btn small" onClick={() => void s.chooseProject()}><FolderOpen size={13} />Open workspace</button>}{needsWorkspace(shownError ?? "") && <button className="ghost-btn small" onClick={() => void s.chooseProject()}><FolderOpen size={13} />Open a workspace</button>}{thread && (thread.viewGap?.state === "failed" || thread.historyFailed) && <button className="ghost-btn small" onClick={() => void s.rebuildThread()}>Retry rebuild</button>}{thread && !thread.opened && <button className="ghost-btn small" onClick={() => void s.selectThread(thread.sessionId)}>Reconnect</button>}<button className="ghost-btn small" onClick={() => s.setSettingsOpen(true)}>Settings</button><button className="icon-btn small" aria-label="Dismiss" onClick={s.dismissError}><X size={13} /></button></div>}</Collapse>
-    <Collapse open={thread?.viewGap?.state === "filling"}>{() => <div className="banner info" role="status"><LoaderCircle size={14} className="spin" aria-hidden="true" /><span>Recovering dropped events…</span></div>}</Collapse>
-    <Collapse open={thread?.viewGap?.state === "failed" && !error}>{() => <div className="banner" role="alert"><CircleAlert size={14} aria-hidden="true" /><span>Events after {viewGapAfter?.slice(-8)} never arrived. Retry the rebuild to replay them from the log.</span><button className="ghost-btn small" onClick={() => void s.rebuildThread()}>Retry rebuild</button></div>}</Collapse>
+    <Collapse open={Boolean(error)}>{() => <div className="banner" role="alert"><CircleAlert size={14} aria-hidden="true" /><span>{shownError}</span>{needsGrant(shownError ?? "") && <button className="ghost-btn small" onClick={() => void s.chooseProject()}><FolderOpen size={13} />Open workspace</button>}{needsWorkspace(shownError ?? "") && <button className="ghost-btn small" onClick={() => void s.chooseProject()}><FolderOpen size={13} />Open a workspace</button>}{thread && !thread.opened && <button className="ghost-btn small" onClick={() => void s.selectThread(thread.sessionId)}>Reconnect</button>}<button className="ghost-btn small" onClick={() => s.setSettingsOpen(true)}>Settings</button><button className="icon-btn small" aria-label="Dismiss" onClick={s.dismissError}><X size={13} /></button></div>}</Collapse>
     <Collapse open={Boolean(thread?.viewHealth)}>{() => <div className="banner warn" role="status"><TriangleAlert size={14} aria-hidden="true" /><span>Live updates unavailable{viewHealth?.noneReason ? ` (${viewHealth.noneReason})` : ""}. Reconnect to restore them.</span>{thread && <button className="ghost-btn small" onClick={() => void s.selectThread(thread.sessionId)}>Reconnect</button>}</div>}</Collapse>
     <div className={`review-layout${s.dockOpen ? " docked" : ""}${s.dockExpanded && s.dockOpen ? " expanded" : ""}${browserOpen ? " browser-docked" : ""}`}>
     <div className={`thread-main${centered ? " centered" : ""}`}>
@@ -329,9 +322,6 @@ export function ThreadView() {
             {branch ? <span className="welcome-meta-branch"><GitBranch size={12} aria-hidden="true" />{branch}</span> : null}
           </p>
         )}
-        {!restoring && !thread?.opening && thread?.historyFailed ? (
-          <button className="primary lg" onClick={() => void s.rebuildThread()} disabled={thread.opening}><RotateCcw size={15} />Retry loading history</button>
-        ) : null}
         </section>
       </div>
     ) : <div className="conversation" ref={scroller} aria-label="Agent" onScroll={() => {
@@ -341,14 +331,6 @@ export function ThreadView() {
         setShowLatest(!following.current);
         if (thread) positions.current.set(thread.sessionId, { top: node.scrollTop, follow: following.current });
       }}><div className="conversation-inner" ref={content} role="log" aria-label="Agent activity" aria-live="off">
-        {thread && !thread.agentId && !thread.historyExhausted && thread.historyCursor ? (
-          <div className="history-pager">
-            <button type="button" className="ghost-btn small" disabled={thread.historyLoading} onClick={() => void s.loadOlderHistory()}>
-              {thread.historyLoading ? <LoaderCircle size={13} className="spin" aria-hidden="true" /> : <History size={13} aria-hidden="true" />}
-              {thread.historyLoading ? "Loading older history…" : "Load older history"}
-            </button>
-          </div>
-        ) : null}
         {thread ? <AgentTimeline thread={thread} scrollContainerRef={scroller} planFloating={planFloating} /> : null}
         <ApprovalCard />
         <UserInputCards />

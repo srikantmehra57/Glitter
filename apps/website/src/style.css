@@ -723,7 +723,7 @@ html[data-theme="light"] .mini-term { background: #F1F1F1; }
 @keyframes spin { to { transform: rotate(1turn); } }
 .orbit-nodes { list-style: none; margin: 0; padding: 0; }
 .orbit-node {
-  /* The step between agents comes from the node count, so the ring keeps its
+  /* The step between providers comes from the node count, so the ring keeps its
      shape when one is added. */
   --ang: calc(var(--a) * var(--orbit-step, 60deg) - 90deg);
   position: absolute;

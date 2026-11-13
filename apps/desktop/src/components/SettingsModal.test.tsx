@@ -116,60 +116,43 @@ describe("settings navigation", () => {
     await vi.waitFor(() => expect(useAppStore.getState().harnessRules).toEqual([]));
   });
 
-  it("holds a connection setting for an explicit restart and drops it on Cancel", () => {
-    seedStore({ settingsTab: "Agents", museBin: "" });
+  it("lets the user turn the Terminal pane off without changing agent permissions", () => {
+    seedStore({ settingsTab: "Permissions", disableTerminal: false, defaultApprovalMode: "onRequest" });
     render(<SettingsModal />);
-    expect(screen.getByRole("button", { name: "Restart connection" })).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("Muse binary (optional)"), { target: { value: "/opt/muse" } });
-    expect(screen.getByRole("button", { name: "Save & restart connection" })).toBeInTheDocument();
-    expect(screen.getByText("Restart the connection to apply these changes")).toBeInTheDocument();
-    expect(useAppStore.getState().museBin).toBe("");
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    expect(useAppStore.getState().settingsOpen).toBe(false);
-    expect(useAppStore.getState().museBin).toBe("");
+    fireEvent.click(screen.getByRole("switch", { name: "Disable Terminal pane" }));
+    expect(useAppStore.getState().disableTerminal).toBe(true);
+    expect(useAppStore.getState().defaultApprovalMode).toBe("onRequest");
   });
 
-  it("treats Contributor mode as an explicit host restart without changing the selected model", () => {
-    seedStore({ settingsTab: "Agents", defaultModel: "muse-spark-1.3" });
-    render(<SettingsModal />);
-    fireEvent.click(screen.getByRole("button", { name: "Contributor mode" }));
-    fireEvent.click(screen.getByRole("option", { name: /Standard mode/ }));
-    expect(useAppStore.getState().contributorMode).toBeUndefined();
-    expect(useAppStore.getState().defaultModel).toBe("muse-spark-1.3");
-    expect(screen.getByRole("button", { name: "Save & restart connection" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    expect(useAppStore.getState().contributorMode).toBeUndefined();
-  });
 
-  it("loads the defaults catalog independently of a Grok conversation and labels a saved legacy model", async () => {
+
+  it("loads the defaults catalog independently of the open thread and labels a saved legacy model", async () => {
     const catalog = [
-      { modelId: "muse-wonder-1.0", providerId: "meta" },
-      { modelId: "muse-spark-1.3", providerId: "meta" },
-      { modelId: "muse-spark-1.2", providerId: "meta" },
+      { modelId: "anthropic/claude-opus-5", providerId: "anthropic", displayLabel: "Claude Opus 5" },
+      { modelId: "anthropic/claude-sonnet-5", providerId: "anthropic", displayLabel: "Claude Sonnet 5" },
+      { modelId: "anthropic/claude-haiku-4-5", providerId: "anthropic", displayLabel: "Claude Haiku 4.5" },
     ];
     const loadModelCatalog = vi.fn(async () => catalog);
-    seedStore({ settingsTab: "Models", defaultModel: "muse-spark-1.3-contributor", models: [{ modelId: "grok-4.7", providerId: "grok" }], loadModelCatalog, agents: [{ id: "muse", name: "Muse", protocol: "msp", found: true, path: "/bin/muse", version: "1", verified: true, signIn: "", authenticated: true }] });
+    seedStore({ settingsTab: "Models", defaultModel: "anthropic/claude-sonnet-3", models: [{ modelId: "xai/grok-4.7", providerId: "xai" }], loadModelCatalog, agents: [{ id: "harness", name: "Harness", protocol: "native", found: true, path: null, version: null, verified: true, signIn: "", authenticated: true }] });
     render(<SettingsModal />);
     const model = screen.getByRole("button", { name: "Default model" });
     await vi.waitFor(() => expect(model).toBeEnabled());
-    expect(loadModelCatalog).toHaveBeenCalledWith("muse");
+    expect(loadModelCatalog).toHaveBeenCalledWith("harness");
     expect(screen.getByText(/This saved model is no longer listed/)).toBeInTheDocument();
-    expect(useAppStore.getState().defaultModel).toBe("muse-spark-1.3-contributor");
+    expect(useAppStore.getState().defaultModel).toBe("anthropic/claude-sonnet-3");
     fireEvent.click(model);
     const list = screen.getByRole("listbox", { name: "Default model" });
     expect(within(list).getAllByRole("option")).toHaveLength(4);
-    expect(within(list).queryByText("Grok 4.7")).toBeNull();
+    expect(within(list).queryByText("grok-4.7")).toBeNull();
     expect(within(list).getByText("Saved selection · not in the current catalog")).toBeInTheDocument();
-    fireEvent.click(within(list).getByText("Muse Wonder 1.0", { exact: true }));
-    await vi.waitFor(() => expect(useAppStore.getState().defaultModel).toBe("muse-wonder-1.0"));
-    expect(useAppStore.getState().models.map((item) => item.modelId)).toEqual(["grok-4.7"]);
-    expect(useAppStore.getState().contributorMode).toBeUndefined();
+    fireEvent.click(within(list).getByText("Claude Opus 5", { exact: true }));
+    await vi.waitFor(() => expect(useAppStore.getState().defaultModel).toBe("anthropic/claude-opus-5"));
+    expect(useAppStore.getState().models.map((item) => item.modelId)).toEqual(["xai/grok-4.7"]);
   });
 
   it("keeps providers and models switched off in the library out of the default model list", async () => {
     seedStore({
       settingsTab: "Models",
-      defaultAgentId: "harness",
       agents: [{ id: "harness", name: "Harness", protocol: "native", found: true, path: null, version: null, verified: true, signIn: "", authenticated: true }],
       hiddenModels: ["harness|anthropic|anthropic/claude-haiku-4-5"],
       hiddenProviders: ["harness:kilo"],
@@ -185,7 +168,7 @@ describe("settings navigation", () => {
   });
 
   it("shows a catalog error instead of presenting the saved model as the only available choice", async () => {
-    seedStore({ settingsTab: "Models", defaultModel: "muse-spark-1.3-contributor", loadModelCatalog: vi.fn(async () => { throw new Error("Connection closed"); }) });
+    seedStore({ settingsTab: "Models", defaultModel: "anthropic/claude-sonnet-3", loadModelCatalog: vi.fn(async () => { throw new Error("Connection closed"); }) });
     render(<SettingsModal />);
     await screen.findByRole("alert");
     expect(screen.getByRole("alert")).toHaveTextContent("Connection closed");
@@ -193,18 +176,12 @@ describe("settings navigation", () => {
     expect(screen.getByRole("button", { name: "Refresh default models" })).toBeEnabled();
   });
 
-  it("keeps Harness provider setup errors specific and skips unconsented CLI catalogs", async () => {
+  it("keeps Harness provider setup errors specific", async () => {
     const detail = "Harness has no model provider yet. Add an API key in Settings → Providers.";
     const peekModelCatalog = vi.fn(async () => []);
     seedStore({
       settingsTab: "Models",
-      defaultAgentId: "harness",
-      acpUnisolatedConsent: false,
-      enabledAgents: { harness: true, grok: true },
-      agents: [
-        { id: "harness", name: "Harness", protocol: "native", found: true, path: null, version: null, verified: true, signIn: "", authenticated: true },
-        { id: "grok", name: "Grok", protocol: "acp", found: true, path: "/bin/grok", version: "1", verified: true, signIn: "" },
-      ],
+      agents: [{ id: "harness", name: "Harness", protocol: "native", found: true, path: null, version: null, verified: true, signIn: "", authenticated: true }],
       loadModelCatalog: vi.fn(async () => { throw new Error(detail); }),
       peekModelCatalog,
     });
@@ -212,11 +189,8 @@ describe("settings navigation", () => {
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent(`Could not load Harness models: ${detail}`);
-    expect(alert).not.toHaveTextContent("Muse needs a sign-in");
     expect(alert).not.toHaveTextContent("Nothing was sent");
     await vi.waitFor(() => expect(peekModelCatalog).toHaveBeenCalledWith("harness"));
-    expect(peekModelCatalog).not.toHaveBeenCalledWith("grok");
-    expect(screen.queryByText("Grok")).toBeNull();
   });
 
   it("saves the default reasoning effort at once without a restart", async () => {
@@ -230,25 +204,6 @@ describe("settings navigation", () => {
     expect(screen.queryByRole("button", { name: "Save & restart connection" })).toBeNull();
   });
 
-  it("enables Contributor routing only after an eligible subscriber explicitly saves and restarts", async () => {
-    const startHost = vi.fn(async () => {});
-    seedStore({
-      settingsTab: "Agents", preview: false, hostInfo: {}, startHost,
-      detection: { found: true, authenticated: true, path: "/bin/muse", version: "1.4.7", method: "subscription", subscriptionAvailable: true },
-      defaultModel: "muse-spark-1.3",
-    });
-    render(<SettingsModal />);
-    expect(useAppStore.getState().contributorMode).toBeUndefined();
-    fireEvent.click(screen.getByRole("button", { name: "Contributor mode" }));
-    fireEvent.click(screen.getByRole("option", { name: /^Contributor mode/ }));
-    expect(useAppStore.getState().contributorMode).toBeUndefined();
-    expect(startHost).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Save & restart connection" }));
-    await vi.waitFor(() => expect(startHost).toHaveBeenCalledTimes(1));
-    expect(useAppStore.getState().contributorMode).toBe("on");
-    expect(useAppStore.getState().defaultModel).toBe("muse-spark-1.3");
-    expect(useAppStore.getState().settingsOpen).toBe(false);
-  });
 
   it("previews and immediately saves the thinking orb, retaining it when reopened", async () => {
     seedStore({ settingsTab: "Theme", thinkingOrb: "auto" });
@@ -382,16 +337,16 @@ describe("settings navigation", () => {
     expect(screen.getByRole("button", { name: "Font" })).toBeInTheDocument();
   });
 
-  it("groups the pages under AI, Workspace, App and System, with Muse's connection under Agents", () => {
+  it("groups the pages under AI, Workspace, App and System, with keys under Providers", () => {
     render(<SettingsModal />);
     const nav = screen.getByRole("navigation", { name: "Settings categories" });
     expect(within(nav).getByText("AI")).toBeInTheDocument();
     expect(within(nav).getByRole("button", { name: "Theme" })).toHaveTextContent("Appearance");
     expect(within(nav).getByRole("button", { name: "Shortcuts" })).toHaveTextContent("Commands & shortcuts");
-    // There is no Account page: Muse is one agent among others.
+    // There is no Account or Agents page: the agent is set up under Providers.
     expect(within(nav).queryByRole("button", { name: "Account" })).toBeNull();
+    expect(within(nav).queryByRole("button", { name: "Agents" })).toBeNull();
     fireEvent.change(screen.getByRole("textbox", { name: "Search settings" }), { target: { value: "api key" } });
-    expect(within(nav).getByRole("button", { name: "Agents" })).toBeInTheDocument();
     expect(within(nav).getByRole("button", { name: "Providers" })).toBeInTheDocument();
     expect(within(nav).queryByRole("button", { name: "Theme" })).toBeNull();
   });
@@ -487,24 +442,23 @@ describe("settings navigation", () => {
     expect(useAppStore.getState().settingsOpen).toBe(true);
   });
 
-  it("opts into smart suggestions, revealing the agent and model pickers", async () => {
-    const loadModelCatalog = vi.fn(async () => [{ modelId: "muse-spark-1.3", providerId: "meta", cost: { input: "0.15", output: "0.60" } }]);
-    seedStore({ settingsTab: "General", suggestionsEnabled: false, loadModelCatalog, agents: [{ id: "muse", name: "Muse", protocol: "msp", found: true, path: "/bin/muse", version: "1", verified: true, signIn: "", authenticated: true }] });
+  it("opts into smart suggestions, revealing the model picker", async () => {
+    const loadModelCatalog = vi.fn(async () => [{ modelId: "deepseek/deepseek-chat", providerId: "deepseek", displayLabel: "DeepSeek Chat", cost: { input: "0.15", output: "0.60" } }]);
+    seedStore({ settingsTab: "General", suggestionsEnabled: false, loadModelCatalog, agents: [{ id: "harness", name: "Harness", protocol: "native", found: true, path: null, version: null, verified: true, signIn: "", authenticated: true }] });
     render(<SettingsModal />);
     const toggle = screen.getByRole("switch", { name: "Smart suggestions" });
     expect(toggle).toHaveAttribute("aria-checked", "false");
-    expect(screen.queryByRole("button", { name: "Suggestion agent" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Suggestion model" })).toBeNull();
     fireEvent.click(toggle);
     await vi.waitFor(() => expect(useAppStore.getState().suggestionsEnabled).toBe(true));
-    expect(screen.getByRole("button", { name: "Suggestion agent" })).toBeInTheDocument();
-    await vi.waitFor(() => expect(loadModelCatalog).toHaveBeenCalledWith("muse"));
+    await vi.waitFor(() => expect(loadModelCatalog).toHaveBeenCalledWith("harness"));
     const modelPicker = screen.getByRole("button", { name: "Suggestion model" });
     await vi.waitFor(() => expect(modelPicker).toBeEnabled());
     fireEvent.click(modelPicker);
     const list = screen.getByRole("listbox", { name: "Suggestion model" });
     expect(within(list).getByRole("option", { name: /Cheapest available/ })).toBeInTheDocument();
-    fireEvent.click(within(list).getByRole("option", { name: /Muse Spark 1.3/ }));
-    await vi.waitFor(() => expect(useAppStore.getState().suggestionsModelId).toBe("muse-spark-1.3"));
+    fireEvent.click(within(list).getByRole("option", { name: /DeepSeek Chat/ }));
+    await vi.waitFor(() => expect(useAppStore.getState().suggestionsModelId).toBe("deepseek/deepseek-chat"));
     fireEvent.click(toggle);
     await vi.waitFor(() => expect(useAppStore.getState().suggestionsEnabled).toBe(false));
   });

@@ -12,7 +12,7 @@ import { pathToFileURL } from 'node:url';
 const temporary = await mkdtemp(join(tmpdir(), 'muse-output-framing-'));
 after(() => rm(temporary, { recursive: true, force: true }));
 const outfile = join(temporary, 'output.mjs');
-await build({ entryPoints: [resolve('packages/glitter-bridge/src/output.ts')], bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'silent' });
+await build({ entryPoints: [resolve('packages/glitter-harness/src/output.ts')], bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'silent' });
 const output = await import(pathToFileURL(outfile).href);
 
 test('a delta under the ceiling is one frame', () => {
@@ -43,7 +43,7 @@ test('flushDeltas writes only bounded frames', async () => {
   const { spawn } = await import('node:child_process');
   const driver = join(temporary, 'driver.mjs');
   await build({
-    entryPoints: [resolve('packages/glitter-bridge/src/output.ts')],
+    entryPoints: [resolve('packages/glitter-harness/src/output.ts')],
     bundle: true, platform: 'node', format: 'esm', outfile: driver, logLevel: 'silent',
     banner: { js: 'process.stdout.write = (chunk) => { const line = String(chunk); const bytes = Buffer.byteLength(line, "utf8"); if (bytes > 8 * 1024 * 1024) process.stderr.write("OVERSIZE " + bytes); };' },
   });

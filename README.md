@@ -7,8 +7,7 @@ A native desktop app for coding agents. You chat with the agent, approve its
 commands, set reasoning effort, and review its changes in one window.
 
 > [!IMPORTANT]
-> This is an independent open-source project, not affiliated with Meta. The Muse
-> agent needs Meta's official `muse` CLI and a Muse Code subscription or API key.
+> Glitter is an independent open-source project and is not affiliated with Meta.
 
 ## Overview
 
@@ -18,13 +17,9 @@ key and runs its own tools in your workspace, so no agent CLI has to be
 installed — a hosted provider, an OpenAI-compatible or Anthropic endpoint you
 name yourself, or a model served on this Mac by Ollama or LM Studio.
 
-Glitter also drives external agent CLIs: Meta's `muse` CLI, which runs its own
-models, tools, sessions and billing while the app starts `muse serve`, streams
-what the agent is doing and sends your decisions back, and third-party agent
-CLIs over the Agent Client Protocol (ACP).
-
-New threads use Harness once it has a key, and Muse when that's what's ready;
-you can set a different default and switch agents mid-thread.
+Harness is the app's agent. Earlier builds could also drive Muse and ACP agent
+CLIs; those integrations are no longer included. Their histories remain in the
+respective CLIs' own storage and are not converted into Harness threads.
 
 Glitter was called Muse Code Desktop until the rename. On first launch it moves
 an existing install's settings, threads, snapshots, logs and keychain entries
@@ -59,7 +54,7 @@ are no Windows or Linux versions. No signed build has been published yet; see [K
 - **Workspaces and threads.** Open local folders through the native picker. The
   sidebar groups threads under their workspace, flags the ones that are running
   or need you, and searches across every workspace at once. Pin, rename,
-  archive, fork and export a thread, or give it its own git worktree.
+  archive or delete a thread, or give it its own git worktree.
 - **A turn that reads as one story.** The agent's mark and name once per turn,
   its notes folded away as it moves on, and its work hung on a quiet rail — one
   line when collapsed, a list of steps with their outcome, duration and path or
@@ -67,7 +62,7 @@ are no Windows or Linux versions. No signed build has been published yet; see [K
   background tasks and goals all sit on that rail. A context compaction is a
   centred seam, the changed files form one review card, and the turn closes with
   a single **Done** line: duration, input and output tokens, estimated cost and the model,
-  with Undo and Fork beside it.
+  with Undo beside it.
 - **Approvals.** Write and edit calls show a diff preview, each choice explains
   its scope, approvals expire after 10 minutes, and there are keyboard shortcuts
   (`⌘Y`, `⌘⇧Y`, `⌘⌫`). Permission modes are Ask, Auto and Full access, the same
@@ -93,9 +88,6 @@ are no Windows or Linux versions. No signed build has been published yet; see [K
   a 7- or 30-day trend per model, provider share, streaks and the longest turn,
   and a per-call trajectory for each turn. Days and legend entries answer on
   hover.
-- **Account and agents.** In-app `muse login`, or a Muse API key, with
-  subscription, API key or automatic billing — all on Settings → Agents. Muse
-  CLI update checks are built in.
 - **Extensions.** Settings → Extensions installs curated skills, MCP servers and
   plugins from a bundled store in one click, with no CLI and no download,
   alongside the skills, plugins and servers already on this Mac.
@@ -103,7 +95,7 @@ are no Windows or Linux versions. No signed build has been published yet; see [K
   Pure black), nine accents, sidebar tint and translucency, ten thinking-orb
   styles, and motion that steps aside under `prefers-reduced-motion`.
 - **Desktop integration.** Native menu bar, command palette (`⌘K`), OS
-  notifications, haptics, Markdown session export, and Settings as a full-window
+  notifications, haptics, and Settings as a full-window
   page of twelve sections in four groups.
 
 ## Tech stack
@@ -112,7 +104,7 @@ are no Windows or Linux versions. No signed build has been published yet; see [K
 |---|---|
 | Native shell | Rust, Tauri 2 (OS webview, no bundled Chromium) |
 | UI | React 19, TypeScript, Zustand, design tokens in CSS on a Tailwind v4 theme layer, lucide-react |
-| Agent bridge | Node (bundled runtime), `@muse-code/sdk` 1.3.0 for MSP, ACP over stdio |
+| Agent bridge | Node (bundled runtime), line-delimited JSON over stdio |
 | Browser verification | Playwright 1.64 driving an installed, native-pinned Chromium; fresh incognito contexts and raster-only panel frames |
 | Built-in harness | HTTPS to Anthropic Messages and OpenAI-compatible Chat Completions; tools confined to the workspace and the seatbelt sandbox |
 | Storage | `glitter.json` for settings, the OS keychain for secrets and workspace grants, JSONL for harness threads |
@@ -122,10 +114,8 @@ are no Windows or Linux versions. No signed build has been published yet; see [K
 ## Architecture
 
 ```text
-React UI ──invoke──▶ Rust shell ──NDJSON/stdio──▶ Node bridge ──▶ muse serve (MSP)
-          ◀─events──            ◀──────────────               ├─▶ ACP agent CLIs
-                                                              └─▶ Model providers
-                                                                  (HTTPS, your keys)
+React UI ──invoke──▶ Rust shell ──NDJSON/stdio──▶ Harness ──▶ Model providers
+          ◀─events──            ◀──────────────             (your keys)
 ```
 
 The Rust shell is the trust boundary. It allowlists and type-checks every
@@ -146,9 +136,8 @@ apps/
 │   └── src-tauri/         Rust shell: commands, IPC validation, grants, packaging config
 └── website/               Marketing site (independent of the app)
 packages/
-└── glitter-bridge/        Node bridge: the built-in harness (providers, wire, tools,
-                           permissions, skills, MCP, delegation, context fitting),
-                           Muse (MSP) and ACP hosts, isolation, redaction
+└── glitter-harness/       Node bridge and CLI: providers, tools, permissions,
+                           skills, MCP, delegation, context fitting, isolation
 tests/                     Node test suite and fixtures (fake agents, stub bridge)
 scripts/                   Release and verification scripts
 docs/                      Architecture, development, agent guide, decisions, design, releasing
@@ -165,15 +154,6 @@ docs/                      Architecture, development, agent guide, decisions, de
 - For the built-in agent: an API key for one model provider, added under
   **Settings → Providers**, or a local server such as Ollama. No key is needed to
   open the app and try the UI.
-- For the Muse agent, the Muse CLI:
-
-```bash
-curl -fsSL https://dev.meta.ai/install.sh | sh
-```
-
-Then sign in with `muse` and `/login`, or sign in inside the app under
-**Settings → Agents**.
-
 **Install and run:**
 
 ```bash
@@ -181,6 +161,20 @@ npm install
 npm run dev          # native app with hot reload
 npm run dev:ui       # UI only, in a browser, with mock data (no Rust or CLI needed)
 ```
+
+**Use the source-build CLI:**
+
+```bash
+npm run build:bridge
+./node_modules/.bin/glitter --help
+./node_modules/.bin/glitter --cwd /path/to/workspace
+```
+
+It uses the app's provider keys and local Harness threads. `-p` runs one prompt
+without an interactive chat; approval-requiring calls are denied in that mode
+unless a less restrictive permission mode is explicitly selected. The CLI is a
+workspace tool in source builds and is not installed on the system PATH by the
+desktop app.
 
 **Build an unsigned bundle:**
 
@@ -223,14 +217,13 @@ debugging, adding features and settings, and common pitfalls.
 
 ## Architecture principles
 
-- The agent is the source of truth — an external CLI, or the built-in harness's
-  own session log. The app never simulates agent behaviour.
+- The Harness session log is the source of truth. The app never simulates agent
+  behaviour.
 - The renderer is untrusted. Privileged work is authorized in Rust, behind an
   allowlisted verb with a typed DTO, or a dedicated command that takes a
   workspace grant.
 - Secrets live only in the OS keychain, and go only to the provider that issued
   them.
-- Third-party agents are opt-in and isolated.
 - One implementation per concern: one store, one IPC module, one design-token
   set.
 
@@ -249,12 +242,11 @@ Coding agents should start with [AGENTS.md](AGENTS.md).
   that request, and a summary can miss details. The full transcript remains
   available in the thread.
 - **Harness threads are local.** They live in this Mac's app data folder, with no
-  sync and no shared session storage with the CLI agents.
+  sync. The included Harness CLI can use the same local session store.
+- **Thread lifecycle.** Harness threads do not yet support fork or export.
 - **Coverage gaps.** Native dialogs (folder picker, save panel) and a live,
-  authenticated end-to-end session aren't covered by automated tests;
-  `scripts/live-muse-smoke.mjs` is a manual check.
-- **Experimental agents.** Gemini CLI, Qwen Code, Goose and Cline CLI aren't
-  verified.
+  authenticated end-to-end session aren't covered by automated tests. The
+  opt-in [Harness evaluation](evals/harness/README.md) exercises real providers.
 - **Large modules.** `apps/desktop/src/lib/store.ts` (~5.0k lines) and
   `src-tauri/src/lib.rs` (~7.8k lines, tests included) hold most of the logic.
   The startup script is the app itself. The terminal and syntax highlighter
@@ -277,7 +269,7 @@ The app points its bridge at that harness folder. Run the bridge outside the
 app, and the same threads default to `~/.glitter/harness/`.
 
 Session history for the Muse CLI and ACP agents stays in each CLI's own data
-directory.
+directory; Glitter no longer opens those sessions.
 
 ## Upgrading from Muse Code Desktop
 

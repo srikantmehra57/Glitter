@@ -238,7 +238,7 @@ describe("predicted suggestions", () => {
     resetStore();
     seedStore({ workspaces: [{ id: "w", path: "/repo", name: "repo", grantId: "g" }], selectedWorkspaceId: "w", selectedSessionId: null, threads: [] });
   });
-  const predicted = (workspaceId = "w") => ({ workspaceId, signature: "s", at: Date.now(), agentId: "muse" as const, items: [
+  const predicted = (workspaceId = "w") => ({ workspaceId, signature: "s", at: Date.now(), agentId: "harness" as const, items: [
     { title: "Finish the login flow", prompt: "Wire the login submit handler and cover it." },
     { title: "Review dirty files", prompt: "Review my uncommitted changes." },
   ] });
@@ -246,7 +246,7 @@ describe("predicted suggestions", () => {
   it("renders predicted chips with their source when the feature is on", () => {
     seedStore({ suggestionsEnabled: true, suggestions: predicted(), refreshSuggestions: vi.fn(async () => {}) });
     render(<ThreadView />);
-    expect(screen.getByText("Predicted from workspace state by Muse")).toBeInTheDocument();
+    expect(screen.getByText("Predicted from workspace state by Harness")).toBeInTheDocument();
     const chip = screen.getByRole("button", { name: /Finish the login flow/ });
     expect(chip.closest(".composer-wrap")).not.toBeNull();
     expect(screen.queryByRole("button", { name: /Explain this codebase/ })).toBeNull();
@@ -380,9 +380,7 @@ describe("live token speed", () => {
   afterEach(() => { vi.restoreAllMocks(); });
 
   it.each([
-    { name: "Muse", agentId: undefined },
     { name: "Harness", agentId: "harness" },
-    { name: "ACP", agentId: "grok" },
   ] as const)("uses the same local estimate for $name", ({ agentId }) => {
     const now = Date.now();
     vi.spyOn(Date, "now").mockReturnValue(now);
@@ -428,7 +426,6 @@ describe("completion usage", () => {
         turnStats: { turnId: "t1", durationMs: 42000, inputTokens: 12040, outputTokens: 3120 },
       }],
       models: [{ modelId: "muse-spark-1.3", isActive: true, cost: { input: "1.25", output: "4.25", currency: "USD" } }],
-      modelsAgentId: "muse",
     });
   });
 
@@ -441,7 +438,6 @@ describe("completion usage", () => {
     expect(stats).toHaveTextContent("≈$0.03");
     expect(within(stats).getByTitle("Estimated cost for this turn")).toHaveTextContent("≈$0.03");
     expect(screen.getAllByLabelText("Turn usage")).toHaveLength(1);
-    expect(within(receipt).getByRole("button", { name: "Fork here" })).toBeInTheDocument();
   });
 
   it("shows the final local token-speed estimate", () => {

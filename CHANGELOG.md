@@ -10,8 +10,17 @@ licence terms.
 
 ## [Unreleased]
 
+Entries record changes as they landed. Some describe behavior since
+superseded, including the retired Muse and ACP integrations.
+
 ### Fixed
 
+- **Context and image requests fail safely.** A model call no longer starts if
+  the system prompt and tool definitions already fill its context budget.
+  Overflow retries keep their fixed prompt budget, and replayed reasoning and
+  tool-call signatures count toward the estimate. Ordinary lossy and lossless
+  WebP attachments pass image admission; empty or malformed base64 images are
+  rejected before a provider call.
 - **Evaluation reports preserve cache accounting and identify their source.**
   Orchestrator comparisons price cache reads and writes separately and mark
   unknown cache charges as partial. Reports retain the cache breakdown, role
@@ -32,6 +41,29 @@ licence terms.
   shortening a long opening request and commits the summary before changing the
   live history. Missing or damaged session indexes now stop with a recovery
   error instead of hiding logs and overwriting the index.
+- **Interrupted tool calls recover truthfully.** When a crash leaves tool calls
+  without results, reopening the thread records the interruption once and tells
+  you nothing was replayed. A declared read-only call (read, list, search, skill)
+  is marked safe to retry; edits, shell, MCP and delegated calls keep an unknown
+  outcome the model must check before retrying. A pending question's calls wait
+  for its answer instead of being repaired. A turn that was still running is
+  not started again. A call that was waiting for approval is marked as not run,
+  and that approval is not kept. Open stream items are closed in the log.
+  Continue on an interrupted Harness turn starts from those recorded results
+  and does not ask for unknown work to be repeated. Leave stopped sends nothing.
+  A delegated task that was already started keeps its child and its permission
+  mode; an MCP call that started stays outcome unknown. A compaction that is
+  still running is recorded, so a crash does not look like a finished summary.
+- **Unsupported images are refused before a model call.** An attachment must
+  be a PNG, JPEG, GIF, or WebP within 10 MB and 8000 pixels on a side, and a
+  model that does not accept images is told so before the request is sent.
+  Approved tool arguments are left unchanged.
+- **Retries honor Retry-After, and missing capabilities stay visible.** A
+  rate limit waits for the provider's delay, capped at 20 seconds, and does
+  not run tools again. A model with an unknown context window, or without
+  tools or images, is named on the turn and is not replaced by another model.
+  The model list says Context unknown when no window is known. Cache
+  breakpoints are sent only on the Anthropic wire.
 - **Model information and estimates retain unknowns.** Listed input limits
   are honoured; unknown prices no longer become free output. Cache reads and
   writes are counted separately, and an unpriced or ambiguous cache leg makes
@@ -92,6 +124,9 @@ licence terms.
 
 ### Added
 
+- **Harness CLI for source builds.** Run the same agent in a terminal, using
+  the app's provider keys and local threads. It supports interactive chat,
+  single-prompt runs, model selection and continuing a saved thread.
 - **Plugins from GitHub.** Settings → Extensions has Discover, Installed and
   Sources, and **Add from GitHub**: paste a repository link and Glitter fetches
   it, shows what it holds — skills, commands, MCP servers with their command
@@ -275,6 +310,12 @@ licence terms.
 
 ### Changed
 
+- **Glitter uses its own Harness.** The Muse and ACP agent integrations and
+  their connection settings have been removed. Existing CLI histories stay in
+  their original storage, and retired keychain entries are retained. Harness
+  threads do not yet support the removed agents' fork and export actions. A
+  previously disabled shell keeps the Terminal pane disabled; its switch is in
+  Settings → Permissions and does not change agent command permissions.
 - **Reasoning effort is available for every provider.** The picker no longer
   hides when a model reports no levels: a model without declared effort falls
   back to the default vocabulary, and the default effort setting is used when

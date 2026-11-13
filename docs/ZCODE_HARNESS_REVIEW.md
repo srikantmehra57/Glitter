@@ -4,7 +4,7 @@ ZCode (`zai-org/ZCode`, Apache-2.0) is Z.ai's coding-agent harness: an Electron
 workbench, a web client, a backend and — the part that matters here — a full
 agent runtime in `apps/zcode-cli`. This document is a reverse-engineering of that
 runtime and an assessment of what belongs in *our* harness
-(`packages/glitter-bridge/src/harness`).
+(`packages/glitter-harness/src/harness`).
 
 It is a design review, not an implementation plan. Every claim below was read
 in the ZCode source, not inferred from its docs.
@@ -36,7 +36,7 @@ carries the combined ranking.
 | `packages/contracts` (provider-neutral types) | | 22,963 |
 | `packages/adapters` (AI-SDK provider layer) | | 55,156 |
 
-Ours, for scale: `packages/glitter-bridge/src` is 6,984 lines, of which the harness
+Ours, for scale: `packages/glitter-harness/src` is 6,984 lines, of which the harness
 is 1,469 (`host.ts` 630, `wire.ts` 337, `tools.ts` 270, `store.ts` 135,
 `providers.ts` 97).
 

@@ -9,7 +9,7 @@ fn main() {
     // consult the digest, and release packaging always builds the bridge via
     // `beforeBuildCommand` first.
     let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../packages/glitter-bridge/dist/index.js");
+        .join("../../../packages/glitter-harness/dist/index.js");
     println!("cargo:rerun-if-changed={}", script.display());
     match std::fs::File::open(&script) {
         Ok(file) => {

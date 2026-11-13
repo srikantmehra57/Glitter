@@ -43,7 +43,8 @@ export function isImageFile(file: { type?: string; name: string }): boolean {
 
 /**
  * Reference path for a dropped file: workspace-relative when the drop lands
- * inside the workspace, otherwise the absolute path (Muse can still read it).
+ * inside the workspace, otherwise the absolute path. Access remains subject to
+ * the Harness workspace boundary.
  */
 export function refPathForDrop(rawPath: string, workspaceRoot?: string): string {
   if (workspaceRoot) {

@@ -18,7 +18,7 @@ const source = (partial: Partial<MarketplaceSource> = {}): MarketplaceSource => 
   addedAt: Date.now(), refreshedAt: Date.now(), avatar: null, plugins: [{ name: "lint", description: null, version: null, category: null, author: null, homepage: null, keywords: [], location: "This repository", supported: true }],
   ...partial,
 });
-const library = (partial: Partial<PluginLibrary> = {}): PluginLibrary => ({ plugins: [plugin()], marketplaces: [], pluginsRoot: "~/.glitter/plugins", problems: [], ...partial });
+const library = (partial: Partial<PluginLibrary> = {}): PluginLibrary => ({ plugins: [plugin()], marketplaces: [], pluginsRoot: "~/.glitter/plugins", problems: [], avatars: {}, avatarsPending: false, ...partial });
 
 describe("InstalledPlugins", () => {
   beforeEach(resetStore);

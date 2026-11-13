@@ -141,10 +141,10 @@ it("lets a scoped file chooser reopen a closed file without returning to All cha
   seedStore({ inspectorTab: "diff", reviewScope: "staged" });
   render(<ReviewDock />);
   await waitFor(() => expect(screen.getByRole("tab", { name: "host.ts" })).toBeInTheDocument());
-  fireEvent.click(screen.getByRole("button", { name: "Close packages/glitter-bridge/src/host.ts" }));
+  fireEvent.click(screen.getByRole("button", { name: "Close packages/glitter-harness/src/harness/host.ts" }));
   expect(screen.queryByRole("tab", { name: "host.ts" })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Review file" }));
-  fireEvent.click(screen.getByRole("option", { name: "packages/glitter-bridge/src/host.ts" }));
+  fireEvent.click(screen.getByRole("option", { name: "packages/glitter-harness/src/harness/host.ts" }));
   expect(useAppStore.getState().reviewScope).toBe("staged");
   expect(screen.getByRole("tab", { name: "host.ts" })).toHaveAttribute("aria-selected", "true");
   expect(screen.getByRole("log", { name: "Staged diff" })).toHaveTextContent("history = opening.items");

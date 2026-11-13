@@ -1,14 +1,14 @@
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
-import { Archive, ArrowDown, ArrowUp, Bell, CornerDownLeft, Keyboard, Cpu, Download, FileText, FolderOpen, Gauge, GitFork, History, Info, MessageSquare, Minimize2, Monitor, Moon, PanelLeft, PanelRight, Pencil, Play, RotateCcw, Search, Settings, ShieldCheck, Square, SquarePen, SquareTerminal, Sun, TextCursorInput } from "lucide-react";
+import { Archive, ArrowDown, ArrowUp, Bell, CornerDownLeft, Keyboard, Cpu, FileText, FolderOpen, Gauge, History, Info, MessageSquare, Minimize2, Monitor, Moon, PanelLeft, PanelRight, Pencil, Play, RotateCcw, Search, Settings, ShieldCheck, Square, SquarePen, SquareTerminal, Sun, TextCursorInput } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
-import { exportThread, runBuiltinCommand, shortcutText } from "../lib/commands";
+import { runBuiltinCommand, shortcutText } from "../lib/commands";
 import { availableBuiltins } from "../lib/composerText";
 import { afterDialogRestore, closeDialog, rememberDialogFocus } from "../lib/dialogFocus";
 import { fuzzyScore } from "../lib/fuzzy";
 import { needsAttention, threadMatches } from "../lib/format";
 import { paletteRows, type PaletteItem } from "../lib/palette";
 import { currentThread, currentWorkspace, useAppStore } from "../lib/store";
-import { agentEnabled, SETTINGS_TABS, type ThemeMode } from "../lib/types";
+import { SETTINGS_TABS, type ThemeMode } from "../lib/types";
 import { SETTINGS_TAB_LABELS } from "../lib/settingsNav";
 
 type Command = PaletteItem & {
@@ -38,9 +38,7 @@ export function CommandPalette() {
     selectedSessionId: state.selectedSessionId,
     workspaces: state.workspaces,
     selectedWorkspaceId: state.selectedWorkspaceId,
-    enabledAgents: state.enabledAgents,
     drafts: state.drafts,
-    defaultAgentId: state.defaultAgentId,
     preview: state.preview,
     theme: state.theme,
     shortcutOverrides: state.shortcutOverrides,
@@ -79,8 +77,7 @@ export function CommandPalette() {
   const thread = currentThread(s);
   const searching = Boolean(query.trim());
   const commands = useMemo<Command[]>(() => {
-    const agentId = thread ? thread.agentId ?? "muse" : s.drafts[`project:${s.selectedWorkspaceId}`]?.config?.agentId ?? s.defaultAgentId ?? "muse";
-    const builtin = new Set(availableBuiltins({ thread: Boolean(thread), muse: agentId === "muse", harness: agentId === "harness", live: !s.preview }).map((command) => command.name));
+    const builtin = new Set(availableBuiltins({ thread: Boolean(thread), live: !s.preview }).map((command) => command.name));
     const act = (name: string) => () => { runBuiltinCommand(name); };
     const actions: Command[] = [
       { id: "new", label: "New thread", icon: <SquarePen size={14} />, shortcut: shortcutText("new-thread"), run: () => void s.newThread() },
@@ -92,14 +89,9 @@ export function CommandPalette() {
       { id: "model", label: "Switch model", icon: <Cpu size={14} />, shortcut: shortcutText("model"), hidden: !workspace, defer: true, run: act("model") },
       { id: "effort", label: "Set reasoning effort", icon: <Gauge size={14} />, shortcut: shortcutText("effort"), hidden: !workspace, defer: true, run: act("effort") },
       { id: "permissions", label: "Change permissions", icon: <ShieldCheck size={14} />, shortcut: shortcutText("permissions"), keywords: "approval mode", hidden: !workspace || !builtin.has("permissions"), defer: true, run: act("permissions") },
-      { id: "fork", label: "Fork thread", icon: <GitFork size={14} />, hidden: !builtin.has("fork"), run: act("fork") },
       { id: "compact", label: "Compact thread", icon: <Minimize2 size={14} />, keywords: "context", hidden: !builtin.has("compact") || thread?.status === "running", run: act("compact") },
       { id: "rename", label: "Rename thread", icon: <Pencil size={14} />, hidden: !builtin.has("rename"), defer: true, run: act("rename") },
       { id: "status", label: "Thread status", icon: <Info size={14} />, keywords: "context usage session id", hidden: !builtin.has("status"), defer: true, run: act("status") },
-      { id: "export", label: "Export thread (share-safe JSON)", icon: <Download size={14} />, hidden: !builtin.has("export"), defer: true, run: () => { if (thread) void exportThread(thread, true); } },
-      { id: "export-raw", label: "Export thread (raw JSON)", icon: <Download size={14} />, hidden: !builtin.has("export"), defer: true, run: () => { if (thread) void exportThread(thread, false); } },
-      { id: "export-md", label: "Export thread (share-safe Markdown)", icon: <ShieldCheck size={14} />, hidden: !builtin.has("export"), defer: true, run: () => { if (thread) void exportThread(thread, true, "markdown"); } },
-      { id: "export-md-raw", label: "Export thread (raw Markdown)", icon: <FileText size={14} />, hidden: !builtin.has("export"), defer: true, run: () => { if (thread) void exportThread(thread, false, "markdown"); } },
       { id: "archive", label: "Archive thread", icon: <Archive size={14} />, shortcut: shortcutText("archive"), hidden: !thread, run: () => { if (thread) s.archiveThread(thread.sessionId); } },
       { id: "open", label: "Open workspace", icon: <FolderOpen size={14} />, run: () => void s.chooseProject() },
       { id: "init", label: "Preview and write AGENTS.md", icon: <FileText size={14} />, keywords: "init set up workspace", hidden: !workspace || !builtin.has("init"), defer: true, run: act("init") },
@@ -116,7 +108,7 @@ export function CommandPalette() {
     ].map((command) => ({ ...command, section: "Actions" as const }));
     // The list shows this workspace's latest threads; a search reaches every workspace.
     const names = new Map(s.workspaces.map((item) => [item.path, item.name]));
-    const pool = s.threads.filter((item) => !item.archived && names.has(item.workspacePath) && agentEnabled(s, item.agentId ?? "muse"));
+    const pool = s.threads.filter((item) => !item.archived && names.has(item.workspacePath));
     const shown = searching
       ? pool.filter((item) => threadMatches(item, query)).sort((a, b) => Number(b.workspacePath === workspace?.path) - Number(a.workspacePath === workspace?.path)).slice(0, SEARCH_LIMIT)
       : pool.filter((item) => !workspace || item.workspacePath === workspace.path).slice(0, THREAD_LIMIT);
@@ -147,7 +139,7 @@ export function CommandPalette() {
       }));
     const settings: Command[] = [
       { id: "settings", label: "Open settings", section: "Settings", icon: <Settings size={14} />, shortcut: shortcutText("settings"), run: () => s.setSettingsOpen(true) },
-      ...SETTINGS_TABS.map((tab) => ({ id: `settings-${tab}`, label: `Settings · ${SETTINGS_TAB_LABELS[tab]}`, section: "Settings" as const, icon: <Settings size={14} />, keywords: tab === "Agents" ? "muse connection sign in api key" : tab === "Extensions" ? "mcp skills plugins" : tab === "Models" ? "hide show test" : undefined, run: () => s.setSettingsOpen(true, tab) })),
+      ...SETTINGS_TABS.map((tab) => ({ id: `settings-${tab}`, label: `Settings · ${SETTINGS_TAB_LABELS[tab]}`, section: "Settings" as const, icon: <Settings size={14} />, keywords: tab === "Extensions" ? "mcp skills plugins" : tab === "Models" ? "hide show test" : undefined, run: () => s.setSettingsOpen(true, tab) })),
     ];
     return [...actions, ...threads, ...files, ...settings];
   }, [s, thread, workspace, query, searching]);

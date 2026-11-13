@@ -47,7 +47,7 @@ describe("UserInputCards", () => {
 
   it("is a named alertdialog that takes focus on mount", () => {
     mount(request());
-    const card = screen.getByRole("alertdialog", { name: "Muse needs your input" });
+    const card = screen.getByRole("alertdialog", { name: "Harness needs your input" });
     expect(card).toHaveFocus();
   });
 

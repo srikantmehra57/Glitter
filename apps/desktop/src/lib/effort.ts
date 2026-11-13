@@ -25,10 +25,9 @@ export function modelFor(models: Model[], config: Pick<SessionConfig, "modelId" 
 }
 
 /**
- * The catalog, plus any model a selection still names that the agent no longer
- * lists (Muse 1.4 stopped listing the `-contributor` ids, for one). The choice
- * stays visible and selectable instead of leaving the picker with nothing
- * selected. An empty catalog stays empty: there is nothing to compare against.
+ * The catalog, plus any selected model it no longer lists. The choice stays
+ * visible and selectable instead of leaving the picker with nothing selected.
+ * An empty catalog stays empty: there is nothing to compare against.
  */
 export function withUnlistedModels(models: Model[], selections: Array<Pick<SessionConfig, "modelId" | "providerId">>): Model[] {
   if (!models.length) return models;
@@ -67,7 +66,7 @@ export function clampTier(effort: ReasoningEffort | undefined, tiers: ReasoningE
   return below[below.length - 1] ?? tiers[0];
 }
 
-/** The model's own top tier (Max on Muse, Extra high on Grok) is the peak mode with its own visuals. */
+/** A model's top tier, when high enough, is the peak mode with its own visuals. */
 export function isPeak(effort: ReasoningEffort | undefined, tiers: ReasoningEffort[]) {
   return Boolean(effort) && tiers.length > 1 && effort === tiers[tiers.length - 1] && TIER_ORDER.indexOf(effort!) >= TIER_ORDER.indexOf("xhigh");
 }

@@ -1,0 +1,25 @@
+{
+  "name": "@glitter/harness",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "glitter": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "build:sidecar": "node scripts/stage-sidecar.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "chromium-bidi": "12.1.0",
+    "playwright-core": "1.64.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "esbuild": "^0.28.2",
+    "openpgp": "^6.3.2",
+    "typescript": "~7.0.2"
+  }
+}

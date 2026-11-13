@@ -1,5 +1,4 @@
 import { isCustomProviderId } from "./providers";
-import type { AgentId } from "./types";
 
 /**
  * Logos for providers and model families. Files in `public/brands/` are avatar
@@ -84,12 +83,6 @@ const MODEL_SLUGS: Array<[RegExp, string]> = [
   [/google/, "google"],
 ];
 
-const AGENT_SLUG: Partial<Record<AgentId, string>> = {
-  grok: "grok",
-  gemini: "gemini",
-  qwen: "qwen",
-};
-
 export function brandSrc(slug: string): string {
   if (slug === "grok" || slug === "gemini" || slug === "qwen") return `/agents/${slug}.svg`;
   return `/brands/${slug}.svg`;
@@ -99,9 +92,9 @@ export function providerSlug(id?: string): string | undefined {
   return id ? PROVIDER_SLUG[id] : undefined;
 }
 
-/** The logo already shown for this agent or provider, so the chip does not repeat it. */
-export function leadingBrandSlug(agentId?: AgentId, providerId?: string): string | undefined {
-  return providerSlug(providerId) ?? (agentId ? AGENT_SLUG[agentId] : undefined);
+/** The logo already shown for this provider, so the chip does not repeat it. */
+export function leadingBrandSlug(providerId?: string): string | undefined {
+  return providerSlug(providerId);
 }
 
 export function providerBrand(id: string, name?: string): BrandMark {

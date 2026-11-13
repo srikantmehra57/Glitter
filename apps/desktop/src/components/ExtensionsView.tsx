@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { describeError } from "../lib/errors";
 import { useShallow } from "zustand/react/shallow";
-import { Check, FolderGit2, KeyRound, LogOut, Package, Plus, Puzzle, RefreshCw, Server, Trash2, WandSparkles, X } from "lucide-react";
-import { consentMcp, mcpLogin, mcpLogout, pluginInspect, pluginReview, reviewMcp, skillInspect, skillSet } from "../lib/bridge";
+import { FolderGit2, Package, Plus, Puzzle, RefreshCw, Server, Trash2 } from "lucide-react";
+import { consentMcp, reviewMcp } from "../lib/bridge";
 import { skillSelectorText, skillUseText } from "../lib/composerText";
 import { ExtensionThumb } from "./ExtensionThumb";
 import { mcpServerNameProblem, mcpServerSummary, parseMcpArguments, parseMcpKeyValues } from "../lib/mcpConfig";
-import { activeWorkspace, currentThread, currentWorkspace, supportsSkills, useAppStore } from "../lib/store";
-import { skillScopeArg, type HarnessMcpConfigServer, type HarnessMcpReview, type HarnessMcpScope, type HarnessMcpServerInput, type PluginDetail, type SkillDetail, type SkillEntry, type SkillRow } from "../lib/types";
+import { activeWorkspace, currentThread, useAppStore } from "../lib/store";
+import { type HarnessMcpConfigServer, type HarnessMcpReview, type HarnessMcpScope, type HarnessMcpServerInput, type SkillRow } from "../lib/types";
 import { ExtensionsStore } from "./ExtensionsStore";
 import { GithubInstallDialog, type GithubRequest } from "./GithubInstallDialog";
 import { InstalledPlugins, PluginSources, type OpenGithub } from "./PluginLibrary";
@@ -24,7 +24,7 @@ const selectorText = (row: SkillRow) => skillSelectorText(row.selector);
 function SkillCard({ row, onUse }: { row: SkillRow; onUse: (row: SkillRow) => void }) {
   return (
     <li className="extension-card">
-      <ExtensionThumb kind="skill" id={row.selector} name={row.displayName ?? row.selector} size={32} />
+      <ExtensionThumb kind="skill" id={row.selector} name={row.displayName ?? row.selector} size={32} src={row.icon} />
       <span className="extension-copy">
         <span className="extension-name">{selectorText(row)}{row.displayName && row.displayName !== row.selector ? <span className="picker-tag">{row.displayName}</span> : null}{row.source ? <span className="picker-tag">{row.source}</span> : null}</span>
         {row.description ? <span className="extension-meta">{row.description}</span> : null}
@@ -43,35 +43,17 @@ export function ExtensionsView({ onOpenThreads, embedded = false }: { onOpenThre
     selectedWorkspaceId: state.selectedWorkspaceId,
     preview: state.preview,
     composer: state.composer,
-    museBin: state.museBin,
-    mcpServers: state.mcpServers,
-    mcpLoading: state.mcpLoading,
-    mcpError: state.mcpError,
     harnessMcp: state.harnessMcp,
     harnessMcpLoading: state.harnessMcpLoading,
     harnessMcpError: state.harnessMcpError,
     harnessMcpConfig: state.harnessMcpConfig,
     harnessMcpConfigLoading: state.harnessMcpConfigLoading,
     harnessMcpConfigError: state.harnessMcpConfigError,
-    pluginEntries: state.pluginEntries,
-    pluginsAvailableShown: state.pluginsAvailableShown,
-    pluginsLoading: state.pluginsLoading,
-    pluginsError: state.pluginsError,
-    skillEntries: state.skillEntries,
-    skillsLoading: state.skillsLoading,
-    skillsError: state.skillsError,
-    refreshMcpServers: state.refreshMcpServers,
     refreshHarnessMcp: state.refreshHarnessMcp,
     refreshHarnessMcpConfig: state.refreshHarnessMcpConfig,
     addHarnessMcpServer: state.addHarnessMcpServer,
     removeHarnessMcpServer: state.removeHarnessMcpServer,
     refreshSkills: state.refreshSkills,
-    refreshManagedSkills: state.refreshManagedSkills,
-    refreshPlugins: state.refreshPlugins,
-    installPlugin: state.installPlugin,
-    installSkill: state.installSkill,
-    importSkills: state.importSkills,
-    uninstallSkill: state.uninstallSkill,
     setComposer: state.setComposer,
     setSettingsOpen: state.setSettingsOpen,
     confirm: state.confirm,
@@ -103,24 +85,6 @@ export function ExtensionsView({ onOpenThreads, embedded = false }: { onOpenThre
   };
   const thread = currentThread(s);
   const [skillsBusy, setSkillsBusy] = useState(false);
-  const [authBusy, setAuthBusy] = useState<string | null>(null);
-  const [authError, setAuthError] = useState<string | null>(null);
-  const [inspectedId, setInspectedId] = useState<string | null>(null);
-  const [detail, setDetail] = useState<PluginDetail | null>(null);
-  const [detailLoading, setDetailLoading] = useState(false);
-  const [detailError, setDetailError] = useState<string | null>(null);
-  const [reviewBusy, setReviewBusy] = useState<string | null>(null);
-  const [reviewError, setReviewError] = useState<string | null>(null);
-  const [skillBusy, setSkillBusy] = useState<string | null>(null);
-  const [skillError, setSkillError] = useState<string | null>(null);
-  const [importFrom, setImportFrom] = useState<"claude" | "codex">("claude");
-  const [importPreview, setImportPreview] = useState<string | null>(null);
-  const [importBusy, setImportBusy] = useState(false);
-  const [importError, setImportError] = useState<string | null>(null);
-  const [inspectedSkill, setInspectedSkill] = useState<string | null>(null);
-  const [skillDetail, setSkillDetail] = useState<SkillDetail | null>(null);
-  const [skillDetailLoading, setSkillDetailLoading] = useState(false);
-  const [skillDetailError, setSkillDetailError] = useState<string | null>(null);
   const [mcpFormOpen, setMcpFormOpen] = useState(false);
   const [mcpName, setMcpName] = useState("");
   const [mcpScope, setMcpScope] = useState<HarnessMcpScope>("workspace");
@@ -154,13 +118,7 @@ export function ExtensionsView({ onOpenThreads, embedded = false }: { onOpenThre
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, s.library]);
 
-  useEffect(() => {
-    if (!s.preview) void s.refreshMcpServers();
-    // Load the catalog once; per-session skills refresh with the thread lifecycle.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [s.preview]);
-
-  const harnessThread = thread?.agentId === "harness" ? thread : null;
+  const harnessThread = thread ?? null;
   const harnessSessionId = harnessThread?.sessionId ?? null;
   const mcpGrantId = activeWorkspace(s)?.grantId ?? (s.preview ? "preview" : null);
   const mcpApproved = Boolean(mcpApproval?.trusted && mcpApproval.current);
@@ -291,67 +249,8 @@ export function ExtensionsView({ onOpenThreads, embedded = false }: { onOpenThre
     onOpenThreads?.();
   };
 
-  const authServer = async (server: string, login: boolean) => {
-    setAuthBusy(server); setAuthError(null);
-    try {
-      if (login) await mcpLogin(server, s.museBin || undefined);
-      else await mcpLogout(server, s.museBin || undefined);
-      await s.refreshMcpServers();
-    } catch (error) {
-      setAuthError(describeError("Could not finish that", error));
-    } finally {
-      setAuthBusy(null);
-    }
-  };
-
-  const skilled = thread != null && supportsSkills(thread.agentId);
-  const harness = thread?.agentId === "harness";
-  const skills = skilled ? thread.skills : null;
-  const skillsState = !thread ? "none" : !skilled ? "foreign" : skills == null ? "unloaded" : skills.length ? "ready" : "empty";
-  const workspace = currentWorkspace(s);
-
-  const toggleSkill = async (entry: SkillEntry, enabled: boolean) => {
-    const scope = skillScopeArg(entry.scope);
-    if (!scope) return;
-    if (scope === "project" && !workspace?.grantId) { setSkillError("Open a workspace to manage project skills."); return; }
-    setSkillBusy(entry.id); setSkillError(null);
-    try {
-      await skillSet(entry.id, scope, enabled, workspace?.grantId ?? undefined, s.museBin || undefined);
-      await s.refreshManagedSkills();
-      if (thread && supportsSkills(thread.agentId)) await s.refreshSkills(thread.sessionId);
-    } catch (error) {
-      setSkillError(describeError("Could not finish that", error));
-    } finally {
-      setSkillBusy(null);
-    }
-  };
-
-  const inspectPlugin = async (id: string) => {
-    if (inspectedId === id) { setInspectedId(null); setDetail(null); setDetailError(null); return; }
-    setInspectedId(id); setDetail(null); setDetailError(null); setDetailLoading(true);
-    try {
-      setDetail(await pluginInspect(id, s.museBin || undefined));
-    } catch (error) {
-      setDetailError(describeError("Could not finish that", error));
-    } finally {
-      setDetailLoading(false);
-    }
-  };
-
-  const reviewPlugin = async (id: string, approve: boolean) => {
-    const verb = approve ? "approve and enable" : "reject and disable";
-    if (!(await s.confirm({ title: `${approve ? "Approve" : "Reject"} ${id}?`, body: `This ${verb}s its current runtime capabilities.`, confirmLabel: approve ? "Approve" : "Reject" }))) return;
-    setReviewBusy(id); setReviewError(null);
-    try {
-      await pluginReview(id, approve, s.museBin || undefined);
-      await s.refreshPlugins(s.pluginsAvailableShown);
-      if (inspectedId === id) setDetail(await pluginInspect(id, s.museBin || undefined).catch(() => detail));
-    } catch (error) {
-      setReviewError(describeError("Could not finish that", error));
-    } finally {
-      setReviewBusy(null);
-    }
-  };
+  const skills = thread ? thread.skills : null;
+  const skillsState = !thread ? "none" : skills == null ? "unloaded" : skills.length ? "ready" : "empty";
 
   const storeInstalled = s.catalogEntries.filter((entry) => entry.installed || entry.installedParts > 0);
   const installedCount = (s.library?.plugins.length ?? 0) + storeInstalled.length;
@@ -433,122 +332,16 @@ export function ExtensionsView({ onOpenThreads, embedded = false }: { onOpenThre
         <section className="extensions-section" aria-labelledby="extensions-skills-title">
           <div className="extensions-section-head">
             <h2 id="extensions-skills-title"><Puzzle size={15} aria-hidden="true" />Skills</h2>
-            <button type="button" className="ghost-btn small" disabled={!skilled || skillsBusy} onClick={() => void refreshSkills()}>
+            <button type="button" className="ghost-btn small" disabled={!thread || skillsBusy} onClick={() => void refreshSkills()}>
               <RefreshCw size={11} className={skillsBusy ? "spin" : ""} />{skillsBusy ? "Refreshing…" : "Refresh"}
             </button>
           </div>
           {skillsState === "none" ? <p className="permission-note extension-empty">Open a thread to see its skills.</p> : null}
-          {skillsState === "foreign" ? <p className="permission-note">Skills work with Muse and Harness; this thread runs on another agent.</p> : null}
-          {harness ? <p className="permission-note">Harness loads skills from <code>.glitter/skills</code> and <code>.agents/skills</code>, in the workspace and in your home folder. A workspace skill wins over a home one with the same name.</p> : null}
+          {thread ? <p className="permission-note">The agent loads skills from <code>.glitter/skills</code> and <code>.agents/skills</code>, in the workspace and in your home folder. A workspace skill wins over a home one with the same name.</p> : null}
           {skillsState === "unloaded" ? <p className="permission-note">The skill catalog has not loaded yet. Refresh to fetch it.</p> : null}
-          {skillsState === "empty" ? <p className="permission-note">{harness ? "No skills yet. Install one from Discover, or add a folder with a SKILL.md to one of those places, then refresh." : "No skills are available for this session. Workspace skills load only from trusted workspaces."}</p> : null}
+          {skillsState === "empty" ? <p className="permission-note">No skills yet. Install one from Discover, or add a folder with a SKILL.md to one of those places, then refresh.</p> : null}
           {skillsState === "ready" ? <ul className="extension-list">
             {(skills ?? []).map((row) => <SkillCard key={`${row.source ?? ""}:${row.selector}`} row={row} onUse={useSkill} />)}
-          </ul> : null}
-        </section>
-        <section className="extensions-section" aria-labelledby="extensions-lifecycle-title">
-          <div className="extensions-section-head">
-            <h2 id="extensions-lifecycle-title"><WandSparkles size={15} aria-hidden="true" />Skill lifecycle</h2>
-            <span className="extension-actions">
-              <button type="button" className="ghost-btn small" disabled={s.skillsLoading} title="Install a skill from a folder" onClick={() => void s.installSkill()}>
-                <WandSparkles size={11} />Install
-              </button>
-              <button type="button" className="ghost-btn small" disabled={s.skillsLoading} onClick={() => void s.refreshManagedSkills()}>
-                <RefreshCw size={11} className={s.skillsLoading ? "spin" : ""} />{s.skillsLoading ? "Refreshing…" : "Refresh"}
-              </button>
-            </span>
-          </div>
-          <p className="permission-note">Enable or disable CLI skills, including the open workspace's project skills.</p>
-          {s.skillsError ? <p className="permission-note" role="alert">{s.skillsError}</p> : null}
-          {skillError ? <p className="permission-note" role="alert">{skillError}</p> : null}
-          <div className="import-row">
-            <span className="import-label">Import from</span>
-            <span className="usage-periods" role="tablist" aria-label="Import source">
-              <button type="button" role="tab" aria-selected={importFrom === "claude"} onClick={() => { setImportFrom("claude"); setImportPreview(null); }}>Claude</button>
-              <button type="button" role="tab" aria-selected={importFrom === "codex"} onClick={() => { setImportFrom("codex"); setImportPreview(null); }}>Codex</button>
-            </span>
-            <button
-              type="button"
-              className="secondary small"
-              disabled={importBusy || s.skillsLoading}
-              title={`Preview importing ${importFrom} skills`}
-              onClick={() => {
-                setImportBusy(true); setImportError(null);
-                s.importSkills(importFrom, true).then(setImportPreview, (error) => setImportError(describeError("Could not finish that", error))).finally(() => setImportBusy(false));
-              }}
-            >{importBusy ? "Working…" : "Preview import"}</button>
-            {importPreview ? <button
-              type="button"
-              className="ghost-btn small"
-              disabled={importBusy || s.skillsLoading}
-              title={`Import ${importFrom} skills into scope user`}
-              onClick={() => {
-                void s.confirm({ title: `Import ${importFrom} skills into your user scope?`, confirmLabel: "Import" }).then((ok) => {
-                  if (!ok) return;
-                  setImportBusy(true); setImportError(null);
-                  s.importSkills(importFrom, false).then(() => setImportPreview(null), (error) => setImportError(describeError("Could not finish that", error))).finally(() => setImportBusy(false));
-                });
-              }}
-            >Import</button> : null}
-          </div>
-          {importError ? <p className="permission-note" role="alert">{importError}</p> : null}
-          {importPreview ? <pre className="import-preview">{importPreview}</pre> : null}
-          {!s.skillEntries.length && !s.skillsLoading ? <p className="permission-note extension-empty">No skills found. Refresh to fetch the inventory.</p> : null}
-          {s.skillEntries.length ? <ul className="extension-list">
-            {s.skillEntries.map((entry) => {
-              const scope = skillScopeArg(entry.scope);
-              const on = entry.activation.toLowerCase() === "on";
-              const uninstallable = entry.scope.toLowerCase() === "user" || entry.scope.toLowerCase() === "project" || entry.scope.toLowerCase() === "plugin";
-              return (
-                <li key={entry.id}>
-                  <div className="extension-card">
-                    <ExtensionThumb kind="skill" id={entry.id} size={32} />
-                    <span className="extension-copy">
-                      <span className="extension-name">{entry.id}<span className="picker-tag">{entry.scope || "unknown"}</span><span className={on ? "picker-tag" : "picker-tag warm"}>{on ? "On" : "Off"}</span></span>
-                      {entry.description ? <span className="extension-meta">{entry.description}</span> : null}
-                    </span>
-                    <span className="extension-actions">
-                      <button
-                        type="button"
-                        className="ghost-btn small"
-                        aria-expanded={inspectedSkill === entry.id}
-                        onClick={() => {
-                          if (inspectedSkill === entry.id) { setInspectedSkill(null); setSkillDetail(null); setSkillDetailError(null); return; }
-                          setInspectedSkill(entry.id); setSkillDetail(null); setSkillDetailError(null); setSkillDetailLoading(true);
-                          skillInspect(entry.id, s.museBin || undefined).then(setSkillDetail, (error) => setSkillDetailError(describeError("Could not finish that", error))).finally(() => setSkillDetailLoading(false));
-                        }}
-                      >{inspectedSkill === entry.id ? "Hide" : "Inspect"}</button>
-                      {uninstallable ? <button
-                        type="button"
-                        className="ghost-btn small"
-                        disabled={s.skillsLoading}
-                        title={`Uninstall ${entry.id}`}
-                        onClick={() => { void s.confirm({ title: `Uninstall ${entry.id}?`, body: "Its files are removed. This cannot be undone.", confirmLabel: "Uninstall", danger: true }).then((ok) => { if (ok) void s.uninstallSkill(entry.id); }); }}
-                      >Uninstall</button> : null}
-                      {scope ? (
-                        <button
-                          type="button"
-                          role="switch"
-                          aria-checked={on}
-                          aria-label={`${on ? "Disable" : "Enable"} ${entry.id}`}
-                          className="toggle"
-                          disabled={skillBusy === entry.id}
-                          onClick={() => void toggleSkill(entry, !on)}
-                        ><i /></button>
-                      ) : null}
-                    </span>
-                  </div>
-                  {inspectedSkill === entry.id ? <div className="extension-detail">
-                    {skillDetailLoading ? <p className="permission-note">Inspecting {entry.id}…</p> : null}
-                    {skillDetailError ? <p className="permission-note" role="alert">{skillDetailError}</p> : null}
-                    {skillDetail && !skillDetailLoading ? <>
-                      {skillDetail.description ? <p className="permission-note">{skillDetail.description}</p> : null}
-                      <p className="permission-note">Scope {skillDetail.scope || "unknown"} · {skillDetail.activation === "on" ? "on" : "off"}{skillDetail.path ? <> · <span className="extension-name">{skillDetail.path}</span></> : null}</p>
-                    </> : null}
-                  </div> : null}
-                </li>
-              );
-            })}
           </ul> : null}
         </section>
         <section className="extensions-section" aria-labelledby="extensions-mcp-title">
@@ -567,10 +360,10 @@ export function ExtensionsView({ onOpenThreads, embedded = false }: { onOpenThre
               <button
                 type="button"
                 className="ghost-btn small"
-                disabled={harnessThread ? Boolean(s.harnessMcpLoading || s.harnessMcpConfigLoading || mcpConsentBusy) : s.mcpLoading}
-                onClick={() => { if (harnessThread) refreshHarnessMcp(true); else void s.refreshMcpServers(); }}
+                disabled={!harnessThread || Boolean(s.harnessMcpLoading || s.harnessMcpConfigLoading || mcpConsentBusy)}
+                onClick={() => refreshHarnessMcp(true)}
               >
-                <RefreshCw size={11} className={(harnessThread ? (s.harnessMcpLoading || s.harnessMcpConfigLoading) : s.mcpLoading) ? "spin" : ""} />{(harnessThread ? (s.harnessMcpLoading || s.harnessMcpConfigLoading) : s.mcpLoading) ? "Refreshing…" : "Refresh"}
+                <RefreshCw size={11} className={s.harnessMcpLoading || s.harnessMcpConfigLoading ? "spin" : ""} />{s.harnessMcpLoading || s.harnessMcpConfigLoading ? "Refreshing…" : "Refresh"}
               </button>
             </span>
           </div>
@@ -667,91 +460,7 @@ export function ExtensionsView({ onOpenThreads, embedded = false }: { onOpenThre
               })}
             </ul> : null}
             {!s.harnessMcpConfig?.servers.length && !s.harnessMcpConfigLoading && !mcpFormOpen ? <p className="permission-note extension-empty">No MCP servers are configured. Install one from Discover, add one here, or write .glitter/mcp.json yourself.</p> : null}
-          </> : <>
-            <p className="permission-note">Servers configured for the Muse CLI. OAuth servers need a sign-in before their tools work.</p>
-            {s.mcpError ? <p className="permission-note" role="alert">{s.mcpError}</p> : null}
-            {authError ? <p className="permission-note" role="alert">{authError}</p> : null}
-            {!s.mcpServers.length && !s.mcpLoading ? <p className="permission-note extension-empty">No MCP servers are configured. Add them with the Muse CLI, then refresh.</p> : null}
-            {s.mcpServers.length ? <ul className="extension-list">
-              {s.mcpServers.map((server) => (
-                <li key={server.name} className="extension-card">
-                  <ExtensionThumb kind="mcp" id={server.name} size={32} />
-                  <span className="extension-copy">
-                    <span className="extension-name">{server.name}<span className="picker-tag">{server.transport}</span>{server.oauth ? <span className="picker-tag">OAuth</span> : null}</span>
-                  </span>
-                  {server.oauth ? (
-                    <span className="extension-actions">
-                      <button type="button" className="ghost-btn small" disabled={authBusy === server.name} title={`Sign in to ${server.name}`} onClick={() => void authServer(server.name, true)}>
-                        <KeyRound size={11} />{authBusy === server.name ? "Working…" : "Sign in"}
-                      </button>
-                      <button type="button" className="ghost-btn small" disabled={authBusy === server.name} title={`Remove the saved credential for ${server.name}`} onClick={() => { void s.confirm({ title: `Remove the saved credential for ${server.name}?`, body: "The next connection asks you to sign in to this server again.", confirmLabel: "Remove", danger: true }).then((ok) => { if (ok) void authServer(server.name, false); }); }}>
-                        <LogOut size={11} />Sign out
-                      </button>
-                    </span>
-                  ) : null}
-                </li>
-              ))}
-            </ul> : null}
-          </>}
-        </section>
-        <section className="extensions-section" aria-labelledby="extensions-plugins-title">
-          <div className="extensions-section-head">
-            <h2 id="extensions-plugins-title"><Package size={15} aria-hidden="true" />Muse CLI plugins</h2>
-            <span className="extension-actions">
-              <span className="usage-periods" role="tablist" aria-label="Plugin inventory">
-                <button type="button" role="tab" aria-selected={!s.pluginsAvailableShown} onClick={() => void s.refreshPlugins(false)}>Installed</button>
-                <button type="button" role="tab" aria-selected={s.pluginsAvailableShown} onClick={() => void s.refreshPlugins(true)}>Available</button>
-              </span>
-              <button type="button" className="ghost-btn small" disabled={s.pluginsLoading} title="Install a plugin from a bundle folder" onClick={() => void s.installPlugin()}>
-                <Package size={11} />Install
-              </button>
-              <button type="button" className="ghost-btn small" disabled={s.pluginsLoading} onClick={() => void s.refreshPlugins(s.pluginsAvailableShown)}>
-                <RefreshCw size={11} className={s.pluginsLoading ? "spin" : ""} />{s.pluginsLoading ? "Refreshing…" : "Refresh"}
-              </button>
-            </span>
-          </div>
-          <p className="permission-note">Inspect a plugin's runtime capabilities before approving it. Per-capability review and marketplace management still need the CLI.</p>
-          {s.pluginsError ? <p className="permission-note" role="alert">{s.pluginsError}</p> : null}
-          {reviewError ? <p className="permission-note" role="alert">{reviewError}</p> : null}
-          {!s.pluginEntries.length && !s.pluginsLoading ? <p className="permission-note extension-empty">{s.pluginsAvailableShown ? "No marketplace plugins are available." : "No Muse CLI plugins are installed. Plugins from GitHub and the store install without a CLI."}</p> : null}
-          {s.pluginEntries.length ? <ul className="extension-list">
-            {s.pluginEntries.map((plugin) => (
-              <li key={plugin.id}>
-                <div className="extension-card">
-                  <ExtensionThumb kind="plugin" id={plugin.id} size={32} />
-                  <span className="extension-copy">
-                    <span className="extension-name">{plugin.id}{plugin.version ? <span className="picker-tag">v{plugin.version}</span> : null}{plugin.enabled == null ? null : plugin.enabled ? <span className="picker-tag">Enabled</span> : <span className="picker-tag warm">Disabled</span>}</span>
-                    {plugin.description ? <span className="extension-meta">{plugin.description}</span> : null}
-                  </span>
-                  <span className="extension-actions">
-                    <button type="button" className="ghost-btn small" aria-expanded={inspectedId === plugin.id} onClick={() => void inspectPlugin(plugin.id)}>
-                      {inspectedId === plugin.id ? "Hide" : "Inspect"}
-                    </button>
-                    {!s.pluginsAvailableShown ? <>
-                      <button type="button" className="ghost-btn small" disabled={reviewBusy === plugin.id} title={`Approve and enable ${plugin.id}`} onClick={() => void reviewPlugin(plugin.id, true)}>
-                        <Check size={11} />{reviewBusy === plugin.id ? "Working…" : "Approve"}
-                      </button>
-                      <button type="button" className="ghost-btn small" disabled={reviewBusy === plugin.id} title={`Reject and disable ${plugin.id}`} onClick={() => void reviewPlugin(plugin.id, false)}>
-                        <X size={11} />Reject
-                      </button>
-                    </> : null}
-                  </span>
-                </div>
-                {inspectedId === plugin.id ? <div className="extension-detail">
-                  {detailLoading ? <p className="permission-note">Inspecting {plugin.id}…</p> : null}
-                  {detailError ? <p className="permission-note" role="alert">{detailError}</p> : null}
-                  {detail && !detailLoading ? detail.capabilities.length ? <ul className="capability-list">
-                    {detail.capabilities.map((cap) => (
-                      <li key={cap.id}>
-                        <span className="extension-name">{cap.id}{cap.kind ? <span className="picker-tag">{cap.kind}</span> : null}{cap.enabled == null ? null : cap.enabled ? <span className="picker-tag">On</span> : <span className="picker-tag warm">Off</span>}</span>
-                        <span className="extension-meta">{cap.description}</span>
-                      </li>
-                    ))}
-                  </ul> : <p className="permission-note">No runtime capabilities reported.</p> : null}
-                </div> : null}
-              </li>
-            ))}
-          </ul> : null}
+          </> : <p className="permission-note extension-empty">Open a thread to see its MCP servers.</p>}
         </section>
         </div>
       </div>

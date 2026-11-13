@@ -98,7 +98,7 @@ document.querySelectorAll("[data-split]").forEach((el) => {
   const nav = $("nav");
   const bar = $("nav-progress");
   const links = [...document.querySelectorAll("[data-nav]")];
-  const NAMES = { top: "Intro", room: "The room", features: "Details", agents: "Agents", dial: "The dial", run: "A run", themes: "Themes", install: "Install" };
+  const NAMES = { top: "Intro", room: "The room", features: "Details", agents: "Providers", dial: "The dial", run: "A run", themes: "Themes", install: "Install" };
   const sections = Object.keys(NAMES).map((id) => $(id));
   let lastY = window.scrollY;
   let current = "";
@@ -131,7 +131,7 @@ document.querySelectorAll("[data-split]").forEach((el) => {
   size();
 })();
 
-/* ─────────── agents orbit: spokes + pulses from the hub to each CLI ─────────── */
+/* ─────────── provider orbit: spokes + pulses from the hub ─────────── */
 (() => {
   const svg = $("orbit-lines");
   const nodes = [...document.querySelectorAll(".orbit-node")];
@@ -142,7 +142,7 @@ document.querySelectorAll("[data-split]").forEach((el) => {
     return n;
   };
   svg.append(el("ellipse", { class: "orbit-ellipse", cx: 50, cy: 50, rx: 41, ry: 40 }));
-  // One agent per slice of the ring: the step follows the node count.
+  // One provider per slice of the ring: the step follows the node count.
   const step = nodes.length ? 360 / nodes.length : 60;
   document.querySelector(".orbit-nodes")?.style.setProperty("--orbit-step", `${step}deg`);
   nodes.forEach((node, i) => {
@@ -435,43 +435,6 @@ document.querySelectorAll(".seg").forEach((seg) => {
   syncSeg(seg);
   segObserver.observe(seg, { subtree: true, attributes: true, attributeFilter: ["aria-checked", "aria-pressed"] });
 });
-
-/* ─────────── install: platform toggle + copy ─────────── */
-(() => {
-  const commands = {
-    posix: "curl -fsSL https://dev.meta.ai/install.sh | sh",
-    windows: "irm https://dev.meta.ai/install.ps1 | iex",
-  };
-  let platform = "posix";
-  const commandEl = $("install-command");
-  const statusEl = $("copy-status");
-  const copyBtn = $("copy-command");
-  document.querySelectorAll("[data-platform]").forEach((button) =>
-    button.addEventListener("click", () => {
-      platform = button.dataset.platform;
-      commandEl.textContent = commands[platform];
-      statusEl.textContent = "";
-      document.querySelectorAll("[data-platform]").forEach((b) => b.setAttribute("aria-pressed", String(b === button)));
-    }),
-  );
-  let timer = 0;
-  copyBtn.addEventListener("click", async () => {
-    try {
-      await navigator.clipboard.writeText(commands[platform]);
-      copyBtn.textContent = "Copied";
-      copyBtn.classList.add("done");
-      statusEl.textContent = "";
-    } catch {
-      statusEl.textContent = "Select the command above to copy it";
-    }
-    clearTimeout(timer);
-    timer = setTimeout(() => {
-      copyBtn.textContent = "Copy";
-      copyBtn.classList.remove("done");
-      statusEl.textContent = "";
-    }, 1600);
-  });
-})();
 
 initScene();
 

@@ -16,8 +16,7 @@ Meta's separately distributed CLI.
 
 | Component | Version | License | Notes |
 |---|---|---|---|
-| Node.js runtime | 26.8.2 | MIT (OpenJS Foundation) | Staged as the `glitter-node` sidecar by `packages/glitter-bridge/scripts/stage-sidecar.mjs`; only `bin/node` is extracted from the official archive |
-| `@muse-code/sdk` | 1.3.0 | MIT — © Meta Platforms, Inc. and affiliates | Bundled into `glitter-bridge/dist/index.js` |
+| Node.js runtime | 26.8.2 | MIT (OpenJS Foundation) | Staged as the `glitter-node` sidecar by `packages/glitter-harness/scripts/stage-sidecar.mjs`; only `bin/node` is extracted from the official archive |
 | `playwright-core` | 1.64.1 | Apache-2.0 — © Microsoft Corporation | Browser automation, bundled into the bridge with its registry metadata; Chromium itself is installed separately, not redistributed by Glitter |
 | `chromium-bidi` | 12.1.0 | Apache-2.0 — © Google LLC and contributors | Playwright's browser-protocol dependency, bundled into the bridge |
 | `@fontsource-variable/google-sans` | 5.3.2 | OFL-1.1 — © 2017 Google, Inc. | Google Sans variable font, bundled locally into the webview |
@@ -322,12 +321,12 @@ FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM
 OTHER DEALINGS IN THE FONT SOFTWARE.
 
 
-@glitter/bridge@undefined
+@glitter/desktop@undefined
 ========================================================================
 License: Unknown
 No license file was found in the package.
 
-@glitter/desktop@undefined
+@glitter/harness@undefined
 ========================================================================
 License: Unknown
 No license file was found in the package.
@@ -336,34 +335,6 @@ No license file was found in the package.
 ========================================================================
 License: Unknown
 No license file was found in the package.
-
-@muse-code/sdk@1.3.0
-========================================================================
-License: MIT
-
---- LICENSE ---
-MIT License
-
-Copyright (c) Meta Platforms, Inc. and affiliates.
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
 
 @tauri-apps/api@2.12.3
 ========================================================================
@@ -791,34 +762,6 @@ License: MIT
 
 
 @types/ms@2.1.0
-========================================================================
-License: MIT
-
---- LICENSE ---
-    MIT License
-
-    Copyright (c) Microsoft Corporation.
-
-    Permission is hereby granted, free of charge, to any person obtaining a copy
-    of this software and associated documentation files (the "Software"), to deal
-    in the Software without restriction, including without limitation the rights
-    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-    copies of the Software, and to permit persons to whom the Software is
-    furnished to do so, subject to the following conditions:
-
-    The above copyright notice and this permission notice shall be included in all
-    copies or substantial portions of the Software.
-
-    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-    SOFTWARE
-
-
-@types/node@26.6.5
 ========================================================================
 License: MIT
 
@@ -4081,34 +4024,6 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
-
-
-undici-types@8.9.0
-========================================================================
-License: MIT
-
---- LICENSE ---
-MIT License
-
-Copyright (c) Matteo Collina and Undici contributors
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
 
 
 unified@11.0.5

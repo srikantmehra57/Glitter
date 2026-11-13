@@ -19,8 +19,8 @@ const readTheme = () => ({ background: css("--surface") || undefined, foreground
 export function TerminalPane() {
   const open = useAppStore((state) => state.terminalOpen);
   const setOpen = useAppStore((state) => state.setTerminalOpen);
-  const shellDisabled = useAppStore((state) => state.disableShell);
   const preview = useAppStore((state) => state.preview);
+  const disableTerminal = useAppStore((state) => state.disableTerminal);
   const theme = useAppStore((state) => state.theme);
   const accentColor = useAppStore((state) => state.accentColor);
   const reduceMotion = useAppStore((state) => state.reduceMotion);
@@ -35,8 +35,7 @@ export function TerminalPane() {
   const [status, setStatus] = useState<string | null>(null);
   const [exited, setExited] = useState(false);
   const [sessionSeq, setSessionSeq] = useState(0);
-  const blocked = shellDisabled
-    ? "The terminal is off because shell commands are disabled in Settings → Permissions."
+  const blocked = disableTerminal ? "The Terminal pane is disabled in Settings → Permissions."
     : !isTauri() || preview ? "The terminal needs the desktop app with a real workspace."
     : !grantId ? "Open a workspace to use the terminal." : null;
 

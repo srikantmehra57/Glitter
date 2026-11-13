@@ -8,25 +8,19 @@ picture, [DEVELOPMENT.md](DEVELOPMENT.md) the commands, and
 ## What this is
 
 Glitter is an independent, MIT-licensed desktop app for coding agents. It
-began as Muse Code Desktop, a GUI for Meta's `muse` coding-agent CLI, and can
-also drive a few third-party agent CLIs over ACP. Users open a workspace folder,
-chat with the agent in threads, approve or deny its tool calls, set the model
-and reasoning effort, and review the resulting git changes. For Muse and the
-ACP agents, all agent work is done by the CLI and the app is the client.
+began as Muse Code Desktop, a GUI for Meta's `muse` coding-agent CLI. Users
+open a workspace folder, chat with the built-in agent in threads, approve or
+deny its tool calls, set the model and reasoning effort, and review the changes.
 
-**Naming.** The product is Glitter. "Muse" (and "Muse Code", Meta's name for
-its CLI and subscription) names Meta's agent and everything that talks to it:
-the Muse agent, `host.ts`, `museBin`/`museApiKey`, auth and detection copy,
-`@muse-code/sdk`. Keep those as they are and use Glitter for the app itself.
-Builds before the rename used the bundle id `com.musecode.desktop`; `legacy.rs`
+**Naming.** The product is Glitter and its built-in agent is Harness. Builds
+before the rename used the bundle id `com.musecode.desktop`; `legacy.rs`
 carries their data over (see "The product is called Glitter" in
 [DECISIONS.md](DECISIONS.md)).
 
-**Direction.** The app is becoming an independent agent harness. Its built-in
-Harness agent (`packages/glitter-bridge/src/harness`) calls model providers with
-the user's own keys and runs its own tool loop, so no agent CLI has to be
-installed; Muse and the ACP agents stay supported alongside it. See "The app
-has its own agent harness" in [DECISIONS.md](DECISIONS.md). The next milestones
+**Direction.** Harness (`packages/glitter-harness/src/harness`) calls model
+providers with the user's own keys and runs its own tool loop. Glitter no longer
+starts Muse or ACP agent CLIs; their existing histories stay in those CLIs'
+storage. See "Harness is the only agent runtime" in [DECISIONS.md](DECISIONS.md). The next milestones
 are signed releases, live end-to-end coverage, and splitting the two largest
 files (see the README's known limitations).
 
@@ -54,27 +48,25 @@ files (see the README's known limitations).
 | Shared browser control | `BrowserPane.tsx`, `lib/browser.ts`, `browser-types.ts` and `browser.ts` in the bridge, the Harness `browser` extension, `browserOpen` / `browserControl` / `browserClose` in `index.ts`, `dto.rs` and `BRIDGE_METHODS` |
 | Review scopes and their grant-scoped reads | `ReviewDock.tsx`, `lib/diff.ts`, native `git_review` in `lib.rs` (+ `snapshots.rs` for Last turn) |
 | Validation for a bridge method | `apps/desktop/src-tauri/src/dto.rs` + `BRIDGE_METHODS` in `lib.rs` |
-| Executable or agent binary trust | `apps/desktop/src-tauri/src/exec.rs` |
+| Executable trust | `apps/desktop/src-tauri/src/exec.rs` |
 | Keychain | `apps/desktop/src-tauri/src/credentials.rs` |
 | Carrying a Muse Code install over (data, logs, keychain, old worktrees) | `apps/desktop/src-tauri/src/legacy.rs`, `legacy_worktree_store` in `lib.rs` |
 | Native permissions granted to the webview | `apps/desktop/src-tauri/capabilities/default.json` |
-| Muse protocol behavior | `packages/glitter-bridge/src/host.ts` |
-| Third-party (ACP) agents | `packages/glitter-bridge/src/acp.ts`, registry in `agents.ts` |
-| The built-in harness agent | `packages/glitter-bridge/src/harness/` (providers, wire, tools, registry, store, host) |
+| The built-in harness agent | `packages/glitter-harness/src/harness/` (providers, wire, tools, registry, store, host) |
 | Harness context compaction | `harness/compaction.ts` (summary and preserved request), `compactLive` / `compactSession` and `runStageLoop` in `harness/host.ts`, the append-only projection in `harness/store.ts`, `compactThread` in `store.ts`, and the composer context card / `/compact` |
-| Harness web tools: `web_fetch`, keyed `web_search`, untrusted page text | `packages/glitter-bridge/src/harness/web.ts`, registered as `webExtension` in `harness/host.ts`; the app side is `SEARCH_PROVIDERS` in `lib/providers.ts` and the Web search card in `ProvidersPanel.tsx`, with `SEARCH_PROVIDER_IDS` in `credentials.rs` fixing each key to its own provider |
-| Harness background shells | `packages/glitter-bridge/src/harness/shells.ts` (`startShell`, `readShell`, `killShell`, `stopSessionShells`, `stopAllShells`), the `bash_output` and `kill_shell` tools in `harness/tools.ts`, and teardown in `harness/host.ts` |
-| Harness permission rules: persistent `Tool(pattern)` allow and deny lists | `packages/glitter-bridge/src/harness/permission/rules.ts` (`parseRule`, `compileRules`), the `rules` guard and merged grants in `harness/host.ts`, the `harnessRules` method in `index.ts` with native validation in `dto.rs`; the app side is `harnessRules` in `lib/types.ts`, `lib/permissionRules.ts` for native limits, serialized `applyHarnessRules` in `store.ts` (on save and before starting or continuing Harness work, reset on bridge exit) and `PermissionRulesCard.tsx` in Settings → Permissions. An allow rule is a grant and never lifts a risky ask, a block, Plan mode or Read only; a deny rule is a guard rechecked before execution in every mode. A path rule is deny-only and covers built-in edits, not shell commands |
-| Permissions: Ask, Auto and Full access, the same for every agent | `apps/desktop/src/lib/types.ts` (`APPROVAL_ORDER`) and `packages/glitter-bridge/src/harness/permission/` (`classify.ts`, `danger.ts`, `grants.ts`, `policy.ts`, `guards.ts`). Muse is told the CLI mode it accepts (`museCliMode` in `host.ts`); an ACP request is answered by `acpPermissionDecision` |
-| Harness skills: discovery, the catalog in the prompt, the `skill` tool, `/name` | `packages/glitter-bridge/src/harness/skills.ts`; the app side is `supportsSkills` in `store.ts` and `ExtensionsView.tsx` |
-| Harness MCP: config, transports, all-or-nothing sync, deferred tools, adding and removing servers | `packages/glitter-bridge/src/harness/mcp.ts` (`readMcpConfig`, `addMcpServer`, `removeMcpServer`); `mcpConfig`, `addMcpServer`, `removeMcpServer` in `harness/host.ts`; the app side is `harnessMcpConfig` and `addHarnessMcpServer` / `removeHarnessMcpServer` in `store.ts`, `lib/mcpConfig.ts` for parsing what the form collects, and the agent-aware MCP section in `ExtensionsView.tsx`. Native digest-bound startup review uses `reviewMcp` / `consentMcp` in `lib/bridge.ts` and `mcp_consent.rs`; redacted rows remain visible while startup is denied |
+| Harness web tools: `web_fetch`, keyed `web_search`, untrusted page text | `packages/glitter-harness/src/harness/web.ts`, registered as `webExtension` in `harness/host.ts`; the app side is `SEARCH_PROVIDERS` in `lib/providers.ts` and the Web search card in `ProvidersPanel.tsx`, with `SEARCH_PROVIDER_IDS` in `credentials.rs` fixing each key to its own provider |
+| Harness background shells | `packages/glitter-harness/src/harness/shells.ts` (`startShell`, `readShell`, `killShell`, `stopSessionShells`, `stopAllShells`), the `bash_output` and `kill_shell` tools in `harness/tools.ts`, and teardown in `harness/host.ts` |
+| Harness permission rules: persistent `Tool(pattern)` allow and deny lists | `packages/glitter-harness/src/harness/permission/rules.ts` (`parseRule`, `compileRules`), the `rules` guard and merged grants in `harness/host.ts`, the `harnessRules` method in `index.ts` with native validation in `dto.rs`; the app side is `harnessRules` in `lib/types.ts`, `lib/permissionRules.ts` for native limits, serialized `applyHarnessRules` in `store.ts` (on save and before starting or continuing Harness work, reset on bridge exit) and `PermissionRulesCard.tsx` in Settings → Permissions. An allow rule is a grant and never lifts a risky ask, a block, Plan mode or Read only; a deny rule is a guard rechecked before execution in every mode. A path rule is deny-only and covers built-in edits, not shell commands |
+| Permissions: Ask, Auto and Full access | `apps/desktop/src/lib/types.ts` (`APPROVAL_ORDER`) and `packages/glitter-harness/src/harness/permission/` (`classify.ts`, `danger.ts`, `grants.ts`, `policy.ts`, `guards.ts`) |
+| Harness skills: discovery, the catalog in the prompt, the `skill` tool, `/name` | `packages/glitter-harness/src/harness/skills.ts`; the app side is `supportsSkills` in `store.ts` and `ExtensionsView.tsx` |
+| Harness MCP: config, transports, all-or-nothing sync, deferred tools, adding and removing servers | `packages/glitter-harness/src/harness/mcp.ts` (`readMcpConfig`, `addMcpServer`, `removeMcpServer`); `mcpConfig`, `addMcpServer`, `removeMcpServer` in `harness/host.ts`; the app side is `harnessMcpConfig` and `addHarnessMcpServer` / `removeHarnessMcpServer` in `store.ts`, `lib/mcpConfig.ts` for parsing what the form collects, and the agent-aware MCP section in `ExtensionsView.tsx`. Native digest-bound startup review uses `reviewMcp` / `consentMcp` in `lib/bridge.ts` and `mcp_consent.rs`; redacted rows remain visible while startup is denied |
 | The bundled extension store: curated skills, MCP servers and skill bundles, installed in one click with no CLI or network | `apps/desktop/src-tauri/src/catalog.rs` (the catalog, its writer and ownership markers) with `catalog_list` / `catalog_install` / `catalog_remove` in `lib.rs`, the skill text in `apps/desktop/src-tauri/catalog/skills/`, and the app side is `catalogEntries` + `installCatalogEntry` / `removeCatalogEntry` in `store.ts` and `ExtensionsStore.tsx` (Discover, which also lists sources' plugins) |
-| Harness delegation: the `task` tool, hidden child sessions, stamped depth and policy | `packages/glitter-bridge/src/harness/delegation.ts`; `delegate` and `readChildSession` in `harness/host.ts`; the app side is `openChild` in `store.ts` and the read-only branch in `AgentTimeline.tsx` |
-| Harness Orchestrator (opt-in): settings, per-turn routing, staged Lead-guided execution, consults, Plan-mode review, route facts and handoff items | `packages/glitter-bridge/src/harness/orchestrator/`: closed router assessments and handoffs, pure pre-route/policy functions, route records, capability probes, the bounded neutral transcript, the fixed stage prompts (`prompts.ts`, including the tool-less and read-enabled Lead plan variants), the Builder's `ask_lead` contract (`consult.ts`), the deterministic stuck signals (`stuck.ts`), the Plan-mode review/restore helpers (`plan-mode.ts`), the internal tuning contract (`tuning.ts`), the shared read-only tool set (`read.ts`) and the Scout contract (`scout.ts`); `runReadOnlyStage` and `orchestratorReadProbe` in `harness/host.ts` back the scout/Lead-read stages; `orchestratorProbe` in `harness/host.ts` runs a role's fixed check and caches it, and `resolveTurnRoute` / `runRouterCall` / `ensureRoleProbes` / `executionStage` decide each turn's route and role before it runs; `runLeadGuided` runs the Lead plan, Builder build, consult, optional review/repair and takeover, with `runStageLoop` for each tool stage and `auxiliaryCall` for the off-history plan, consult and review calls; request images reach the Lead plan/read/review while the Builder works from the neutral plan and an attachment vision floor blocks text-only roles that would receive them; `store.ts` saves each route with its turn and the Lead and per-plan Builder role sessions; `resumeSession` replays routes and restores both role sessions; deterministic coverage in `tests/orchestrator.test.mjs`, `tests/harness.test.mjs` and `tests/bridge-dispatch.test.mjs`; the app starts a session with `orchestratorStart` (`lib/orchestrator.ts`) in `store.ts`, keeps each `route` event in the Thread's per-turn map (`lib/bridge.ts`, `lib/types.ts`), and labels the live line, receipts and Usage calls through `lib/orchestrator.ts`; a live thread switches modes through `setOrchestrator` (`harness/host.ts`, with dispatch in `lib/bridge.ts` and native validation in `dto.rs`), which stashes the manual model and effort for the switch back; the composer's `ModelPicker` carries the switch, `GoalPicker.tsx` the goal and per-message shape, and `sendPrompt` forwards that shape as `forcedShape` through the native DTO to `TurnRequest.forcedShape`; settings render in `OrchestratorPanel.tsx` with normalization in `lib/settingsPersistence.ts`; native start validation in `dto.rs`; route metadata in the browser preview's usage fixtures (`lib/mock.ts`); product decision and phases in `docs/ORCHESTRATOR_PLAN.md` |
+| Harness delegation: the `task` tool, hidden child sessions, stamped depth and policy | `packages/glitter-harness/src/harness/delegation.ts`; `delegate` and `readChildSession` in `harness/host.ts`; the app side is `openChild` in `store.ts` and the read-only branch in `AgentTimeline.tsx` |
+| Harness Orchestrator (opt-in): settings, per-turn routing, staged Lead-guided execution, consults, Plan-mode review, route facts and handoff items | `packages/glitter-harness/src/harness/orchestrator/`: closed router assessments and handoffs, pure pre-route/policy functions, route records, capability probes, the bounded neutral transcript, the fixed stage prompts (`prompts.ts`, including the tool-less and read-enabled Lead plan variants), the Builder's `ask_lead` contract (`consult.ts`), the deterministic stuck signals (`stuck.ts`), the Plan-mode review/restore helpers (`plan-mode.ts`), the internal tuning contract (`tuning.ts`), the shared read-only tool set (`read.ts`) and the Scout contract (`scout.ts`); `runReadOnlyStage` and `orchestratorReadProbe` in `harness/host.ts` back the scout/Lead-read stages; `orchestratorProbe` in `harness/host.ts` runs a role's fixed check and caches it, and `resolveTurnRoute` / `runRouterCall` / `ensureRoleProbes` / `executionStage` decide each turn's route and role before it runs; `runLeadGuided` runs the Lead plan, Builder build, consult, optional review/repair and takeover, with `runStageLoop` for each tool stage and `auxiliaryCall` for the off-history plan, consult and review calls; request images reach the Lead plan/read/review while the Builder works from the neutral plan and an attachment vision floor blocks text-only roles that would receive them; `store.ts` saves each route with its turn and the Lead and per-plan Builder role sessions; `resumeSession` replays routes and restores both role sessions; deterministic coverage in `tests/orchestrator.test.mjs`, `tests/harness.test.mjs` and `tests/bridge-dispatch.test.mjs`; the app starts a session with `orchestratorStart` (`lib/orchestrator.ts`) in `store.ts`, keeps each `route` event in the Thread's per-turn map (`lib/bridge.ts`, `lib/types.ts`), and labels the live line, receipts and Usage calls through `lib/orchestrator.ts`; a live thread switches modes through `setOrchestrator` (`harness/host.ts`, with dispatch in `lib/bridge.ts` and native validation in `dto.rs`), which stashes the manual model and effort for the switch back; the composer's `ModelPicker` carries the switch, `GoalPicker.tsx` the goal and per-message shape, and `sendPrompt` forwards that shape as `forcedShape` through the native DTO to `TurnRequest.forcedShape`; settings render in `OrchestratorPanel.tsx` with normalization in `lib/settingsPersistence.ts`; native start validation in `dto.rs`; route metadata in the browser preview's usage fixtures (`lib/mock.ts`); product decision and phases in `docs/ORCHESTRATOR_PLAN.md` |
 | Orchestrator evaluation (opt-in): corpus with tune/holdout splits and vision/long-context fixtures, configs, cost-capped runner, pre-route matrix, report comparison with manual `scores.json` | `evals/orchestrator/README.md`, `corpus.mjs`, `checks.mjs`, `configs.mjs`, `pre-route.mjs`, `run.mjs`; `--validate`, `--list`, `--dry`, `--check-host` and `--pre-route` are free, while live runs need provider keys and `--yes`; deterministic corpus/check/policy coverage in `tests/eval-corpus.test.mjs` and `tests/orchestrator.test.mjs`; not part of `npm run verify` |
-| Harness baseline evaluation (opt-in): synthetic coding fixtures, conformance observations and bounded/redacted live runs | `evals/harness/README.md`, `corpus.mjs`, `conformance.mjs`, `budget.mjs`, `core.mjs` and `run.mjs`; shared fixture setup and pricing use `evals/orchestrator/checks.mjs` and `configs.mjs`; deterministic coverage is in `tests/harness-eval.test.mjs`. Live runs need explicit model, environment credentials, price bounds and `--yes` |
+| Harness baseline evaluation (opt-in): synthetic coding fixtures, conformance observations and bounded/redacted live runs | `evals/harness/README.md`, `corpus.mjs`, `conformance.mjs`, `budget.mjs`, `core.mjs`, `probes.mjs` and `run.mjs`; `--probes` exercises both wire families with scripted streams and no provider; shared fixture setup and pricing use `evals/orchestrator/checks.mjs` and `configs.mjs`; deterministic coverage is in `tests/harness-eval.test.mjs`. Live runs need explicit model, environment credentials, price bounds and `--yes` |
 | The plan review that ends Plan mode | `EXIT_PLAN_TOOL` and `planSettlement` in `harness/questions.ts`; `PlanReviewCard.tsx`, picked in `UserInputCards.tsx` |
-| Harness questions (`ask_user`): the tool, the durable pending question, answers | `packages/glitter-bridge/src/harness/questions.ts`; `parkQuestion`, `settleQuestion` and `respondUserInput` in `harness/host.ts` |
+| Harness questions (`ask_user`): the tool, the durable pending question, answers | `packages/glitter-harness/src/harness/questions.ts`; `parkQuestion`, `settleQuestion` and `respondUserInput` in `harness/host.ts` |
 | The usage record, its bounds, the year map and trend, and the per-call Trajectory | `apps/desktop/src/lib/usageLedger.ts` (stored shape, compaction, `MAX_TURN_CALLS`), `lib/usageChart.ts` (year map, streaks, trend), `UsageView.tsx`; Harness calls arrive as `modelCall` events and land in the entry's `calls` |
 | A harness tool, prompt section or hook | an `Extension` registered on `ExtensionRegistry` (`harness/registry.ts`); built-in tools are `BUILTIN_TOOLS` in `harness/tools.ts` |
 | Provider keys (BYOK) | `credentials.rs` (`provider_key_set`, `provider_keys_get`), Settings → Providers (`ProvidersPanel.tsx`, `lib/providers.ts`) |
@@ -85,18 +77,18 @@ files (see the README's known limitations).
 | Testing a model's reply | `testModel` in `harness/host.ts`, the `testModel` bridge verb (`index.ts`, `dto.rs`, `BRIDGE_METHODS`), `testModel` in `store.ts` |
 | Plugins and marketplaces from GitHub: fetch, preview, install, enable, update, remove, sources | `apps/desktop/src-tauri/src/plugins.rs` (source parsing, the staged git fetch, Claude Code/Codex/skills detection, ownership markers, records under `~/.glitter/plugins` and `~/.glitter/marketplaces`) with `github_*`, `library_*` and `marketplace_*` in `lib.rs` (`plugin_git` hardens git); the app side is `githubInspect` and friends in `lib/bridge.ts` (preview answers in `lib/mock.ts`), `library` and its actions in `store.ts`, `lib/pluginLibrary.ts` (source reading, Discover rows, featured repositories), `GithubInstallDialog.tsx`, `PluginLibrary.tsx` (Installed and Sources) and the tabs in `ExtensionsView.tsx`; see "Plugins install from GitHub" in DECISIONS.md |
 | Extension thumbnails | `lib/extensionArt.ts` (icon and tint per id, name or category) and `ExtensionThumb.tsx` (logo or avatar image, corner badge) |
-| Bridge request routing | `packages/glitter-bridge/src/index.ts` |
-| Child-process isolation, redaction | `packages/glitter-bridge/src/isolation.ts`, `redaction.ts` |
-| Types shared by the bridge and UI | `packages/glitter-bridge/src/protocol.ts` |
+| Bridge request routing | `packages/glitter-harness/src/index.ts` |
+| Child-process isolation, redaction | `packages/glitter-harness/src/isolation.ts`, `redaction.ts` |
+| Types shared by the bridge and UI | `packages/glitter-harness/src/protocol.ts` |
 | Node or DOM tests | `tests/*.test.mjs`, `apps/desktop/src/components/*.test.tsx` |
-| Release and verification scripts | `scripts/`, `packages/glitter-bridge/scripts/` |
+| Release and verification scripts | `scripts/`, `packages/glitter-harness/scripts/` |
 | Marketing site | `apps/website/` (independent of the app) |
 | Harness work in progress | [HARNESS_UPGRADE_PLAN.md](HARNESS_UPGRADE_PLAN.md) — the current forward roadmap; [HARNESS_REVIEWS.md](HARNESS_REVIEWS.md) — dated peer reviews, not current implementation status |
 
 ## Rules to preserve
 
-1. **The agent is the source of truth.** Show what the agent (a CLI, or the
-   built-in harness's own session log) reports. Never
+1. **The agent is the source of truth.** Show what the harness's own session
+   log reports. Never
    simulate agent output, invent reasoning, or duplicate session storage.
 2. **The renderer is untrusted.** Anything touching the filesystem, processes or
    credentials is authorized in Rust.
@@ -107,8 +99,8 @@ files (see the README's known limitations).
      renderer really calls that plugin API.
 3. **Secrets stay native.** API keys live in the OS keychain. The renderer only
    ever sees a mask. Logs go through the redactors.
-4. **Third-party agents stay opt-in.** Default-off, consent-gated,
-   digest-pinned, sandboxed where possible.
+4. **External tools stay scoped.** MCP servers require trust and are subject to
+   the harness permission pipeline; do not start unreviewed workspace commands.
 5. **One implementation per concern.** One store, one IPC module (`bridge.ts`),
    one logger, one redaction policy per process, and one design-token set
    (`styles.css`). Extend these; don't add parallel ones.

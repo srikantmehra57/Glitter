@@ -1,13 +1,13 @@
-import { diagnostics } from "../../../../packages/glitter-bridge/src/redaction";
+import { diagnostics } from "../../../../packages/glitter-harness/src/redaction";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { isTauri } from "./format";
 import { log } from "./logger";
-import { MOCK_FILES, MOCK_GIT, MOCK_GIT_GRAPH, MOCK_MODELS, MOCK_THREADS, mockAddMarketplace, mockGitReview, mockGithubInspect, mockGithubInstall, mockLibraryList, mockRefreshMarketplace, mockRemoveMarketplace, mockRemovePlugin, mockSetPluginEnabled, mockThreads, mockWorkspaceFile, mockWorktree } from "./mock";
+import { MOCK_FILES, MOCK_GIT, MOCK_GIT_GRAPH, MOCK_MODELS, MOCK_THREADS, mockAddMarketplace, mockGitReview, mockGithubInspect, mockGithubInstall, mockLibraryList, mockMarketplaceAvatars, mockRefreshMarketplace, mockRemoveMarketplace, mockRemovePlugin, mockSetPluginEnabled, mockThreads, mockWorkspaceFile, mockWorktree } from "./mock";
 import type { ProviderStatus } from "./providers";
 export type { ProviderStatus } from "./providers";
 import type { DiagnosticsSnapshot, EditorChoice, SupportPaths, ThemeMode, BrowserControlResult, BrowserFrame, BrowserStateEvent } from "./types";
-import type { AgentId, AgentIdentity, AgentSessionConfig, ApprovalRequest, CatalogEntry, CatalogInstallResult, CatalogList, CatalogRemoveResult, GithubPreview, MarketplaceSource, PluginInstallOutcome, PluginLibrary, PluginUpdate, CliUpdateOutcome, CliUpdateStatus, ContextUsage, Detection, DroppedFile, EnterpriseStatus, GitBranch, GitGraph, GoalState, HarnessMcpConfig, HarnessMcpConfigServer, HarnessMcpReview, HarnessMcpScope, HarnessMcpServerInput, ModelCall, PlanItem, PullRequest, GitReview, GitReviewRequest, GitSnapshot, SessionConfig, SessionMetadata, SnapshotRestore, ThreadWorktree, TokenUsage, TranscriptItem, TurnSnapshot, UserInputRequest, WorkspaceFile, WorktreeRemoval, PluginDetail, PluginEntry, SkillDetail, SkillEntry, OrchestratorProbeResult, OrchestratorRole, OrchestratorRoute } from "./types";
+import type { AgentId, AgentSessionConfig, ApprovalRequest, CatalogEntry, CatalogInstallResult, CatalogList, CatalogRemoveResult, GithubPreview, MarketplaceSource, PluginInstallOutcome, PluginLibrary, PluginUpdate, ContextUsage, Detection, DroppedFile, GitBranch, GitGraph, GoalState, HarnessMcpConfig, HarnessMcpConfigServer, HarnessMcpReview, HarnessMcpScope, HarnessMcpServerInput, ModelCall, PlanItem, PullRequest, GitReview, GitReviewRequest, GitSnapshot, SessionConfig, SessionMetadata, SnapshotRestore, ThreadWorktree, TokenUsage, TranscriptItem, TurnSnapshot, UserInputRequest, WorkspaceFile, WorktreeRemoval, OrchestratorProbeResult, OrchestratorRole, OrchestratorRoute } from "./types";
 
 /**
  * The payload each bridge event carries, declared once here instead of being
@@ -106,7 +106,7 @@ async function ensureListener() {
         if (value.event === "hostExit" || value.event === "bridgeExit" || value.event === "hostStopping") {
           for (const [id, waiter] of pending) {
             if (value.event === "hostStopping" && ["startHost", "stopHost"].includes(waiter.method)) continue;
-            waiter.reject(new Error("Muse connection closed. Reconnect from Settings."));
+            waiter.reject(new Error("The agent connection closed. Reconnect from Settings."));
             pending.delete(id);
           }
         }
@@ -211,21 +211,7 @@ function previewCatalogList(): CatalogList {
 function mockBridge(method: string, params: Record<string, unknown>): unknown {
   switch (method) {
     case "detect":
-    case "status": {
-      const apiKeyAvailable = Boolean(typeof params.museApiKey === "string" && params.museApiKey.trim());
-      const activeAuth = params.museAuthMode === "subscription" ? null : apiKeyAvailable ? "apiKey" : null;
-      return {
-        found: false,
-        path: null,
-        version: null,
-        authenticated: activeAuth !== null,
-        method: activeAuth === "apiKey" ? "META_API_KEY" : null,
-        activeAuth,
-        subscriptionAvailable: false,
-        apiKeyAvailable,
-        running: false,
-      } satisfies Detection;
-    }
+      return { agents: [{ id: "harness", name: "Harness", protocol: "native", found: true, path: null, version: null, verified: true, signIn: "Add an API key for a model provider in Settings → Providers.", authenticated: true }] } satisfies Detection;
     case "listSessions":
       return {
         sessions: MOCK_THREADS.map((thread) => ({
@@ -234,15 +220,13 @@ function mockBridge(method: string, params: Record<string, unknown>): unknown {
           updatedAt: thread.updatedAt,
           status: thread.status === "running" ? "running" : "idle",
           turnCount: thread.items.length,
-          modelId: "muse-spark-1.2",
+          modelId: "anthropic/claude-sonnet-5",
           activeTurnId: thread.activeTurnId ?? null,
         })),
         nextCursor: null,
       };
     case "listModels":
-      return { models: MOCK_MODELS, providerId: "meta", profileId: null, source: "preview" };
-    case "usage":
-      return {};
+      return { models: MOCK_MODELS, source: "preview" };
     case "browserOpen":
     case "browserControl":
     case "browserClose":
@@ -251,17 +235,7 @@ function mockBridge(method: string, params: Record<string, unknown>): unknown {
         text: "Browser control needs the desktop app with a real workspace.",
       } satisfies BrowserControlResult;
     case "startHost":
-      return {
-        server: { name: "preview", version: "0.0.0" },
-        durability: params.noSessionLog === true ? "ephemeral" : "durable",
-        trustWorkspace: params.trustWorkspace === true,
-        posture: {
-          ephemeralSessions: params.noSessionLog === true,
-          disableWrite: params.disableWrite === true,
-          disableShell: params.disableShell === true,
-          sandboxNetwork: typeof params.sandboxNetwork === "string" ? params.sandboxNetwork : "proxy-only",
-        },
-      };
+      return { started: true, agentId: "harness", isolation: { env: "minimal", osSandbox: "enforced", platform: "darwin", consentRequired: false } };
     case "startSession":
       return { sessionId: `preview-${Date.now()}` };
     case "sendTurn":
@@ -270,12 +244,6 @@ function mockBridge(method: string, params: Record<string, unknown>): unknown {
     case "cancelTurn":
     case "stopHost":
       return { ok: true };
-    case "readOutput": {
-      const line = "✓ preview spec passes\n";
-      const content = line.repeat(64).slice(0, 2048);
-      return { offsetBytes: 0, byteLen: content.length, eof: true, encoding: "utf8", mediaType: "text/plain", content };
-    }
-    case "readSession":
     case "readChildSession":
       return {
         session: { sessionId: params.sessionId },
@@ -286,19 +254,11 @@ function mockBridge(method: string, params: Record<string, unknown>): unknown {
         pendingRequests: [],
         viewCursor: "mock-cursor",
       };
-    case "subagentControl":
-    case "taskControl":
-    case "workflowControl":
-    case "goalControl":
-    case "userShell":
-    case "setReasoningEffort":
     case "setModel":
     case "setOrchestrator":
       return { commandId: "mock-cmd", status: "accepted" };
     case "setApprovalMode":
       return { commandId: "mock-cmd", status: "accepted", effectiveMode: { mode: params.mode } };
-    case "renameSession":
-      return { sessionId: params.sessionId, name: params.name };
     case "suggest":
       return { text: JSON.stringify([
         { title: "Wire up the new feature", prompt: "Implement the next pending piece of the current task and keep it consistent with the existing patterns." },
@@ -384,12 +344,6 @@ function mockBridge(method: string, params: Record<string, unknown>): unknown {
       }
       return result;
     }
-    case "mcpServers":
-      return { servers: [{ name: "preview-docs", transport: "streamableHttp", oauth: true }] };
-    case "checkCliUpdate":
-      return { available: false, current: null, latest: null, urgency: "none", notification: "", channel: "muse-stable" } satisfies CliUpdateStatus;
-    case "updateCli":
-      return { updated: false, from: null, to: null, version: null } satisfies CliUpdateOutcome;
     default:
       return {};
   }
@@ -628,6 +582,11 @@ export async function persistStoreDocument(json: string): Promise<void> {
   await invoke<void>("persist_store_atomic", { json });
 }
 
+/** Preserve a pre-keychain Muse key before its obsolete settings field is removed. */
+export async function preserveLegacyMuseKey(value: string): Promise<void> {
+  if (isTauri()) await invoke<void>("preserve_legacy_muse_key", { value });
+}
+
 /**
  * Make the settings file safe to read before hydration. An unreadable file is
  * quarantined and the newest complete backup restored. Preview is a no-op.
@@ -666,32 +625,6 @@ export async function verifyGrants(entries: Array<{ id: string; path: string }>)
 export async function removeGrant(grantId: string): Promise<void> {
   if (!isTauri()) return;
   await invoke("remove_grant", { grantId });
-}
-
-export async function agentIdentities(): Promise<AgentIdentity[]> {
-  if (!isTauri()) return [];
-  return invoke<AgentIdentity[]>("agent_identities");
-}
-
-/** Trust the binary currently on disk for an agent (resolves natively; never nominates a path). */
-export async function confirmAgentBin(agentId: string): Promise<AgentIdentity> {
-  if (!isTauri()) throw new Error("Agent confirmation needs the desktop app.");
-  return invoke<AgentIdentity>("confirm_agent_bin", { agentId });
-}
-
-/**
- * The two keychain verbs settings persistence needs. Values never pass
- * through the settings document — they go straight to the OS credential
- * store. Preview has no keychain, so reads answer `null` and writes no-op.
- */
-export async function credentialGet(): Promise<string | null> {
-  if (!isTauri()) return null;
-  return invoke<string | null>("credential_get");
-}
-
-export async function credentialSet(value: string): Promise<void> {
-  if (!isTauri()) return;
-  await invoke<void>("credential_set", { value });
 }
 
 /** What the renderer may know about a model provider's saved credential: never the key itself. */
@@ -741,17 +674,6 @@ export async function providerKeySet(ids: readonly string[], provider: string, c
   return invoke<ProviderStatus[]>("provider_key_set", { provider, key: change.key ?? null, baseUrl: change.baseUrl ?? null, name: change.name ?? null, wire: change.wire ?? null, clear: change.clear ?? null });
 }
 
-/** The native ACP-isolation consent flag lives beside the keychain, not in the settings document. */
-export async function acpConsentGet(): Promise<boolean> {
-  if (!isTauri()) return false;
-  return invoke<boolean>("acp_isolation_consent_get");
-}
-
-export async function acpConsentSet(consented: boolean): Promise<void> {
-  if (!isTauri()) return;
-  await invoke<void>("acp_isolation_consent_set", { consented });
-}
-
 /** Reveal the app-log directory; resolves the current file's path for the notice. */
 export async function openLogFolder(): Promise<string> {
   if (!isTauri()) throw new Error("The log folder needs the desktop app.");
@@ -759,9 +681,9 @@ export async function openLogFolder(): Promise<string> {
 }
 
 /** App-owned support paths. Harness is the only agent with a canonical session log. */
-export async function supportPaths(sessionId?: string, agentId?: AgentId): Promise<SupportPaths> {
+export async function supportPaths(sessionId?: string): Promise<SupportPaths> {
   if (!isTauri()) throw new Error("Support paths need the desktop app.");
-  return invoke<SupportPaths>("support_paths", { sessionId, agentId });
+  return invoke<SupportPaths>("support_paths", { sessionId });
 }
 
 /** Open Glitter's own settings document with the OS default JSON editor. */
@@ -821,91 +743,6 @@ export async function consentMcp(grantId: string, approve: boolean, expectedDige
     return;
   }
   await invoke<void>("consent_mcp", { grantId, approve, expectedDigest: expectedDigest ?? null });
-}
-
-export async function mcpLogin(server: string, museBin?: string): Promise<void> {
-  if (!isTauri()) return;
-  await invoke("mcp_login", { server, museBin: museBin ?? "" });
-}
-
-export async function mcpLogout(server: string, museBin?: string): Promise<void> {
-  if (!isTauri()) return;
-  await invoke("mcp_logout", { server, museBin: museBin ?? "" });
-}
-
-export async function cliLogout(museBin?: string): Promise<void> {
-  if (!isTauri()) return;
-  await invoke("cli_logout", { museBin: museBin ?? "" });
-}
-
-export async function projectInit(grantId: string, museBin: string | undefined, dryRun: boolean, force: boolean): Promise<string> {
-  if (!isTauri()) return "# Preview AGENTS.md\n\nProject setup runs in the desktop app.";
-  return invoke<string>("project_init", { grantId, museBin: museBin ?? "", dryRun, force });
-}
-
-export async function enterpriseStatus(museBin?: string): Promise<EnterpriseStatus> {
-  if (!isTauri()) return { generation: null, sources: [] };
-  return invoke<EnterpriseStatus>("enterprise_status", { museBin: museBin ?? "" });
-}
-
-export async function skillList(grantId: string | undefined, museBin?: string): Promise<SkillEntry[]> {
-  if (!isTauri()) return [{ id: "preview-skill", name: "preview-skill", description: "Preview placeholder skill.", scope: "bundled", activation: "on" }];
-  return invoke<SkillEntry[]>("skill_list", { grantId: grantId ?? "", museBin: museBin ?? "" });
-}
-
-export async function skillInstall(path: string, museBin?: string): Promise<string> {
-  if (!isTauri()) return "Preview install — use the desktop app to install skills.";
-  return invoke<string>("skill_install", { path, museBin: museBin ?? "" });
-}
-
-export async function skillImport(from: "claude" | "codex", dryRun: boolean, museBin?: string): Promise<string> {
-  if (!isTauri()) return "Preview import — use the desktop app to import skills.";
-  return invoke<string>("skill_import", { from, dryRun, museBin: museBin ?? "" });
-}
-
-export async function pickSkillSource(): Promise<string | null> {
-  if (!isTauri()) return null;
-  return invoke<string | null>("pick_skill_source", {});
-}
-
-export async function skillInspect(skill: string, museBin?: string): Promise<SkillDetail> {
-  if (!isTauri()) return { id: skill, name: skill, description: "Preview placeholder skill.", scope: "bundled", activation: "on", path: null };
-  return invoke<SkillDetail>("skill_inspect", { skill, museBin: museBin ?? "" });
-}
-
-export async function skillUninstall(skill: string, museBin?: string): Promise<string> {
-  if (!isTauri()) return "Preview uninstall — use the desktop app to uninstall skills.";
-  return invoke<string>("skill_uninstall", { skill, museBin: museBin ?? "" });
-}
-
-export async function skillSet(skill: string, scope: string, enabled: boolean, grantId: string | undefined, museBin?: string): Promise<void> {
-  if (!isTauri()) return;
-  await invoke("skill_set", { skill, scope, enabled, grantId: grantId ?? "", museBin: museBin ?? "" });
-}
-
-export async function pluginList(museBin?: string, available = false): Promise<PluginEntry[]> {
-  if (!isTauri()) return [{ id: "preview-plugin", version: "0.1", description: "Preview placeholder plugin.", enabled: true }];
-  return invoke<PluginEntry[]>("plugin_list", { museBin: museBin ?? "", available });
-}
-
-export async function pluginInspect(id: string, museBin?: string): Promise<PluginDetail> {
-  if (!isTauri()) return { id, version: "0.1", description: "Preview placeholder plugin.", capabilities: [{ id: "preview-cap", kind: "tool", description: "Preview capability.", enabled: true }] };
-  return invoke<PluginDetail>("plugin_inspect", { id, museBin: museBin ?? "" });
-}
-
-export async function pluginReview(id: string, approve: boolean, museBin?: string): Promise<void> {
-  if (!isTauri()) return;
-  await invoke("plugin_review", { id, approve, museBin: museBin ?? "" });
-}
-
-export async function pluginInstall(path: string, museBin?: string): Promise<void> {
-  if (!isTauri()) return;
-  await invoke("plugin_install", { path, museBin: museBin ?? "" });
-}
-
-export async function pickPluginBundle(): Promise<string | null> {
-  if (!isTauri()) return null;
-  return invoke<string | null>("pick_plugin_bundle", {});
 }
 
 /** The bundled extension store. Installation is native: no CLI and no network. */
@@ -974,30 +811,26 @@ export async function marketplaceRefresh(id: string): Promise<MarketplaceSource>
   return invoke<MarketplaceSource>("marketplace_refresh", { id });
 }
 
+/** Fetch the avatars of the repositories the sources' listings live in; returns how many arrived. */
+export async function marketplaceAvatars(): Promise<number> {
+  if (!isTauri()) return mockMarketplaceAvatars();
+  return invoke<number>("marketplace_avatars", {});
+}
+
 export async function marketplaceRemove(id: string): Promise<void> {
   if (!isTauri()) { mockRemoveMarketplace(id); return; }
   await invoke("marketplace_remove", { id });
 }
 
-export async function trustPreview(grantId: string, museBin?: string): Promise<import("./types").TrustPreview> {
+export async function trustPreview(grantId: string): Promise<import("./types").TrustPreview> {
   if (!isTauri()) {
     return {
       skills: [{ name: "/preview-skill", description: "Preview placeholder: real workspace skills appear in the desktop app." }],
       rules: { path: "AGENTS.md", excerpt: "# Preview rules\n\nThe desktop app shows this workspace's AGENTS.md here.", truncated: false },
     };
   }
-  return invoke<import("./types").TrustPreview>("trust_preview", { grantId, museBin: museBin ?? "" });
+  return invoke<import("./types").TrustPreview>("trust_preview", { grantId });
 }
 
-export async function exportSession(options: { sessionId: string; title: string; museBin?: string; redacted: boolean; markdown?: boolean }): Promise<string | null> {
-  if (!isTauri()) return null;
-  return invoke<string | null>("export_session", {
-    sessionId: options.sessionId,
-    title: options.title,
-    museBin: options.museBin ?? "",
-    redacted: options.redacted,
-    markdown: options.markdown === true,
-  });
-}
 
 export { MOCK_FILES, mockThreads, mockWorkspaceFile, mockWorktree };

@@ -1,10 +1,10 @@
 import { memo, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type DragEvent, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { Archive, Bug, ChartColumn, ChevronRight, ChevronsUpDown, Copy, Download, ExternalLink, FileText, Folder, FolderOpen, GitBranch, GitFork, Keyboard, LoaderCircle, LogOut, Mail, MailOpen, MoreHorizontal, Palette, PanelLeft, Pencil, Pin, PinOff, Plus, RotateCcw, ScanSearch, Search, Settings, ShieldCheck, SquarePen, Trash2, X } from "lucide-react";
-import { formatResetIn, formatTokens, isMacPlatform, needsAttention, relativeTime, shortCliVersion, threadMatches, usageWindowLabel, windowPercent, worktreeRemovalNote } from "../lib/format";
+import { Archive, Bug, ChartColumn, ChevronRight, ChevronsUpDown, Copy, ExternalLink, FileText, Folder, FolderOpen, GitBranch, Keyboard, LoaderCircle, LogOut, Mail, MailOpen, MoreHorizontal, Palette, PanelLeft, Pencil, Pin, PinOff, Plus, RotateCcw, Search, Settings, ShieldCheck, SquarePen, Trash2, X } from "lucide-react";
+import { formatTokens, isMacPlatform, needsAttention, relativeTime, threadMatches, worktreeRemovalNote } from "../lib/format";
 import { openPath } from "../lib/bridge";
 import { describeError } from "../lib/errors";
-import { exportThread, shortcutText } from "../lib/commands";
+import { shortcutText } from "../lib/commands";
 import { copyAppLogPath, copySessionId, copyThreadLogPath, copyThreadPath, openAppConfig, openThreadFolder, reportThreadIssue } from "../lib/threadActions";
 import { activeWorkspace, currentWorkspace, readyAgents, useAppStore } from "../lib/store";
 import { threadChangeCounts } from "../lib/agent";
@@ -16,7 +16,7 @@ const SIDEBAR_EXIT_MS = 240;
 import { sidebarWidthBounds, sidebarWidthFor, subscribeResize } from "../lib/reviewLayout";
 import { Collapse } from "./Presence";
 import { totalsSince } from "../lib/usageLedger";
-import { EDITOR_LABELS, agentEnabled, type AgentId, type CliUpdateOutcome, type CliUpdateStatus, type EditorChoice, type SettingsTab, type SubscriptionUsage, type Thread, type Workspace } from "../lib/types";
+import { AGENT_LABELS, EDITOR_LABELS, type AgentId, type EditorChoice, type SettingsTab, type Thread, type Workspace } from "../lib/types";
 
 /**
  * What one sidebar row needs from a thread, and nothing that changes while a
@@ -118,79 +118,6 @@ function ThreadStatus({ thread }: { thread: Pick<ThreadRow, "status" | "lastOutc
   return null;
 }
 
-/** `percent` is null once the window has reset since the reading: the bar empties rather than show a spent figure. */
-function UsageBar({ percent }: { percent: number | null }) {
-  const rounded = Math.round(percent ?? 0);
-  const tone = percent == null ? "" : rounded >= 100 ? " over" : rounded >= 80 ? " high" : "";
-  return (
-    <span className={`usage-bar${tone}`} role="img" aria-label={percent == null ? "No current reading" : `${rounded}% used`}>
-      <span style={{ width: `${Math.min(100, Math.max(0, rounded))}%` }} />
-    </span>
-  );
-}
-
-function UsageRow({ label, percent, resetsAtMs, now }: { label: string; percent: number; resetsAtMs: number; now: number }) {
-  const current = windowPercent(percent, resetsAtMs, now);
-  return (
-    <div className="usage-row">
-      <div className="usage-row-head"><span>{label}</span><span className="usage-pct">{current == null ? "—" : `${Math.round(current)}%`}</span></div>
-      <UsageBar percent={current} />
-      <div className="usage-sub">{current == null ? "Reset since this reading" : formatResetIn(resetsAtMs, now)}</div>
-    </div>
-  );
-}
-
-function UsageCard({ usage, now, refreshing, onRefresh }: { usage: SubscriptionUsage; now: number; refreshing: boolean; onRefresh: () => void }) {
-  const ago = relativeTime(new Date(usage.observedAtMs).toISOString());
-  return (
-    <div className="usage-pop sidebar-usage" role="status" aria-label="Subscription usage">
-      <div className="usage-head">
-        <span className="usage-title">Subscription usage</span>
-        <button
-          type="button"
-          className="icon-btn small usage-refresh"
-          aria-label="Refresh usage"
-          title="Refresh usage"
-          disabled={refreshing}
-          onClick={(event) => { event.stopPropagation(); onRefresh(); }}
-        >
-          {refreshing ? <LoaderCircle size={12} className="spin" aria-hidden="true" /> : <RotateCcw size={12} aria-hidden="true" />}
-        </button>
-      </div>
-      <UsageRow label={usageWindowLabel(usage.window.windowDurationMins)} percent={usage.window.usedPercent} resetsAtMs={usage.window.resetsAtMs} now={now} />
-      <UsageRow label="Weekly" percent={usage.weekly.usedPercent} resetsAtMs={usage.weekly.resetsAtMs} now={now} />
-      <div className="usage-foot"><span>as of {ago === "now" ? "now" : `${ago} ago`}</span></div>
-    </div>
-  );
-}
-
-/** The subscription meter and its empty, loading and error states. Shown from the sidebar's Usage control. */
-export function AccountUsage() {
-  const usage = useAppStore((state) => state.subscriptionUsage);
-  const loading = useAppStore((state) => state.subscriptionUsageLoading);
-  const error = useAppStore((state) => state.subscriptionUsageError);
-  const authenticated = useAppStore((state) => state.detection?.authenticated);
-  const refresh = useAppStore((state) => state.refreshSubscriptionUsage);
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => { const timer = window.setInterval(() => setNow(Date.now()), 60_000); return () => window.clearInterval(timer); }, []);
-  if (usage) return <UsageCard usage={usage} now={now} refreshing={loading} onRefresh={() => void refresh(true)} />;
-  if (loading) return <div className="usage-pop sidebar-usage" role="status"><div className="usage-state"><LoaderCircle size={13} className="spin" aria-hidden="true" />Reading usage…</div></div>;
-  if (error) {
-    return (
-      <div className="usage-pop sidebar-usage" role="alert">
-        <div className="usage-state">{error}</div>
-        <button type="button" className="ghost-btn small" onClick={(event) => { event.stopPropagation(); void refresh(true); }}><RotateCcw size={11} />Retry</button>
-      </div>
-    );
-  }
-  return (
-    <div className="usage-pop sidebar-usage" role="status">
-      <div className="usage-state">{authenticated === false ? "Sign in with the Muse CLI to see usage." : "No usage observed yet — it appears after your first turn."}</div>
-      {authenticated !== false ? <button type="button" className="ghost-btn small" onClick={(event) => { event.stopPropagation(); void refresh(true); }}><RotateCcw size={11} />Check again</button> : null}
-    </div>
-  );
-}
-
 /** Local midnight, so the sidebar chip matches the Usage view's Today. */
 function startOfToday(now: number): number {
   const date = new Date(now);
@@ -224,63 +151,6 @@ function SidebarUsage({ showToday = false }: { showToday?: boolean }) {
   );
 }
 
-/** Release-channel update popover: versions, urgency, channel notes, and the update itself. */
-function CliUpdateCard({ status, updating, checking, error, result, checkedAt, closing, onUpdate, onRefresh, onClose }: {
-  status: CliUpdateStatus;
-  updating: boolean;
-  checking: boolean;
-  error: string | null;
-  result: CliUpdateOutcome | null;
-  checkedAt: number | null;
-  closing: boolean;
-  onUpdate: () => void;
-  onRefresh: () => void;
-  onClose: () => void;
-}) {
-  const ago = checkedAt ? relativeTime(new Date(checkedAt).toISOString()) : null;
-  return (
-    <div className={`update-pop${closing ? " closing" : ""}`} role="dialog" aria-label="Muse CLI update" onClick={(event) => event.stopPropagation()}>
-      <div className="usage-head">
-        <span className="usage-title">Muse CLI update</span>
-        <button
-          type="button"
-          className="icon-btn small usage-refresh"
-          aria-label="Check again"
-          title="Check again"
-          disabled={checking || updating}
-          onClick={(event) => { event.stopPropagation(); onRefresh(); }}
-        >
-          {checking ? <LoaderCircle size={12} className="spin" aria-hidden="true" /> : <RotateCcw size={12} aria-hidden="true" />}
-        </button>
-      </div>
-      <div className="update-vers">
-        <span>{shortCliVersion(status.current) || "unknown"}</span>
-        <span aria-hidden="true">→</span>
-        <strong>{shortCliVersion(status.latest)}</strong>
-        {status.urgency !== "none" ? <em className={`update-urgency ${status.urgency}`}>{status.urgency === "must_download" ? "Required" : "Recommended"}</em> : null}
-      </div>
-      {status.notification ? <p className="update-notes">{status.notification}</p> : null}
-      {result ? <p className="update-result" role="status">{result.updated ? `Updated to ${shortCliVersion(result.to ?? result.version)}.` : "Already on the latest version."}</p> : null}
-      {error ? <p className="update-error" role="alert">{error}</p> : null}
-      <div className="update-actions">
-        <button type="button" className="primary accent" disabled={checking || updating} onClick={(event) => { event.stopPropagation(); onUpdate(); }}>
-          {updating ? <><LoaderCircle size={13} className="spin" aria-hidden="true" />Updating…</> : "Update now"}
-        </button>
-        <button type="button" className="ghost-btn" onClick={(event) => { event.stopPropagation(); onClose(); }}>Later</button>
-      </div>
-      {ago ? <div className="usage-foot"><span>checked {ago === "now" ? "now" : `${ago} ago`}</span></div> : null}
-    </div>
-  );
-}
-
-/**
- * The keyboard contract a `role="menu"` popover owes once it is open:
- * ArrowUp/ArrowDown roam its items with wraparound, Home/End land on the ends,
- * and Escape or a Tab taken from an item closes it. `close` hands focus back to
- * the opener — the item that had focus is about to unmount, and without the
- * hand-off the key would leave the keyboard on <body>. Nested content that is
- * not a menu item (an expanded export group) keeps normal Tab traversal.
- */
 function menuKeys(event: ReactKeyboardEvent<HTMLElement>, close: () => void) {
   const items = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('[role="menuitem"]:not(:disabled)'));
   if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -320,9 +190,6 @@ type ThreadActions = {
   openConfig: () => void;
   viewTrajectory: (id: string) => void;
   reportIssue: (id: string) => void;
-  exportThread: (row: ThreadRow, redacted: boolean, format?: "json" | "markdown") => void;
-  fork: (id: string) => void;
-  preview: (id: string) => void;
   remove: (row: ThreadRow) => void;
   dragStart: (event: DragEvent, id: string) => void;
   dragOver: (event: DragEvent, row: ThreadRow) => void;
@@ -348,12 +215,11 @@ function ThreadItemView({ row, active, menuOpen, renaming, dragging, dropTarget,
   const menu = usePresence(menuOpen, EXIT_FAST_MS);
   const menuRef = useRef<HTMLDivElement>(null);
   const moreRef = useRef<HTMLButtonElement>(null);
-  const [exportOpen, setExportOpen] = useState(false);
   // The menu hangs below its row inside the scrolling list; a row near the foot
   // of the list opens it upward instead, so the list never clips it.
   const [menuUp, setMenuUp] = useState(false);
   useLayoutEffect(() => {
-    if (!menuOpen) { setExportOpen(false); return; }
+    if (!menuOpen) return;
     const node = menuRef.current;
     const list = node?.closest(".scroll");
     if (!node || !list) return;
@@ -418,7 +284,7 @@ function ThreadItemView({ row, active, menuOpen, renaming, dragging, dropTarget,
                 workspace's folder, so every title starts on the same line as
                 the names above it. The thread's state rides at the row's end,
                 in the time's slot — a running thread has no time. */}
-            <span className="thread-mark" title={agentName}><AgentMark id={row.agentId ?? "muse"} size={15} /></span>
+            <span className="thread-mark" title={agentName}><AgentMark size={15} /></span>
             <span className="title"><span className="title-text">{row.title}</span></span>
             {row.pinned ? <Pin size={11} className="pin-mark" aria-label="Pinned" /> : null}
             {row.branch ? <span className="thread-branch" title={`Worktree on ${row.branch}`}><GitBranch size={10} aria-hidden="true" />{row.branch}</span> : null}
@@ -451,26 +317,10 @@ function ThreadItemView({ row, active, menuOpen, renaming, dragging, dropTarget,
           <div className="menu-sep" />
           <button type="button" role="menuitem" onClick={() => actions.openFolder(row.sessionId)}><FolderOpen size={13} />Open in Finder</button>
           <button type="button" role="menuitem" onClick={() => actions.copyPath(row.sessionId)}><Copy size={13} />Copy path</button>
-          {!preview && row.agentId === "harness" ? <button type="button" role="menuitem" onClick={() => actions.copyTaskPath(row.sessionId)}><FileText size={13} />Copy task path</button> : null}
+          {!preview ? <button type="button" role="menuitem" onClick={() => actions.copyTaskPath(row.sessionId)}><FileText size={13} />Copy task path</button> : null}
           {!preview ? <button type="button" role="menuitem" onClick={actions.copyLogPath}><FileText size={13} />Copy log path</button> : null}
           <button type="button" role="menuitem" onClick={() => actions.copySessionId(row.sessionId)}><Copy size={13} />Copy session ID</button>
           {!preview ? <button type="button" role="menuitem" onClick={actions.openConfig}><Settings size={13} />Go to config</button> : null}
-          {(row.agentId ?? "muse") === "muse" && !preview ? <>
-            <button type="button" role="menuitem" onClick={() => actions.fork(row.sessionId)}><GitFork size={13} />Fork thread</button>
-            {/* The four export formats fold under one item instead of filling the menu. */}
-            <button type="button" role="menuitem" aria-expanded={exportOpen} onClick={(event) => { event.stopPropagation(); setExportOpen((open) => !open); }}>
-              <Download size={13} />Export<ChevronRight size={12} className={`caret ${exportOpen ? "open" : ""}`} aria-hidden="true" />
-            </button>
-            <Collapse open={exportOpen}>{() => (
-              <div className="menu-sub" role="group" aria-label="Export formats">
-                <button type="button" role="menuitem" aria-label="Export share-safe JSON" onClick={() => actions.exportThread(row, true)}><ShieldCheck size={13} />Share-safe JSON</button>
-                <button type="button" role="menuitem" aria-label="Export share-safe Markdown" onClick={() => actions.exportThread(row, true, "markdown")}><ShieldCheck size={13} />Share-safe Markdown</button>
-                <button type="button" role="menuitem" aria-label="Export raw JSON" onClick={() => actions.exportThread(row, false)}><FileText size={13} />Raw JSON</button>
-                <button type="button" role="menuitem" aria-label="Export raw Markdown" onClick={() => actions.exportThread(row, false, "markdown")}><FileText size={13} />Raw Markdown</button>
-              </div>
-            )}</Collapse>
-            {!row.opened ? <button type="button" role="menuitem" onClick={() => actions.preview(row.sessionId)}><ScanSearch size={13} />Preview without opening</button> : null}
-          </> : null}
           <div className="menu-sep" />
           <button type="button" role="menuitem" onClick={() => actions.viewTrajectory(row.sessionId)}><ChartColumn size={13} />View model trajectory</button>
           {!preview ? <button type="button" role="menuitem" onClick={() => actions.reportIssue(row.sessionId)}><Bug size={13} />Report issue</button> : null}
@@ -610,7 +460,6 @@ export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) 
     threadsLoading: state.threadsLoading,
     threadSearch: state.threadSearch,
     threadSearchOpen: state.threadSearchOpen,
-    enabledAgents: state.enabledAgents,
     workspaces: state.workspaces,
     selectedWorkspaceId: state.selectedWorkspaceId,
     selectedSessionId: state.selectedSessionId,
@@ -623,12 +472,6 @@ export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) 
     editor: state.editor,
     sidebarCollapsed: state.sidebarCollapsed,
     shortcutOverrides: state.shortcutOverrides,
-    cliUpdate: state.cliUpdate,
-    cliUpdateLoading: state.cliUpdateLoading,
-    cliUpdateError: state.cliUpdateError,
-    cliUpdateAt: state.cliUpdateAt,
-    cliUpdating: state.cliUpdating,
-    cliUpdateResult: state.cliUpdateResult,
     loadWorkspaceThreads: state.loadWorkspaceThreads,
     newThread: state.newThread,
     exitPreview: state.exitPreview,
@@ -641,9 +484,6 @@ export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) 
     openTrustDialog: state.openTrustDialog,
     setSidebarCollapsed: state.setSidebarCollapsed,
     setSettingsOpen: state.setSettingsOpen,
-    signOut: state.signOut,
-    refreshCliUpdate: state.refreshCliUpdate,
-    updateCli: state.updateCli,
     confirm: state.confirm,
   })));
   // The rows, not the threads: identical objects until something a row shows changes.
@@ -654,13 +494,11 @@ export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) 
   const [menu, setMenu] = useState<string | null>(null);
   const [wsMenu, setWsMenu] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
-  const [updateOpen, setUpdateOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const profilePop = usePresence(profileOpen, EXIT_FAST_MS);
   const profileRef = useRef<HTMLButtonElement>(null);
   const profileMenuRef = useRef<HTMLDivElement>(null);
   const profileFocusEnd = useRef(false);
-  const updatePop = usePresence(updateOpen, EXIT_FAST_MS);
   const wsMenuPop = usePresence(wsMenu !== null, EXIT_FAST_MS);
   // A closing workspace menu still names its workspace until it unmounts.
   const wsMenuFor = useRef<string | null>(null);
@@ -699,30 +537,29 @@ export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) 
     const threads = search ? new Map(useAppStore.getState().threads.map((thread) => [thread.sessionId, thread])) : null;
     return rows
       .filter((row) => !row.archived)
-      .filter((row) => agentEnabled(s, row.agentId ?? "muse"))
       .filter((row) => !threads || threadMatches(threads.get(row.sessionId)!, search))
       .slice()
       .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.order - a.order);
-  }, [rows, search, s.enabledAgents]);
+  }, [rows, search]);
   // One group per workspace, in the store's sidebar order, so the thread shortcuts walk what is drawn.
   const groups = useMemo(() => s.workspaces.map((item) => ({ item, threads: listed.filter((row) => row.workspacePath === item.path) })), [s.workspaces, listed]);
   // What a closed folder flags on its row. Read from every thread, not just a search's matches.
   const flags = useMemo(() => {
     const byPath = new Map<string, { attention: boolean; running: boolean }>();
     for (const row of rows) {
-      if (row.archived || !agentEnabled(s, row.agentId ?? "muse")) continue;
+      if (row.archived) continue;
       const flag = byPath.get(row.workspacePath) ?? { attention: false, running: false };
       flag.attention ||= row.attention;
       flag.running ||= row.status === "running";
       byPath.set(row.workspacePath, flag);
     }
     return byPath;
-  }, [rows, s.enabledAgents]);
+  }, [rows]);
   // Work blocked on the user, in every workspace.
   const attentionCount = useMemo(() => {
     const paths = new Set(s.workspaces.map((item) => item.path));
-    return rows.reduce((count, row) => count + (row.attention && !row.archived && paths.has(row.workspacePath) && agentEnabled(s, row.agentId ?? "muse") ? 1 : 0), 0);
-  }, [rows, s.workspaces, s.enabledAgents]);
+    return rows.reduce((count, row) => count + (row.attention && !row.archived && paths.has(row.workspacePath) ? 1 : 0), 0);
+  }, [rows, s.workspaces]);
   // The row keeps its last count while it folds away, rather than reading "0 threads".
   const attentionShown = useRef(attentionCount);
   if (attentionCount) attentionShown.current = attentionCount;
@@ -768,13 +605,6 @@ export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) 
     const timer = window.setTimeout(() => document.addEventListener("click", close), 0);
     return () => { window.clearTimeout(timer); document.removeEventListener("click", close); };
   }, [wsMenu]);
-
-  useEffect(() => {
-    if (!updateOpen) return;
-    const close = () => setUpdateOpen(false);
-    const timer = window.setTimeout(() => document.addEventListener("click", close), 0);
-    return () => { window.clearTimeout(timer); document.removeEventListener("click", close); };
-  }, [updateOpen]);
 
   const closeProfileMenu = () => {
     setProfileOpen(false);
@@ -834,12 +664,6 @@ export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) 
       openConfig: () => { setMenu(null); void openAppConfig(); },
       viewTrajectory: (id) => { setMenu(null); store().openThreadTrajectory(id); },
       reportIssue: (id) => { setMenu(null); void reportThreadIssue(id); },
-      exportThread: (row, redacted, format) => {
-        setMenu(null);
-        void exportThread(row, redacted, format);
-      },
-      fork: (id) => { setMenu(null); void store().forkThread(id); },
-      preview: (id) => { setMenu(null); void store().openPreview(id); },
       remove: (row) => {
         setMenu(null);
         void store().confirm({ title: `Delete “${row.title}”?`, body: ["It is removed from Glitter. This cannot be undone.", worktreeRemovalNote(store().threads, [row.sessionId])].filter(Boolean).join(" "), confirmLabel: "Delete", danger: true }).then((ok) => { if (ok) store().deleteThread(row.sessionId); });
@@ -871,21 +695,17 @@ export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) 
   }, []);
 
   const ready = readyAgents(s);
-  const installed = s.agents.filter((agent) => agent.found);
-  // Until detection has answered, "no agent found" would be a claim we cannot make yet.
+  // Until detection has answered, "no key" would be a claim we cannot make yet.
   const checking = !s.detectionChecked && !s.preview;
   // A healthy connection says nothing. The row exists only while something blocks work.
   const alert: { tone: "idle" | "warn" | "bad"; label: string; tab?: SettingsTab } | null = s.preview ? null
-    : checking ? { tone: "idle", label: "Checking agents…" }
+    : checking ? { tone: "idle", label: "Starting the agent…" }
     : s.offline ? { tone: "bad", label: "Offline" }
     : ready.length ? null
-    : installed.length ? { tone: "warn", label: "Sign in needed", tab: "Agents" }
-    : { tone: "bad", label: "No agent CLI found", tab: "Agents" };
-  const statusTitle = installed.map((agent) => `${agent.name}${agent.version ? ` ${agent.version}` : ""} — ${agent.path}`).join("\n") || undefined;
-  const profileName = s.preview ? "Preview" : s.detection?.accountName || s.detection?.accountEmail || "Profile";
-  const profileDetail = s.preview ? "Demo data" : s.detection?.authenticated
-    ? s.detection.accountEmail && s.detection.accountEmail !== profileName ? s.detection.accountEmail : "Muse connected"
-    : "Preferences on this Mac";
+    : { tone: "warn", label: "Add a provider key", tab: "Providers" };
+  const statusTitle = undefined;
+  const profileName = s.preview ? "Preview" : "Profile";
+  const profileDetail = s.preview ? "Demo data" : "Preferences on this Mac";
   const profileInitial = Array.from(profileName.trim())[0]?.toUpperCase() ?? "P";
   const newThread = () => { onOpenThreads?.(); void s.newThread(); };
   // Selecting a workspace opens its draft, so a new thread elsewhere is one click too.
@@ -895,7 +715,6 @@ export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) 
   };
   const openSettings = (tab?: SettingsTab) => { setProfileOpen(false); s.setSettingsOpen(true, tab); };
   const searchShown = s.threadSearchOpen || Boolean(s.threadSearch);
-  const updateAvailable = !s.preview && s.cliUpdate?.available === true && Boolean(s.cliUpdate.latest);
   const closeWorkspaceMenu = (id: string) => {
     setWsMenu(null);
     document.getElementById(`workspace-more-${id}`)?.focus();
@@ -923,7 +742,7 @@ export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) 
       dropTarget={dropTarget === row.sessionId}
       reorderable={reorderable}
       preview={s.preview}
-      agentName={s.agents.find((agent) => agent.id === (row.agentId ?? "muse"))?.name}
+      agentName={AGENT_LABELS.harness}
       actions={actions}
     />
   );
@@ -965,7 +784,6 @@ export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) 
             <button className="icon-btn" aria-label="Open workspace" data-tooltip={`Open workspace  ${shortcutText("open-workspace")}`} onClick={() => void s.chooseProject()}><Plus size={16} /></button>
             <button className="icon-btn" aria-label="Settings" data-tooltip={`Settings  ${shortcutText("settings")}`} onClick={() => openSettings()}><Settings size={16} /></button>
             <SidebarUsage />
-            {updateAvailable ? <button className="icon-btn update-dot" aria-label="CLI update available — show sidebar" title="CLI update available" onClick={() => s.setSidebarCollapsed(false)}><Download size={16} /></button> : null}
           </div>
         ) : null}
       </div>
@@ -1129,33 +947,8 @@ export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) 
         {search && s.workspaces.length && !anyMatch && !workspace ? <div className="tree-note">No matching threads</div> : null}
       </div>
 
-      {/* The foot: an update or a blocked agent while they last, then Settings and today's usage. */}
+      {/* The foot: a blocked agent while it lasts, then Settings and today's usage. */}
       <div className="sidebar-bottom">
-        {updateAvailable && s.cliUpdate ? <div className="update-wrap" onKeyDown={(event) => { if (event.key === "Escape") setUpdateOpen(false); }}>
-          <button
-            type="button"
-            className="nav-row update-row"
-            aria-label={`Muse CLI update available, ${shortCliVersion(s.cliUpdate.current) || "unknown"} to ${shortCliVersion(s.cliUpdate.latest)}`}
-            aria-expanded={updateOpen}
-            onClick={() => setUpdateOpen((open) => !open)}
-          >
-            <Download size={15} />
-            <span>CLI update</span>
-            <em className="update-ver">{shortCliVersion(s.cliUpdate.latest)}</em>
-          </button>
-          {updatePop.mounted ? <CliUpdateCard
-            closing={updatePop.closing}
-            status={s.cliUpdate}
-            updating={s.cliUpdating}
-            checking={s.cliUpdateLoading}
-            error={s.cliUpdateError}
-            result={s.cliUpdateResult}
-            checkedAt={s.cliUpdateAt}
-            onUpdate={() => void s.updateCli()}
-            onRefresh={() => void s.refreshCliUpdate(true)}
-            onClose={() => setUpdateOpen(false)}
-          /> : null}
-        </div> : null}
         <div className="sidebar-foot">
           {alert ? (
             alert.tab ? (
@@ -1216,10 +1009,6 @@ export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) 
                 <button type="button" role="menuitem" onClick={() => openSettings("Usage")}><ChartColumn size={13} aria-hidden="true" />Usage stats</button>
                 <button type="button" role="menuitem" onClick={() => openSettings("Shortcuts")}><Keyboard size={13} aria-hidden="true" />Commands &amp; shortcuts</button>
                 <button type="button" role="menuitem" onClick={() => openSettings()}><Settings size={13} aria-hidden="true" />Settings<span className="menu-hint">{shortcutText("settings")}</span></button>
-                {!s.preview && s.detection?.authenticated ? <>
-                  <div className="menu-sep" aria-hidden="true" />
-                  <button type="button" role="menuitem" onClick={() => { setProfileOpen(false); void s.signOut(); }}><LogOut size={13} aria-hidden="true" />Sign out of Muse</button>
-                </> : null}
               </div>
             ) : null}
             <SidebarUsage showToday />

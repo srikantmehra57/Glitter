@@ -1,6 +1,6 @@
 use std::io::{self, BufRead};
 
-// Must match packages/glitter-bridge/src/framing.ts. Excludes the newline.
+// Must match packages/glitter-harness/src/framing.ts. Excludes the newline.
 pub const MAX_FRAME_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_LOG_BYTES: usize = 8 * 1024;
 

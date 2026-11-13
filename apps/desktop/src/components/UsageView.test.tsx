@@ -28,13 +28,12 @@ const ledger: UsageLedger = { version: 1, days: [], turns: [
   turn({ agentId: "grok", providerId: "xai", modelId: "grok-4.7", outputTokens: 0, estimated: true }),
 ] };
 
-const refresh = vi.fn(async () => {});
 function seed(extra: Record<string, unknown> = {}) {
-  seedStore({ preview: false, usageLedger: ledger, agents: [], refreshSubscriptionUsage: refresh, ...extra });
+  seedStore({ preview: false, usageLedger: ledger, agents: [], ...extra });
 }
 
 describe("UsageView", () => {
-  beforeEach(() => { resetStore(); refresh.mockReset(); refresh.mockResolvedValue(undefined); });
+  beforeEach(() => { resetStore(); });
 
   it("breaks the period down by provider, from the recorded ledger", () => {
     seed();
@@ -218,31 +217,7 @@ describe("UsageView", () => {
     expect(screen.getByRole("img", { name: /claude-sonnet-5 1.5K/ })).toBeInTheDocument();
   });
 
-  it("refreshes the visible page and forces a fresh subscription reading", async () => {
-    seed({
-      agents: [{ id: "muse", name: "Muse", protocol: "msp", found: true, path: "/bin/muse", version: "1.3.0", verified: true, signIn: "", authenticated: true }],
-    });
-    render(<UsageView embedded />);
-    expect(refresh).toHaveBeenCalled();
-    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Refresh usage" })); });
-    expect(refresh).toHaveBeenCalledWith(true);
-    expect(screen.getByRole("button", { name: "Refresh usage" })).toBeEnabled();
-  });
 
-  it("polls the subscription reading once a minute while the page is open", async () => {
-    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
-    try {
-      seed({ agents: [{ id: "muse", name: "Muse", protocol: "msp", found: true, path: "/bin/muse", version: "1.3.0", verified: true, signIn: "", authenticated: true }] });
-      render(<UsageView embedded />);
-      refresh.mockClear();
-      await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
-      expect(refresh).toHaveBeenCalledTimes(1);
-      await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
-      expect(refresh).toHaveBeenCalledTimes(2);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
 
   it("clears the history after confirming", async () => {
     const confirm = vi.fn(async () => true);
@@ -253,39 +228,8 @@ describe("UsageView", () => {
     expect(confirm).toHaveBeenCalledWith(expect.objectContaining({ title: "Clear usage history?", danger: true }));
   });
 
-  it("hides the Muse subscription card when Muse is installed but turned off", () => {
-    seed({
-      agents: [{ id: "muse", name: "Muse", protocol: "msp", found: true, path: "/bin/muse", version: "1.3.0", verified: true, signIn: "", authenticated: true }],
-      enabledAgents: { muse: false },
-    });
-    render(<UsageView embedded />);
-    expect(screen.queryByRole("region", { name: "Muse subscription" })).toBeNull();
-    expect(refresh).not.toHaveBeenCalled();
-  });
 
-  it("hides the Muse subscription card unless Muse is installed", () => {
-    seed();
-    render(<UsageView embedded />);
-    expect(screen.queryByRole("region", { name: "Muse subscription" })).toBeNull();
-    expect(refresh).not.toHaveBeenCalled();
-  });
 
-  it("drops a subscription window that has reset since the reading", () => {
-    const now = Date.now();
-    seed({
-      agents: [{ id: "muse", name: "Muse", protocol: "msp", found: true, path: "/bin/muse", version: "1.3.0", verified: true, signIn: "", authenticated: true }],
-      subscriptionUsage: { observedAtMs: now - 6 * 3_600_000, tier: "pro", window: { usedPercent: 87, resetsAtMs: now - 3_600_000, windowDurationMins: 300 }, weekly: { usedPercent: 40, resetsAtMs: now + 86_400_000 } },
-      subscriptionUsageError: "Could not load subscription usage: the host is not running.",
-    });
-    render(<UsageView embedded />);
-    const card = screen.getByRole("region", { name: "Muse subscription" });
-    expect(card).toHaveTextContent("as of 6h ago");
-    expect(card).not.toHaveTextContent("87%");
-    expect(card).toHaveTextContent("Reset since this reading");
-    expect(card).toHaveTextContent("40%");
-    expect(within(card).getByRole("alert")).toHaveTextContent("the host is not running");
-    expect(refresh).toHaveBeenCalled();
-  });
 
   it("answers a heatmap cell on hover at once, without a native title", () => {
     seed();

@@ -15,32 +15,7 @@ async function bundle(entry) {
 }
 
 const { clampTier, tiersFor, defaultTier, isPeak, modelFor, withUnlistedModels, isFastModel, VOCABULARY } = await bundle('apps/desktop/src/lib/effort.ts');
-const { annotateEfforts } = await bundle('packages/glitter-bridge/src/efforts.ts');
 const { stepFromItem } = await bundle('apps/desktop/src/lib/agent.ts');
-
-test('Muse models top out at max; ultra only behind the experimental flag', () => {
-  const plain = annotateEfforts({ models: [{ modelId: 'muse-spark-1.3' }] }, {});
-  assert.deepEqual(plain.models[0].reasoningEfforts, ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
-  assert.equal(plain.models[0].defaultReasoningEffort, 'high');
-  assert.equal(plain.models[0].effortSource, 'vocabulary');
-  const gated = annotateEfforts({ models: [{ modelId: 'm' }] }, { MUSE_EXPERIMENTAL_ULTRA_REASONING_EFFORT: '1' });
-  assert.equal(gated.models[0].reasoningEfforts.at(-1), 'ultra');
-});
-
-test('tiers a host forwards on the model row win over the vocabulary', () => {
-  const result = annotateEfforts({ models: [{ modelId: 'm', reasoningEffortVariants: [{ tier: 'max' }, { tier: 'low' }, { tier: 'bogus' }], defaultReasoningEffort: 'low' }] }, {});
-  assert.deepEqual(result.models[0].reasoningEfforts, ['low', 'max']);
-  assert.equal(result.models[0].defaultReasoningEffort, 'low');
-  assert.equal(result.models[0].effortSource, 'host');
-});
-
-test('the variants tier list wins over a recommendation-only reasoningEffortVariants', () => {
-  // Muse 1.4 rows: `variants` is the accepted set, `reasoningEffortVariants` a hint.
-  const result = annotateEfforts({ models: [{ modelId: 'muse-spark-1.3-contributor', variants: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'], reasoningEffortVariants: [{ tier: 'xhigh' }], defaultReasoningEffort: 'xhigh' }] }, {});
-  assert.deepEqual(result.models[0].reasoningEfforts, ['minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
-  assert.equal(result.models[0].defaultReasoningEffort, 'xhigh');
-  assert.equal(result.models[0].effortSource, 'host');
-});
 
 test('effort clamps to the nearest supported tier at or below when the model changes', () => {
   const tiers = ['low', 'medium', 'high', 'max'];

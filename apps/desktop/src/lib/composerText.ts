@@ -208,33 +208,26 @@ export const SLASH_COMMANDS: SlashCommand[] = [
  * exception: it drafts a prompt for the review scope in view.
  * `needs` says what has to be open for the command to mean anything.
  */
-export type BuiltinCommand = { name: string; hint: string; needs?: "thread" | "muse" | "museThread" | "liveMuseThread" | "liveCompactableThread" };
+export type BuiltinCommand = { name: string; hint: string; needs?: "thread" | "liveThread" };
 
 export const BUILTIN_COMMANDS: BuiltinCommand[] = [
   { name: "new", hint: "Start a new thread" },
-  { name: "compact", hint: "Compact this thread's context", needs: "liveCompactableThread" },
-  { name: "fork", hint: "Fork this thread", needs: "museThread" },
+  { name: "compact", hint: "Compact this thread's context", needs: "liveThread" },
   { name: "rename", hint: "Rename this thread", needs: "thread" },
   { name: "model", hint: "Choose a model" },
   { name: "effort", hint: "Set reasoning effort" },
-  { name: "permissions", hint: "Change permissions", needs: "muse" },
-  { name: "init", hint: "Preview and write AGENTS.md", needs: "muse" },
+  { name: "permissions", hint: "Change permissions" },
   { name: "status", hint: "Show context, usage and session id", needs: "thread" },
   { name: "mcp", hint: "MCP servers in Settings" },
   { name: "skills", hint: "Skills in Settings" },
-  { name: "export", hint: "Export this thread", needs: "liveMuseThread" },
   { name: "review", hint: "Review the changes in view" },
 ];
 
 /** The built-ins that apply to what is open. Commands that could do nothing are left out, not disabled. */
-export function availableBuiltins(context: { thread: boolean; muse: boolean; live: boolean; harness?: boolean }): BuiltinCommand[] {
+export function availableBuiltins(context: { thread: boolean; live: boolean }): BuiltinCommand[] {
   return BUILTIN_COMMANDS.filter((command) => {
-    // Muse compacts in its CLI; the built-in agent summarizes its own history.
-    if (command.needs === "liveCompactableThread") return context.thread && (context.muse || context.harness === true) && context.live;
+    if (command.needs === "liveThread") return context.thread && context.live;
     if (command.needs === "thread") return context.thread;
-    if (command.needs === "muse") return context.muse;
-    if (command.needs === "museThread") return context.thread && context.muse;
-    if (command.needs === "liveMuseThread") return context.thread && context.muse && context.live;
     return true;
   });
 }
@@ -366,19 +359,6 @@ export function parseSkillInvocation(text: string): { selector: string; args: st
   const match = text.trimStart().match(SKILL_INVOCATION);
   if (!match) return null;
   return { selector: match[1], args: (match[2] ?? "").trim() };
-}
-
-const SHELL_ESCAPE = /^![ \t]*(\S[\s\S]*)$/;
-
-/**
- * Parse a leading `!command` shell escape (TUI parity). A bare `!` with no
- * command is not an escape: it stays plain text so the submit path can ask
- * for the command instead of running nothing.
- */
-export function parseShellEscape(text: string): { command: string } | null {
-  const match = text.trimStart().match(SHELL_ESCAPE);
-  if (!match) return null;
-  return { command: match[1].trim() };
 }
 
 /** Canonical typed spelling for a catalog selector: exactly one leading slash. */

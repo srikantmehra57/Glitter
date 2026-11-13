@@ -22,16 +22,13 @@ async function bundle(entry, replacements = {}) {
 const deferred = () => { let resolve, reject; const promise = new Promise((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; };
 const { SettingsPersistence } = await bundle('apps/desktop/src/lib/settingsPersistence.ts');
 const { DEFAULT_SETTINGS, THINKING_ORBS } = await bundle('apps/desktop/src/lib/types.ts');
-function persistenceFixture(saved = {}, secure = null) {
-  const state = { saved, secure, writes: [], failKey: false, failSave: false };
+function persistenceFixture(saved = {}) {
+  const state = { saved, writes: [], failSave: false, failKey: false, keptKeys: [] };
   const persistence = new SettingsPersistence({
     get: async () => state.saved,
     set: async (_, value) => { state.buffer = value; },
     save: async () => { if (state.failSave) throw new Error('disk full'); state.saved = state.buffer; state.writes.push('settings'); },
-  }, {
-    get: async () => state.secure,
-    set: async (value) => { if (state.failKey) throw new Error('locked'); state.secure = value || null; state.writes.push('credential'); },
-  });
+  }, async (value) => { if (state.failKey) throw new Error('keychain locked'); state.keptKeys.push(value); });
   return { state, persistence };
 }
 
@@ -47,77 +44,34 @@ test('thinking orb choices survive saving and loading, and older or malformed se
   }
 });
 
-test('legacy key migrates before JSON is scrubbed, preserving other settings', async () => {
-  const { state, persistence } = persistenceFixture({ museApiKey: 'old-test-key', theme: 'light', workspaces: [{ id: 'a', path: '/a' }] });
-  const settings = await persistence.load();
-  assert.equal(settings.museApiKey, 'old-test-key');
-  assert.equal(settings.theme, 'light');
-  assert.equal(settings.accentColor, 'ember');
-  assert.equal(settings.accentSidebar, false);
-  assert.equal(state.secure, 'old-test-key');
-  assert.equal('museApiKey' in state.saved, false);
-  assert.deepEqual(state.writes, ['credential', 'settings']);
-  assert.equal(state.saved.workspaces[0].path, '/a');
+test('settings from the Muse CLI and the agent CLIs are dropped from the saved document on load', async () => {
+  const { state, persistence } = persistenceFixture({ theme: 'light', museBin: '/bin/muse', museApiKey: 'plain-text-key', museAuthMode: 'apiKey', enabledAgents: { opencode: true }, acpUnisolatedConsent: true, defaultAgentId: 'grok', futureSetting: 1 });
+  const loaded = await persistence.load();
+  assert.equal(loaded.theme, 'light');
+  assert.ok(!('museApiKey' in loaded) && !('enabledAgents' in loaded));
+  assert.deepEqual(state.keptKeys, ['plain-text-key'], 'the legacy key is secured before its plaintext copy is removed');
+  assert.deepEqual(state.writes, ['settings'], 'the cleaned document is written once');
+  assert.ok(!('museApiKey' in state.saved) && !('museBin' in state.saved) && !('defaultAgentId' in state.saved));
+  assert.equal(state.saved.futureSetting, 1, 'unknown newer settings are still kept');
+  await persistenceFixture({ theme: 'dark' }).persistence.load();
 });
-test('locked credential store preserves legacy key and does not rewrite JSON', async () => {
-  const { state, persistence } = persistenceFixture({ museApiKey: 'legacy-test' });
+
+test('a legacy key remains in settings if keychain migration fails', async () => {
+  const { state, persistence } = persistenceFixture({ museApiKey: 'only-copy', theme: 'dark' });
   state.failKey = true;
-  await assert.rejects(persistence.load(), /locked/);
-  assert.equal(state.saved.museApiKey, 'legacy-test');
-  assert.deepEqual(state.writes, []);
-  state.failKey = false;
-  await persistence.load();
-  assert.equal(state.secure, 'legacy-test');
-  assert.equal('museApiKey' in state.saved, false);
+  await assert.rejects(persistence.load(), /keychain locked/);
+  assert.equal(state.saved.museApiKey, 'only-copy');
+  await persistence.save(DEFAULT_SETTINGS);
+  assert.equal(state.saved.museApiKey, 'only-copy', 'a later settings save cannot discard the only copy');
 });
-test('existing secure key wins over an obsolete legacy key', async () => {
-  const { state, persistence } = persistenceFixture({ museApiKey: 'obsolete-test' }, 'secure-test');
-  assert.equal((await persistence.load()).museApiKey, 'secure-test');
-  assert.deepEqual(state.writes, ['settings']);
-});
-test('save excludes credentials and serializes key changes and deletion', async () => {
-  const { state, persistence } = persistenceFixture();
-  await persistence.load();
-  await Promise.all([
-    persistence.save({ ...DEFAULT_SETTINGS, museApiKey: 'first-test' }),
-    persistence.save({ ...DEFAULT_SETTINGS, museApiKey: 'second-test', theme: 'light' }),
-  ]);
-  assert.equal(state.secure, 'second-test');
-  assert.equal(state.saved.theme, 'light');
-  assert.equal(JSON.stringify(state.saved).includes('second-test'), false);
-  await persistence.save({ ...DEFAULT_SETTINGS, museApiKey: '' });
-  assert.equal(state.secure, null);
-  assert.equal('museApiKey' in state.saved, false);
-});
-test('failed public settings write rolls back a credential change', async () => {
-  const { state, persistence } = persistenceFixture({}, 'previous-test');
-  await persistence.load(); state.failSave = true;
-  await assert.rejects(persistence.save({ ...DEFAULT_SETTINGS, museApiKey: 'next-test' }), /disk full/);
-  assert.equal(state.secure, 'previous-test');
-});
-test('masked credential store never writes the mask over the real key', async () => {
-  const MASK = '••••••••';
-  const state = { saved: {}, secure: 'previous-test', writes: [], failSave: false };
-  const persistence = new SettingsPersistence({
-    get: async () => state.saved,
-    set: async (_, value) => { state.buffer = value; },
-    save: async () => { if (state.failSave) throw new Error('disk full'); state.saved = state.buffer; state.writes.push('settings'); },
-  }, {
-    // Native `credential_get` returns only the mask when a key exists.
-    get: async () => (state.secure ? MASK : null),
-    set: async (value) => { state.secure = value || null; state.writes.push('credential'); },
-  });
-  assert.equal((await persistence.load()).museApiKey, MASK);
-  // A failed public write leaves the real credential untouched (no mask rollback).
-  state.failSave = true;
-  await assert.rejects(persistence.save({ ...DEFAULT_SETTINGS, museApiKey: 'next-test' }), /disk full/);
-  assert.equal(state.secure, 'previous-test');
-  assert.deepEqual(state.writes, []);
-  // Saving the mask itself means "unchanged": no credential write.
-  state.failSave = false;
-  await persistence.save({ ...DEFAULT_SETTINGS, museApiKey: MASK });
-  assert.equal(state.secure, 'previous-test');
-  assert.deepEqual(state.writes, ['settings']);
+
+test('a previously disabled shell keeps the Terminal pane disabled', async () => {
+  const { state, persistence } = persistenceFixture({ disableShell: true });
+  assert.equal((await persistence.load()).disableTerminal, true);
+  assert.equal(state.saved.disableTerminal, true);
+  assert.ok(!('disableShell' in state.saved));
+  const explicit = persistenceFixture({ disableShell: true, disableTerminal: false });
+  assert.equal((await explicit.persistence.load()).disableTerminal, false, 'the new preference takes precedence');
 });
 
 const nativeReplacements = {
@@ -180,6 +134,7 @@ const storeReplacements = {
     export const openLogFolder=async()=>globalThis.testInvoke ? globalThis.testInvoke('open_log_folder') : '/preview/logs/app.log';
     export const providerKeysGet=async(ids)=>ids.map((id)=>({id,configured:false,keyHint:null,baseUrl:null}));
     export const persistStoreDocument=async(...args)=>globalThis.persistStoreDocument?.(...args);
+    export const preserveLegacyMuseKey=async()=>{};
     export const repairStoreDocument=async()=>globalThis.storeRepair ?? {status:'ok'};
     export const bridge=(...args)=>globalThis.storeBridge(...args);
     export const gitReview=async(...args)=>globalThis.readReview?.(...args) ?? {files:[],diff:"",truncated:false};
@@ -215,7 +170,7 @@ const storeReplacements = {
     export const cliLogout=async()=>{globalThis.cliLoggedOut=true;};
     export const pluginList=async()=>globalThis.pluginEntries ?? [];
     export const skillList=async()=>globalThis.skillEntries ?? [];
-    export const catalogList=async()=>({entries:[],skillsRoot:'',error:null});export const catalogInstall=async()=>({installedSkills:[],installedServers:[],skipped:[],errors:[]});export const catalogRemove=async()=>({removed:[],skipped:[],errors:[]});export const githubInstall=async()=>({id:'',skills:[],commands:[],servers:[],problems:[]});export const libraryList=async()=>({plugins:[],marketplaces:[],pluginsRoot:'',problems:[]});export const librarySetEnabled=async()=>({id:'',skills:[],commands:[],servers:[],problems:[]});export const libraryRemove=async()=>[];export const libraryCheckUpdates=async()=>[];export const marketplaceAdd=async()=>({});export const marketplaceRefresh=async()=>({});export const marketplaceRemove=async()=>{};
+    export const catalogList=async()=>({entries:[],skillsRoot:'',error:null});export const catalogInstall=async()=>({installedSkills:[],installedServers:[],skipped:[],errors:[]});export const catalogRemove=async()=>({removed:[],skipped:[],errors:[]});export const githubInstall=async()=>({id:'',skills:[],commands:[],servers:[],problems:[]});export const libraryList=async()=>({plugins:[],marketplaces:[],pluginsRoot:'',problems:[]});export const librarySetEnabled=async()=>({id:'',skills:[],commands:[],servers:[],problems:[]});export const libraryRemove=async()=>[];export const libraryCheckUpdates=async()=>[];export const marketplaceAdd=async()=>({});export const marketplaceRefresh=async()=>({});export const marketplaceRemove=async()=>{};export const marketplaceAvatars=async()=>0;
     export const projectInit=async(...args)=>globalThis.runProjectInit(...args);
     export const enterpriseStatus=async()=>globalThis.enterpriseFixture ?? { generation: null, sources: [] };
     export const pickPluginBundle=async()=>globalThis.pickedBundle ?? null;
@@ -310,182 +265,6 @@ test('preview commits preserve or remove exactly the selected file groups', asyn
   assert.deepEqual(store.getState().git.files, []);
   assert.equal(store.getState().git.dirty, false);
 });
-test('sign out removes credentials, closes sessions, and re-detects', async () => {
-  const store = await frontendStore();
-  globalThis.cliLoggedOut = false;
-  const seen = [];
-  globalThis.storeBridge = async (method) => { seen.push(method); return method === 'detect' ? { found: true, authenticated: false } : {}; };
-  store.setState({
-    museApiKey: 'secret-test', hostInfo: { version: 'x' }, hostTrust: true, preview: false,
-    threads: [{ ...thread('s1', '/repo'), status: 'running', activeTurnId: 't0' }], selectedSessionId: 's1',
-  });
-  await store.getState().signOut();
-  const state = store.getState();
-  assert.equal(globalThis.cliLoggedOut, true);
-  assert.equal(state.museApiKey, '');
-  assert.equal(state.hostInfo, null);
-  assert.equal(state.hostTrust, null);
-  assert.equal(state.threads[0].opened, false);
-  assert.equal(state.threads[0].status, 'idle');
-  assert.deepEqual(state.detection, { found: true, authenticated: false });
-  assert.ok(seen.includes('detect'));
-});
-test('shell escape routes to userShell and clears the composer without a turn', async () => {
-  const store = await frontendStore();
-  const calls = [];
-  globalThis.storeBridge = async (method, params) => { calls.push([method, params]); return { commandId: 'cmd-1', status: 'accepted' }; };
-  store.setState({
-    workspaces: [{ id: 'w', path: '/repo', grantId: 'g1' }], selectedWorkspaceId: 'w', selectedSessionId: 's1', preview: false,
-    threads: [{ ...thread('s1', '/repo') }], hostInfo: { compat: { granted: ['userShell'] } },
-    composer: '!git status --short', images: [], contextRefs: [],
-  });
-  await store.getState().sendPrompt();
-  assert.deepEqual(calls, [['userShell', { sessionId: 's1', commandText: 'git status --short' }]]);
-  const state = store.getState();
-  assert.equal(state.composer, '');
-  assert.equal(state.threads[0].status, 'idle');
-  assert.deepEqual(state.threads[0].items, []);
-});
-test('shell escape fails closed on foreign agents and missing grants', async () => {
-  const store = await frontendStore();
-  globalThis.storeBridge = async () => { throw new Error('must not call'); };
-  store.setState({
-    workspaces: [{ id: 'w', path: '/repo', grantId: 'g1' }], selectedWorkspaceId: 'w', selectedSessionId: 's1', preview: false,
-    threads: [{ ...thread('s1', '/repo'), agentId: 'opencode' }], hostInfo: { compat: { granted: ['userShell'] } },
-    composer: '!ls', images: [], contextRefs: [],
-  });
-  await store.getState().sendPrompt();
-  assert.match(store.getState().error, /Muse feature/);
-  store.setState({ threads: [{ ...thread('s1', '/repo') }], hostInfo: { compat: { granted: [] } }, error: null });
-  await store.getState().sendPrompt();
-  assert.match(store.getState().error, /did not grant/);
-});
-test('plugin inventory refresh stores entries and tracks the available tab', async () => {
-  const store = await frontendStore();
-  globalThis.pluginEntries = [{ id: 'acme', version: '1.2', description: 'Tools', enabled: true }];
-  await store.getState().refreshPlugins();
-  const state = store.getState();
-  assert.deepEqual(state.pluginEntries, globalThis.pluginEntries);
-  assert.equal(state.pluginsAvailableShown, false);
-  assert.equal(state.pluginsError, null);
-  await store.getState().refreshPlugins(true);
-  assert.equal(store.getState().pluginsAvailableShown, true);
-});
-test('managed skill inventory refresh stores entries and surfaces failures', async () => {
-  const store = await frontendStore();
-  globalThis.skillEntries = [{ id: 'bundled:git', name: 'git', description: 'Git help', scope: 'bundled', activation: 'on' }];
-  await store.getState().refreshManagedSkills();
-  assert.deepEqual(store.getState().skillEntries, globalThis.skillEntries);
-  assert.equal(store.getState().skillsError, null);
-});
-test('project setup previews, scaffolds, and surfaces conflicts', async () => {
-  const store = await frontendStore();
-  globalThis.runProjectInit = async (grantId, museBin, dryRun, force) => {
-    assert.equal(grantId, 'g1');
-    if (dryRun) return '# Preview AGENTS.md';
-    return force ? 'Wrote AGENTS.md' : 'AGENTS.md already exists. Pass --force to replace it, or --dry-run to preview.';
-  };
-  store.setState({ workspaces: [{ id: 'w', path: '/repo', name: 'repo', grantId: 'g1' }], preview: false });
-  await store.getState().openInitDialog('w');
-  assert.equal(store.getState().initDialog.preview, '# Preview AGENTS.md');
-  await store.getState().runInit(false);
-  assert.equal(store.getState().initDialog.conflict, true);
-  assert.equal(store.getState().initDialog.done, false);
-  await store.getState().runInit(true);
-  assert.equal(store.getState().initDialog.done, true);
-  store.getState().closeInitDialog();
-  assert.equal(store.getState().initDialog, null);
-});
-test('startHost forwards posture and restarts on posture drift', async () => {
-  const store = await frontendStore();
-  const calls = [];
-  const defaultPosture = { ephemeralSessions: false, disableWrite: false, disableShell: false, sandboxNetwork: 'proxy-only' };
-  globalThis.storeBridge = async (method, params) => {
-    calls.push([method, params]);
-    if (method === 'status') return { running: true, trustWorkspace: false, posture: defaultPosture };
-    if (method === 'startHost') {
-      return {
-        trustWorkspace: false,
-        posture: { ephemeralSessions: params.noSessionLog === true, disableWrite: params.disableWrite === true, disableShell: params.disableShell === true, sandboxNetwork: params.sandboxNetwork },
-      };
-    }
-    if (method === 'listModels') return { models: [] };
-    return {};
-  };
-  store.setState({
-    workspaces: [{ id: 'w', path: '/repo', grantId: 'g1' }], selectedWorkspaceId: 'w', preview: false,
-    threads: [{ ...thread('s1', '/repo'), status: 'idle' }], selectedSessionId: 's1',
-    ephemeralSessions: true, disableWrite: false, disableShell: true, sandboxNetwork: 'restricted',
-  });
-  await store.getState().startHost();
-  const start = calls.find(([method]) => method === 'startHost');
-  assert.deepEqual([start[1].noSessionLog, start[1].disableWrite, start[1].disableShell, start[1].sandboxNetwork], [true, false, true, 'restricted']);
-  assert.deepEqual(store.getState().hostInfo.posture, { ephemeralSessions: true, disableWrite: false, disableShell: true, sandboxNetwork: 'restricted' });
-  assert.match(store.getState().threads[0].notice.message, /posture changed/);
-});
-test('enterprise refresh stores generation and plane states', async () => {
-  const store = await frontendStore();
-  globalThis.enterpriseFixture = { generation: 'sha256:abc', sources: [{ plane: 'policy', sourceClass: 'system_file', state: 'active' }] };
-  await store.getState().refreshEnterprise();
-  assert.deepEqual(store.getState().enterprise, globalThis.enterpriseFixture);
-  assert.equal(store.getState().enterpriseError, null);
-});
-test('plugin install picks a bundle, installs, and shows installed inventory', async () => {
-  const store = await frontendStore();
-  globalThis.installedBundles = [];
-  globalThis.pickedBundle = '/bundles/acme';
-  globalThis.pluginEntries = [{ id: 'acme', version: '1.0', description: 'New', enabled: false }];
-  store.setState({ pluginsAvailableShown: true });
-  await store.getState().installPlugin();
-  assert.deepEqual(globalThis.installedBundles, ['/bundles/acme']);
-  assert.equal(store.getState().pluginsAvailableShown, false);
-  assert.equal(store.getState().pluginEntries[0].id, 'acme');
-  globalThis.pickedBundle = null;
-  globalThis.installedBundles = [];
-  await store.getState().installPlugin();
-  assert.deepEqual(globalThis.installedBundles, []);
-});
-test('skill install picks a folder, installs, and refreshes the inventory', async () => {
-  const store = await frontendStore();
-  globalThis.installedSkills = [];
-  globalThis.pickedSkill = '/skills/acme';
-  globalThis.skillEntries = [{ id: 'user:acme', name: 'acme', description: '', scope: 'user', activation: 'on' }];
-  await store.getState().installSkill();
-  assert.deepEqual(globalThis.installedSkills, ['/skills/acme']);
-  assert.equal(store.getState().skillEntries[0].id, 'user:acme');
-  globalThis.pickedSkill = null;
-  globalThis.installedSkills = [];
-  await store.getState().installSkill();
-  assert.deepEqual(globalThis.installedSkills, []);
-});
-test('skill import previews without refreshing and refreshes on import', async () => {
-  const store = await frontendStore();
-  globalThis.importCalls = [];
-  globalThis.skillEntries = [];
-  assert.equal(await store.getState().importSkills('codex', true), 'preview');
-  assert.deepEqual(globalThis.importCalls, [['codex', true]]);
-  assert.equal(await store.getState().importSkills('claude', false), 'done');
-  assert.deepEqual(globalThis.importCalls, [['codex', true], ['claude', false]]);
-});
-test('skill uninstall removes by id and refreshes the inventory', async () => {
-  const store = await frontendStore();
-  globalThis.uninstalledSkills = [];
-  globalThis.skillEntries = [];
-  await store.getState().uninstallSkill('user:acme');
-  assert.deepEqual(globalThis.uninstalledSkills, ['user:acme']);
-  assert.deepEqual(store.getState().skillEntries, []);
-});
-test('MCP catalog refresh stores servers and surfaces failures', async () => {
-  const store = await frontendStore();
-  globalThis.storeBridge = async () => ({ servers: [{ name: 'docs', transport: 'streamableHttp', oauth: true }] });
-  await store.getState().refreshMcpServers();
-  assert.deepEqual(store.getState().mcpServers, [{ name: 'docs', transport: 'streamableHttp', oauth: true }]);
-  assert.equal(store.getState().mcpError, null);
-  globalThis.storeBridge = async () => { throw new Error('host down'); };
-  await store.getState().refreshMcpServers();
-  assert.equal(store.getState().mcpError, 'Could not load MCP servers: host down');
-  assert.equal(store.getState().mcpLoading, false);
-});
 test('busy sends queue behind the running turn and promote at launch', async () => {
   const store = await frontendStore();
   store.setState({
@@ -494,6 +273,7 @@ test('busy sends queue behind the running turn and promote at launch', async () 
     composer: 'later', images: [], contextRefs: [],
   });
   globalThis.storeBridge = async (method, params) => {
+    if (method === 'harnessRules') return { problems: [] };
     assert.equal(method, 'sendTurn');
     assert.equal(params.ifBusy, 'queue');
     return { turnId: 't1', disposition: 'queued' };
@@ -539,44 +319,7 @@ test('stale completions settle only their own turn items', async () => {
   assert.deepEqual(current.items.map((item) => item.status), ['cancelled', 'inProgress']);
 });
 
-test('forkThread branches, selects the fork, and records provenance', async () => {
-  const store = await frontendStore();
-  store.setState({
-    workspaces: [{ id: 'w', path: '/repo', grantId: 'g1' }], selectedWorkspaceId: 'w', selectedSessionId: 's1', preview: false,
-    threads: [{ ...thread('s1', '/repo'), title: 'Source', opened: true, config: { modelId: 'm' } }],
-  });
-  globalThis.storeBridge = async (method) => {
-    if (method === 'forkSession') return { sessionId: 'fork-1', forkedFrom: { sourceSessionId: 's1', cutExplicit: false } };
-    if (method === 'resumeSession') return { alreadyOpen: true };
-    if (method === 'listModels') return { models: [] };
-    return {};
-  };
-  await store.getState().forkThread('s1');
-  const state = store.getState();
-  assert.equal(state.selectedSessionId, 'fork-1');
-  const fork = state.threads.find((item) => item.sessionId === 'fork-1');
-  assert.equal(fork.title, 'Source (fork)');
-  assert.deepEqual(fork.forkedFrom, { sessionId: 's1', title: 'Source' });
-  assert.equal(fork.opened, true);
-});
 
-test('forkThread passes real turn cut points and forks whole for local groupings', async () => {
-  const store = await frontendStore();
-  store.setState({
-    workspaces: [{ id: 'w', path: '/repo', grantId: 'g1' }], selectedWorkspaceId: 'w', selectedSessionId: 's1', preview: false,
-    threads: [{ ...thread('s1', '/repo'), title: 'Source', opened: true, config: {} }],
-  });
-  const forks = [];
-  globalThis.storeBridge = async (method, params) => {
-    if (method === 'forkSession') { forks.push(params); return { sessionId: `fork-${forks.length}`, forkedFrom: { sourceSessionId: 's1' } }; }
-    if (method === 'resumeSession') return { alreadyOpen: true };
-    if (method === 'listModels') return { models: [] };
-    return {};
-  };
-  await store.getState().forkThread('s1', 'turn-9');
-  await store.getState().forkThread('s1', 'local:abc');
-  assert.deepEqual(forks, [{ sessionId: 's1', lastTurnId: 'turn-9' }, { sessionId: 's1' }]);
-});
 test('compactThread reports noop reasons and clears its notice at terminal', async () => {
   const store = await frontendStore();
   store.setState({
@@ -604,26 +347,6 @@ test('compactThread reports noop reasons and clears its notice at terminal', asy
   assert.equal(store.getState().threads[0].context, null, 'the old context count is cleared');
 });
 
-test('openPreview reads without attaching and closePreview clears', async () => {
-  const store = await frontendStore();
-  store.setState({
-    selectedSessionId: 's1', preview: false,
-    threads: [{ ...thread('s1', '/repo'), title: 'Source', opened: false }, { ...thread('s2', '/repo'), title: 'Other', opened: false }],
-  });
-  globalThis.storeBridge = async (method, params) => {
-    assert.equal(method, 'readSession');
-    assert.equal(params.excludeItems, false);
-    return { session: { sessionId: 's2', status: 'idle' }, history: { items: [] }, pendingRequests: [], viewCursor: 'v' };
-  };
-  await store.getState().openPreview('s2');
-  const preview = store.getState().previewSession;
-  assert.equal(preview.title, 'Other');
-  assert.equal(preview.loading, false);
-  assert.equal(preview.snapshot.session.status, 'idle');
-  assert.equal(store.getState().threads.find((item) => item.sessionId === 's2').opened, false);
-  store.getState().closePreview();
-  assert.equal(store.getState().previewSession, null);
-});
 
 test('preview discard filters demo rows locally without a backend', async () => {
   const store = await frontendStore();
@@ -695,25 +418,12 @@ test('opening a thread in an ungranted workspace fails closed', async () => {
   } finally { delete globalThis.window.__TAURI_INTERNALS__; }
 });
 
-test('quiet-turn reconcile skips ungranted workspaces', async () => {
-  const module = await bundle('apps/desktop/src/lib/store.ts', storeReplacements);
-  const store = module.useAppStore;
-  globalThis.window.__TAURI_INTERNALS__ = {};
-  try {
-    const calls = [];
-    globalThis.storeBridge = async (method, params) => { calls.push([method, params]); return { sessions: [] }; };
-    store.setState({ workspaces: [{ id: 'w', path: '/repo', grantId: null }],
-      threads: [{ ...thread('s', '/repo'), status: 'running', updatedAt: new Date(Date.now() - 60000).toISOString() }] });
-    await module.reconcileRunningThreads();
-    assert.deepEqual(calls, []);
-  } finally { delete globalThis.window.__TAURI_INTERNALS__; }
-});
 
-test('host retirement invalidates opened sessions without a spurious connection error', async () => {
+test('an agent process exit invalidates opened sessions and says so once', async () => {
   const store = await frontendStore();
   store.setState({ threads: [{ ...thread('s', '/a'), status: 'running', activeTurnId: 'turn', plan: [{ id: 'p', text: 'Work', status: 'inProgress' }], items: [{ itemId: 'tool', kind: 'toolCall', status: 'inProgress', turnId: 'turn' }], userInputs: [{ userInputId: 'q' }] }] });
-  globalThis.storeEvent('hostStopping', {});
-  assert.equal(store.getState().error, null);
+  globalThis.storeEvent('bridgeExit', {});
+  assert.match(store.getState().error, /The agent stopped/);
   assert.equal(store.getState().threads[0].opened, false);
   assert.equal(store.getState().threads[0].activeTurnId, null);
   assert.equal(store.getState().threads[0].lastTurnId, 'turn');
@@ -776,114 +486,6 @@ test('a question that ended the turn leaves the thread idle, and the answer turn
   assert.equal(store.getState().threads[0].status, 'running');
 });
 
-const { UserInputRelay, observeNotifications } = await bundle('packages/glitter-bridge/src/user-input.ts');
-const notification = (method, params) => ({ jsonrpc: '2.0', method, params });
-test('question relay preserves simultaneous sessions and does not revive settled requests', () => {
-  const relay = new UserInputRelay(() => {});
-  relay.notify(notification('userInput/requested', question()));
-  relay.notify(notification('userInput/requested', question('q', 'other')));
-  relay.notify(notification('userInput/settled', { sessionId: 's', userInputId: 'q' }));
-  relay.notify(notification('userInput/requested', question()));
-  assert.equal(relay.requests('s').length, 0);
-  assert.equal(relay.requests('other').length, 1);
-});
-test('resume reads do not erase newer questions or resurrect questions settled in flight', () => {
-  const relay = new UserInputRelay(() => {});
-  const version = relay.version('s');
-  relay.notify(notification('userInput/requested', question('new')));
-  relay.notify(notification('userInput/settled', { sessionId: 's', userInputId: 'old' }));
-  relay.restore('s', [question('old')], version);
-  assert.deepEqual(relay.requests('s').map(x => x.userInputId), ['new']);
-  relay.restore('s', [], relay.version('s'));
-  assert.deepEqual(relay.requests('s'), []);
-});
-test('terminal turns clear their questions while preserving other turns', () => {
-  const relay = new UserInputRelay(() => {});
-  relay.notify(notification('userInput/requested', question()));
-  relay.notify(notification('userInput/requested', { ...question('q2'), turnId: 't2' }));
-  relay.notify(notification('turn/completed', { sessionId: 's', turnId: 't' }));
-  assert.deepEqual(relay.requests('s').map(x => x.userInputId), ['q2']);
-});
-test('notification adapter preserves SDK routing and private receiver bindings', () => {
-  class Connection {
-    #value = 7;
-    get value() { return this.#value; }
-    request() { return this.#value; }
-    onNotification(callback) { this.handler = callback; }
-  }
-  const connection = new Connection(); const observed = [];
-  const adapter = observeNotifications(connection, event => observed.push(['observer', event.method]));
-  adapter.onNotification(event => observed.push(['sdk', event.method]));
-  connection.handler(notification('userInput/requested', question()));
-  assert.deepEqual(observed, [['sdk', 'userInput/requested'], ['observer', 'userInput/requested']]);
-  assert.equal(adapter.value, 7); assert.equal(adapter.request(), 7);
-});
-
-async function fakeHost(t) {
-  const hosts = [];
-  const events = [];
-  const originalWrite = process.stdout.write;
-  process.stdout.write = function (chunk, ...args) {
-    if (typeof chunk === 'string' && chunk.startsWith('{"type":"event"')) { events.push(JSON.parse(chunk)); return true; }
-    return originalWrite.call(this, chunk, ...args);
-  };
-  t.after(() => { process.stdout.write = originalWrite; });
-  globalThis.fakeSdk = {
-    spawn() {
-      const exit = deferred();
-      const current = { exit, requests: [], commands: [], pending: [] };
-      current.connection = {
-        onNotification(handler) { current.notify = handler; },
-        request: async (method, params) => { current.requests.push([method, params]); return { userInputs: current.pending }; },
-        command: async (method, params) => { current.commands.push([method, params]); return { status: 'accepted' }; },
-      };
-      current.spawned = { child: { exit: exit.promise }, connection: current.connection, initializeResult: { serverInfo: {}, sessionDurability: 'durable' } };
-      hosts.push(current);
-      return { initialize: async () => current.spawned };
-    },
-    MuseClient: class {
-      constructor(connection, { host }) { this.host = host; connection.onNotification(() => {}); }
-      async close() { this.host.child.exit; hosts.find(item => item.spawned === this.host).exit.resolve({ code: 0 }); await Promise.resolve(); }
-      async resumeSession({ sessionId }) { return { sessionId, onApproval() {}, onApprovalError() {}, onGapError() {}, opening: { verb: 'session/resume', result: { session: { sessionId, activeTurnId: null }, history: { items: [] } } } }; }
-    },
-  };
-  const { MuseHost } = await bundle('packages/glitter-bridge/src/host.ts', {
-    '@muse-code/sdk': 'export const spawnMspConnection=(...args)=>globalThis.fakeSdk.spawn(...args); export const MuseClient=globalThis.fakeSdk.MuseClient; export const readSessionDurability=()=>({kind:"durable"}); export const EXPECTED_SCHEMA_FINGERPRINT="sha256:fake-pin";',
-    './detect.js': 'export const resolveMuseBin=()=>"/fake/muse"; export const detectMuse=()=>({found:true}); export const museEnv=base=>({...base});',
-  });
-  return { host: new MuseHost(), hosts, events };
-}
-test('host restart emits retirement without emitting a crash from the old process', async t => {
-  const { host, hosts, events } = await fakeHost(t);
-  await host.start(); await host.start();
-  assert.equal(hosts.length, 2);
-  assert.deepEqual(events.map(event => event.event), ['hostStopping']);
-  hosts[1].exit.resolve({ code: 1 }); await new Promise(setImmediate);
-  assert.equal(events.at(-1).event, 'hostExit');
-  assert.equal((await host.status()).running, false);
-});
-test('host restores questions on resume and sends answer, clarification and cancellation commands', async t => {
-  const { host, hosts } = await fakeHost(t);
-  await host.start();
-  const server = hosts[0];
-  server.pending = [question()];
-  const resumed = await host.resumeSession({ sessionId: 's' });
-  assert.deepEqual(resumed.userInputs, [question()]);
-  assert.equal(server.requests[0][0], 'approval/listPending');
-  const answers = [{ questionId: 'choice', selectedLabel: 'A' }];
-  await host.respondUserInput({ sessionId: 's', userInputId: 'q', response: { action: 'answer', answers } });
-  await host.respondUserInput({ sessionId: 's', userInputId: 'q', response: { action: 'clarify', text: 'Consider C' } });
-  await host.respondUserInput({ sessionId: 's', userInputId: 'q', response: { action: 'cancel' } });
-  assert.deepEqual(server.commands.map(([method]) => method), ['userInput/answer', 'userInput/clarify', 'userInput/cancel']);
-  assert.deepEqual(server.commands[0][1].answers, answers);
-  assert.deepEqual(server.commands[1][1].clarification, { format: 'text', content: 'Consider C' });
-  server.notify(notification('userInput/settled', { sessionId: 's', userInputId: 'q' }));
-  await assert.rejects(host.respondUserInput({ sessionId: 's', userInputId: 'q', response: { action: 'cancel' } }), /no longer pending/);
-  await host.stop();
-});
-
-// Exercise the actual component handlers with a minimal deterministic hook host.
-// Browser smoke checks cover native dialog/keyboard rendering separately.
 test('first selection of an untrusted workspace prompts trust exactly once', async () => {
   const store = await frontendStore();
   globalThis.storeBridge = async () => ({});
@@ -963,7 +565,6 @@ async function settingsComponent() {
   const state = { ...DEFAULT_SETTINGS, models: [], agents: [], settingsOpen: true, settingsTab: "Models", preview: false, hostInfo: null,
     setSettingsOpen: (value, tab) => { state.settingsOpen = value; if (tab) state.settingsTab = tab; },
     loadModelCatalog: async () => state.models,
-    agentIdentities: [], refreshAgentIdentities: async () => {},
     commitSettings: async patch => { commits.push(patch); Object.assign(state, patch); },
     startHost: async () => { state.restarts = (state.restarts ?? 0) + 1; },
   };
@@ -972,7 +573,7 @@ async function settingsComponent() {
     'react/jsx-runtime': 'export const jsx=(type,props,key)=>({type,props,key});export const jsxs=jsx;export const Fragment=Symbol.for("react.fragment");',
     react: 'export const useState=(...args)=>globalThis.componentHooks.useState(...args); export const useRef=(...args)=>globalThis.componentHooks.useRef(...args); export const useEffect=(...args)=>globalThis.componentHooks.useEffect(...args); export const useId=(()=>{let n=0;return()=>`id-${++n}`})(); export const useDeferredValue=(value)=>value; export const lazy=(load)=>{const component=()=>null;component.load=load;return component;}; export const Suspense=(props)=>props.children ?? null;',
     'zustand/react/shallow': 'export const useShallow=(selector)=>selector;',
-    '../lib/store': 'export const useAppStore=()=>globalThis.componentState;useAppStore.getState=()=>globalThis.componentState;export const applyTheme=()=>{};export const hasWindowMaterial=()=>false;export const currentThread=()=>undefined;export const currentWorkspace=()=>undefined;export const preferredAgent=()=>"muse";',
+    '../lib/store': 'export const useAppStore=()=>globalThis.componentState;useAppStore.getState=()=>globalThis.componentState;export const applyTheme=()=>{};export const hasWindowMaterial=()=>false;export const currentThread=()=>undefined;export const currentWorkspace=()=>undefined;',
     '../lib/bridge': 'export const openLogFolder=async()=>"/preview/logs/app.log";export const diagnosticsSnapshot=async()=>({os:"browser-preview",arch:"",logTail:[]});export const providerKeysGet=async(ids)=>ids.map((id)=>({id,configured:false,keyHint:null,baseUrl:null}));export const providerKeySet=async()=>[];export const openUrl=async()=>{};',
     'lucide-react': 'const I=()=>null;export const Activity=I,Archive=I,ArchiveRestore=I,ArrowLeft=I,Bot=I,ChartNoAxesColumn=I,Check=I,ChevronDown=I,Command=I,Cpu=I,Eye=I,EyeOff=I,ExternalLink=I,FilePlus=I,FolderOpen=I,Globe=I,Info=I,KeyRound=I,LoaderCircle=I,Lock=I,MessagesSquare=I,Minus=I,Monitor=I,Moon=I,Palette=I,PanelLeft=I,Plug=I,Plus=I,Puzzle=I,RefreshCw=I,Search=I,Settings2=I,ShieldAlert=I,ShieldCheck=I,Sun=I,Trash2=I,TriangleAlert=I,Workflow=I,X=I;',
     './SelectMenu': 'export const SelectMenu=()=>null;',
@@ -981,59 +582,32 @@ async function settingsComponent() {
     './ExtensionsView': 'export const ExtensionsView=()=>null;',
     './ModelLibrary': 'export const ModelLibrary=()=>null;',
     './UsageView': 'export const UsageView=()=>null;',
-    './LoginPanel': 'export const LoginPanel=()=>null;',
   });
   const render = () => runtime.render(SettingsModal);
   render(); render();
   return { state, commits, render };
 }
-test('Settings saves preferences as they change, and Cancel discards only a pending connection setting', async () => {
+test('Settings saves every preference as it changes, and Back closes without a pending step', async () => {
   const { state, commits, render } = await settingsComponent();
   let tree = nodes(render());
-  assert.ok(!tree.some(node => node.type === 'button' && node.props.children === 'Cancel'), 'nothing is pending, so there is nothing to cancel');
+  assert.ok(!tree.some(node => node.type === 'button' && node.props.children === 'Cancel'), 'nothing waits for a restart, so there is nothing to cancel');
   tree.find(node => node.props?.['aria-label'] === 'Permissions').props.onClick();
   tree = nodes(render());
   tree.find(node => typeof node.type === 'function' && node.props?.draft && node.props?.onChange).props.onChange({ defaultApprovalMode: 'denyUnmatched' });
   await new Promise(setImmediate);
   assert.deepEqual(commits, [{ defaultApprovalMode: 'denyUnmatched' }]);
   tree = nodes(render());
-  // Muse's connection lives on the Agents page.
-  tree.find(node => node.props?.['aria-label'] === 'Agents').props.onClick();
-  tree = nodes(render());
-  tree.find(node => node.props?.id === 'muse-bin').props.onChange({ target: { value: '/other/muse' } });
+  assert.ok(!tree.some(node => node.props?.['aria-label'] === 'Agents'), 'there is no Agents page');
   tree.find(node => node.props?.['aria-label'] === 'Theme').props.onClick();
   tree = nodes(render());
   const theme = tree.find(node => typeof node.type === 'function' && node.props?.draft && node.props?.onChange);
   nodes(theme.type(theme.props)).filter(node => node.props?.role === 'radio')[1].props.onClick();
   await new Promise(setImmediate);
   tree = nodes(render());
-  tree.find(node => node.type === 'button' && node.props.children === 'Cancel').props.onClick();
+  tree.find(node => node.props?.['aria-label'] === 'Back to Glitter').props.onClick();
   assert.equal(state.settingsOpen, false);
   assert.equal(state.defaultApprovalMode, 'denyUnmatched'); assert.equal(state.theme, 'light');
-  assert.equal(state.museBin, '', 'the binary path waits for a restart and is dropped on Cancel');
-  assert.ok(commits.every(patch => !('museBin' in patch)));
   assert.equal(state.restarts ?? 0, 0);
-});
-test('Settings restarts a running host only for a posture change, after an explicit save', async () => {
-  const { state, commits, render } = await settingsComponent();
-  state.hostInfo = { posture: { ephemeralSessions: false, disableWrite: false, disableShell: false, sandboxNetwork: 'proxy-only' } };
-  let tree = nodes(render());
-  tree.find(node => node.props?.['aria-label'] === 'Permissions').props.onClick();
-  tree = nodes(render());
-  const panel = () => nodes(render()).find(node => typeof node.type === 'function' && node.props?.draft && node.props?.onChange);
-  panel().props.onChange({ defaultApprovalMode: 'denyUnmatched' });
-  await new Promise(setImmediate);
-  assert.equal(state.restarts ?? 0, 0, 'a preference never restarts the host');
-  panel().props.onChange({ ephemeralSessions: true });
-  await new Promise(setImmediate);
-  assert.equal(state.ephemeralSessions, false, 'a posture change is not applied until it is saved');
-  tree = nodes(render());
-  tree.find(node => node.type === 'button' && node.props.children === 'Save & restart connection').props.onClick();
-  await new Promise(setImmediate);
-  assert.equal(commits.at(-1).ephemeralSessions, true);
-  assert.ok(!('defaultApprovalMode' in commits.at(-1)), 'the restart save carries host settings only');
-  assert.equal(state.restarts, 1);
-  assert.equal(state.settingsOpen, false);
 });
 test('A failed Settings save is shown and keeps the dialog open', async () => {
   const { state, render } = await settingsComponent();
@@ -1046,14 +620,6 @@ test('A failed Settings save is shown and keeps the dialog open', async () => {
   await new Promise(setImmediate);
   assert.equal(state.settingsOpen, true);
   assert.ok(nodes(render()).some(node => node.props?.role === 'status' && String(node.props.children).includes('credential store locked')));
-  tree.find(node => node.props?.['aria-label'] === 'Permissions').props.onClick();
-  tree = nodes(render());
-  tree.find(node => typeof node.type === 'function' && node.props?.draft && node.props?.onChange).props.onChange({ disableShell: true });
-  tree = nodes(render());
-  tree.find(node => node.type === 'button' && node.props.children === 'Save & restart connection').props.onClick();
-  await new Promise(setImmediate);
-  assert.equal(state.settingsOpen, true);
-  assert.equal(state.disableShell, false);
 });
 
 async function questionComponent(request) {
@@ -1180,36 +746,6 @@ test('only the bridge module and its two sanctioned exceptions invoke Tauri comm
 // only in a `title` attribute, which browsers never show on disabled buttons.
 // The reason now renders inline on the row, and the consent gate unlocks the
 // third-party toggle so a second ready agent frees the Muse switch.
-test('Agent toggles explain consent and last-ready-agent gates, then unlock', async () => {
-  const { state, commits, render } = await settingsComponent();
-  state.agents = [
-    { id: 'muse', name: 'Muse', protocol: 'msp', found: true, path: '/bin/muse', version: '1.3.0', verified: true, signIn: '', authenticated: true },
-    { id: 'opencode', name: 'OpenCode', protocol: 'acp', found: true, path: '/bin/opencode', version: '1.18.31', verified: true, signIn: '' },
-  ];
-  state.agentIdentities = [];
-  state.refreshAgentIdentities = async () => {};
-  let tree = nodes(render());
-  tree.find(node => node.props?.['aria-label'] === 'Agents').props.onClick();
-  tree = nodes(render());
-  const toggleFor = (label) => tree.find(node => node.type === 'button' && node.props?.['aria-label'] === label);
-  assert.equal(toggleFor('Show OpenCode and its threads').props.disabled, true);
-  assert.equal(toggleFor('Hide Muse and its threads').props.disabled, true);
-  assert.ok(tree.some(node => node.props?.children === 'Hidden — accept the isolation notice above to enable'));
-  tree.find(node => node.type === 'input' && node.props?.type === 'checkbox').props.onChange({ target: { checked: true } });
-  tree = nodes(render());
-  assert.equal(toggleFor('Show OpenCode and its threads').props.disabled, false);
-  assert.equal(toggleFor('Hide Muse and its threads').props.disabled, true);
-  toggleFor('Show OpenCode and its threads').props.onClick();
-  tree = nodes(render());
-  assert.equal(toggleFor('Hide Muse and its threads').props.disabled, false);
-  assert.equal(toggleFor('Hide OpenCode and its threads').props['aria-checked'], true);
-  await new Promise(setImmediate);
-  // Agent visibility is a preference: each change is saved as it is made.
-  assert.equal(commits[0].acpUnisolatedConsent, true);
-  assert.equal(commits.at(-1).enabledAgents.opencode, true);
-  assert.equal(commits.at(-1).enabledAgents.muse, true);
-  assert.ok(!nodes(render()).some(node => node.type === 'button' && node.props.children === 'Save changes'));
-});
 
 // Grok's set_config_option takes ~2s. Scrubbing effort during the apply used to
 // drop input and fire two listModels refreshes per echo — seconds of churn per
@@ -1277,7 +813,7 @@ test('every modal surface is a native dialog that traps focus', async () => {
 // Settings from the sidebar gear was dropped onto <body> on close.
 test('modal surfaces share one focus-returning dialog hook', async () => {
   const { readFileSync } = await import('node:fs');
-  const modals = ['SettingsModal', 'OutputModal', 'SubagentModal', 'PreviewModal', 'InitModal', 'TrustModal', 'CommitDialog'];
+  const modals = ['SettingsModal', 'SubagentModal', 'TrustModal', 'CommitDialog'];
   const offenders = [];
   for (const name of modals) {
     const source = readFileSync(`apps/desktop/src/components/${name}.tsx`, 'utf8');

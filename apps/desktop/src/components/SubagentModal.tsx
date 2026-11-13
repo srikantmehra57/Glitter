@@ -1,34 +1,38 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef } from "react";
 import { useModalDialog } from "../lib/dialogFocus";
 import { useRetained } from "../lib/presence";
-import { describeError } from "../lib/errors";
-import { Check, LoaderCircle, ScanSearch, X } from "lucide-react";
+import { LoaderCircle, ScanSearch, X } from "lucide-react";
 import { useAppStore } from "../lib/store";
-import { role, snippet } from "./PreviewModal";
+import type { TranscriptItem } from "../lib/types";
 
 const CHILD_ITEMS = 40;
+const SNIPPET = 280;
+
+function snippet(item: TranscriptItem): string {
+  const text = item.text ?? item.fallbackText ?? "";
+  return text.length > SNIPPET ? `${text.slice(0, SNIPPET)}…` : text;
+}
+
+function role(item: TranscriptItem): string {
+  if (item.kind === "userMessage") return "You";
+  if (item.kind === "agentMessage") return "Agent";
+  if (item.kind === "toolCall") return item.tool ? `Tool · ${item.tool}` : "Tool";
+  if (item.kind === "compaction") return "Compaction";
+  return item.kind;
+}
 
 /**
- * Child drill-down: the subagent's result envelope plus its transcript read
- * without attaching (`session/read` on the child session). Consuming the
- * result is an explicit, state-changing gesture.
+ * Child drill-down: a delegated child's result plus its transcript, read
+ * without attaching (`readChildSession`).
  */
 export function SubagentModal() {
   const open = useAppStore((s) => s.childSession);
   // Drawn from the last child view while the dialog animates out.
   const viewing = useRetained(open);
   const close = useAppStore((s) => s.closeChild);
-  const consume = useAppStore((s) => s.consumeChild);
   const dialog = useRef<HTMLDialogElement>(null);
-  const [consuming, setConsuming] = useState(false);
-  const [consumeError, setConsumeError] = useState<string | null>(null);
 
   useModalDialog(Boolean(open), dialog);
-
-  useEffect(() => {
-    setConsuming(false);
-    setConsumeError(null);
-  }, [viewing?.itemId]);
 
   const items = viewing?.items ?? [];
   const shown = items.slice(-CHILD_ITEMS);
@@ -50,7 +54,7 @@ export function SubagentModal() {
       <>
         {result ? (
           <section className="child-result" aria-label="Child result">
-            <div className="monitor-heading"><span>Result</span>{viewing.consumed ? <span className="monitor-count">Consumed</span> : null}</div>
+            <div className="monitor-heading"><span>Result</span></div>
             <p className="child-summary">{result.summary}</p>
             {result.text ? <pre className="child-text">{result.text}</pre> : null}
             {result.errorKind ? <p className="review-note" role="alert">Failed: {result.errorKind}</p> : null}
@@ -60,26 +64,6 @@ export function SubagentModal() {
                 {result.evidenceRefs.map((ref) => <li key={`e:${ref}`}>Evidence · {ref}</li>)}
               </ul>
             ) : null}
-            {!viewing.consumed && viewing.consumable ? (
-              <div className="agent-buttons" role="toolbar" aria-label="Result controls">
-                <button
-                  type="button"
-                  className="agent-btn emphasis"
-                  disabled={consuming}
-                  title="Consume the ready result (state-changing)"
-                  onClick={() => {
-                    setConsuming(true);
-                    setConsumeError(null);
-                    void consume()
-                      .catch((cause) => setConsumeError(describeError("Could not read the result", cause)))
-                      .finally(() => setConsuming(false));
-                  }}
-                >
-                  <Check size={12} />Mark consumed
-                </button>
-              </div>
-            ) : null}
-            {consumeError ? <p className="monitor-error" role="alert">{consumeError}</p> : null}
           </section>
         ) : <p className="review-note">No result yet — the child has not finished one.</p>}
         <div className="monitor-heading child-transcript-head"><span>Transcript</span></div>

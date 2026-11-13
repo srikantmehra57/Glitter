@@ -24,6 +24,7 @@ use crate::catalog::{config_path, document_servers_mut, read_config, safe_relati
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -32,6 +33,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 const PLUGINS_DIR: [&str; 2] = [".glitter", "plugins"];
 const MARKETPLACES_DIR: [&str; 2] = [".glitter", "marketplaces"];
 const STAGING_DIR: [&str; 3] = [".glitter", "cache", "github"];
+/// GitHub avatars of the owners whose repositories a source's listings point at.
+const AVATARS_DIR: [&str; 3] = [".glitter", "cache", "avatars"];
+/// A failed avatar fetch is not retried for a week.
+const AVATAR_RETRY: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+const MAX_LISTING_AVATARS: usize = 400;
+const AVATAR_WORKERS: usize = 8;
 const RECORD: &str = "plugin.json";
 const META: &str = "meta.json";
 const MAX_FILES: usize = 4000;
@@ -1088,6 +1095,10 @@ fn staging_root(home: &Path) -> PathBuf {
     join(home, &STAGING_DIR)
 }
 
+fn avatars_root(home: &Path) -> PathBuf {
+    join(home, &AVATARS_DIR)
+}
+
 /// A folder name for a plugin or marketplace: lowercase, safe, stable.
 pub fn slug(name: &str) -> String {
     let mut out = String::new();
@@ -1402,6 +1413,11 @@ pub struct Library {
     pub marketplaces: Vec<MarketplaceView>,
     pub plugins_root: String,
     pub problems: Vec<String>,
+    /// Data URLs by lowercase GitHub owner: the avatar of each repository a
+    /// source's listings point at, other than the source's own.
+    pub avatars: BTreeMap<String, String>,
+    /// Some of those owners have not been fetched yet (`marketplace_avatars`).
+    pub avatars_pending: bool,
 }
 
 #[derive(Serialize)]
@@ -1882,7 +1898,105 @@ pub fn library(home: &Path) -> Library {
             Err(problem) => problems.push(format!("{}: {problem}", display_name(&child))),
         }
     }
-    Library { plugins, marketplaces, plugins_root: plugins_root(home).to_string_lossy().into_owned(), problems }
+    let mut avatars = BTreeMap::new();
+    let mut avatars_pending = false;
+    let root = avatars_root(home);
+    for owner in listing_owners(marketplaces.iter().map(|market| (market.origin.owner.as_str(), market.plugins.as_slice()))) {
+        match avatar_state(&root, &owner) {
+            AvatarState::Cached(file) => {
+                if let Some(url) = data_url(&file) {
+                    avatars.insert(owner, url);
+                }
+            }
+            AvatarState::Pending => avatars_pending = true,
+            AvatarState::Missing => {}
+        }
+    }
+    Library { plugins, marketplaces, plugins_root: plugins_root(home).to_string_lossy().into_owned(), problems, avatars, avatars_pending }
+}
+
+/// The GitHub owner of a listing that lives in another repository.
+fn listing_owner(location: &str) -> Option<String> {
+    let (owner, repo) = location.split_once('/')?;
+    let valid = !owner.is_empty() && owner.len() <= 39 && owner.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-');
+    (valid && !repo.is_empty() && !repo.contains('/')).then(|| owner.to_ascii_lowercase())
+}
+
+/// Every owner the given sources' listings point at, without each source's
+/// own owner (its avatar is already the corner badge), sorted and capped.
+fn listing_owners<'a>(sources: impl Iterator<Item = (&'a str, &'a [MarketplacePlugin])>) -> Vec<String> {
+    let mut owners = BTreeSet::new();
+    for (source_owner, plugins) in sources {
+        for plugin in plugins {
+            if let Some(owner) = listing_owner(&plugin.location).filter(|owner| !owner.eq_ignore_ascii_case(source_owner)) {
+                owners.insert(owner);
+            }
+        }
+    }
+    owners.into_iter().take(MAX_LISTING_AVATARS).collect()
+}
+
+enum AvatarState {
+    Cached(PathBuf),
+    /// Fetched without success recently; tried again after `AVATAR_RETRY`.
+    Missing,
+    Pending,
+}
+
+fn avatar_state(root: &Path, owner: &str) -> AvatarState {
+    let file = root.join(format!("{owner}.png"));
+    if is_plain_file(&file) {
+        return AvatarState::Cached(file);
+    }
+    let marker = root.join(format!("{owner}.missing"));
+    let recent = fs::symlink_metadata(&marker).ok().filter(|meta| meta.is_file()).and_then(|meta| meta.modified().ok()).and_then(|at| SystemTime::now().duration_since(at).ok()).is_some_and(|age| age < AVATAR_RETRY);
+    if recent {
+        AvatarState::Missing
+    } else {
+        AvatarState::Pending
+    }
+}
+
+/// Fetch the avatars `library` reports as pending, a few at a time. Best
+/// effort: an owner whose avatar cannot be fetched keeps the generated tile
+/// and is not asked for again for a week. Returns how many were fetched.
+pub fn fetch_listing_avatars(home: &Path, avatar: &(dyn Fn(&str, &Path) + Sync)) -> usize {
+    let records: Vec<MarketplaceRecord> = sorted_children(&marketplaces_root(home))
+        .into_iter()
+        .filter(|child| child.extension().and_then(|ext| ext.to_str()) == Some("json"))
+        .filter_map(|child| read_json(&child).ok().flatten().and_then(|value| serde_json::from_value(value).ok()))
+        .collect();
+    let root = avatars_root(home);
+    let pending: Vec<String> = listing_owners(records.iter().map(|record| (record.origin.source.owner.as_str(), record.plugins.as_slice())))
+        .into_iter()
+        .filter(|owner| matches!(avatar_state(&root, owner), AvatarState::Pending))
+        .collect();
+    if pending.is_empty() || fs::create_dir_all(&root).is_err() {
+        return 0;
+    }
+    let fetched = std::sync::atomic::AtomicUsize::new(0);
+    let per_worker = pending.len().div_ceil(AVATAR_WORKERS);
+    std::thread::scope(|scope| {
+        for chunk in pending.chunks(per_worker) {
+            let (root, fetched) = (&root, &fetched);
+            scope.spawn(move || {
+                for owner in chunk {
+                    let file = root.join(format!("{owner}.png"));
+                    let marker = root.join(format!("{owner}.missing"));
+                    avatar(owner, &file);
+                    // Keep only a real image; anything else is a failed fetch.
+                    if is_plain_file(&file) && data_url(&file).is_some() {
+                        let _ = fs::remove_file(&marker);
+                        fetched.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    } else {
+                        let _ = fs::remove_file(&file);
+                        let _ = fs::write(&marker, b"");
+                    }
+                }
+            });
+        }
+    });
+    fetched.into_inner()
 }
 
 // ---------------------------------------------------------------------------
@@ -2275,6 +2389,46 @@ mod tests {
 
         remove_marketplace(&home.0, "team-tools").unwrap();
         assert!(library(&home.0).marketplaces.is_empty());
+    }
+
+    #[test]
+    fn listings_in_other_repositories_get_their_owners_avatars() {
+        let home = TempDir::new("avatar-home");
+        let fixtures = TempDir::new("avatar-fixtures");
+        write(&fixtures.0.join("team_market"), ".claude-plugin/marketplace.json", r#"{"name":"Team","plugins":[
+            {"name":"local-kit","source":"./plugins/local"},
+            {"name":"own-kit","source":{"source":"github","repo":"Team/other"}},
+            {"name":"acme-kit","source":{"source":"github","repo":"Acme/tools"}},
+            {"name":"ghost-kit","source":{"source":"github","repo":"ghost/kit"}}
+        ]}"#);
+        let git = fake_git(fixtures.0.clone());
+        let preview = inspect(&home.0, "team/market", None, &git, &no_avatar).unwrap();
+        add_marketplace(&home.0, &preview.token).unwrap();
+
+        let before = library(&home.0);
+        assert!(before.avatars.is_empty());
+        assert!(before.avatars_pending, "acme and ghost are not fetched yet");
+
+        let asked = Mutex::new(Vec::new());
+        let png = |owner: &str, dest: &Path| {
+            asked.lock().unwrap().push(owner.to_string());
+            if owner == "acme" {
+                fs::write(dest, b"\x89PNG\r\n\x1a\nrest").unwrap();
+            } else {
+                fs::write(dest, b"<html>not found</html>").unwrap();
+            }
+        };
+        assert_eq!(fetch_listing_avatars(&home.0, &png), 1);
+        let mut owners = asked.lock().unwrap().clone();
+        owners.sort();
+        assert_eq!(owners, vec!["acme", "ghost"], "the source's own owner and in-repo listings are skipped");
+
+        let after = library(&home.0);
+        assert!(after.avatars.get("acme").is_some_and(|url| url.starts_with("data:image/png;base64,")));
+        assert!(!after.avatars.contains_key("ghost"));
+        assert!(!after.avatars_pending, "a failed fetch is remembered, not retried at once");
+        assert!(!avatars_root(&home.0).join("ghost.png").exists());
+        assert_eq!(fetch_listing_avatars(&home.0, &png), 0);
     }
 
     #[test]

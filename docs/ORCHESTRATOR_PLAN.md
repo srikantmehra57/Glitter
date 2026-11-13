@@ -323,12 +323,9 @@ A new **Orchestrator** section directly after **Models** in the Settings
 navigation (`apps/desktop/src/lib/settingsNav.ts`). Follow
 `docs/DESIGN_SYSTEM.md` and record the section there in the same commit.
 
-1. "Applies to the built-in agent." Muse and external agents (OpenCode, Grok,
-   Gemini, Qwen, Goose, Cline) choose their own models and are unchanged; the
-   Orchestrator option appears only in built-in agent threads.
-2. **Use Orchestrator for new threads**: off by default. If new threads default
-   to another agent, the switch notes it applies when a built-in agent thread
-   starts.
+1. Orchestrator applies to Harness threads; a thread can switch between it and
+   a manually selected model.
+2. **Use Orchestrator for new threads**: off by default.
 3. **Goal**: Optimize for cost / Balanced / Optimize for output, with a
    two-line summary of what it does.
 4. **Lead model**, **Builder model**, **Small-task model**: the existing
@@ -482,6 +479,10 @@ Live baseline runs still need provider keys and spend; the consult/pre-route
 decisions, the Balanced review experiment and the exit report are next. Tune
 only after the corpus and baselines exist: every decision below is a corpus
 comparison, not a guess.
+
+On 2026-11-13, offline validation covered 16 tasks and 28 checks, and the
+scripted pre-route matrix passed 23/23 cases. These results do not establish
+live model quality or cost savings.
 
 **Exit gate:** the chosen defaults match or beat the Phase 2 Balanced baseline's
 success rate at lower or equal cost per successful task; the review-all-complex
@@ -739,7 +740,7 @@ specialist for UI work).
 - DOM: Settings navigation and search, disclosure list, built-in-agent-only
   visibility, composer mode and override, route labels, plan review card,
   keyboard access, narrow layout, browser preview.
-- Manual mode, Muse and external agents unchanged.
+- Manual model selection remains available when Orchestrator is off.
 
 ### Live evaluation (opt-in, cost-capped, not part of verify)
 

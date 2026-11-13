@@ -150,7 +150,7 @@ test("the evaluator runs a file task through the real Harness host with a stubbe
   try {
     const entry = join(root, "entry.ts");
     const output = join(root, "host.mjs");
-    await writeFile(entry, `export { HarnessHost } from ${JSON.stringify(resolve("packages/glitter-bridge/src/harness/host.ts"))};\nexport { SessionStore } from ${JSON.stringify(resolve("packages/glitter-bridge/src/harness/store.ts"))};\n`);
+    await writeFile(entry, `export { HarnessHost } from ${JSON.stringify(resolve("packages/glitter-harness/src/harness/host.ts"))};\nexport { SessionStore } from ${JSON.stringify(resolve("packages/glitter-harness/src/harness/store.ts"))};\n`);
     await build({ entryPoints: [entry], bundle: true, platform: "node", format: "esm", outfile: output, logLevel: "silent" });
     const { HarnessHost, SessionStore } = await import(pathToFileURL(output).href);
     let calls = 0;
@@ -279,5 +279,26 @@ test("a fixed coding fixture passes its unchanged tests in the OS sandbox", { sk
     assert.ifError(failed);
     assert.equal(report.results[0].status, "pass");
     assert.deepEqual(report.results[0].checks, [{ kind: "command", ok: true }]);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("scripted protocol probes observe every conformance id on both wire families", async () => {
+  const root = await mkdtemp(join(tmpdir(), "glitter-eval-probes-"));
+  try {
+    const out = join(root, "report");
+    await promisify(execFile)(process.execPath, ["evals/harness/run.mjs", "--probes", `--out=${out}`], { cwd: resolve("."), timeout: 90_000 });
+    const { readFile } = await import("node:fs/promises");
+    const raw = await readFile(join(out, "report.json"), "utf8");
+    const report = JSON.parse(raw);
+    assert.equal(report.kind, "protocol-probes");
+    assert.equal(report.ok, true);
+    assert.deepEqual(report.families.map((family) => family.id), ["anthropic", "groq"]);
+    for (const family of report.families) {
+      assert.deepEqual(family.failures, [], family.id);
+      for (const id of ["model-listing", "text-streaming", "reasoning-streaming", "tool-calls", "parallel-tool-calls", "malformed-calls", "truncated-calls", "cancellation", "idle-streams", "retries", "usage", "context-overflow"]) {
+        assert.equal(family.conformance.find((row) => row.id === id).status, "pass", `${family.id} ${id}`);
+      }
+    }
+    assert.doesNotMatch(raw, /probe-key|Reply with ok/);
   } finally { await rm(root, { recursive: true, force: true }); }
 });

@@ -40,7 +40,7 @@ export function keepFieldEscape(event: KeyboardEvent<HTMLElement>) {
   }
 }
 
-export function UserInputCard({ request, disabled, closing = false, agentName = "Muse" }: { request: UserInputRequest; disabled: boolean; closing?: boolean; agentName?: string }) {
+export function UserInputCard({ request, disabled, closing = false, agentName = "Harness" }: { request: UserInputRequest; disabled: boolean; closing?: boolean; agentName?: string }) {
   const respond = useAppStore((state) => state.respondUserInput);
   const [drafts, setDrafts] = useState<Record<string, AnswerDraft>>({});
   const [clarifying, setClarifying] = useState(false);

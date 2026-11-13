@@ -23,11 +23,8 @@ npm run build:website  # emits apps/website/dist
   describe (new thread, changes and diffs, approvals, worktrees, command palette) in the site's current
   theme; the terminal and the process pipeline are drawn. A ruled sheet under the grid lists the smaller
   features.
-- **Use your own agent**: the agent CLIs the app drives (Muse by default; OpenCode and Grok
-  verified; Gemini CLI, Qwen Code, Goose and Cline CLI experimental, per
-  `packages/glitter-bridge/src/agents.ts`)
-  around a hub, plus subscription-or-own-key, ACP and mid-thread switching. Marks are copied from
-  `apps/desktop/public/agents`.
+- **Use your own models**: example hosted and local model providers around a hub,
+  plus keychain storage, custom endpoints and model switching.
 - **Reasoning effort**: a working rebuild of the composer's effort gauge (thin track, a pill handle that
   names the tier, a dashed mark at the model's starting tier, the two ends as shortcuts). It drives the
   particle ring's turbulence and heat via `window.glitterScene.setEffort(t)`.
@@ -36,8 +33,7 @@ npm run build:website  # emits apps/website/dist
 - **Themes**: a compact product preview. Its dark/light switch and nine accent swatches (Ember,
   Monochrome and the seven colors) restyle only the screenshot; the site keeps its own theme and the
   Ember accent.
-- **Get started**: provider setup, an optional Muse CLI install command (copy button),
-  release/source links and a closing call to action.
+- **Get started**: provider setup, release/source links and a closing call to action.
 
 ## The scene
 
@@ -75,4 +71,4 @@ regions in `src/main.js` are percentages measured on the 1440×900 capture, so r
 the app's layout moves.
 
 The walkthrough and approval card are illustrative; nothing on the page executes commands or
-connects to the Muse agent. Fonts load from Fontshare (General Sans) and Google Fonts (Geist Mono), with system fallbacks.
+connects to a model provider. Fonts load from Fontshare (General Sans) and Google Fonts (Geist Mono), with system fallbacks.
