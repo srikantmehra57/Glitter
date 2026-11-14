@@ -13,7 +13,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "chromium-bidi": "12.1.0",
+    "chromium-bidi": "17.0.2",
     "playwright-core": "1.64.1"
   },
   "devDependencies": {
