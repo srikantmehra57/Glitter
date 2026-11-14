@@ -15,6 +15,9 @@ superseded, including the retired Muse and ACP integrations.
 
 ### Changed
 
+- **Failed model calls keep their reported usage.** Tokens reported before an
+  interrupted response now count for the Orchestrator's Router as well as
+  retried agent calls, so the usage ledger includes them when available.
 - **Delegated runs can request tool approval.** A child run's request appears
   in its parent thread, names the run and can be allowed once or denied. Stop
   cancels a waiting request; headless runs still refuse requests they cannot ask.

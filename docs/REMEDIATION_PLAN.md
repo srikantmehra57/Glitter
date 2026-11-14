@@ -22,7 +22,8 @@ test, which this check does not run. F2.1's cache implementation and automated
 verification are complete, with packaged checks still open. F2.3's toolchain
 implementation and automated verification are complete as of 2026-11-15, with
 real compiler and packaged checks still open. F2.4's delegated approvals are
-implemented and verified, with a packaged desktop interaction still unrun.
+implemented and verified, with a packaged desktop interaction still unrun;
+F2.5's reported-usage accounting is implemented and verified.
 Completed items are marked below, and partial work and accepted residuals are
 called out without claiming that the corresponding finding is closed.
 
@@ -527,7 +528,7 @@ other threads, or kills the process; cancellation and timeouts are truthful.
 
 ## Phase F2 — Make the agent usable on a real project
 
-**Status:** in progress (F2.1, F2.3, F2.4) · **Depends on:** F0, F1 · **Gate for:** daily-driver
+**Status:** in progress (F2.1, F2.3, F2.4, F2.5) · **Depends on:** F0, F1 · **Gate for:** daily-driver
 adoption.
 
 The agent must install dependencies, undo on a normal repo, find the user's
@@ -603,8 +604,15 @@ toolchains, and delegate usefully in the default mode.
       approval. `npm run verify` passed: 860 Node tests (one live-browser test
       skipped), 501 UI tests and 221 native tests. A packaged desktop interaction
       has not been driven (owner: repository maintainer).
-- [ ] **F2.5 Bill failed attempts to the ledger (M4).** Accumulate usage from
+- [x] **F2.5 Bill failed attempts to the ledger (M4).** Accumulate usage from
       partial streams on failure/retry so cost is not undercounted on flaky days.
+      **Done 2026-11-15.** Turn calls record usage
+      reported before a failure or retry; failed Router streams now do the same
+      before falling back. Tests cover retries, terminal failure, Router fallback,
+      cache counts and avoiding a second charge for a truncated Router response.
+      Only provider-reported usage can be counted; a failed stream that reports
+      none remains unknown. `npm run verify` passed: 863 Node tests (one
+      live-browser test skipped), 501 UI tests and 221 native tests.
 - [ ] **F2.6 Configurable limits (L8).** Make step caps, approval expiry and retry
       budget configurable with safe defaults; document the unattended-run
       tradeoffs. (Auto-resume is D6.8.)

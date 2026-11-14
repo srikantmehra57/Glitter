@@ -1791,6 +1791,7 @@ export class HarnessHost {
     const spent = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
     const at = Date.now();
     let text = "";
+    let reported = false;
     try {
       const envelope = routerEnvelope({
         prompt,
@@ -1840,12 +1841,29 @@ export class HarnessHost {
             durationMs: Date.now() - at,
             toolCalls: 0,
           });
+          reported = true;
           if (isTruncatedStop(event.stopReason)) throw new Error("The routing response was cut off by a provider limit.");
           return { text, ...(effort ? { effort } : {}) };
         }
       }
       // streamChat throws when a stream closes without its end marker.
       return { text, ...(effort ? { effort } : {}) };
+    } catch (error) {
+      // A failed stream may already have reported billable usage. A completed
+      // but truncated response was accounted for above, so do not count it twice.
+      if (!reported && (spent.input || spent.output || spent.cacheRead || spent.cacheWrite)) {
+        this.accumulateUsage(live, spent);
+        this.emitCall(this.surface(live), {
+          callId: randomUUID(), routeId, role: "router", stage: "router", at,
+          providerId: provider.id, modelId: router.modelId,
+          ...(effort ? { effort } : {}),
+          inputTokens: spent.input + spent.cacheRead + spent.cacheWrite,
+          cachedTokens: spent.cacheRead + spent.cacheWrite,
+          cacheReadTokens: spent.cacheRead, cacheWriteTokens: spent.cacheWrite,
+          outputTokens: spent.output, stopReason: "error", durationMs: Date.now() - at, toolCalls: 0,
+        });
+      }
+      throw error;
     } finally {
       clearTimeout(timer);
       signal.removeEventListener("abort", forwardAbort);

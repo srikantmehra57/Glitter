@@ -1452,6 +1452,60 @@ test('an invalid Router reply falls back to a staged Lead-guided turn and record
   assert.match(calls[2].body.system.at(-1).text, /Serving model: claude-haiku-9/, 'the Builder call names the Builder model');
 });
 
+test('a failed Router stream bills its reported usage before falling back', async () => {
+  const root = await workspace();
+  const { fetchImpl } = anthropicStub([
+    () => [
+      { type: 'message_start', message: { usage: { input_tokens: 100, cache_read_input_tokens: 30, cache_creation_input_tokens: 20 } } },
+      { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'partial' } },
+      { type: 'error', error: { type: 'overloaded_error', message: 'Overloaded' } },
+    ],
+    () => textReply(JSON.stringify(stagedPlan)),
+    () => textReply('Builder finished.'),
+  ]);
+  const { instance, events } = host(fetchImpl, new SessionStore(await seededStore()));
+  seedProbes(instance);
+  const { sessionId } = await instance.startSession({ workspaceRoot: root, orchestrator: { goal: 'balanced', models: orchestratorRoles } });
+  await instance.sendTurn({ sessionId, text: 'Investigate this request' });
+  assert.equal((await settled(events, 1))[0]?.payload.outcome.params.terminal, 'completed');
+  const reports = events.filter(({ event }) => event === 'modelCall').map(({ payload }) => payload.call);
+  assert.deepEqual(reports.map(({ role, stopReason, inputTokens }) => [role, stopReason, inputTokens]), [
+    ['router', 'error', 150],
+    ['lead', 'end_turn', 1200],
+    ['builder', 'end_turn', 1200],
+  ]);
+  const usage = events.filter(({ event, payload }) => event === 'sessionFacts' && payload.usage).at(-1).payload.usage;
+  assert.equal(reports[0].cacheReadTokens, 30);
+  assert.equal(reports[0].cacheWriteTokens, 20);
+  assert.equal(usage.promptTokens, 2500);
+  assert.equal(usage.cacheReadTokens, 30);
+  assert.equal(usage.cacheWriteTokens, 20);
+  assert.equal(usage.outputTokens, 18);
+});
+
+test('a truncated Router reply is billed once before fallback', async () => {
+  const root = await workspace();
+  const truncated = textReply('partial');
+  truncated.at(-1).delta.stop_reason = 'max_tokens';
+  const { fetchImpl } = anthropicStub([
+    () => truncated,
+    () => textReply(JSON.stringify(stagedPlan)),
+    () => textReply('Builder finished.'),
+  ]);
+  const { instance, events } = host(fetchImpl, new SessionStore(await seededStore()));
+  seedProbes(instance);
+  const { sessionId } = await instance.startSession({ workspaceRoot: root, orchestrator: { goal: 'balanced', models: orchestratorRoles } });
+  await instance.sendTurn({ sessionId, text: 'Investigate this request' });
+  assert.equal((await settled(events, 1))[0]?.payload.outcome.params.terminal, 'completed');
+  const reports = events.filter(({ event }) => event === 'modelCall').map(({ payload }) => payload.call);
+  assert.equal(reports.filter(({ role }) => role === 'router').length, 1);
+  assert.equal(reports[0].stopReason, 'max_tokens');
+  const usage = events.filter(({ event, payload }) => event === 'sessionFacts' && payload.usage).at(-1).payload.usage;
+  assert.equal(usage.promptTokens, 3600);
+  assert.equal(usage.outputTokens, 27);
+});
+
 test('a staged Lead plan sees the request image while the Builder works from the plan', async () => {
   const root = await workspace();
   const image = TEST_PNG;
@@ -2221,6 +2275,25 @@ test('a cached call counts its cache in the input, and a retry says which attemp
   assert.equal(calls[1].cachedTokens, 100500);
   assert.equal(calls[1].cacheReadTokens, 100000);
   assert.equal(calls[1].cacheWriteTokens, 500);
+  const usage = events.filter(({ event, payload }) => event === 'sessionFacts' && payload.usage).at(-1).payload.usage;
+  assert.equal(usage.promptTokens, 1220, 'the failed attempt contributes to the session total');
+  assert.equal(usage.cacheReadTokens, 100000);
+  assert.equal(usage.cacheWriteTokens, 500);
+});
+
+test('a final failed stream keeps its reported usage in the session and call record', async () => {
+  const root = await workspace();
+  const { fetchImpl } = anthropicStub([() => cutOff('partial', { type: 'invalid_request_error', message: 'Bad request' })]);
+  const store = new SessionStore(await seededStore());
+  const { instance, events } = host(fetchImpl, store);
+  const { sessionId } = await instance.startSession({ workspaceRoot: root });
+  await instance.sendTurn({ sessionId, text: 'hi' });
+  assert.equal((await settled(events, 1))[0]?.payload.outcome.params.terminal, 'failed');
+  const reports = events.filter(({ event }) => event === 'modelCall').map(({ payload }) => payload.call);
+  assert.equal(reports.length, 1);
+  assert.equal(reports[0].stopReason, 'error');
+  assert.equal(reports[0].inputTokens, 10);
+  assert.equal((await store.meta(sessionId)).usage.promptTokens, 10);
 });
 
 test('a reply cut off by the output limit does not run its tool call', async () => {
