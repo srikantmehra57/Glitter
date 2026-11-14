@@ -7,6 +7,373 @@ must respect. Don't log routine changes here; they belong in git history and
 
 ---
 
+### Toolchains are discovered without running shell startup files
+
+- **Date:** 2026-11-15
+- **Decision:** Extend the native app's existing PATH lookup with Cargo, pyenv,
+  rbenv, Bun and Go's standard directories. Honor inherited absolute toolchain
+  roots, including Java and active Python environments. Read nvm's installed
+  `versions/node` directories and default aliases as bounded text; resolve
+  numeric versions, `node`, `stable` and alias chains without evaluating shell
+  code. Both the native bridge launcher and its shell/MCP children preserve the
+  same explicit allowlist of toolchain roots and version selectors.
+- **Why:** Finder launches lack the shell's PATH, and a correct PATH alone is
+  insufficient when either environment filter drops `JAVA_HOME`, `GOPATH` or
+  a version manager's root. Sourcing a login shell would also execute startup
+  files and could import credentials or interpreter hooks.
+- **Consequences:**
+  - The existing Homebrew, Volta, asdf, nodenv, mise and fnm paths remain.
+    Only directories that exist enter the augmented PATH. Custom roots must
+    be absolute; a multi-root `GOPATH` contributes each absolute `bin` directory.
+  - Toolchain settings must be present in the app's inherited environment.
+    Shell-only functions, aliases and exports are not imported. A missing or
+    unsupported nvm default does not select another installed version;
+    without a default alias, the newest installed numeric version is used.
+  - Provider, cloud and registry credentials and startup hooks such as
+    `NODE_OPTIONS`, `BASH_ENV`, `PYTHONPATH`, `RUBYOPT` and `JAVA_TOOL_OPTIONS`
+    remain excluded. PATH discovery adds no filesystem or network grant.
+  - Regression coverage compares the two allowlists, launches an actual child
+    with toolchain settings and secret sentinels, and runs fixture executables
+    from the GUI-discovered paths. Fixtures do not claim real compiler builds.
+
+---
+
+### Package managers share bounded writable caches
+
+- **Date:** 2026-11-14
+- **Decision:** Shell commands and stdio MCP servers keep the same write
+  sandbox. Both may write npm's `~/.npm`, Cargo's `~/.cargo/registry` and
+  `~/.cargo/git` (plus Cargo's exact package-cache lock files and SQLite cache
+  bookkeeping files), Gradle's caches, daemon, native, notifications and wrapper
+  folders, Maven's `~/.m2/repository`, Go's `~/go/pkg`, Bun's
+  `~/.bun/install/cache` and Yarn's `~/.yarn/berry/cache`. Missing parent
+  directories may be created, but their other contents are not writable.
+  The existing `~/.cache` and `~/Library/Caches` allowances remain.
+- **Why:** Package installs and uncached `npx` MCP launchers need these folders.
+  Granting whole toolchain folders would also let a command replace binaries,
+  change configuration or overwrite credentials. A per-command unsandboxed
+  escape would give an ordinary install more authority than it needs.
+- **Consequences:**
+  - Cache contents are shared across workspaces and can include executable
+    package code. An allowed install or MCP launcher may change what a later
+    command runs from those caches. Package scripts still run with the child's
+    existing sandbox and network policy; this is not a package trust check.
+  - The new cache allowances do not follow a symlink to a location outside the
+    allowed folders. Creating a cache symlink must not grant its target on a
+    later command.
+  - Global binary installs, custom cache locations outside existing write
+    roots, Cargo configuration and credentials, Gradle properties and Maven
+    settings remain outside this allowance. Run those setup steps yourself or
+    put a custom cache inside the workspace. Toolchain discovery is F2.3.
+  - Offline commands remain offline; stdio MCP startup still requires its
+    existing trust and digest-bound approval. No unsandboxed fallback is added.
+  - Cargo's `.package-cache`, `.package-cache-mutate`, `.global-cache` and its
+    `-journal`/`-shm`/`-wal` sidecars are writable as exact files. A real local
+    registry fixture showed that a download can succeed while Cargo silently
+    leaves its cache unlocked and untracked if only `registry/` is writable.
+
+---
+
+### One failure stays one failure: tools, streams and saves are contained
+
+- **Date:** 2026-11-14
+- **Decision:**
+  - **Files.** `read_file`, `edit_file`, `multi_edit` and `write_file` refuse a
+    file that is binary, is not valid UTF-8, or is over 8 MB, instead of
+    rewriting it through a string. A file whose lines all end in CRLF takes a
+    multi-line `old_string` written with plain newlines and keeps its endings;
+    a file that mixes them says so.
+  - **Shell.** A command is over when its shell exits, plus 200 ms for output
+    in flight, not when every pipe closes. A timeout or Stop ends the call within
+    3 s whatever holds the pipes, and terminating a command also signals the
+    descendants it started in other sessions, found before the leader is
+    signalled. A small watchdog process kills background shells' process groups
+    if the agent process dies without running its exit handlers.
+  - **Search.** `grep` runs in a worker thread with a 20 s deadline and Stop; it
+    reads files in batches, so a broad search still stops as soon as it has its
+    answer. `grep` and `list_files` honor `.gitignore` (root and nested; no git
+    process, no global excludes) and say what they left out;
+    `include_ignored` turns that off. `htmlToText` is a single linear pass.
+  - **Crashes.** Every fire-and-forget save is contained: a failure becomes one
+    warning on its thread per minute. `runTurn` always reports its end, a turn
+    that cannot start after its message was saved is settled, and a second net
+    under every started turn turns a bug into a failed turn, not an exited
+    process. The process-level crash sink stays for what nothing else catches.
+  - **Providers.** A mid-stream error frame is classified by its own type:
+    overload, rate limit and timeout retry; a bad request, a refusal or an
+    exhausted quota do not. A `Retry-After` is honored up to the 120 s retry
+    budget. A provider that never sends headers times out after 60 s, and one
+    event larger than 16 MB is refused.
+  - **Persistence.** An unreadable log entry is reported when a thread opens. A
+    reply cut off by an error is saved as cut off, and a retry writes over it
+    instead of adding a second copy. The index keeps a copy of its last good
+    state and falls back to it. Usage totals are saved every two seconds at most.
+  - **MCP.** A stdio server that exits is started again on its next call, up to
+    three times with a doubling wait, and then says to refresh. A call that was
+    running when it died is never repeated. A server whose tool names collide is
+    left out alone.
+  - **Stop.** `cancelTurn` answers `stopping` while the turn is still running.
+- **Why:** Each of these let one bad file, page, pattern, provider answer or
+  full disk freeze or end the single process every thread shares, or corrupt a
+  file silently.
+- **Consequences:**
+  - A server that fails to *start* still fails the whole MCP generation: the
+    all-or-nothing swap in "Harness MCP" below stands for that case, because a
+    partial tool list after a configuration change is the stale-authority
+    problem it was written to avoid.
+  - A `.gitignore` pattern with more than three wildcards, or longer than 512
+    characters, is ignored: a search then looks at more, never less.
+  - A process that left its session and is not a descendant of the command, a
+    daemon it started earlier for example, is not stopped.
+  - Not done here: paging the thread log on open and an incremental index (L2,
+    M13's second half) wait for F3.4; the index is still rewritten whole, only
+    less often.
+
+---
+
+### An untrusted workspace's rules and skills stay out of the prompt
+
+- **Date:** 2026-11-14
+- **Decision:** A workspace's own `AGENTS.md` and `CLAUDE.md` (root and nested)
+  and its `.glitter/skills` and `.agents/skills` reach the model only while the
+  user has trusted that workspace. Untrusted, the model gets nothing from the
+  repository, and its system prompt says so, so it does not go looking. The
+  user's own `~/.glitter/AGENTS.md` and home skills are theirs and always load.
+  The decision is the native record that already carried MCP trust
+  (`mcp_consent.rs`): it rides to the agent as `workspaceTrusted` with
+  `startSession`, `resumeSession`, `sendTurn` and `listSkills`, is read again on
+  every turn, and reaches each contribution as `TurnContext.workspaceTrusted`.
+  Revoking it takes effect on the next message.
+- **Why:** The trust prompt promised this and enforced nothing: "Trust
+  workspace" only set a flag in the renderer's settings document, which the
+  native side never read, and only MCP startup checked trust. A cloned
+  repository could put instructions or a skill in front of the model before
+  the user decided anything.
+- **Consequences:**
+  - "Trust workspace" and "Stop trusting" now call `workspace_trust_set`. A
+    workspace remembered as trusted by the settings document is carried to the
+    native record when its grant is restored; syncing only raises trust.
+  - Approving MCP startup still trusts the workspace. Withdrawing that approval
+    does not untrust it: rules and skills are a separate decision.
+  - A worktree thread is trusted while the workspace it was made from is, found
+    through the app's own worktree store. It never trusts that workspace in
+    return, and its MCP approval is its own.
+  - A delegated child follows the thread it works for.
+  - The CLI has no trust prompt, so it starts untrusted. `--trust` loads the
+    folder's rules and skills; `--mcp` implies it.
+  - Open question answered: an untrusted workspace's rules are not shown to the
+    model and not sent anywhere. The trust dialog still previews them to the
+    user.
+
+---
+
+### Offline commands reach this Mac only, and cannot read keys or saved threads
+
+- **Date:** 2026-11-14
+- **Decision:** A shell command that did not ask for the network runs under a
+  profile that allows loopback and Unix sockets only under the folders the
+  sandbox may write (the workspace, temp, caches) plus `~/.gnupg`, and nothing
+  else. It cannot connect to `/var/run/mDNSResponder` (the system resolver) or
+  to a Docker socket. Offline commands also cannot read `~/.ssh`,
+  `~/.gnupg/private-keys-v1.d`, or the saved threads of any workspace
+  (`GLITTER_HARNESS_DIR`, `~/.glitter/harness` and the app's own `harness`
+  folder); every sandboxed child, MCP servers included, cannot read the saved
+  threads.
+- **Why:** The old rule allowed every Unix socket "for name lookup". The
+  resolver daemon answers any name for any caller, so a command with no route
+  could send data out as a hostname (`<data>.attacker.example`), and a Docker
+  socket gives a container the network. Measured on macOS, closing the resolver
+  socket makes an outside name fail at once and leaves `localhost` working,
+  because that name resolves without it. A private key or another project's
+  conversation printed by an offline command goes straight into the model's
+  context.
+- **Consequences:**
+  - This Mac's own `.local` name does not resolve offline. Some JVM and Hadoop
+    style tests look it up; run them with `network: true`.
+  - A commit signed with a key *file* cannot be made from an offline agent
+    shell. An agent-held key (ssh-agent, gpg-agent) still signs, and the app's
+    own Commit button is unaffected.
+  - Loopback stays open on purpose: dev servers, test databases and browsers
+    need it. A local proxy or published container port the user runs is
+    reachable through it. This is not closed.
+  - Not closed: a command that asked for the network, and Full access, are not
+    narrowed, so the Docker socket stays reachable there, and a container can
+    mount the host. Removing it needs its own decision.
+  - Domain-level egress control is D6.7.
+
+---
+
+### Bundled MCP servers name an exact release
+
+- **Date:** 2026-11-14
+- **Decision:** Every npm and PyPI launcher in the bundled catalog names an
+  exact release (`@modelcontextprotocol/server-memory@2.0.1`,
+  `mcp-server-time@2026.10.28`), never a bare name or `@latest`. Each is the
+  newest release at least 14 days old on the day it was pinned, and a native
+  test refuses an unpinned launcher. Moving to a newer release is a deliberate
+  edit.
+- **Why:** MCP startup approval binds to the text of the configuration. An
+  unpinned `npx -y pkg` never changes that text, so a new, compromised or
+  broken release ran under an approval that still looked current. With the
+  release in the text, a new one changes the digest and needs a new review.
+- **Consequences:** An entry that an earlier build wrote unpinned is still the
+  store's own: Remove accepts it and Install brings it to the pinned release,
+  which changes the text and asks for approval again. The pinned releases are
+  older than the newest ones on purpose. `uvx name@version` is uv's documented
+  form; it was not run on a machine with uv.
+
+---
+
+### Native workspace Git skips repository hooks
+
+- **Date:** 2026-11-14
+- **Decision:** Git commands started by the app for a workspace, including
+  background reads, worktree operations, commit, push and pull, override
+  `core.hooksPath` to disable hooks and disable `core.fsmonitor`. A project can
+  still run its own checks through the terminal.
+- **Why:** The agent can change repository metadata, while the app's Git runs
+  with the app's authority. A repository hook must not cross that boundary.
+- **Superseded in part by** "The app's Git does not trust the repository's own
+  settings" below, which covers filters, drivers and redirects as well.
+
+---
+
+### The app's Git does not trust the repository's own settings
+
+- **Date:** 2026-11-14
+- **Decision:** Before each workspace Git command (status and diff refresh,
+  review, stage, discard, commit, switch, worktree creation and handoff, push,
+  pull, and `gh`), the app lists the effective configuration with its scopes
+  (`git config --list --show-scope`) and treats only the *local* and
+  *worktree* scopes as the repository's. It then:
+  - blanks every repository-defined `filter.*.clean/smudge/process` (and sets
+    `required=false`), `diff.*.command/textconv` and `diff.external` with `-c`,
+    so the zero-click background refresh runs no planted driver;
+  - refuses a push, pull or pull request when the repository sets
+    `url.*.insteadOf`/`pushInsteadOf`, `remote.*.uploadpack/receivepack/vcs/
+    proxy`, `core.sshCommand`, `core.gitProxy`, `core.askPass`, a credential
+    helper, or an `http.*` proxy, certificate or resolve override;
+  - refuses a commit when it sets a `gpg.*` program or SSH key command;
+  - refuses everything when it sets `core.worktree`;
+  - always forces `core.hooksPath=/dev/null`, `core.fsmonitor=false` and
+    `protocol.ext.allow=never`. `gh` gets the same settings through
+    `GIT_CONFIG_COUNT`, which every Git it starts reads.
+  The listing and the command read config a few milliseconds apart, so the
+  agent must not be able to change it in between: the shell's seatbelt denies
+  writes to the workspace's `.git` entry itself, `.git/config`,
+  `config.worktree`, `commondir`, `.git/hooks`, and each linked worktree's
+  `config.worktree`/`commondir`/`gitdir`; the edit tools refuse any path with
+  a `.git` component in every mode.
+- **Why:** The 2026-11-14 audit executed a planted clean filter through the
+  background `git diff --numstat` refresh with no click: `--no-ext-diff
+  --no-textconv` do not stop clean filters. Running the app's Git inside the
+  agent's sandbox was rejected because push and pull need the user's network,
+  credential helper and SSH agent, and Git LFS (a global filter) must keep
+  working. Treating global and system config as the user's keeps LFS and the
+  user's own credential helper and signing setup intact. A refusal names the
+  key and the `git config --local --unset-all` that removes it, rather than
+  silently ignoring a setting the user may have chosen.
+- **Consequences:** Filters a repository defines for itself (for example
+  `git-crypt`, which installs into local config) are not applied by the app, so
+  those files can show as changed in its Git views; the terminal is unaffected.
+  The agent cannot run `git init` at the workspace root, change local Git
+  config (`git config`, `git remote add`, `push -u`'s upstream), create linked
+  worktrees itself, or install hooks; the user does these, and the app has its
+  own Initialize and worktree actions. `git add` and `git commit` in the shell
+  still work. Merge drivers are not neutralized because no app Git command
+  merges (pull is fast-forward only). An `include.path` the user points at a
+  file inside the workspace is read but not protected from the agent.
+
+---
+
+### Protected files ask every time; the shell cannot write them
+
+- **Date:** 2026-11-14
+- **Decision:** A user-editable set of workspace path patterns (Settings →
+  Permissions → Protected files; defaults: agent instructions `AGENTS.md`,
+  `CLAUDE.md`, skills folders `.glitter/` and `.agents/`, `.env`, `.env.*`,
+  `.envrc`, and key files) is protected. An edit tool asks before each change
+  to one, in every permission mode including Full access, and the card offers
+  allow-once only, so approving one change never approves the next. The
+  shell's seatbelt and stdio MCP servers cannot write them at all. `.git` is
+  stricter: the edit tools always refuse it and it is not configurable.
+  Files under `node_modules` are exempt. Settings store the list only once
+  the user changes it, so later defaults reach everyone else. Reading is
+  governed separately by deny-only `Read(path)` rules, which also keep
+  `grep` out of the file.
+- **Why:** Edits run unasked in Ask and Auto, and the audit found that an
+  agent could make its own instructions permanent (M16) or change secrets and
+  `direnv`'s `.envrc` (which runs on `cd`) unseen (H8). These files outlive
+  the turn, so a per-call look is cheap insurance. The shell gets a hard deny
+  rather than an ask because a command cannot be previewed as a diff, and the
+  edit tools give the agent a reviewable way to make the same change.
+- **Consequences:** The agent's shell cannot run `cp .env.example .env`,
+  generate a key file, or write `AGENTS.md`; it uses the edit tools, which
+  ask, or the user removes the pattern. A headless `glitter -p` run refuses a
+  protected change even in full access. Seatbelt matches the way APFS does,
+  so case variants are denied too. Shell reads of secrets are not limited
+  here (F0.4).
+
+---
+
+### The model library is what the user adds
+
+- **Date:** 2026-11-14
+- **Decision:** Settings → AI has one page, **Models & providers**, in place of
+  the Models and Providers tabs. The composer's picker, the new-thread defaults
+  and the Orchestrator role lists offer exactly the models the user added to
+  the model library — not every model each provider lists. An entry carries the
+  metadata the user chose: display name, context window, effort levels with one
+  default, and image, document and video support that may stay unknown. The
+  harness persists the library (`models.json`, 0600, beside the session store)
+  and is its only writer; the renderer edits it through four new bridge verbs
+  (`modelLibraryList`, `modelLibraryPut`, `modelLibraryRemove`,
+  `listProviderModels`). At runtime the precedence is: learned window (the
+  provider's own overflow statement) → the library entry → the live catalog row
+  → the family table; user-set effort levels replace `effortTiers` entirely. A
+  first run seeds the library once from the models past threads actually used
+  (thread model, manual model, Orchestrator roles), and the renderer quietly
+  adds any saved default or role model that predates it. The add-model dialog
+  fetches the chosen provider's own listing for suggestions
+  (`listProviderModels`, scoped and cached) and pre-fills what it reports;
+  `hiddenModels`/`hiddenProviders` are retired.
+- **Why:** Fetching every model from every provider buried the picker and left
+  context windows and reasoning levels to family-regex guesses. Making the
+  library explicit keeps the picker clean and puts one source of truth — the
+  user — behind the metadata turns depend on.
+- **Consequences:** A model not in the library cannot be sent to, and an empty
+  library means an empty picker until the user adds one. Deleting the file
+  re-seeds from session history only. The scoped suggestion listing is a second
+  consumer of the catalog fetch path; both share the credential-keyed cache.
+  The `glitter` CLI lists models through the same host method, so its `/models`
+  shows the library too; a model id typed at `/model` still resolves when the
+  provider accepts it.
+
+---
+
+### The `glitter` CLI shares the app's engine and state
+
+- **Date:** 2026-11-13
+- **Decision:** `glitter` (`packages/glitter-harness/src/cli.ts`) runs
+  `HarnessHost` in its own process, with no bridge and no native shell in
+  between. It reads the provider keys from the app's Keychain entry
+  (`com.glitter.desktop` / `provider-keys`), the defaults and permission rules
+  from the app's settings file, and uses the app's harness folder for threads
+  and the model library. Environment keys override saved ones.
+- **Why:** A thread should move between the terminal and the app, and the user
+  should set a provider up once.
+- **Consequences:** The harness folder has two writers. The session index is
+  re-read when its file changes and is written under `index.json.lock`, so
+  neither process drops the other's threads. Anything else in that folder that
+  both processes write needs the same treatment. The CLI is outside the native
+  trust boundary: it has no workspace grants or MCP approval records, so it
+  refuses `/` and the home folder as a workspace and starts MCP servers only
+  with `--mcp`. A headless run denies any step that needs approval. The app
+  bundle ships `cli.js`, and `npm run install:cli` writes a launcher that runs
+  it with the bundled Node rather than a system Node.
+
+---
+
 ### Harness is the only agent runtime
 
 - **Date:** 2026-11-13
@@ -19,9 +386,38 @@ must respect. Don't log routine changes here; they belong in git history and
   Glitter neither converts nor deletes them. Retired keychain entries remain in
   the keychain rather than being deleted on launch.
 - **Surfaces:** The model picker lists model providers; Settings → Providers
-  manages their credentials. The source-build terminal CLI can use the same
-  Harness engine, provider keys and local session store as the app; the desktop
-  installer does not add it to the system PATH.
+  manages their credentials. The `glitter` terminal CLI runs the same Harness
+  engine with the app's provider keys and session store (see the next entry).
+
+### An unknown context window is learned from the provider's own rejection
+
+- **Date:** 2026-11-13
+- **Decision:** A model whose window no catalog row or family table knows is
+  treated as unknown until evidence arrives, not as unmanageable. When the
+  provider rejects a request as an overflow, the harness parses the limit out
+  of the provider's prose (`parseContextLimit` in `wire.ts`, anchored to
+  maximum-phrasings so a prompt-size count is never mistaken for the window)
+  and adopts it for the model: the window resolution becomes learned → catalog
+  → family (`windowFor` on the host). A learned window drives the same retry
+  the known-window path gives — the refit fits the real budget — and from the
+  next call on, trimming, auto-compaction, the context meter and the
+  orchestrator's `long_context` capability all behave as if the window had been
+  listed. A rejection that states no number still gets one recovery retry
+  against half the estimated request; a second rejection stands. Learned
+  windows live for the host's lifetime and are cleared when the credential set
+  changes, the same trigger that rebuilds the catalog cache, so a re-pointed
+  custom endpoint re-learns. The once-per-model capability notice stays: it is
+  accurate while the window is unknown and stops once one is learned, and a
+  catalog-listed window now counts there too (it previously read only the
+  family table and announced listed models as unknown).
+- **Why:** An unknown window previously disabled every safeguard at once — no
+  fitting, no overflow retry, no auto-compaction, no context reporting — so a
+  long thread on a custom endpoint died on its first overflow with no
+  recovery. The provider's rejection is the one authoritative statement of the
+  real limit, and it costs one failed request to obtain. This supersedes the
+  2026-10-23 decision below in one respect: an unknown window no longer keeps
+  the request unchanged through an overflow; it keeps it unchanged only until
+  the provider says otherwise.
 
 ### The built-in agent compacts its own model history
 
@@ -49,8 +445,8 @@ must respect. Don't log routine changes here; they belong in git history and
 - **Date:** 2026-10-26
 - **Context:** A long tool loop pays one model for both high-judgement decisions
   and repetitive reading and typing. Automatic model selection was explicitly
-  out of scope without a product decision; [ORCHESTRATOR_PLAN.md](ORCHESTRATOR_PLAN.md)
-  is that decision and defines the implementation and evaluation gates.
+  out of scope without a product decision; [REMEDIATION_PLAN.md](REMEDIATION_PLAN.md)
+  carries the remaining Orchestrator delivery and evaluation gates (D1.5, D4.12, D6.5).
 - **Decision:** Build Orchestrator as an opt-in mode for the built-in Harness
   agent, off by default. The user assigns the Lead, Builder, Small-task and
   Router roles; providers are independent and the app never infers a role from
@@ -393,8 +789,9 @@ must respect. Don't log routine changes here; they belong in git history and
   include-unstaged flag runs `git add --all -- .` immediately before `git
   commit`, under the same native write lock. This includes deletions and new
   files, honors `.gitignore`, and cannot stage beyond the granted subtree. It
-  does not use `git commit -a`, which would omit new files. If a hook refuses
-  the commit, any newly staged files remain staged and the UI says so.
+  does not use `git commit -a`, which would omit new files. If the commit fails,
+  any newly staged files remain staged and the UI says so. The app does not run
+  repository hooks (see "Native workspace Git skips repository hooks" above).
 - **Draft sequencing:** A blank message uses the ordinary agent turn and keeps
   the composer-preservation rules. The result is bound to its originating
   thread. Closing the dialog or changing the active grant cancels the pending
@@ -1217,17 +1614,20 @@ must respect. Don't log routine changes here; they belong in git history and
 - **Date:** 2026-10-22
 - **Decision:** The `task` tool starts a child agent as a hidden session
   (`h-…`) in the same harness host. The child is filtered out of
-  `listSessions`, has no approval channel, and runs under a registry profile
+  `listSessions` and runs under a registry profile
   (`delegate`, then `delegate-leaf` at the cap) with a 24-step turn cap. Its
   scope is written both to the session index and to its own log as a
   `delegation` record: parent session, depth, profile, approval mode and Plan
-  mode. A call that would need approval is refused instead of parked. The
+  mode. A call that needs approval appears in the visible ancestor thread,
+  identifies the delegated run and offers a single-call decision. Without a
+  visible active ancestor or approval channel, the call is refused. The
   model may choose a model from the catalog; otherwise the child inherits the
   parent's model and effort. Children are catalogued by the parent's persisted
   `subagent` items, and `readChildSession` returns a child transcript read-only
   through the parent's binding.
-- **Why:** A hidden session cannot ask the user anything, so giving it the
-  power to ask would deadlock the turn. Narrowing its tools by profile means
+- **Why:** Routing tool approvals through the visible thread lets a child work
+  in Ask mode without granting it more authority. Single-call decisions avoid
+  presenting a child-only grant as a thread-wide grant. Narrowing its tools by profile means
   the child's capability is fixed when it starts, not chosen by its own model.
   Stamping depth and policy in two durable places means a resumed child is
   still a child: it cannot delegate as if it were top-level, widen its

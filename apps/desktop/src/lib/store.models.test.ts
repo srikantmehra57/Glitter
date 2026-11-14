@@ -19,12 +19,12 @@ describe("model listing", () => {
     });
   });
 
-  it("asks the agent afresh once when its cached listing is empty", async () => {
-    bridgeMock.call.mockImplementation(async (method: string, params: { refresh?: boolean }) => method === "listModels" ? { models: params.refresh ? [{ modelId: "xai/grok-4.7", providerId: "xai" }] : [] } : {});
+  it("shows an empty library listing as-is, without probing again", async () => {
+    // The library holds only what the user added, so an empty answer is meaningful.
+    bridgeMock.call.mockImplementation(async (method: string) => method === "listModels" ? { models: [] } : {});
     await useAppStore.getState().refreshModels();
-    const listings = bridgeMock.call.mock.calls.filter(([method]) => method === "listModels");
-    expect(listings.map(([, params]) => Boolean(params.refresh))).toEqual([false, true]);
-    expect(useAppStore.getState().models.map((model) => model.modelId)).toEqual(["xai/grok-4.7"]);
+    expect(bridgeMock.call.mock.calls.filter(([method]) => method === "listModels")).toHaveLength(1);
+    expect(useAppStore.getState().models).toEqual([]);
   });
 
   it("does not probe again when the listing has models", async () => {

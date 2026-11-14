@@ -12,7 +12,6 @@ import {
   storedOrchestratorModel,
 } from "../lib/orchestrator";
 import { PROVIDERS, providerName, type ProviderEntry } from "../lib/providers";
-import { selectableModels } from "../lib/modelVisibility";
 import { useAppStore } from "../lib/store";
 import { ORCHESTRATOR_GOALS, type Model, type OrchestratorAssignments, type OrchestratorModel, type OrchestratorRole, type Settings } from "../lib/types";
 import { AgentMark, ModelIcon } from "./AgentPicker";
@@ -156,14 +155,14 @@ export function OrchestratorPanel({ draft, onChange, customProviders: customs = 
 
   const roleOptions = (role: OrchestratorRole, inherit?: { label: string; description: string }): SelectMenuOption[] => {
     const options: SelectMenuOption[] = inherit ? [{ value: "", label: inherit.label, description: inherit.description }] : [];
-    // A model or provider switched off in Settings → Models is not offered here either.
-    const listed = selectableModels(catalog.models, "harness", draft.hiddenModels, draft.hiddenProviders);
+    // The library is what is offered: only the models the user added.
+    const listed = catalog.models;
     const saved = storedOrchestratorModel(assignments, role);
     if (saved) {
       const savedKey = modelKey(saved);
       if (!listed.some((model) => modelKey(model) === savedKey && !model.unavailable)) {
         const known = catalog.models.find((model) => modelKey(model) === savedKey);
-        options.push({ value: savedKey, label: humanizeModelLabel(saved.modelId), description: !known ? "Saved selection · not in the current catalog" : known.unavailable ? "Unavailable on this account" : "Off in Settings → Models" });
+        options.push({ value: savedKey, label: humanizeModelLabel(saved.modelId), description: !known ? "Saved selection · not in the current catalog" : known.unavailable ? "Unavailable on this account" : "Not in your model library" });
       }
     }
     for (const model of listed) {

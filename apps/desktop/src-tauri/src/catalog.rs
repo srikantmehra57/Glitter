@@ -177,7 +177,7 @@ const SERVERS: &[CatalogServer] = &[
         scope: ServerScope::Workspace,
         transport: "stdio",
         command: "npx",
-        args: &["-y", "@modelcontextprotocol/server-filesystem", "{workspace}"],
+        args: &["-y", "@modelcontextprotocol/server-filesystem@2.1.0", "{workspace}"],
         env: &[],
         url: "",
         version: 1,
@@ -191,7 +191,7 @@ const SERVERS: &[CatalogServer] = &[
         scope: ServerScope::User,
         transport: "stdio",
         command: "npx",
-        args: &["-y", "@modelcontextprotocol/server-sequential-thinking"],
+        args: &["-y", "@modelcontextprotocol/server-sequential-thinking@2.0.0"],
         env: &[],
         url: "",
         version: 1,
@@ -205,7 +205,7 @@ const SERVERS: &[CatalogServer] = &[
         scope: ServerScope::User,
         transport: "stdio",
         command: "npx",
-        args: &["-y", "@modelcontextprotocol/server-memory"],
+        args: &["-y", "@modelcontextprotocol/server-memory@2.0.1"],
         env: &[("MEMORY_FILE_PATH", "{home}/.glitter/mcp-memory.json")],
         url: "",
         version: 1,
@@ -219,7 +219,7 @@ const SERVERS: &[CatalogServer] = &[
         scope: ServerScope::User,
         transport: "stdio",
         command: "uvx",
-        args: &["mcp-server-fetch"],
+        args: &["mcp-server-fetch@2026.10.28"],
         env: &[],
         url: "",
         version: 1,
@@ -233,7 +233,7 @@ const SERVERS: &[CatalogServer] = &[
         scope: ServerScope::User,
         transport: "stdio",
         command: "uvx",
-        args: &["mcp-server-time"],
+        args: &["mcp-server-time@2026.10.28"],
         env: &[],
         url: "",
         version: 1,
@@ -247,7 +247,7 @@ const SERVERS: &[CatalogServer] = &[
         scope: ServerScope::User,
         transport: "stdio",
         command: "npx",
-        args: &["-y", "@playwright/mcp@latest"],
+        args: &["-y", "@playwright/mcp@0.0.83"],
         env: &[],
         url: "",
         version: 1,
@@ -261,7 +261,7 @@ const SERVERS: &[CatalogServer] = &[
         scope: ServerScope::User,
         transport: "stdio",
         command: "npx",
-        args: &["-y", "@upstash/context7-mcp"],
+        args: &["-y", "@upstash/context7-mcp@4.4.4"],
         env: &[],
         url: "",
         version: 1,
@@ -552,6 +552,44 @@ fn expected_server(server: &CatalogServer, home: &Path, workspace: Option<&Path>
     Value::Object(value)
 }
 
+/// `(package, version)` for a launcher argument pinned to an exact release such
+/// as `@scope/name@1.2.3` or `name@2026.10.28`. A bare name, `@latest`, a range
+/// and a tag are not pins.
+fn pinned_package(arg: &str) -> Option<(&str, &str)> {
+    let at = arg.rfind('@').filter(|at| *at > 0)?;
+    let (name, version) = (&arg[..at], &arg[at + 1..]);
+    let parts: Vec<&str> = version.split('.').collect();
+    (parts.len() >= 2 && parts.iter().all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))).then_some((name, version))
+}
+
+/// What earlier builds wrote for this server before its package was pinned: the
+/// same arguments with the package named bare, or as `@latest`. Such an entry is
+/// still the store's own, so Remove accepts it and Install upgrades it.
+fn unpinned_forms(server: &CatalogServer, home: &Path, workspace: Option<&Path>) -> Vec<Value> {
+    if server.transport != "stdio" {
+        return Vec::new();
+    }
+    let args: Vec<String> = server.args.iter().map(|arg| substitute(arg, home, workspace)).collect();
+    let Some(position) = args.iter().position(|arg| pinned_package(arg).is_some()) else {
+        return Vec::new();
+    };
+    let name = pinned_package(&args[position]).map(|(name, _)| name.to_string()).unwrap_or_default();
+    [name.clone(), format!("{name}@latest")]
+        .into_iter()
+        .map(|package| {
+            let mut forms = args.clone();
+            forms[position] = package;
+            let mut older = expected_server(server, home, workspace);
+            older["args"] = json!(forms);
+            older
+        })
+        .collect()
+}
+
+fn is_unpinned_form(existing: &Value, server: &CatalogServer, home: &Path, workspace: Option<&Path>) -> bool {
+    unpinned_forms(server, home, workspace).iter().any(|older| same_server(existing, older))
+}
+
 fn same_server(existing: &Value, expected: &Value) -> bool {
     let Some(existing) = existing.as_object() else {
         return false;
@@ -590,6 +628,13 @@ fn install_server(home: &Path, workspace: Option<&Path>, server: &CatalogServer)
     if let Some(existing) = servers.get(server.id) {
         if same_server(existing, &expected) {
             return Ok(false);
+        }
+        // The store's own earlier, unpinned entry is brought up to the pinned
+        // package. The configuration text changes, so MCP startup is asked again.
+        if is_unpinned_form(existing, server, home, workspace) {
+            servers.insert(server.id.to_string(), expected);
+            write_config(&file, &document)?;
+            return Ok(true);
         }
         return Err(format!(
             "An MCP server named {} is already configured in {} with different settings.",
@@ -662,7 +707,7 @@ fn remove_server(home: &Path, workspace: Option<&Path>, server: &CatalogServer) 
     let Some(existing) = servers.get(server.id) else {
         return Ok(false);
     };
-    if !same_server(existing, &expected) {
+    if !same_server(existing, &expected) && !is_unpinned_form(existing, server, home, workspace) {
         return Err(format!(
             "The server {} in {} was changed after installation. Remove it there if you no longer want it.",
             server.id,
@@ -992,12 +1037,60 @@ mod tests {
         // Fetch and Time are published to PyPI, not npm; `npx` cannot start them.
         for (id, package) in [("fetch", "mcp-server-fetch"), ("time", "mcp-server-time")] {
             let server = SERVERS.iter().find(|server| server.id == id).unwrap();
-            assert_eq!((server.command, server.args), ("uvx", &[package][..]), "{id}");
+            assert_eq!(server.command, "uvx", "{id}");
+            let (name, _) = pinned_package(server.args[0]).unwrap_or_else(|| panic!("{id} must name an exact release"));
+            assert_eq!((name, server.args.len()), (package, 1), "{id}");
         }
         let home = TempDir::new("uvx");
         install(&home.0, None, "fetch").unwrap();
         let config = read_json(&home.0.join(".glitter/mcp.json"));
-        assert_eq!(config["mcpServers"]["fetch"], json!({"transport": "stdio", "command": "uvx", "args": ["mcp-server-fetch"]}));
+        let written = config["mcpServers"]["fetch"]["args"][0].as_str().unwrap();
+        assert!(written.starts_with("mcp-server-fetch@"), "{written}");
+        assert_eq!(config["mcpServers"]["fetch"]["command"], "uvx");
+    }
+
+    // F0.9 / M21. Approval binds to the configuration text, so the exact release
+    // has to be in that text: an unpinned launcher would run whatever was
+    // published last while the approval still looked current.
+    #[test]
+    fn every_launcher_in_the_catalog_names_an_exact_release() {
+        for server in SERVERS.iter().filter(|server| server.transport == "stdio") {
+            assert!(matches!(server.command, "npx" | "uvx"), "{} uses an unexpected launcher {}", server.id, server.command);
+            let packages: Vec<&str> = server.args.iter().copied().filter(|arg| !arg.starts_with('-') && !arg.starts_with('{')).collect();
+            assert_eq!(packages.len(), 1, "{} should name exactly one package", server.id);
+            let (name, version) = pinned_package(packages[0]).unwrap_or_else(|| panic!("{} is not pinned to an exact release: {}", server.id, packages[0]));
+            assert!(!name.is_empty() && !version.contains("latest"), "{}", server.id);
+        }
+    }
+
+    #[test]
+    fn pinned_package_accepts_only_exact_releases() {
+        assert_eq!(pinned_package("@scope/name@1.2.3"), Some(("@scope/name", "1.2.3")));
+        assert_eq!(pinned_package("mcp-server-time@2026.10.28"), Some(("mcp-server-time", "2026.10.28")));
+        for loose in ["name", "@scope/name", "name@latest", "name@^1.2.3", "name@1", "name@1.2.x", "name@", "name@1.2.3-beta"] {
+            assert_eq!(pinned_package(loose), None, "{loose}");
+        }
+    }
+
+    #[test]
+    fn an_earlier_unpinned_entry_is_removable_and_upgraded_to_the_pin() {
+        let home = TempDir::new("unpinned");
+        let file = home.0.join(".glitter/mcp.json");
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(&file, r#"{"mcpServers":{"memory":{"transport":"stdio","command":"npx","args":["-y","@modelcontextprotocol/server-memory"],"env":{"MEMORY_FILE_PATH":"HOME/.glitter/mcp-memory.json"}},"playwright":{"transport":"stdio","command":"npx","args":["-y","@playwright/mcp@latest"]}}}"#.replace("HOME", &home.0.to_string_lossy())).unwrap();
+        // Removal recognizes what earlier builds wrote, so the store does not strand it.
+        remove(&home.0, None, "playwright").unwrap();
+        assert!(read_json(&file)["mcpServers"].get("playwright").is_none());
+        // Installing brings the entry to the pinned release; the text changes, so approval is asked again.
+        let result = install(&home.0, None, "memory").unwrap();
+        assert_eq!(result.installed_servers, vec!["memory"]);
+        let args = read_json(&file)["mcpServers"]["memory"]["args"].clone();
+        assert_eq!(args[1].as_str().unwrap(), "@modelcontextprotocol/server-memory@2.0.1");
+        // A server the user changed is still left alone.
+        fs::write(&file, r#"{"mcpServers":{"memory":{"transport":"stdio","command":"npx","args":["-y","@modelcontextprotocol/server-memory","--extra"]}}}"#).unwrap();
+        let again = install(&home.0, None, "memory").unwrap();
+        assert!(again.installed_servers.is_empty());
+        assert_eq!(again.errors.len(), 1);
     }
 
     #[test]

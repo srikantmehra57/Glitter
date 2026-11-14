@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { realpathSync, statSync } from "node:fs";
+import { existsSync, realpathSync, statSync } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
 import { homedir, platform, tmpdir } from "node:os";
 import { approvalAlive, approvalExpiry, approvalExpiryMono, APPROVAL_TTL_MS, describeIsolation, osSandboxAvailable, type IsolationReport } from "../isolation.js";
@@ -8,22 +8,24 @@ import { clipRecency, contextBudget, estimateRequestTokens, fitHistory } from ".
 import type { Grant, Subject } from "./permission/grants.js";
 import { runGuards } from "./permission/guards.js";
 import { decide, type ApprovalMode, type Verdict } from "./permission/policy.js";
-import { SENDS_NONE, TIERS, configuredProviders, defaultEffortTier, effortTiers, providerSpec, resolveProvider, splitModelId, type ProviderCredentials, type ResolvedProvider } from "./providers.js";
+import { SENDS_NONE, TIERS, configuredProviders, defaultEffortTier, effortTiers, isCustomProvider, providerSpec, resolveProvider, splitModelId, type ProviderCredentials, type ResolvedProvider, type Tier } from "./providers.js";
+import { entryKey, libraryFile, loadLibrary, normalizeEntry, saveLibrary, seedFromSessions, type UserModelEntry } from "./library.js";
 import { ExtensionRegistry, type HookEvents, type HookFailure, type HookName, type TurnContext, type TurnContributions } from "./registry.js";
 import type { UserInputResponse } from "../protocol.js";
 import { McpManager, addMcpServer as writeMcpServer, mcpExtension, readMcpConfig, removeMcpServer as eraseMcpServer, type McpAuthorization, type McpScope, type McpServerInput } from "./mcp.js";
 import { DELEGATE_LEAF_PROFILE, DELEGATE_PROFILE, MAX_DELEGATED_STEPS, MAX_DELEGATION_DEPTH, delegationExtension, type DelegationRequest, type DelegationResult } from "./delegation.js";
 import { ASK_USER_TOOL, EXIT_PLAN_TOOL, planReviewQuestion, questionRequest, settlement, type Asked, type PendingQuestion } from "./questions.js";
 import { discoverSkills, expandInvocation, skillIcon, skillsExtension } from "./skills.js";
-import { SessionStore, type BuilderSessionRecord, type DelegationPolicy, type PendingSteer, type SessionMeta } from "./store.js";
+import { SessionStore, type BuilderSessionRecord, type DelegationPolicy, type PendingSteer, type SessionMeta, type WorkspaceRestore } from "./store.js";
 import { BUILTIN_EXTENSION, BUILTIN_TOOLS, canonicalize, confine, executeTool, executionMode, prepareTool, repeatReminder, scheduleToolCalls, type PresentationMeta, type ToolDefinition, type ToolKind } from "./tools.js";
 import { stopAllShells, stopSessionShells } from "./shells.js";
 import { webExtension } from "./web.js";
 import { COMPACT_AT, COMPACTION_TIMEOUT_MS, SUMMARY_SYSTEM, compactable, compactedHistory, lastUserContent, summaryRequest } from "./compaction.js";
 import { compileRules, type CompiledRules, type PermissionRule } from "./permission/rules.js";
+import { compileProtectedPaths, DEFAULT_PROTECTED_PATHS, type ProtectedPaths } from "./permission/protected.js";
 import { capabilityGaps, modelCapabilities } from "./capabilities.js";
 import { imageRequestProblem } from "./images.js";
-import { CONTEXT_WINDOW, ProviderError, interruptedOutput, isTransientProviderError, isTruncatedStop, streamChat, truncatedToolResult, type AssistantMessage, type ChatMessage, type ContentPart, type ImagePart, type SystemPrompt, type ToolCall, type ToolSchema } from "./wire.js";
+import { CONTEXT_WINDOW, ProviderError, interruptedOutput, isTransientProviderError, isTruncatedStop, parseContextLimit, streamChat, truncatedToolResult, type AssistantMessage, type ChatMessage, type ContentPart, type ImagePart, type SystemPrompt, type ToolCall, type ToolSchema } from "./wire.js";
 import { PROBE_CONTENT, PROBE_DONE, PROBE_FILE, PROBE_VERSION, createProbeStore, findProbe, isProbeRole, probeNeeded, recordProbe, roleCapabilitiesFromProbes, runProbe, type ProbeRequest, type ProbeResponse, type ProbeResult, type ProbeRole, type ProbeStore } from "./orchestrator/probes.js";
 import { parseRouterAssessment } from "./orchestrator/assessment.js";
 import { catalogCapabilities } from "./orchestrator/capabilities.js";
@@ -82,9 +84,14 @@ export type HarnessModel = {
   effortSource?: "host";
   isDefault?: boolean;
   isActive?: boolean;
+  /** The library's own modality record; only images gate a request today. */
+  documents?: boolean | null;
+  video?: boolean | null;
+  /** True when the entry's provider has no key, so the model is listed but cannot run. */
+  unavailable?: boolean;
 };
 
-type CatalogModel = HarnessModel & { listedReasoning?: boolean };
+type CatalogModel = HarnessModel & { listedReasoning?: boolean; listedImages?: boolean | null };
 
 const MODES = [
   { value: "build", name: "Build", description: "Reads, edits files and runs commands, within the permission mode." },
@@ -218,6 +225,7 @@ type TurnRequest = {
   effort?: string;
   /** This message's override; floors still apply to it. */
   forcedShape?: OrchestratorShape;
+  workspaceRestores?: WorkspaceRestore[];
 };
 
 type SteerRequest = PendingSteer;
@@ -231,7 +239,14 @@ type OpenTask = { shape: OrchestratorShape; assessment?: RouterAssessment };
 type CallRoute = { routeId: string; role: OrchestratorRole; stage: OrchestratorStage; effort?: string };
 
 /** A plan or review call: its own message list, no transcript items and no thread context reading. */
-type CallOptions = { messages?: readonly ChatMessage[]; emitText?: boolean; emitContext?: boolean };
+type CallOptions = { messages?: readonly ChatMessage[]; emitText?: boolean; emitContext?: boolean; partials?: PartialStreams };
+
+/**
+ * What a failed attempt had already streamed. A retry writes over these items
+ * (the same ids), so a reply that was cut off and then retried is shown once,
+ * and one that is never retried is marked cut off rather than finished.
+ */
+type PartialStreams = { kept: { reasoning?: string; text?: string }; parked: Map<string, { kind: "reasoning" | "text"; text: string; turnId: string }> };
 
 type TurnRoute = {
   record: RouteRecord;
@@ -292,6 +307,7 @@ type RouteResolution = {
 type Live = {
   meta: SessionMeta;
   messages: ChatMessage[];
+  workspaceRestoreIds?: Set<string>;
   approvalMode: ApprovalMode;
   /** Commands, prefixes, files and folders the user allowed for the rest of the thread. */
   grants: Grant[];
@@ -299,6 +315,8 @@ type Live = {
   controller: AbortController | null;
   turnId: string;
   counter: number;
+  /** Distinguishes this run's `idle` item ids from those of an earlier run of the same thread. */
+  nonce: string;
   muted?: boolean;
   /** Running totals the providers reported. Prompt tokens are uncached; cache counters are disjoint. */
   usage: { promptTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number };
@@ -338,6 +356,12 @@ type Live = {
   compactionController?: AbortController;
   /** Nested AGENTS.md files already shown to the model in this session. */
   rulesLoaded?: Set<string>;
+  /** When a failed background save last raised a warning, so a failing disk is one notice, not one per model call. */
+  persistWarnedAt?: number;
+  /** Pending coalesced save of the usage totals. */
+  usageTimer?: ReturnType<typeof setTimeout>;
+  /** The last turn whose `turnCompleted` went out, so the safety net never sends a second one. */
+  settledTurnId?: string;
 };
 
 /** One call's result. A call that asks the user also carries its questions and its transcript item. */
@@ -346,10 +370,14 @@ type CallResult = { id: string; name: string; output: string; isError?: boolean;
 type HostLimits = {
   idleMs?: number;
   firstEventMs?: number;
+  /** How long a provider may take to answer with headers. */
+  headersMs?: number;
+  /** How long a Stop waits for the turn to end before answering `stopping`. */
+  cancelWaitMs?: number;
   retryElapsedMs?: number;
   /** Test seam: invoked after a call is approved and before it runs. Production leaves it unset. */
   beforeTool?: (name: string) => Promise<void> | void;
-  /** False when nothing can answer an approval (a delegated child, a headless run): every request is refused as unavailable. */
+  /** False when nothing can answer an approval (a headless run): every request is refused as unavailable. */
   approvalChannel?: boolean;
   /** Test seam: the folder user skills load from. Production uses the OS home folder. */
   homeDir?: string;
@@ -362,11 +390,21 @@ export class HarnessHost {
   private credentials: ProviderCredentials = {};
   /** The user's persistent allow and deny rules (Settings → Permissions), for every thread. */
   private rules: CompiledRules = compileRules([]);
+  /** Files an edit asks about in every mode and the shell cannot write (Settings → Permissions). */
+  private protected: ProtectedPaths = compileProtectedPaths(DEFAULT_PROTECTED_PATHS);
   private sessions = new Map<string, Live>();
   private approvals = new Map<string, Approval>();
   private catalog: { key: string; at: number; models: CatalogModel[] } | null = null;
   /** The listing in flight and the keys it was started with; a newly added key starts a new one. */
   private catalogLoading: { key: string; run: Promise<CatalogModel[]> } | null = null;
+  /** The model library, read once and rewritten on each change. */
+  private libraryCache: UserModelEntry[] | null = null;
+  private libraryLoading: Promise<UserModelEntry[]> | null = null;
+  /** The add-model dialog's scoped listings, keyed by provider; dropped when the credential set changes. */
+  private suggestions: { key: string; at: number; models: Map<string, CatalogModel[]> } | null = null;
+  /** Windows the providers themselves stated in overflow rejections, keyed `providerId/model`. Host-lifetime memory, like the probes: a restart re-learns at the cost of one retry. */
+  private readonly learnedWindows = new Map<string, number>();
+  private learnedKey: string | null = null;
   /** Settings' role checks, kept for this host's lifetime. A failed check stays failed until a refresh. */
   private probes: ProbeStore = createProbeStore();
   /** One live check per role and model, so two Settings views never pay for the same probe. */
@@ -381,6 +419,7 @@ export class HarnessHost {
 
   constructor(emit: Emit, private readonly store = new SessionStore(), private readonly fetchImpl: typeof fetch = fetch, private readonly limits: HostLimits = {}, private readonly authorization: (sessionId: string) => McpAuthorization | undefined = () => undefined) {
     this.emit = emit;
+    store.onRepair = (message) => this.emit("agentNotice", { level: "warning", message });
     this.tuning = resolveOrchestratorTuning(this.limits.tuning);
     this.registry.register(BUILTIN_EXTENSION);
     this.registry.register(delegationExtension(this));
@@ -400,7 +439,15 @@ export class HarnessHost {
 
   /** The native shell injects the keychain's provider keys into every harness request. */
   setCredentials(credentials: ProviderCredentials | undefined) {
-    if (credentials) this.credentials = credentials;
+    if (!credentials) return;
+    this.credentials = credentials;
+    // A learned window describes one endpoint. A changed credential set — a different
+    // address, wire or key — invalidates it the same way it invalidates the catalog.
+    const key = this.credentialKey();
+    if (key !== this.learnedKey) {
+      this.learnedWindows.clear();
+      this.learnedKey = key;
+    }
   }
 
   get running() { return true; }
@@ -411,7 +458,10 @@ export class HarnessHost {
     return { ...describeIsolation(process.cwd(), osSandboxAvailable()), consentRequired: false };
   }
 
-  async start() { /* in-process: nothing to spawn */ }
+  async start() {
+    // The library is read (and seeded from past threads, once) before anything can ask for a model.
+    await this.library();
+  }
 
   async stop() {
     for (const approval of this.approvals.values()) approval.resolve({ kind: "cancelled" });
@@ -419,7 +469,9 @@ export class HarnessHost {
     for (const live of this.sessions.values()) {
       live.controller?.abort();
       live.compactionController?.abort();
+      if (live.usageTimer) this.flushUsage(live);
     }
+    await this.store.settled();
     this.sessions.clear();
     await stopAllShells();
     await this.mcp.close();
@@ -432,6 +484,11 @@ export class HarnessHost {
     // Name and wire count too: a renamed or retyped custom endpoint changes the catalog.
     for (const [id, credential] of Object.entries(this.credentials).sort(([a], [b]) => a.localeCompare(b))) hash.update(`${id}\u0000${credential.key ?? ""}\u0000${credential.baseUrl ?? ""}\u0000${credential.name ?? ""}\u0000${credential.wire ?? ""}\u0001`);
     return hash.digest("hex");
+  }
+
+  /** The window to fit against: the provider's own stated limit wins, then the catalog row, then the family table. */
+  private windowFor(providerId: string, model: string, listed?: number | null): number | null {
+    return this.learnedWindows.get(`${providerId}/${model}`) ?? listed ?? contextWindow(providerId, model);
   }
 
   private async fetchJson(provider: ResolvedProvider, path: string): Promise<Json> {
@@ -464,6 +521,11 @@ export class HarnessHost {
       const parameters = Array.isArray(row.supported_parameters) ? row.supported_parameters.filter((item): item is string => typeof item === "string") : null;
       const capabilities = row.capabilities as { reasoning?: unknown } | undefined;
       const listedReasoning = typeof capabilities?.reasoning === "boolean" ? capabilities.reasoning : undefined;
+      // OpenRouter names each model's input modalities ("text+image->text"). A model that
+      // lists no image input is marked imageless; a catalog without the field says nothing.
+      const architecture = row.architecture as { modality?: unknown } | undefined;
+      const inputModalities = typeof architecture?.modality === "string" ? architecture.modality.split("->")[0] ?? "" : "";
+      const listedImages = inputModalities ? inputModalities.split("+").includes("image") : undefined;
       // OpenRouter names each model's accepted levels. `null` means all gateway
       // levels are accepted; an omitted key means the model exposes no effort
       // selection, so the family fallback must not invent one.
@@ -504,14 +566,15 @@ export class HarnessHost {
         ...(tiers.length ? { defaultReasoningEffort: listedDefault ?? defaultEffortTier(raw, tiers) } : {}),
         effortSource: "host",
         ...(listedReasoning !== undefined ? { listedReasoning } : {}),
+        ...(listedImages !== undefined ? { listedImages } : {}),
       };
     }).filter((model): model is CatalogModel => Boolean(model));
   }
 
   /** A sensible first model: the newest mainstream coding model from the first provider that has one. */
-  private markDefault(models: CatalogModel[]): CatalogModel[] {
+  private markDefault<T extends { modelId: string }>(models: readonly T[]): T[] {
     const preferences = [/anthropic\/claude-sonnet/, /anthropic\/claude-opus/, /anthropic\/claude/, /openai\/gpt-5(?!.*(nano|mini))/, /openai\/gpt-4\.1$/, /google\/gemini-.*pro/, /xai\/grok-4/, /deepseek\/deepseek-chat/, /nvidia\/moonshotai\/kimi-k[\d.]+$/, /nvidia\/z-ai\/glm-[\d.]+$/, /nvidia\/nvidia\/nemotron-[\d.]+-super/, /./];
-    let pick: CatalogModel | undefined;
+    let pick: T | undefined;
     for (const pattern of preferences) {
       const hits = models.filter((model) => pattern.test(model.modelId));
       // A gateway's `~vendor/…-latest` alias is a pointer, not a release. Prefer a named model when one matches.
@@ -527,7 +590,7 @@ export class HarnessHost {
     if (!refresh && this.catalog && this.catalog.key === key && Date.now() - this.catalog.at < CATALOG_TTL_MS) return this.catalog.models;
     if (this.catalogLoading?.key === key && !refresh) return this.catalogLoading.run;
     const providers = configuredProviders(this.credentials);
-    if (!providers.length) throw new Error(`${HARNESS_NAME} has no model provider yet. Add an API key in Settings → Providers.`);
+    if (!providers.length) throw new Error(`${HARNESS_NAME} has no model provider yet. Add an API key in Settings → Models & providers.`);
     const run = (async () => {
       const results = await Promise.allSettled(providers.map((provider) => this.providerModels(provider)));
       const models = results.flatMap((result) => result.status === "fulfilled" ? result.value : []);
@@ -542,15 +605,149 @@ export class HarnessHost {
     try { return await run; } finally { if (this.catalogLoading?.run === run) this.catalogLoading = null; }
   }
 
+  // ─── Model library ────────────────────────────────────────────────────────
+
+  /** The library on disk, seeded once from past threads when the file does not exist yet. */
+  private async library(): Promise<UserModelEntry[]> {
+    if (this.libraryCache) return this.libraryCache;
+    this.libraryLoading ??= this.loadLibraryOnce();
+    const loaded = await this.libraryLoading;
+    this.libraryCache = loaded;
+    this.libraryLoading = null;
+    return loaded;
+  }
+
+  private async loadLibraryOnce(): Promise<UserModelEntry[]> {
+    // The library lives beside the session store, so the app and the CLI see the same one.
+    const root = this.store.root;
+    if (!existsSync(libraryFile(root))) {
+      const seeded = seedFromSessions(await this.store.list().catch(() => []));
+      // A failed seed write still yields the in-memory library; the next change saves it.
+      await saveLibrary(seeded, root).catch(() => {});
+      return seeded;
+    }
+    return loadLibrary(root);
+  }
+
+  /**
+   * The catalog row for a model with the library's own choices layered over it.
+   * What the user set wins; what they left open comes from the live catalog
+   * row, and a model the catalog no longer lists still resolves from its entry.
+   */
+  private withLibrary(rows: readonly CatalogModel[], modelId: string): CatalogModel | undefined {
+    const entry = this.libraryCache?.find((item) => entryKey(item) === modelId);
+    const row = rows.find((item) => item.modelId === modelId);
+    if (!entry) return row;
+    const { providerId, model } = splitModelId(modelId);
+    const efforts: Tier[] = entry.efforts !== undefined
+      ? TIERS.filter((tier) => entry.efforts!.includes(tier))
+      : (row?.reasoningEfforts ?? []).filter((tier): tier is Tier => (TIERS as readonly string[]).includes(tier));
+    const fallbackDefault = row?.defaultReasoningEffort && (efforts as string[]).includes(row.defaultReasoningEffort) ? row.defaultReasoningEffort : undefined;
+    const images = entry.images ?? row?.listedImages ?? undefined;
+    return {
+      modelId,
+      displayLabel: entry.displayName ?? row?.displayLabel ?? model,
+      providerId,
+      description: row?.description ?? providerSpec(providerId)?.name ?? providerId,
+      contextLimit: entry.contextWindow ?? row?.contextLimit ?? null,
+      cost: row?.cost ?? entry.cost ?? null,
+      reasoningEfforts: efforts,
+      ...(efforts.length ? { defaultReasoningEffort: entry.defaultEffort ?? fallbackDefault ?? defaultEffortTier(model, efforts) } : {}),
+      effortSource: "host",
+      ...(row?.listedReasoning !== undefined ? { listedReasoning: row.listedReasoning } : {}),
+      ...(images !== undefined ? { listedImages: images } : {}),
+    };
+  }
+
+  /** The listed row call sites fit against: catalog metadata with the library's choices on top. */
+  private async listedFor(modelId: string): Promise<CatalogModel | undefined> {
+    const rows = await this.loadCatalog(false).catch(() => [] as CatalogModel[]);
+    return this.withLibrary(rows, modelId);
+  }
+
+  /** The picker's rows: the library, with fresh catalog metadata where the user left a field open. */
+  private async libraryModels(refresh = false): Promise<HarnessModel[]> {
+    const library = await this.library();
+    const rows = await this.loadCatalog(refresh).catch(() => [] as CatalogModel[]);
+    const models = library.map((entry) => {
+      const row = this.withLibrary(rows, entryKey(entry))!;
+      return {
+        ...row,
+        documents: entry.documents ?? null,
+        video: entry.video ?? null,
+        unavailable: !resolveProvider(entry.providerId, this.credentials) || undefined,
+      };
+    });
+    return this.markDefault(models);
+  }
+
   async listModels(sessionId?: string, refresh = false): Promise<{ models: HarnessModel[]; source: string; modes: typeof MODES; defaultMode: string }> {
-    const models = await this.loadCatalog(refresh);
+    const models = await this.libraryModels(refresh);
     const active = sessionId ? this.sessions.get(sessionId)?.meta.modelId : undefined;
-    return { models: active ? models.map((model) => ({ ...model, isActive: model.modelId === active })) : models, source: sessionId ? "session" : "catalog", modes: MODES, defaultMode: "build" };
+    return { models: active ? models.map((model) => ({ ...model, isActive: model.modelId === active })) : models, source: sessionId ? "session" : "library", modes: MODES, defaultMode: "build" };
+  }
+
+  async modelLibraryList(): Promise<{ entries: UserModelEntry[] }> {
+    return { entries: await this.library() };
+  }
+
+  /** Add or update one library entry. Editing keeps the entry's place and added date. */
+  async modelLibraryPut(entry: {
+    providerId: string;
+    model: string;
+    displayName?: string | null;
+    contextWindow?: number | null;
+    efforts?: string[];
+    defaultEffort?: string;
+    images?: boolean | null;
+    documents?: boolean | null;
+    video?: boolean | null;
+    cost?: HarnessModel["cost"];
+    effortSource?: "fetched" | "user";
+  }): Promise<{ entries: UserModelEntry[] }> {
+    const existing = (await this.library()).find((item) => entryKey(item) === `${entry.providerId.trim()}/${entry.model.trim()}`);
+    const normalized = normalizeEntry({ ...entry, source: "user", addedAt: existing?.addedAt ?? new Date().toISOString() });
+    if (!normalized) throw new Error("The model entry is invalid.");
+    if (!providerSpec(normalized.providerId) && !isCustomProvider(normalized.providerId)) throw new Error(`${normalized.providerId} is not a model provider.`);
+    const library = this.libraryCache!;
+    const updated = library.some((item) => entryKey(item) === entryKey(normalized))
+      ? library.map((item) => entryKey(item) === entryKey(normalized) ? normalized : item)
+      : [...library, normalized];
+    await saveLibrary(updated, this.store.root);
+    this.libraryCache = updated;
+    return this.modelLibraryList();
+  }
+
+  async modelLibraryRemove(modelId: string): Promise<{ entries: UserModelEntry[] }> {
+    const library = await this.library();
+    const updated = library.filter((item) => entryKey(item) !== modelId);
+    if (updated.length === library.length) throw new Error(`${modelId} is not in the model library.`);
+    await saveLibrary(updated, this.store.root);
+    this.libraryCache = updated;
+    return this.modelLibraryList();
+  }
+
+  /**
+   * One provider's own listing for the add-model dialog: suggestions to pick
+   * from, not entries in the library. Cached per credential set like the catalog.
+   */
+  async listProviderModels(providerId: string, refresh = false): Promise<{ models: HarnessModel[] }> {
+    const id = providerId.trim();
+    const provider = resolveProvider(id, this.credentials);
+    if (!provider) throw new ProviderError(`${providerSpec(id)?.name ?? (id || "That provider")} has no key. Add it in Settings → Models & providers.`, undefined, "MISSING_CREDENTIAL");
+    const key = this.credentialKey();
+    if (!this.suggestions || this.suggestions.key !== key || Date.now() - this.suggestions.at >= CATALOG_TTL_MS) this.suggestions = { key, at: Date.now(), models: new Map() };
+    if (refresh || !this.suggestions.models.has(id)) {
+      const models = await this.providerModels(provider);
+      this.suggestions.models.set(id, models);
+      return { models };
+    }
+    return { models: this.suggestions.models.get(id)! };
   }
 
   private async defaultModel(): Promise<string | undefined> {
-    const models = await this.loadCatalog(false).catch(() => []);
-    return models.find((model) => model.isDefault)?.modelId ?? models[0]?.modelId;
+    const models = await this.libraryModels(false).catch(() => [] as HarnessModel[]);
+    return models.find((model) => model.isDefault && !model.unavailable)?.modelId ?? models.find((model) => !model.unavailable)?.modelId;
   }
 
   // ─── Sessions ─────────────────────────────────────────────────────────────
@@ -602,7 +799,7 @@ export class HarnessHost {
   }
 
   private track(meta: SessionMeta, messages: ChatMessage[], approvalMode?: string): Live {
-    const live: Live = { meta, messages, mcpAuthorization: this.authorization(meta.sessionId) ?? { workspaceTrusted: false }, approvalMode: APPROVAL_MODES.has(approvalMode as ApprovalMode) ? approvalMode as ApprovalMode : "promptUnmatched", grants: [], prompting: false, controller: null, turnId: "idle", counter: 0, usage: { promptTokens: meta.usage?.promptTokens ?? 0, outputTokens: meta.usage?.outputTokens ?? 0, cacheReadTokens: meta.usage?.cacheReadTokens ?? 0, cacheWriteTokens: meta.usage?.cacheWriteTokens ?? 0 }, queue: [], steering: [], replacing: false, repeatCount: 0, leadMessages: [] };
+    const live: Live = { meta, messages, mcpAuthorization: this.authorization(meta.sessionId) ?? { workspaceTrusted: false }, approvalMode: APPROVAL_MODES.has(approvalMode as ApprovalMode) ? approvalMode as ApprovalMode : "promptUnmatched", grants: [], prompting: false, controller: null, turnId: "idle", counter: 0, nonce: randomUUID().slice(0, 8), usage: { promptTokens: meta.usage?.promptTokens ?? 0, outputTokens: meta.usage?.outputTokens ?? 0, cacheReadTokens: meta.usage?.cacheReadTokens ?? 0, cacheWriteTokens: meta.usage?.cacheWriteTokens ?? 0 }, queue: [], steering: [], replacing: false, repeatCount: 0, leadMessages: [] };
     this.sessions.set(meta.sessionId, live);
     return live;
   }
@@ -613,7 +810,7 @@ export class HarnessHost {
     const meta = await this.store.meta(options.sessionId);
     if (!meta) throw new Error("This thread's history is no longer on this device.");
     if (meta.workspaceRoot !== options.workspaceRoot) throw new Error("That thread belongs to another workspace.");
-    const { messages, items, steering, question, delegation, routes, leadMessages, builder, checkpoint } = await this.store.read(options.sessionId);
+    const { messages, items, workspaceRestoreIds, steering, question, delegation, routes, leadMessages, builder, checkpoint, damaged } = await this.store.read(options.sessionId);
     const openedTurn = checkpoint.turn?.state === "open" ? checkpoint.turn : undefined;
     // A crash can leave the last assistant's tool calls without results. Settle
     // them once, truthfully: the log records the same interruption the model
@@ -637,6 +834,7 @@ export class HarnessHost {
       await this.store.update(options.sessionId, { delegation: policy, mode: meta.mode });
     }
     const live = this.track(meta, messages, policy ? policy.approvalMode : options.approvalMode);
+    live.workspaceRestoreIds = new Set(workspaceRestoreIds);
     live.steering = steering ?? [];
     // Replay the transcript exactly as it was recorded; nothing runs again.
     live.question = question;
@@ -695,6 +893,12 @@ export class HarnessHost {
         message: "The previous turn was interrupted before it finished. It was not resumed, and nothing was replayed.",
       });
     }
+    // Unreadable entries are skipped, never silently: the history the model sees may be missing some.
+    if (damaged?.lines) {
+      this.emit("agentNotice", { sessionId: options.sessionId, level: "warning", message: `${damaged.lines} saved ${damaged.lines === 1 ? "entry" : "entries"} in this thread could not be read and ${damaged.lines === 1 ? "was" : "were"} skipped, so some of its history may be missing. The log is unchanged: ${join(this.store.root, "sessions", `${options.sessionId}.jsonl`)}.` });
+    } else if (damaged?.tornTail) {
+      this.emit("agentNotice", { sessionId: options.sessionId, level: "info", message: "The last saved entry of this thread was cut off, probably because the app stopped while writing it, and was skipped." });
+    }
     this.emitUsage(live);
     return { sessionId: options.sessionId, alreadyOpen: false, opening: { result: { session: { sessionId: options.sessionId, workspaceRoot: meta.workspaceRoot, modelId: meta.modelId ?? null } } }, agentConfig: this.config(live), userInputs: this.openQuestions(live) };
   }
@@ -703,6 +907,7 @@ export class HarnessHost {
     const live = this.sessions.get(options.sessionId);
     live?.controller?.abort();
     live?.compactionController?.abort();
+    if (live?.usageTimer) this.flushUsage(live);
     this.sessions.delete(options.sessionId);
     // A thread's dev servers and watchers stop with it.
     await stopSessionShells(options.sessionId);
@@ -710,9 +915,17 @@ export class HarnessHost {
     return { closed: true };
   }
 
-  /** Settings → Permissions' rules. Answers with the ones that could not be read, so the app can say so. */
-  setPermissionRules(rules: readonly PermissionRule[]) {
+  /**
+   * Settings → Permissions' rules and protected paths. Answers with the rules
+   * that could not be read, so the app can say so. Leaving the protected paths
+   * out keeps the current set (the defaults until the app sends one).
+   */
+  setPermissionRules(rules: readonly PermissionRule[], protectedPaths?: readonly string[]) {
     this.rules = compileRules(rules);
+    if (protectedPaths) {
+      this.protected = compileProtectedPaths(protectedPaths);
+      this.mcp.protectedPaths = this.protected.patterns;
+    }
     return { problems: this.rules.problems };
   }
 
@@ -745,14 +958,14 @@ export class HarnessHost {
     this.emitItem(live, { itemId, kind: "compaction", status: "inProgress", turnId: live.turnId, reason }, true);
     try {
       const modelId = live.meta.modelId ?? await this.defaultModel();
-      if (!modelId) throw new Error(`${HARNESS_NAME} has no model to use. Add a provider key in Settings → Providers.`);
+      if (!modelId) throw new Error(`${HARNESS_NAME} has no model to use. Add one in Settings → Models & providers.`);
       const { providerId, model } = splitModelId(modelId);
       const provider = resolveProvider(providerId, this.credentials);
-      if (!provider) throw new ProviderError(`${providerSpec(providerId)?.name ?? providerId} has no key. Add it in Settings → Providers, or pick another model.`, undefined, "MISSING_CREDENTIAL");
-      const listed = (await this.loadCatalog(false).catch(() => [])).find((row) => row.modelId === modelId);
-      const window = listed?.contextLimit ?? contextWindow(provider.id, model);
+      if (!provider) throw new ProviderError(`${providerSpec(providerId)?.name ?? providerId} has no key. Add it in Settings → Models & providers, or pick another model.`, undefined, "MISSING_CREDENTIAL");
+      const listed = await this.listedFor(modelId);
+      const window = this.windowFor(provider.id, model, listed?.contextLimit);
       compactSignal.throwIfAborted();
-      const { message, stopReason } = await this.callModel(live, provider, modelId, model, { stable: SUMMARY_SYSTEM, volatile: "" }, [], compactSignal, window, listed?.listedReasoning, listed?.reasoningEfforts, undefined, { messages: summaryRequest(live.messages, window), emitText: false, emitContext: false });
+      const { message, stopReason } = await this.callModel(live, provider, modelId, model, { stable: SUMMARY_SYSTEM, volatile: "" }, [], compactSignal, window, listed?.listedReasoning, listed?.reasoningEfforts, listed?.listedImages, undefined, { messages: summaryRequest(live.messages, window), emitText: false, emitContext: false });
       if (isTruncatedStop(stopReason)) throw new Error("the model's summary was cut off by a provider limit");
       const summary = message.text.trim();
       if (!summary) throw new Error("the model returned an empty summary");
@@ -862,8 +1075,8 @@ export class HarnessHost {
   /**
    * Run one self-contained task in a child session. The child shares this
    * host's turn loop and workspace, but gets the narrowed profile for its
-   * depth, a step cap, the parent's permission mode fixed for its life, and no
-   * approval channel: anything the mode would ask about is refused.
+   * depth, a step cap, and the parent's permission mode fixed for its life.
+   * Approval requests surface in the visible thread, but grants stay in the child.
    */
   async delegate(context: TurnContext, request: DelegationRequest, signal?: AbortSignal): Promise<DelegationResult> {
     const parent = this.requireLive(context.sessionId);
@@ -978,8 +1191,15 @@ export class HarnessHost {
 
   // ─── Turns ────────────────────────────────────────────────────────────────
 
+  /**
+   * Item ids are `session:turn:kind:n`. A turn id is unique, but before the
+   * first turn of a run it is `idle` and the counter starts again at 1, so a
+   * compaction after a restart would take the id of one from the run before and
+   * overwrite its row in the transcript. A per-run nonce keeps them apart.
+   */
   private itemId(live: Live, kind: string) {
-    return `${live.meta.sessionId}:${live.turnId}:${kind}:${++live.counter}`;
+    const turn = live.turnId === "idle" ? `idle-${live.nonce}` : live.turnId;
+    return `${live.meta.sessionId}:${turn}:${kind}:${++live.counter}`;
   }
 
   /**
@@ -1014,6 +1234,23 @@ export class HarnessHost {
     });
   }
 
+  /**
+   * Usage is written to the index, which is rewritten whole under a lock. Doing
+   * that after every model call made a long tool loop a stream of full rewrites
+   * and lock waits, so the totals are saved at most every two seconds and at the
+   * end of the turn, the thread's close and the process's stop.
+   */
+  private saveUsageSoon(live: Live) {
+    if (live.usageTimer) return;
+    live.usageTimer = setTimeout(() => this.flushUsage(live), 2000);
+    live.usageTimer.unref?.();
+  }
+
+  private flushUsage(live: Live) {
+    if (live.usageTimer) { clearTimeout(live.usageTimer); live.usageTimer = undefined; }
+    this.contained(live, "the thread's usage", this.store.update(live.meta.sessionId, { usage: live.usage }));
+  }
+
   /** Add one call's reported tokens to this session and its open ancestors. */
   private accumulateUsage(live: Live, spent: { input: number; output: number; cacheRead: number; cacheWrite: number }) {
     if (!(spent.input || spent.output || spent.cacheRead || spent.cacheWrite)) return;
@@ -1027,7 +1264,7 @@ export class HarnessHost {
         cacheReadTokens: current.usage.cacheReadTokens + spent.cacheRead,
         cacheWriteTokens: current.usage.cacheWriteTokens + spent.cacheWrite,
       };
-      void this.store.update(current.meta.sessionId, { usage: current.usage });
+      this.saveUsageSoon(current);
       if (!current.muted) break;
       const parentId: string | undefined = current.meta.delegation?.parentSessionId;
       current = parentId ? this.sessions.get(parentId) : undefined;
@@ -1039,7 +1276,7 @@ export class HarnessHost {
     // A muted child still writes its transcript: the parent's drill-down reads
     // it from disk, and the log is the durable child catalog.
     if (!live.muted) this.emit("item", { sessionId: live.meta.sessionId, item });
-    if (persist) void this.store.append(live.meta.sessionId, [{ type: "item", item }]).catch(() => {});
+    if (persist) this.contained(live, "a transcript entry", this.store.append(live.meta.sessionId, [{ type: "item", item }]));
   }
 
   /**
@@ -1059,7 +1296,9 @@ export class HarnessHost {
   private rejectImages(live: Live, images?: Array<{ mediaType: string; base64Data: string }>) {
     if (!images?.length) return;
     const { providerId, model } = splitModelId(live.meta.modelId ?? "");
-    const supported = providerId ? modelCapabilities({ providerId, model }).images.value : null;
+    // The library's own images flag is read synchronously from the in-memory cache, which `start()` filled.
+    const entry = providerId ? this.libraryCache?.find((item) => entryKey(item) === `${providerId}/${model}`) : undefined;
+    const supported = providerId ? modelCapabilities({ providerId, model, ...(entry?.images != null ? { listedImages: entry.images } : {}) }).images.value : null;
     const problem = imageRequestProblem([{ content: images.map((image) => ({ type: "image", mediaType: image.mediaType, data: image.base64Data })) }], supported);
     if (problem) throw new Error(problem);
   }
@@ -1077,6 +1316,7 @@ export class HarnessHost {
       if (approval.sessionId !== live.meta.sessionId) continue;
       approval.resolve({ kind: "cancelled" });
       this.approvals.delete(id);
+      this.emit("approvalResolved", { approvalId: id, sessionId: live.meta.sessionId });
     }
     live.controller?.abort();
   }
@@ -1086,7 +1326,7 @@ export class HarnessHost {
   /** Skills the thread's workspace and the home folder provide, as rows the composer and Extensions list. */
   listSkills(options: { sessionId: string }) {
     const live = this.requireLive(options.sessionId);
-    return { skills: discoverSkills(live.meta.workspaceRoot, this.homeDir).map((skill) => {
+    return { skills: discoverSkills(live.meta.workspaceRoot, this.homeDir, this.workspaceTrusted(live)).map((skill) => {
       const icon = skillIcon(skill.folder);
       return { selector: skill.name, description: skill.description, source: skill.scope, ...(icon ? { icon } : {}) };
     }) };
@@ -1111,6 +1351,14 @@ export class HarnessHost {
     return live.mcpAuthorization;
   }
 
+  /**
+   * The user's native trust decision for this thread's workspace. A delegated
+   * child has no authorization of its own, so it follows the thread it works for.
+   */
+  private workspaceTrusted(live: Live): boolean {
+    return this.mcpAuthorization(this.surface(live)).workspaceTrusted === true;
+  }
+
   /** Add a server to one config file, then return the effective rows. */
   async addMcpServer(options: { sessionId: string; scope: McpScope; server: McpServerInput }) {
     const live = this.requireLive(options.sessionId);
@@ -1125,17 +1373,17 @@ export class HarnessHost {
     return this.mcpConfig(options);
   }
 
-  async sendTurn(options: { sessionId: string; text: string; reasoningEffort?: string; images?: Array<{ mediaType: string; base64Data: string }>; ifBusy?: "queue" | "steer" | "replace"; skill?: SkillInvocation; forcedShape?: OrchestratorShape }) {
+  async sendTurn(options: { sessionId: string; text: string; reasoningEffort?: string; images?: Array<{ mediaType: string; base64Data: string }>; ifBusy?: "queue" | "steer" | "replace"; skill?: SkillInvocation; forcedShape?: OrchestratorShape; workspaceRestores?: WorkspaceRestore[] }) {
     const live = this.requireLive(options.sessionId);
     // Waiting here would hold the session's bridge queue and prevent Stop from
     // reaching it. The composer restores an unaccepted draft for a retry.
     if (live.compacting) throw new Error("Context is still being compacted. Wait for it to finish before sending.");
     // A typed `/skill` is expanded now, so a queued turn runs the skill as it was when sent.
-    const expanded = options.skill ? expandInvocation(live.meta.workspaceRoot, this.homeDir, options.skill, options.text) : undefined;
+    const expanded = options.skill ? expandInvocation(live.meta.workspaceRoot, this.homeDir, this.workspaceTrusted(live), options.skill, options.text) : undefined;
     const text = expanded?.content ?? options.text;
     const display = expanded?.display ?? options.text;
     // Steer folds into the running turn, whose shape is already decided.
-    const request = { text, images: options.images, effort: options.reasoningEffort, ...(expanded ? { display } : {}), ...(options.forcedShape && options.ifBusy !== "steer" ? { forcedShape: options.forcedShape } : {}) };
+    const request = { text, images: options.images, effort: options.reasoningEffort, workspaceRestores: options.workspaceRestores, ...(expanded ? { display } : {}), ...(options.forcedShape && options.ifBusy !== "steer" ? { forcedShape: options.forcedShape } : {}) };
     this.rejectImages(live, request.images);
     if (live.prompting) {
       if (options.ifBusy === "queue") {
@@ -1187,7 +1435,9 @@ export class HarnessHost {
   private async beginTurn(live: Live, request: TurnRequest, fromQueue: boolean) {
     live.prompting = true;
     let durable = false;
-    const user: ChatMessage = { role: "user", content: this.userContent(request.text, request.images) };
+    const restores = (request.workspaceRestores ?? []).filter((restore) => !live.workspaceRestoreIds?.has(restore.id));
+    const text = restores.length ? `Workspace file state updates from Glitter:\n${restores.map((restore) => restore.text).join("\n\n")}\n\nUser request:\n${request.text}` : request.text;
+    const user: ChatMessage = { role: "user", content: this.userContent(text, request.images) };
     try {
       live.turnId = request.turnId;
       // A new user message is a new task, even while a plan review waits.
@@ -1203,29 +1453,35 @@ export class HarnessHost {
       await this.flushSteering(live);
       live.messages.push(user);
       this.resetRepeat(live);
-      await this.store.append(live.meta.sessionId, [{ type: "message", message: user }, { type: "checkpoint", checkpoint: { kind: "turn", turnId: request.turnId, state: "open" } }]);
+      await this.store.append(live.meta.sessionId, [{ type: "message", message: user }, ...(restores.length ? [{ type: "workspaceRestores" as const, ids: restores.map((restore) => restore.id) }] : []), { type: "checkpoint", checkpoint: { kind: "turn", turnId: request.turnId, state: "open" } }]);
       durable = true;
+      live.workspaceRestoreIds ??= new Set();
+      for (const restore of restores) live.workspaceRestoreIds.add(restore.id);
       this.emitItem(live, { itemId: `${request.turnId}:user`, kind: "userMessage", status: "completed", text: request.display ?? request.text, turnId: request.turnId }, true);
       if (!live.meta.title) {
         const title = (request.display ?? request.text).trim().split("\n")[0].slice(0, 80) || "New thread";
         live.meta.title = title;
-        void this.store.update(live.meta.sessionId, { title });
+        this.contained(live, "the thread's title", this.store.update(live.meta.sessionId, { title }));
         this.emit("sessionTitle", { sessionId: live.meta.sessionId, title });
       } else {
-        void this.store.update(live.meta.sessionId, {});
+        this.contained(live, "the thread's details", this.store.update(live.meta.sessionId, {}));
       }
       if (fromQueue) this.emit("turnStarted", { sessionId: live.meta.sessionId, turnId: request.turnId });
       // Sync before the snapshot, so this turn sees the config as it is now. A
       // broken config reports and retires the previous generation for future turns.
       if (live.meta.mode !== "plan") await this.mcp.ensure(live.meta.workspaceRoot, this.mcpAuthorization(live), live.meta.sessionId);
-      void this.runTurn(live, request.turnId, { prompt: request.display ?? request.text, ...(request.forcedShape ? { forcedShape: request.forcedShape } : {}) });
+      this.guardTurn(live, request.turnId, this.runTurn(live, request.turnId, { prompt: request.display ?? request.text, ...(request.forcedShape ? { forcedShape: request.forcedShape } : {}) }));
     } catch (error) {
       if (!durable) {
         const tail = live.messages.at(-1);
         if (tail === user) live.messages.pop();
         live.prompting = false;
+        throw error;
       }
-      throw error;
+      // The message is saved but the turn could not start. Settle it, or the
+      // thread stays busy with nothing running and every later send is refused.
+      this.abandonTurn(live, request.turnId, error);
+      if (!fromQueue) throw error;
     }
   }
 
@@ -1234,14 +1490,21 @@ export class HarnessHost {
     if (live.prompting || !this.sessions.has(live.meta.sessionId)) return;
     const next = live.queue.shift();
     if (!next) return;
-    void this.beginTurn(live, next, true);
+    // A start that fails before its message is saved has no caller to tell: say so, and move on to the next one.
+    this.beginTurn(live, next, true).catch((error: unknown) => this.abandonTurn(live, next.turnId, error));
   }
 
+  /**
+   * Stop the running turn and say what is true: `terminal` when it has ended,
+   * `stopping` when the wait ran out with the turn still running (a tool that
+   * has not yet died). The end itself always arrives as `turnCompleted`.
+   */
   async cancelTurn(options: { sessionId: string }) {
     const live = this.sessions.get(options.sessionId);
     if (live) this.stopInFlight(live);
-    for (let waited = 0; live?.prompting && waited < 3000; waited += 50) await new Promise((resolve) => setTimeout(resolve, 50));
-    return { status: "terminal" as const };
+    const patience = this.limits.cancelWaitMs ?? 3000;
+    for (let waited = 0; live?.prompting && waited < patience; waited += 50) await new Promise((resolve) => setTimeout(resolve, 50));
+    return { status: live?.prompting ? "stopping" as const : "terminal" as const };
   }
 
   decideApproval(options: { approvalId: string; choiceId: string }) {
@@ -1269,8 +1532,11 @@ export class HarnessHost {
   private async systemPrompt(live: Live, turn: TurnContributions): Promise<SystemPrompt> {
     let rules = "";
     let rulesFile = "AGENTS.md";
+    // A repository's own instructions reach the model only once the user has
+    // trusted the workspace; the trust prompt promises exactly that.
+    const trusted = turn.context.workspaceTrusted;
     // AGENTS.md first; a project that only has CLAUDE.md gets that instead.
-    for (const name of ["AGENTS.md", "CLAUDE.md"]) {
+    for (const name of trusted ? ["AGENTS.md", "CLAUDE.md"] : []) {
       try { rules = (await readFile(confine(live.meta.workspaceRoot, name), "utf8")).slice(0, 20_000); rulesFile = name; break; } catch { /* no readable in-workspace project rules */ }
     }
     // The user's own rules for every project: written by them, outside any workspace.
@@ -1285,7 +1551,9 @@ export class HarnessHost {
       "Reply in concise Markdown. When you finish, summarise what changed and anything left to do.",
       personal.trim() ? `The user's own rules, for every project (from ~/.glitter/AGENTS.md):\n\n${personal}` : "",
       rules ? `Project rules from ${rulesFile}:\n\n${rules}` : "",
-      "A folder inside the workspace can have its own AGENTS.md; when you first touch a file there, its rules are added to that tool result. Follow them for files under that folder.",
+      trusted
+        ? "A folder inside the workspace can have its own AGENTS.md; when you first touch a file there, its rules are added to that tool result. Follow them for files under that folder."
+        : "The user has not trusted this workspace, so its own rules (AGENTS.md, CLAUDE.md) and skills are not loaded. Do not go looking for them; work from the user's request.",
     ].filter(Boolean).join("\n\n");
     const volatile = [
       `Date: ${new Date().toISOString().slice(0, 10)}.`,
@@ -1465,13 +1733,12 @@ export class HarnessHost {
 
   /** Catalog capabilities are added only to roles that already passed their check. */
   private async roleCatalogCapabilities(settings: OrchestratorSettings): Promise<Partial<Record<OrchestratorRole, OrchestratorCapability[]>>> {
-    const rows = await this.loadCatalog(false).catch(() => []);
-    const forModel = (modelId: string) => {
+    const forModel = async (modelId: string) => {
       const { providerId, model } = splitModelId(modelId);
-      const listed = rows.find((row) => row.modelId === modelId);
-      return catalogCapabilities({ modelId, contextLimit: listed?.contextLimit ?? contextWindow(providerId, model) });
+      const listed = await this.listedFor(modelId);
+      return catalogCapabilities({ modelId, contextLimit: this.windowFor(providerId, model, listed?.contextLimit) });
     };
-    return { lead: forModel(settings.roles.lead.modelId), builder: forModel(settings.roles.builder.modelId), small: forModel(settings.roles.small.modelId) };
+    return { lead: await forModel(settings.roles.lead.modelId), builder: await forModel(settings.roles.builder.modelId), small: await forModel(settings.roles.small.modelId) };
   }
 
   /** The single-stage shapes: one model runs the turn. Lead-guided is staged. */
@@ -1496,7 +1763,7 @@ export class HarnessHost {
     const { providerId, model } = splitModelId(modelId);
     const provider = resolveProvider(providerId, this.credentials);
     if (!provider) return undefined;
-    const listed = (await this.loadCatalog(false).catch(() => [])).find((row) => row.modelId === modelId);
+    const listed = await this.listedFor(modelId);
     return resolveEffortTarget(target, effortTiers(provider.id, model, provider.wire, listed?.listedReasoning, listed?.reasoningEfforts));
   }
 
@@ -1514,7 +1781,7 @@ export class HarnessHost {
   private async runRouterCall(live: Live, routeId: string, router: OrchestratorModel, effort: string | undefined, prompt: string, openTask: OpenTask | undefined, attachments: readonly { name: string; mediaType?: string }[], signal: AbortSignal): Promise<{ text: string; effort?: string }> {
     const { providerId, model } = splitModelId(router.modelId);
     const provider = resolveProvider(providerId, this.credentials);
-    if (!provider) throw new ProviderError(`${providerSpec(providerId)?.name ?? providerId} has no key. Add it in Settings → Providers.`, undefined, "MISSING_CREDENTIAL");
+    if (!provider) throw new ProviderError(`${providerSpec(providerId)?.name ?? providerId} has no key. Add it in Settings → Models & providers.`, undefined, "MISSING_CREDENTIAL");
     const controller = new AbortController();
     const forwardAbort = () => controller.abort();
     if (signal.aborted) controller.abort();
@@ -1532,7 +1799,7 @@ export class HarnessHost {
         recent: this.recentTurns(live, prompt),
         ...(openTask ? { openTask: openTask.shape } : {}),
       });
-      const listed = (await this.loadCatalog(false).catch(() => [])).find((row) => row.modelId === router.modelId);
+      const listed = await this.listedFor(router.modelId);
       for await (const event of streamChat({
         provider,
         modelId: router.modelId,
@@ -1542,8 +1809,9 @@ export class HarnessHost {
         effort,
         listedReasoning: listed?.listedReasoning,
         listedEfforts: listed?.reasoningEfforts,
+        listedImages: listed?.listedImages,
         signal: controller.signal,
-        timeouts: { idleMs: this.limits.idleMs, firstEventMs: this.limits.firstEventMs },
+        timeouts: { idleMs: this.limits.idleMs, firstEventMs: this.limits.firstEventMs, headersMs: this.limits.headersMs },
         fetchImpl: this.fetchImpl,
       })) {
         if (event.type === "text") text += event.delta;
@@ -1633,46 +1901,61 @@ export class HarnessHost {
   }
 
   /** Ask the user about one call. Thread choices come from the policy, narrowest first. */
-  private async ask(live: Live, call: ToolCall, kind: ToolKind, subject: Subject, verdict: Extract<Verdict, { kind: "ask" }>): Promise<ApprovalOutcome> {
-    // A delegated child has no one to answer: its asks fail closed rather than
-    // waiting on a card the app never shows for it.
-    if (this.limits.approvalChannel === false || live.meta.delegation) return Promise.resolve({ kind: "unavailable" });
+  private async ask(live: Live, call: ToolCall, kind: ToolKind, subject: Subject, verdict: Extract<Verdict, { kind: "ask" }>, signal: AbortSignal): Promise<ApprovalOutcome> {
+    const owner = this.surface(live);
+    // A child without a live visible ancestor cannot show a card.
+    if (this.limits.approvalChannel === false || owner.muted || (live !== owner && !owner.prompting)) return { kind: "unavailable" };
+    if (signal.aborted) return { kind: "cancelled" };
     // Durable before the card is shown, so a crash while it is open is not mistaken for a call that never asked.
     await this.store.append(live.meta.sessionId, [{ type: "checkpoint", checkpoint: { kind: "approval", turnId: live.turnId, callId: call.id, state: "pending" } }]);
     const approvalId = randomUUID();
+    // Thread-scoped grants belong to the child, not the visible thread. Offer
+    // only a single-call decision so the card never promises a wider grant.
+    const scopes = live === owner ? verdict.scopes : [];
     const choices = [
       { choiceId: "allow-once", label: "Allow once", decision: "approved", scope: "once" },
-      ...verdict.scopes.map((scope) => ({ choiceId: scope.choiceId, label: scope.label, scopeLabel: scope.scopeLabel, decision: "approved", scope: "session" })),
+      ...scopes.map((scope) => ({ choiceId: scope.choiceId, label: scope.label, scopeLabel: scope.scopeLabel, decision: "approved", scope: "session" })),
       { choiceId: "deny", label: "Deny", decision: "denied", scope: "once" },
     ];
     const outcomes = new Map<string, ApprovalOutcome>([
       ["allow-once", { kind: "allowed" }],
-      ...verdict.scopes.map((scope): [string, ApprovalOutcome] => [scope.choiceId, { kind: "allowed", grant: scope.grant }]),
+      ...scopes.map((scope): [string, ApprovalOutcome] => [scope.choiceId, { kind: "allowed", grant: scope.grant }]),
       ["deny", { kind: "rejected" }],
     ]);
     return new Promise((resolve) => {
       let settled = false;
+      let expiry: ReturnType<typeof setTimeout> | undefined;
+      const cancel = () => {
+        if (!this.approvals.delete(approvalId)) return;
+        this.emit("approvalResolved", { approvalId, sessionId: owner.meta.sessionId });
+        finish({ kind: "cancelled" });
+      };
       const finish = (outcome: ApprovalOutcome) => {
         if (settled) return;
         settled = true;
+        if (expiry) clearTimeout(expiry);
+        signal.removeEventListener("abort", cancel);
         const state = outcome.kind === "allowed" ? "allowed" : outcome.kind === "rejected" ? "rejected" : outcome.kind === "expired" ? "expired" : "cancelled";
         // The decision is on disk before the tool is allowed to start. A failed write still unblocks the turn.
         void this.store.append(live.meta.sessionId, [{ type: "checkpoint", checkpoint: { kind: "approval", turnId: live.turnId, callId: call.id, state } }]).then(() => resolve(outcome), () => resolve(outcome));
       };
-      this.approvals.set(approvalId, { sessionId: live.meta.sessionId, turnId: live.turnId, choices: outcomes, expiresAtMono: approvalExpiryMono(), resolve: finish });
-      const expiry = setTimeout(() => {
+      this.approvals.set(approvalId, { sessionId: owner.meta.sessionId, turnId: owner.turnId, choices: outcomes, expiresAtMono: approvalExpiryMono(), resolve: finish });
+      expiry = setTimeout(() => {
         const approval = this.approvals.get(approvalId);
         if (!approval) return;
         this.approvals.delete(approvalId);
-        this.emit("approvalResolved", { approvalId, sessionId: live.meta.sessionId });
-        this.emit("approvalAudit", { approvalId, sessionId: live.meta.sessionId, turnId: live.turnId, choiceId: null, outcome: "expired" });
+        this.emit("approvalResolved", { approvalId, sessionId: owner.meta.sessionId });
+        this.emit("approvalAudit", { approvalId, sessionId: owner.meta.sessionId, turnId: owner.turnId, choiceId: null, outcome: "expired" });
         finish({ kind: "expired" });
       }, APPROVAL_TTL_MS);
       expiry.unref?.();
+      signal.addEventListener("abort", cancel, { once: true });
+      if (signal.aborted) { cancel(); return; }
       this.emit("approval", {
         approvalId,
-        sessionId: live.meta.sessionId,
-        turnId: live.turnId,
+        sessionId: owner.meta.sessionId,
+        turnId: owner.turnId,
+        ...(live !== owner ? { delegatedTask: live.meta.title || "Delegated run" } : {}),
         toolName: call.name,
         rawArgs: JSON.stringify(call.input),
         subject: subject.kind === "mcp"
@@ -1733,7 +2016,7 @@ export class HarnessHost {
     let routeAssessment: RouterAssessment | undefined;
     try {
       // Before the first await, so a registry change made during this turn waits for the next one.
-      turn = this.registry.snapshot({ sessionId, turnId, workspaceRoot: live.meta.workspaceRoot, mode: live.meta.mode === "plan" ? "plan" : "build", delegationDepth: live.meta.delegation?.depth ?? 0 }, options.profileId);
+      turn = this.registry.snapshot({ sessionId, turnId, workspaceRoot: live.meta.workspaceRoot, mode: live.meta.mode === "plan" ? "plan" : "build", delegationDepth: live.meta.delegation?.depth ?? 0, workspaceTrusted: this.workspaceTrusted(live) }, options.profileId);
       const contributions = turn;
       await this.hook(contributions, "turnStarted", { context: contributions.context });
       // Once per turn: a mid-turn edit of AGENTS.md must not change the cached prefix.
@@ -1804,12 +2087,13 @@ export class HarnessHost {
       if (routeRecord?.shape === "lead-guided" && !live.muted) this.emit("route", { sessionId, turnId, route: routeRecord });
       // The decision is durable even when execution failed: the next turn can
       // explain the shape without repeating the Router call.
-      if (routeRecord) await this.store.append(sessionId, [{ type: "route", turnId, route: routeRecord }]).catch(() => {});
+      if (routeRecord) await this.store.append(sessionId, [{ type: "route", turnId, route: routeRecord }]).catch((error: unknown) => this.saveFailed(live, "this turn's route", error));
       // A steer accepted in the last moment stays in history, including after
       // cancellation or replacement. Its durable pending record settles here.
-      await this.flushSteering(live).catch(() => {});
+      await this.flushSteering(live).catch((error: unknown) => this.saveFailed(live, "a message sent during the turn", error));
       // While the turn still holds the session, so no next turn starts before its observers have run.
-      const finished = turn ? await turn.runHook("turnFinished", { context: turn.context, outcome }) : [];
+      // Nothing below may throw before `turnCompleted` goes out: the app would wait on a turn that is over.
+      const finished = turn ? await turn.runHook("turnFinished", { context: turn.context, outcome }).catch(() => []) : [];
       const startNext = live.replacing || !controller.signal.aborted;
       live.replacing = false;
       live.prompting = false;
@@ -1821,13 +2105,15 @@ export class HarnessHost {
       } else {
         live.openTask = undefined;
       }
-      void this.store.update(sessionId, {});
+      this.flushUsage(live);
       const terminal = (outcome as { kind?: string; params?: { terminal?: string } }).params?.terminal;
       const turnState = terminal === "cancelled" ? "cancelled" : (outcome as { kind?: string }).kind === "failed" ? "failed" : "completed";
-      await this.store.append(sessionId, [{ type: "checkpoint", checkpoint: { kind: "turn", turnId, state: turnState } }]);
+      // A checkpoint that cannot be written leaves the log saying the turn is still open, which resume reconciles; the app must still hear the turn ended.
+      await this.store.append(sessionId, [{ type: "checkpoint", checkpoint: { kind: "turn", turnId, state: turnState } }]).catch((error: unknown) => this.saveFailed(live, "the end of this turn", error));
       if (!live.muted) this.emit("agentNotice", { sessionId, message: null });
       // After the notice is cleared, or the warning would vanish with it.
       if (turn) this.reportHookFailures(turn, finished);
+      live.settledTurnId = turnId;
       if (!live.muted) this.emit("turnCompleted", { sessionId, turnId, outcome });
       // After turnCompleted, which clears a thread's questions in the app. A queued message settles it at once.
       if (!live.muted && live.question?.turnId === turnId) this.emit("userInputs", { sessionId, requests: [questionRequest(sessionId, live.question)], turnEnded: true });
@@ -1885,14 +2171,14 @@ export class HarnessHost {
       if (input.signal.aborted) return { text, capped, asked, cancelled: true, steps };
       steps += 1;
       const modelId = input.stage?.model.modelId ?? live.meta.modelId ?? await this.defaultModel();
-      if (!modelId) throw new Error(`${HARNESS_NAME} has no model to use. Add a provider key in Settings → Providers.`);
+      if (!modelId) throw new Error(`${HARNESS_NAME} has no model to use. Add one in Settings → Models & providers.`);
       if (!input.stage && !live.meta.modelId) await this.changed(live, { modelId });
       const { providerId, model } = splitModelId(modelId);
       const provider = resolveProvider(providerId, this.credentials);
-      if (!provider) throw new ProviderError(`${providerSpec(providerId)?.name ?? providerId} has no key. Add it in Settings → Providers, or pick another model.`, undefined, "MISSING_CREDENTIAL");
-      // The listed window and capability beat the family default, so the catalog is loaded before they are consulted.
-      const listed = (await this.loadCatalog(false).catch(() => [])).find((row) => row.modelId === modelId);
-      const window = listed?.contextLimit ?? contextWindow(provider.id, model);
+      if (!provider) throw new ProviderError(`${providerSpec(providerId)?.name ?? providerId} has no key. Add it in Settings → Models & providers, or pick another model.`, undefined, "MISSING_CREDENTIAL");
+      // A learned window beats the library's own choice, which beats the catalog row, which beats the family default.
+      const listed = await this.listedFor(modelId);
+      const window = this.windowFor(provider.id, model, listed?.contextLimit);
       const route = input.stage ? { routeId: input.stage.routeId, role: input.stage.role, stage: input.stage.stage, ...(input.stage.effort ? { effort: input.stage.effort } : {}) } : undefined;
       const schemas = input.toolSchemas?.() ?? input.offered();
       // Near the window, the thread's own history is summarized before the call rather than trimmed.
@@ -1908,7 +2194,7 @@ export class HarnessHost {
       }
       const isolated = input.history ? (provider.wire === "anthropic" ? [...history.messages] : clipRecency(history.messages)) : undefined;
       const callOptions = { ...(isolated ? { messages: isolated } : {}), ...(input.emitText === false ? { emitText: false } : {}) };
-      const { message: reply, stopReason, effort } = await this.callModel(live, provider, modelId, model, input.system, schemas, input.signal, window, listed?.listedReasoning, listed?.reasoningEfforts, route, Object.keys(callOptions).length ? callOptions : undefined);
+      const { message: reply, stopReason, effort } = await this.callModel(live, provider, modelId, model, input.system, schemas, input.signal, window, listed?.listedReasoning, listed?.reasoningEfforts, listed?.listedImages, route, Object.keys(callOptions).length ? callOptions : undefined);
       // A provider that rejected the effort fell back for this call; the route record keeps what actually ran.
       if (input.stage && effort !== input.stage.effort) {
         input.stage.effort = effort;
@@ -2590,12 +2876,12 @@ export class HarnessHost {
     const modelId = input.model.modelId;
     const { providerId, model } = splitModelId(modelId);
     const provider = resolveProvider(providerId, this.credentials);
-    if (!provider) throw new ProviderError(`${providerSpec(providerId)?.name ?? providerId} has no key. Add it in Settings → Providers, or pick another model.`, undefined, "MISSING_CREDENTIAL");
+    if (!provider) throw new ProviderError(`${providerSpec(providerId)?.name ?? providerId} has no key. Add it in Settings → Models & providers, or pick another model.`, undefined, "MISSING_CREDENTIAL");
     const effort = await this.effortFor(modelId, input.effort);
     const row: RouteStageRecord = { providerId, modelId, stage: input.stage, ...(effort ? { effectiveEffort: effort } : {}) };
     input.record.stages.push(row);
-    const listed = (await this.loadCatalog(false).catch(() => [])).find((entry) => entry.modelId === modelId);
-    const window = listed?.contextLimit ?? contextWindow(provider.id, model);
+    const listed = await this.listedFor(modelId);
+    const window = this.windowFor(provider.id, model, listed?.contextLimit);
     const { message, stopReason, effort: actual } = await this.callModel(
       input.live,
       provider,
@@ -2607,6 +2893,7 @@ export class HarnessHost {
       window,
       listed?.listedReasoning,
       listed?.reasoningEfforts,
+      listed?.listedImages,
       { routeId: input.routeId, role: input.role, stage: input.stage, ...(effort ? { effort } : {}) },
       { messages: input.messages, emitText: false, emitContext: false },
     );
@@ -2738,6 +3025,42 @@ export class HarnessHost {
     return this.stageSystem(base, `Serving model: ${model} (provider: ${provider.name}). If the user asks about your identity, answer with this and do not claim another vendor's model or a training cutoff.`);
   }
 
+  /**
+   * A save that nobody awaits. A rejection nobody handles ends the whole agent
+   * process, and every conversation with it, so a full disk or a locked index
+   * becomes one warning on the thread it belongs to instead.
+   */
+  private contained(live: Live | undefined, what: string, work: Promise<unknown>): void {
+    work.catch((error: unknown) => this.saveFailed(live, what, error));
+  }
+
+  private saveFailed(live: Live | undefined, what: string, error: unknown): void {
+    const now = Date.now();
+    if (!live || live.muted || now - (live.persistWarnedAt ?? 0) < 60_000) return;
+    live.persistWarnedAt = now;
+    this.emit("agentNotice", { sessionId: live.meta.sessionId, level: "warning", message: `Could not save ${what} (${error instanceof Error ? error.message : String(error)}). The thread keeps working here; check the disk if this repeats.` });
+  }
+
+  /** The net under a turn: `runTurn` settles its own failures, so anything that reaches here is a bug, and it must not end the process. */
+  private guardTurn(live: Live, turnId: string, work: Promise<unknown>): void {
+    work.catch((error: unknown) => this.abandonTurn(live, turnId, error));
+  }
+
+  /** End a turn that could not start or finish, so the thread is never left busy and the app is told. */
+  private abandonTurn(live: Live, turnId: string, error: unknown): void {
+    const message = error instanceof Error ? error.message : String(error);
+    live.prompting = false;
+    live.controller = null;
+    live.activeModelId = undefined;
+    if (!live.muted && live.settledTurnId !== turnId) {
+      live.settledTurnId = turnId;
+      this.emit("agentNotice", { sessionId: live.meta.sessionId, level: "warning", message: `This turn ended unexpectedly: ${message}` });
+      this.emit("turnCompleted", { sessionId: live.meta.sessionId, turnId, outcome: { kind: "failed", params: { terminal: "failed", error: { message } } } });
+    }
+    this.contained(live, "the end of this turn", this.store.append(live.meta.sessionId, [{ type: "checkpoint", checkpoint: { kind: "turn", turnId, state: "failed" } }]));
+    this.pump(live);
+  }
+
   private notice(live: Live, level: "info" | "warning", message: string) {
     if (!live.muted) this.emit("agentNotice", { sessionId: live.meta.sessionId, level, message });
   }
@@ -2841,7 +3164,38 @@ export class HarnessHost {
   }
 
   /** One model call, streamed into reasoning and message items, with retries for transient failures. */
-  private async callModel(live: Live, provider: ResolvedProvider, modelId: string, model: string, system: SystemPrompt, tools: readonly ToolSchema[], signal: AbortSignal, window: number | null, listedReasoning?: boolean, listedEfforts?: readonly string[], route?: CallRoute, options: CallOptions = {}): Promise<{ message: AssistantMessage; stopReason: string; effort?: string }> {
+  private async callModel(live: Live, provider: ResolvedProvider, modelId: string, model: string, system: SystemPrompt, tools: readonly ToolSchema[], signal: AbortSignal, window: number | null, listedReasoning?: boolean, listedEfforts?: readonly string[], listedImages?: boolean | null, route?: CallRoute, options: CallOptions = {}): Promise<{ message: AssistantMessage; stopReason: string; effort?: string }> {
+    const partials: PartialStreams = { kept: {}, parked: new Map() };
+    try {
+      const result = await this.attemptModelCalls(live, provider, modelId, model, system, tools, signal, window, listedReasoning, listedEfforts, listedImages, route, { ...options, partials });
+      // A retry that streamed no reasoning leaves the first attempt's thinking with nothing to replace it: blank it rather than show a stale copy.
+      this.settlePartials(live, partials, "completed");
+      return result;
+    } catch (error) {
+      this.settlePartials(live, partials, signal.aborted ? "cancelled" : "failed", error);
+      throw error;
+    }
+  }
+
+  /** Close the items a failed attempt left open, as the truth: replaced by a retry, cut off, or stopped. */
+  private settlePartials(live: Live, partials: PartialStreams, outcome: "completed" | "failed" | "cancelled", error?: unknown) {
+    for (const [itemId, part] of partials.parked) {
+      const reason = `The reply was cut off: ${error instanceof Error ? error.message : String(error ?? "the stream ended early")}`;
+      this.emitItem(live, {
+        itemId,
+        kind: part.kind === "text" ? "agentMessage" : "reasoning",
+        status: outcome,
+        text: outcome === "completed" ? "" : part.text,
+        turnId: part.turnId,
+        ...(outcome === "failed" ? { failureReason: reason } : {}),
+      }, true);
+    }
+    partials.parked.clear();
+    partials.kept = {};
+  }
+
+  private async attemptModelCalls(live: Live, provider: ResolvedProvider, modelId: string, model: string, system: SystemPrompt, tools: readonly ToolSchema[], signal: AbortSignal, window: number | null, listedReasoning?: boolean, listedEfforts?: readonly string[], listedImages?: boolean | null, route?: CallRoute, options: CallOptions = {}): Promise<{ message: AssistantMessage; stopReason: string; effort?: string }> {
+    const partials: PartialStreams = options.partials ?? { kept: {}, parked: new Map() };
     const serving = this.servingSystem(system, model, provider);
     let effort = route ? route.effort : live.meta.effort && (live.meta.effort !== "none" || SENDS_NONE.has(provider.id) || provider.wire === "anthropic") ? live.meta.effort : undefined;
     if (live.effortRejected?.has(modelId)) effort = undefined;
@@ -2849,17 +3203,18 @@ export class HarnessHost {
     if (effort && !tiers.includes(effort)) effort = undefined;
     // ZenMux fills an omitted effort with medium. Kimi K3 does not accept that, and its published default is max.
     if (!effort && tiers.length === 3 && tiers[0] === "low" && tiers[1] === "high" && tiers[2] === "max") effort = "max";
-    this.noteCapabilities(live, modelId, model, provider.id, listedReasoning, listedEfforts);
+    this.noteCapabilities(live, modelId, model, provider.id, window, listedReasoning, listedEfforts, listedImages);
     if (tools.length) {
       const toolsKnown = modelCapabilities({ providerId: provider.id, model, wire: provider.wire, ...(listedReasoning !== undefined ? { listedReasoning } : {}), ...(listedEfforts ? { listedEfforts } : {}) }).tools.value;
       if (toolsKnown === false) throw new ProviderError(`${model} does not accept tools, so this turn was not sent.`, undefined, "MALFORMED_RESPONSE");
     }
     const startedAt = Date.now();
     const cap = this.limits.retryElapsedMs ?? RETRY_ELAPSED_MS;
-    // The window is only known for catalog and family-known models. Unknown means no fitting: current behaviour, unchanged.
+    // The window is known for catalog and family-known models, and learned when a provider
+    // states its limit in an overflow. An unknown window sends the request unfitted once.
     let budget = window ? contextBudget(window) : null;
     // System prompt and tool schemas never change within a call, so their cost is measured once.
-    const fixedTokens = budget ? estimateRequestTokens({ system: serving, messages: [], tools }) : 0;
+    let fixedTokens = budget ? estimateRequestTokens({ system: serving, messages: [], tools }) : 0;
     if (budget && fixedTokens >= budget.input) throw unfittableContextError();
     let providerOverflow = false;
     // One tighter refit after a reported overflow. A second rejection stands.
@@ -2899,7 +3254,7 @@ export class HarnessHost {
         });
       }
       try {
-        for await (const event of streamChat({ provider, modelId, system: serving, messages: fitted.messages, tools, effort, listedReasoning, listedEfforts, signal, timeouts: { idleMs: this.limits.idleMs, firstEventMs: this.limits.firstEventMs }, fetchImpl: this.fetchImpl })) {
+        for await (const event of streamChat({ provider, modelId, system: serving, messages: fitted.messages, tools, effort, listedReasoning, listedEfforts, listedImages, signal, timeouts: { idleMs: this.limits.idleMs, firstEventMs: this.limits.firstEventMs, headersMs: this.limits.headersMs }, fetchImpl: this.fetchImpl })) {
           if (event.type === "text" || event.type === "reasoning") {
             if (options.emitText === false) continue;
             const kind = event.type;
@@ -2911,7 +3266,9 @@ export class HarnessHost {
             }
             const open = streams[kind];
             if (!open) {
-              const itemId = this.itemId(live, kind === "text" ? "agentMessage" : "reasoning");
+              // After a failed attempt the new stream takes over the item the old one left, so the reply is not shown twice.
+              const itemId = partials.kept[kind] ?? this.itemId(live, kind === "text" ? "agentMessage" : "reasoning");
+              if (partials.kept[kind]) { partials.parked.delete(itemId); delete partials.kept[kind]; }
               streams[kind] = { itemId, text: event.delta };
               this.emitItem(live, { itemId, kind: kind === "text" ? "agentMessage" : "reasoning", status: "inProgress", text: event.delta, turnId: live.turnId });
             } else {
@@ -2924,7 +3281,7 @@ export class HarnessHost {
             if (event.cacheReadTokens != null) spent.cacheRead = event.cacheReadTokens;
             if (event.cacheWriteTokens != null) spent.cacheWrite = event.cacheWriteTokens;
             const reportedInput = event.inputTokens != null || event.cacheReadTokens != null || event.cacheWriteTokens != null;
-            const window = this.catalog?.models.find((row) => row.modelId === modelId)?.contextLimit ?? contextWindow(provider.id, model);
+            const window = this.windowFor(provider.id, model, (await this.listedFor(modelId))?.contextLimit);
             const surface = this.surface(live);
             if (reportedInput && window && !surface.muted && options.emitContext !== false) {
               this.emit("sessionFacts", {
@@ -2964,10 +3321,38 @@ export class HarnessHost {
             return { message: { ...event.message, modelId }, stopReason: event.stopReason, ...(effort ? { effort } : {}) };
           }
         }
-        close();
         throw new ProviderError(`${provider.name} ended the reply early.`);
       } catch (error) {
-        close();
+        // A failed attempt still cost the provider's tokens: bill whatever its stream reported,
+        // so a flaky day does not silently under-record them. An attempt that reported nothing
+        // adds nothing (accumulateUsage ignores all-zero spent).
+        if (spent.input || spent.output || spent.cacheRead || spent.cacheWrite) {
+          this.accumulateUsage(live, spent);
+          this.emitCall(this.surface(live), {
+            callId: randomUUID(),
+            ...(route ? { routeId: route.routeId, role: route.role, stage: route.stage } : {}),
+            at: attemptAt,
+            providerId: provider.id,
+            modelId,
+            ...(effort ? { effort } : {}),
+            inputTokens: spent.input + spent.cacheRead + spent.cacheWrite,
+            cachedTokens: spent.cacheRead + spent.cacheWrite,
+            cacheReadTokens: spent.cacheRead,
+            cacheWriteTokens: spent.cacheWrite,
+            outputTokens: spent.output,
+            stopReason: "error",
+            durationMs: Date.now() - attemptAt,
+            ...(attempt > 1 ? { attempt } : {}),
+            toolCalls: 0,
+          });
+        }
+        // What streamed so far is held, not finished: a retry will write over it.
+        for (const kind of ["reasoning", "text"] as const) {
+          const open = streams[kind];
+          if (!open || options.emitText === false) continue;
+          partials.kept[kind] = open.itemId;
+          partials.parked.set(open.itemId, { kind, text: open.text, turnId: live.turnId });
+        }
         if (signal.aborted) throw error;
         const status = error instanceof ProviderError ? error.status : undefined;
         const message = error instanceof Error ? error.message : String(error);
@@ -2979,23 +3364,40 @@ export class HarnessHost {
           if (!live.muted) this.emit("agentNotice", { sessionId: live.meta.sessionId, level: "info", message: `${model} does not accept that effort level; continuing without it.` });
           continue;
         }
-        // An input overflow cannot be retried as-is. One retry refits the original
-        // history against half its remaining budget and forces the next trim rung. A second
-        // rejection stands. An unknown window gets no speculative shrinking.
+        // An input overflow cannot be retried as-is. One retry refits the original history
+        // and forces the next trim rung; a second rejection stands. The provider's own stated
+        // limit is adopted as the window — it is what actually enforces — and a rejection that
+        // states nothing is met with half the estimated messages.
         const overflow = error instanceof ProviderError && (error.code === "CONTEXT_WINDOW_EXCEEDED" || (error.status === 400 && CONTEXT_WINDOW.test(message)));
         if (overflow) {
-          if (!overflowRetried && budget) {
+          if (!overflowRetried) {
             const original = sanitizeHistory(options.messages ?? this.history(live, provider), modelId, live.meta.modelId);
-            const remaining = budget.input - fixedTokens;
-            const input = fixedTokens + Math.floor(remaining / 2);
-            if (input <= fixedTokens) throw unfittableContextError();
-            const tighter = fitHistory({ messages: original, budget: input - fixedTokens, force: true });
+            // Message room for the retry. A window the provider just states is trusted whole,
+            // because the rejected request was never fitted; a budget the provider already
+            // rejected is halved; a window still unknown leaves half of the estimated messages.
+            const stated = parseContextLimit(message);
+            if (stated != null) this.learnedWindows.set(`${provider.id}/${model}`, stated);
+            let room: number;
+            if (stated != null && !budget) {
+              budget = contextBudget(stated);
+              fixedTokens = estimateRequestTokens({ system: serving, messages: [], tools });
+              room = budget.input - fixedTokens;
+            } else if (budget) {
+              room = Math.floor((budget.input - fixedTokens) / 2);
+            } else {
+              fixedTokens = estimateRequestTokens({ system: serving, messages: [], tools });
+              const estimate = estimateRequestTokens({ system: serving, messages: options.messages ?? this.history(live, provider), tools });
+              room = Math.floor(Math.max(1, estimate - fixedTokens) / 2);
+              budget = { input: fixedTokens + room, output: 0 };
+            }
+            if (room < 1) throw unfittableContextError();
+            const tighter = fitHistory({ messages: original, budget: room, force: true });
             // A second provider call is useful only when the smaller request actually fits.
             if (!tighter.trimmed) throw error;
             if (tighter.outcome === "unfittable") throw unfittableContextError();
             overflowRetried = true;
             view = original;
-            budget = { input, output: budget.output };
+            budget = { input: fixedTokens + room, output: budget.output };
             providerOverflow = true;
             if (!live.muted) this.emit("agentNotice", { sessionId: live.meta.sessionId, level: "warning", message: `${message} Shortening the thread's history further and retrying.` });
             continue;
@@ -3004,7 +3406,9 @@ export class HarnessHost {
         }
         const transient = error instanceof ProviderError ? isTransientProviderError(error) : true;
         const elapsed = Date.now() - startedAt;
-        const wait = Math.min(20_000, error instanceof ProviderError && error.retryAfterMs != null ? error.retryAfterMs : 1500 * 2 ** (attempt - 1));
+        // A provider that names its own wait is honored up to the retry budget (the check below declines one that does not fit);
+        // the doubling backoff, which nobody asked for, stays short.
+        const wait = error instanceof ProviderError && error.retryAfterMs != null ? error.retryAfterMs : Math.min(20_000, 1500 * 2 ** (attempt - 1));
         if (transient && retryBudgetOpen(elapsed, attempt, cap) && elapsed + wait <= cap) {
           if (!live.muted) this.emit("agentNotice", { sessionId: live.meta.sessionId, level: "warning", message: `${message} Retrying in ${Math.round(wait / 1000)}s (attempt ${attempt + 1} of ${RETRIES + 1}).` });
           await new Promise((resolve, reject) => {
@@ -3019,10 +3423,10 @@ export class HarnessHost {
   }
 
   /** Say once what this model cannot do. The model id does not change. */
-  private noteCapabilities(live: Live, modelId: string, model: string, providerId: string, listedReasoning?: boolean, listedEfforts?: readonly string[]) {
+  private noteCapabilities(live: Live, modelId: string, model: string, providerId: string, window: number | null, listedReasoning?: boolean, listedEfforts?: readonly string[], listedImages?: boolean | null) {
     if (live.muted || live.capabilityNoted?.has(modelId)) return;
     (live.capabilityNoted ??= new Set()).add(modelId);
-    const gaps = capabilityGaps(modelCapabilities({ providerId, model, ...(listedReasoning !== undefined ? { listedReasoning } : {}), ...(listedEfforts ? { listedEfforts } : {}) }));
+    const gaps = capabilityGaps(modelCapabilities({ providerId, model, listedContext: window, ...(listedReasoning !== undefined ? { listedReasoning } : {}), ...(listedEfforts ? { listedEfforts } : {}), ...(listedImages != null ? { listedImages } : {}) }));
     if (!gaps.length) return;
     this.emit("agentNotice", { sessionId: live.meta.sessionId, level: "info", message: `${model} has ${gaps.join(", ")}. This turn still uses ${modelId}.` });
   }
@@ -3053,7 +3457,7 @@ export class HarnessHost {
     try { subject = definition.subject?.(live.meta.workspaceRoot, frozen) ?? { kind: "none" }; } catch { /* refused below */ }
     // Guards first, in every mode: the policy below never sees a call they refused.
     const refusal = subject ? runGuards(turn.guards, { toolName: call.name, kind, subject }) : "A permission check failed, so this call was refused.";
-    const verdict: Verdict = refusal || !subject ? { kind: "deny", reason: refusal ?? "" } : decide({ kind, toolName: call.name, subject, mode: live.approvalMode, planMode: live.meta.mode === "plan", grants: [...live.grants, ...this.rules.grants] });
+    const verdict: Verdict = refusal || !subject ? { kind: "deny", reason: refusal ?? "" } : decide({ kind, toolName: call.name, subject, mode: live.approvalMode, planMode: live.meta.mode === "plan", grants: [...live.grants, ...this.rules.grants], protectedPath: this.protected.matches });
     if (verdict.kind === "deny") {
       const output = noted(verdict.reason);
       this.emitItem(live, { ...base, status: "failed", failureReason: output, visibleOutput: output }, true);
@@ -3061,7 +3465,7 @@ export class HarnessHost {
     }
     const approvedGrants: Grant[] = [];
     if (verdict.kind === "ask") {
-      const outcome = await this.ask(live, call, kind, subject ?? { kind: "none" }, verdict);
+      const outcome = await this.ask(live, call, kind, subject ?? { kind: "none" }, verdict, signal);
       if (outcome.kind !== "allowed") {
         const output = noted(REFUSALS[outcome.kind]);
         this.emitItem(live, { ...base, status: outcome.kind === "cancelled" ? "cancelled" : "failed", failureReason: output, visibleOutput: output }, true);
@@ -3080,14 +3484,14 @@ export class HarnessHost {
         return { id: call.id, name: call.name, output, isError: true };
       }
       if (latest.kind === "browser" && (latest.origin !== subject.origin || latest.control !== subject.control)) {
-        const refreshed = decide({ kind, subject: latest, mode: live.approvalMode, planMode: live.meta.mode === "plan", grants: [...live.grants, ...approvedGrants, ...this.rules.grants] });
+        const refreshed = decide({ kind, subject: latest, mode: live.approvalMode, planMode: live.meta.mode === "plan", grants: [...live.grants, ...approvedGrants, ...this.rules.grants], protectedPath: this.protected.matches });
         if (refreshed.kind === "deny") {
           const output = noted(refreshed.reason);
           this.emitItem(live, { ...base, status: "failed", failureReason: output, visibleOutput: output }, true);
           return { id: call.id, name: call.name, output, isError: true };
         }
         if (refreshed.kind === "ask") {
-          const outcome = await this.ask(live, call, kind, latest, refreshed);
+          const outcome = await this.ask(live, call, kind, latest, refreshed, signal);
           if (outcome.kind !== "allowed") {
             const output = noted(REFUSALS[outcome.kind]);
             this.emitItem(live, { ...base, status: outcome.kind === "cancelled" ? "cancelled" : "failed", failureReason: output, visibleOutput: output }, true);
@@ -3119,7 +3523,7 @@ export class HarnessHost {
     live.grants.push(...approvedGrants);
     // Frozen before observers see it: a hook cannot rewrite what the model or the card receives.
     // Background shells belong to the visible thread, so a delegated task's dev server outlives the task but not the thread.
-    const result = Object.freeze(await executeTool(definition, live.meta.workspaceRoot, frozen, signal, { canRead: live.meta.mode !== "plan", sessionId: this.surface(live).meta.sessionId, ...(live.approvalMode === "allowAll" ? { fullAccess: true } : {}) }));
+    const result = Object.freeze(await executeTool(definition, live.meta.workspaceRoot, frozen, signal, { canRead: live.meta.mode !== "plan", sessionId: this.surface(live).meta.sessionId, protectedPaths: this.protected.patterns, readDenied: this.rules.readDenied, ...(live.approvalMode === "allowAll" ? { fullAccess: true } : {}) }));
     await this.hook(turn, "toolFinished", { context: turn.context, call: observed, outcome: result });
     const rules = !result.isError && (kind === "read" || kind === "edit") && typeof frozen.path === "string" ? await this.nestedRules(live, frozen.path) : "";
     const output = rules ? `${noted(result.output)}\n\n${rules}` : noted(result.output);
@@ -3156,6 +3560,7 @@ export class HarnessHost {
    * append-only, so the prompt cache and the stable prefix are untouched.
    */
   private async nestedRules(live: Live, raw: string): Promise<string> {
+    if (!this.workspaceTrusted(live)) return "";
     let root: string;
     let target: string;
     try {
@@ -3295,7 +3700,7 @@ export class HarnessHost {
       throw error;
     }
     this.emit("turnStarted", { sessionId: live.meta.sessionId, turnId, cause: "userInput" });
-    void this.runTurn(live, turnId, { prompt, ...(openTask ? { openTask } : {}) });
+    this.guardTurn(live, turnId, this.runTurn(live, turnId, { prompt, ...(openTask ? { openTask } : {}) }));
     return { status: "accepted" as const, userInputId: options.userInputId, turnId };
   }
 
@@ -3325,9 +3730,9 @@ export class HarnessHost {
   }
 
   /**
-   * Settings → Models' Test: a one-word, tool-less, off-transcript request, so
-   * a busy or retired model shows up before a thread depends on it. The reply
-   * is cut to a short line; only the timing and that line come back.
+   * The model Test in Settings: a one-word, tool-less, off-transcript request,
+   * so a busy or retired model shows up before a thread depends on it. The
+   * reply is cut to a short line; only the timing and that line come back.
    */
   async testModel(options: { modelId: string; timeoutMs?: number }) {
     const { providerId } = splitModelId(options.modelId);
@@ -3397,7 +3802,8 @@ export class HarnessHost {
     if (cached) return cached;
     const run = this.runReadProbe(modelId, options.timeoutMs, options.signal);
     this.readProbes.set(modelId, run);
-    void run.then(() => { if (options.signal?.aborted) this.readProbes.delete(modelId); });
+    // Both outcomes are handled here: a failed probe is the caller's to report, and must not also be an unhandled rejection of this copy.
+    void run.then(() => { if (options.signal?.aborted) this.readProbes.delete(modelId); }, () => { this.readProbes.delete(modelId); });
     return run;
   }
 
@@ -3430,7 +3836,7 @@ export class HarnessHost {
           messages,
           tools: definitions.map((definition) => definition.schema),
           signal: controller.signal,
-          timeouts: { idleMs: this.limits.idleMs, firstEventMs: this.limits.firstEventMs },
+          timeouts: { idleMs: this.limits.idleMs, firstEventMs: this.limits.firstEventMs, headersMs: this.limits.headersMs },
           fetchImpl: this.fetchImpl,
         })) {
           if (event.type === "done") {
@@ -3525,7 +3931,7 @@ export class HarnessHost {
         messages,
         tools,
         signal,
-        timeouts: { idleMs: this.limits.idleMs, firstEventMs: this.limits.firstEventMs },
+        timeouts: { idleMs: this.limits.idleMs, firstEventMs: this.limits.firstEventMs, headersMs: this.limits.headersMs },
         fetchImpl: this.fetchImpl,
       })) {
         if (event.type === "done") {

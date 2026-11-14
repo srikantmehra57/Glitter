@@ -31,10 +31,14 @@ const { parseArgs, PERMISSIONS, UsageError, envCredentials, keychainCredentials,
 const cli = join(temporary, 'cli.mjs');
 await build({ entryPoints: [resolve('packages/glitter-harness/src/cli.ts')], bundle: true, platform: 'node', format: 'esm', outfile: cli, logLevel: 'silent', define: { __GLITTER_VERSION__: '"9.9.9-test"' } });
 
+/** The app's model library, as Settings → Models & providers would have saved it. */
+await mkdir(join(temporary, 'harness'), { recursive: true });
+await writeFile(join(temporary, 'harness', 'models.json'), JSON.stringify([{ providerId: 'anthropic', model: 'claude-test', source: 'user', addedAt: '2026-01-01T00:00:00.000Z' }]));
+
 test('arguments select chat, headless and listing runs', () => {
   assert.deepEqual(
     { ...parseArgs(['-p', 'fix', 'the', 'bug', '--output-format', 'json', '-m', 'anthropic/x']) },
-    { command: 'chat', print: true, prompt: 'fix the bug', outputFormat: 'json', model: 'anthropic/x', continueLast: false, mcp: false, keychain: true, verbose: false },
+    { command: 'chat', print: true, prompt: 'fix the bug', outputFormat: 'json', model: 'anthropic/x', continueLast: false, mcp: false, trust: false, keychain: true, verbose: false },
   );
   assert.equal(parseArgs(['models']).command, 'models');
   assert.equal(parseArgs(['sessions']).command, 'sessions');

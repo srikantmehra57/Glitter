@@ -27,6 +27,10 @@ const storeReplacements = {
     export const acpConsentSet=async(consented)=>{ if (globalThis.testInvoke) return globalThis.testInvoke('acp_isolation_consent_set',{consented}); };
     export const openLogFolder=async()=>globalThis.testInvoke ? globalThis.testInvoke('open_log_folder') : '/preview/logs/app.log';
     export const providerKeysGet=async(ids)=>ids.map((id)=>({id,configured:false,keyHint:null,baseUrl:null}));
+    export const modelLibraryList=async()=>({entries:[]});
+    export const modelLibraryPut=async(entry)=>({entries:[]});
+    export const modelLibraryRemove=async(modelId)=>({entries:[]});
+    export const listProviderModels=async(providerId)=>({models:[]});
     export const persistStoreDocument=async(...args)=>globalThis.persistStoreDocument?.(...args);
     export const preserveLegacyMuseKey=async()=>{};
     export const repairStoreDocument=async()=>globalThis.storeRepair ?? {status:'ok'};
@@ -60,6 +64,7 @@ const storeReplacements = {
     export const mockWorktree=(base)=>({grantId:'preview-worktree',path:'/preview/worktree',branch:'muse/preview',base:base||'main'});
     export const gitInit=async()=>globalThis.discardedGit;
     export const trustPreview=async()=>globalThis.trustPreviewResult ?? { skills: [], rules: null };
+    export const setWorkspaceTrust=async()=>{};
     export const listWorkspaceFiles=async()=>globalThis.fileIndexPaths ?? [];
     export const cliLogout=async()=>{globalThis.cliLoggedOut=true;};
     export const pluginList=async()=>globalThis.pluginEntries ?? [];

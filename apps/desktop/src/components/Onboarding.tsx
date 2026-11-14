@@ -36,7 +36,7 @@ export function Onboarding() {
   // The dialog stays mounted for one exit after it is dismissed, so it can animate out.
   const { mounted } = usePresence(show);
   useModalDialog(show, dialog);
-  const openProviders = () => { setDismissed(true); s.setSettingsOpen(true, "Providers"); };
+  const openProviders = () => { setDismissed(true); s.setSettingsOpen(true, "Models & providers"); };
   if (!mounted) return null;
   return <dialog ref={dialog} className="hero" aria-labelledby="onboarding-title" onCancel={(event) => { event.preventDefault(); setDismissed(true); }}>
     <EmberTiles />

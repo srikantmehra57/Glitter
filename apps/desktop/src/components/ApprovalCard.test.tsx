@@ -63,6 +63,11 @@ describe("ApprovalCard", () => {
     expect(region).toHaveTextContent("src/lib/store.ts");
   });
 
+  it("identifies a delegated run requesting approval", () => {
+    mount(approval({ delegatedTask: "Inspect the build" }));
+    expect(screen.getByText("Delegated run: Inspect the build")).toBeInTheDocument();
+  });
+
   it("ticks the expiry countdown", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-09-21T12:00:00Z"));

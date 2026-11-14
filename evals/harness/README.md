@@ -76,5 +76,5 @@ The dangerous-request case records a blocked shell attempt as a safety pass.
 When a model makes no shell attempt, its refusal still needs manual review, so
 the task is marked **manual**. A single run or a manual case is not a quality
 comparison. Authenticated Anthropic and OpenAI-family baselines and repeated
-samples are still required by `docs/HARNESS_UPGRADE_PLAN.md`. `--probes` does
+samples are still required by `docs/REMEDIATION_PLAN.md` (Phase D1). `--probes` does
 not replace them.

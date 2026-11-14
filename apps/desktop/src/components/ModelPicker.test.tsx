@@ -86,13 +86,13 @@ it("restores model focus when a provider switch unlocks the loaded catalog", () 
   expect(screen.getByRole("option")).toHaveFocus();
 });
 
-it("points an empty catalog at Providers", () => {
-  const onManageProviders = vi.fn();
-  render(<ModelPicker models={[]} loading={false} disabled={false} onChange={vi.fn()} onManageProviders={onManageProviders} />);
+it("points an empty library at Models & providers", () => {
+  const onManageModels = vi.fn();
+  render(<ModelPicker models={[]} loading={false} disabled={false} onChange={vi.fn()} onManageModels={onManageModels} />);
   fireEvent.click(screen.getByRole("button", { name: "Model" }));
   expect(screen.getByText("No models yet. Add a provider key to see its models.")).toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: "Manage providers" }));
-  expect(onManageProviders).toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Manage models & providers" }));
+  expect(onManageModels).toHaveBeenCalled();
 });
 
 it("lists each Harness provider as a provider of its own, with no Harness row over them", () => {
@@ -118,18 +118,17 @@ it("lists each Harness provider as a provider of its own, with no Harness row ov
   expect(screen.queryByRole("option", { name: /Claude Sonnet/ })).toBeNull();
 });
 
-it("leaves switched-off models out, except the one the thread uses, and links to them", () => {
+it("lists every model in the library, and links to Models & providers", () => {
   const models: Model[] = [
     { modelId: "anthropic/claude-sonnet", providerId: "anthropic", displayLabel: "Claude Sonnet" },
     { modelId: "anthropic/claude-haiku", providerId: "anthropic", displayLabel: "Claude Haiku" },
     { modelId: "anthropic/claude-opus", providerId: "anthropic", displayLabel: "Claude Opus" },
   ];
   const onManageModels = vi.fn();
-  const hidden = ["harness|anthropic|anthropic/claude-sonnet", "harness|anthropic|anthropic/claude-haiku"];
-  render(<ModelPicker models={models} value={modelKey(models[0])} hidden={hidden} loading={false} disabled={false} onChange={vi.fn()} onManageModels={onManageModels} />);
+  render(<ModelPicker models={models} value={modelKey(models[0])} loading={false} disabled={false} onChange={vi.fn()} onManageModels={onManageModels} />);
   fireEvent.click(screen.getByRole("button", { name: "Model" }));
-  expect(screen.getAllByRole("option").map((option) => option.querySelector(".model-label")?.textContent)).toEqual(["Claude Sonnet", "Claude Opus"]);
-  fireEvent.click(screen.getByRole("button", { name: "1 hidden" }));
+  expect(screen.getAllByRole("option").map((option) => option.querySelector(".model-label")?.textContent)).toEqual(["Claude Sonnet", "Claude Haiku", "Claude Opus"]);
+  fireEvent.click(screen.getByRole("button", { name: "Manage models & providers" }));
   expect(onManageModels).toHaveBeenCalled();
 });
 
@@ -170,18 +169,16 @@ it("lists a fast variant as its own row, tagged Fast, and marks it on the trigge
   expect(screen.getByLabelText("Fast")).toBeInTheDocument();
 });
 
-it("leaves a provider switched off, or with every model off, out of the rail unless the thread uses it", () => {
+it("keeps a model whose provider lost its key in the rail, marked unavailable", () => {
   const models: Model[] = [
     { modelId: "anthropic/claude-sonnet", providerId: "anthropic", displayLabel: "Claude Sonnet" },
-    { modelId: "openai/gpt-5", providerId: "openai", displayLabel: "GPT-5" },
-    { modelId: "kilo/auto", providerId: "kilo", displayLabel: "Auto" },
+    { modelId: "kilo/auto", providerId: "kilo", displayLabel: "Auto", unavailable: true },
   ];
-  const { rerender } = render(<ModelPicker models={models} value={modelKey(models[0])} hidden={["harness|kilo|kilo/auto"]} hiddenProviders={["harness:openai"]} loading={false} disabled={false} onChange={vi.fn()} onRescan={async () => {}} />);
+  render(<ModelPicker models={models} value={modelKey(models[0])} loading={false} disabled={false} onChange={vi.fn()} onRescan={async () => {}} />);
   fireEvent.click(screen.getByRole("button", { name: "Model" }));
-  expect(screen.getAllByRole("tab").map((tab) => tab.getAttribute("aria-label"))).toEqual(["Anthropic"]);
-  rerender(<ModelPicker models={models} value={modelKey(models[0])} hiddenProviders={["harness:anthropic"]} loading={false} disabled={false} onChange={vi.fn()} onRescan={async () => {}} />);
-  // The provider the thread's model comes from stays, even when it is switched off.
-  expect(screen.getAllByRole("tab").map((tab) => tab.getAttribute("aria-label"))).toEqual(["Anthropic", "OpenAI", "Kilo API"]);
+  expect(screen.getAllByRole("tab").map((tab) => tab.getAttribute("aria-label"))).toEqual(["Anthropic", "Kilo API"]);
+  fireEvent.click(screen.getByRole("tab", { name: "Kilo API" }));
+  expect(screen.getByRole("option", { name: /Auto/ })).toHaveTextContent("Unavailable");
 });
 
 const ORCHESTRATOR = { goal: "balanced" as const, models: { lead: { modelId: "anthropic/claude-opus" }, builder: { modelId: "anthropic/claude-haiku" } } };

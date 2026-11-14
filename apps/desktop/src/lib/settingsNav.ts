@@ -7,9 +7,8 @@ import { SETTINGS_TABS, type SettingsTab } from "./types";
  * one name everywhere.
  */
 export const SETTINGS_TAB_LABELS: Record<SettingsTab, string> = {
-  Models: "Models",
+  "Models & providers": "Models & providers",
   Orchestrator: "Orchestrator",
-  Providers: "Providers",
   Extensions: "Extensions",
   Permissions: "Permissions",
   Threads: "Threads",
@@ -22,16 +21,15 @@ export const SETTINGS_TAB_LABELS: Record<SettingsTab, string> = {
 };
 
 export const SETTINGS_NAV_GROUPS: ReadonlyArray<{ label: string; tabs: readonly SettingsTab[] }> = [
-  { label: "AI", tabs: ["Models", "Orchestrator", "Providers"] },
+  { label: "AI", tabs: ["Models & providers", "Orchestrator"] },
   { label: "Workspace", tabs: ["Extensions", "Permissions", "Threads"] },
   { label: "App", tabs: ["General", "Theme", "Shortcuts", "Usage"] },
   { label: "System", tabs: ["Diagnostics", "About"] },
 ];
 
 export const SETTINGS_TAB_COPY: Record<SettingsTab, string> = {
-  Models: "Defaults for new threads, and which models the picker offers. Test a model before you rely on it.",
+  "Models & providers": "Connect providers with your own API keys, and add the models you want with their context window, reasoning and modalities. Keys stay in your Mac’s keychain.",
   Orchestrator: "Split new threads between a Lead that plans and a Builder that types. Off by default.",
-  Providers: "Connect model providers with your own API keys. Keys stay in your Mac’s keychain.",
   Extensions: "Plugins, skills and MCP servers, from the built-in store, GitHub or your own.",
   Permissions: "How freely the agent works before it asks, and your own allow and deny rules.",
   Threads: "How far back the sidebar lists, and the threads you archived.",
@@ -44,9 +42,8 @@ export const SETTINGS_TAB_COPY: Record<SettingsTab, string> = {
 };
 
 const SEARCH_TERMS: Record<SettingsTab, string> = {
-  Models: "default model effort reasoning hide show enable disable visible test latency busy responsive picker",
+  "Models & providers": "default model effort reasoning context window modality images documents video add edit remove library test latency api key byok bring your own anthropic claude openai gpt google gemini openrouter cline kilo xai grok deepseek groq mistral nvidia nim ollama lm studio local custom endpoint picker hide show",
   Orchestrator: "lead builder small task router goal cost balanced output plan review routes roles model mixing delegation sub-agents subagents",
-  Providers: "agent harness ready api key byok bring your own anthropic claude openai gpt google gemini openrouter cline kilo xai grok deepseek groq mistral nvidia nim ollama lm studio local custom endpoint",
   Extensions: "skills mcp servers plugins import store install github marketplace source repository update",
   Permissions: "approval sandbox read only ask auto full access rules allow deny always never allowlist denylist bash edit webfetch websearch mcp",
   Threads: "archive restore delete history",

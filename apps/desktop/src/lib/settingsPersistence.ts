@@ -1,7 +1,6 @@
 import { normalizeCustomCommands } from "./composerText";
-import { normalizeHiddenModels, normalizeHiddenProviders } from "./modelVisibility";
 import { normalizeOrchestratorGoal, normalizeOrchestratorModels } from "./orchestrator";
-import { normalizeHarnessRules } from "./permissionRules";
+import { normalizeHarnessRules, normalizeProtectedPaths } from "./permissionRules";
 import { normalizeShortcutOverrides } from "./shortcuts";
 import { normalizeUiFont } from "./fonts";
 import { normalizeTranslucency } from "./theme";
@@ -14,16 +13,17 @@ type SettingsStore = {
 };
 
 /**
- * Settings that belonged to the Muse CLI and the third-party agents the app no
- * longer runs. A saved document may still hold them (an old plain-text
- * `museApiKey` among them), so they are dropped on load instead of being
- * carried forward with the other unknown keys.
+ * Settings that belonged to the Muse CLI, the third-party agents the app no
+ * longer runs, or the model picker's hide-everything era: the model library is
+ * now what the user adds. A saved document may still hold them (an old
+ * plain-text `museApiKey` among them), so they are dropped on load instead of
+ * being carried forward with the other unknown keys.
  */
-const RETIRED_SETTINGS = new Set(["museBin", "museApiKey", "museAuthMode", "contributorMode", "ephemeralSessions", "disableWrite", "disableShell", "sandboxNetwork", "defaultAgentId", "enabledAgents", "acpUnisolatedConsent", "hideAgentCapabilities", "suggestionsAgentId"]);
+const RETIRED_SETTINGS = new Set(["museBin", "museApiKey", "museAuthMode", "contributorMode", "ephemeralSessions", "disableWrite", "disableShell", "sandboxNetwork", "defaultAgentId", "enabledAgents", "acpUnisolatedConsent", "hideAgentCapabilities", "suggestionsAgentId", "hiddenModels", "hiddenProviders"]);
 
 export function settingsFields(settings: Settings): Settings {
-  const { theme, uiFont, darkIntensity, accentColor, accentSidebar, sidebarTranslucency, sidebarDensity, reduceMotion, thinkingOrb, defaultModel, defaultProviderId, defaultEffort, defaultApprovalMode, harnessRules, disableTerminal, notifications, editor, customCommands, suggestionsEnabled, suggestionsModelId, shortcutOverrides, orchestratorEnabled, orchestratorGoal, orchestratorModels, hiddenModels, hiddenProviders, workspaces } = settings;
-  return { theme, uiFont: normalizeUiFont(uiFont), darkIntensity: DARK_INTENSITIES.find((level) => level === darkIntensity) ?? "mid", accentColor, accentSidebar, sidebarTranslucency: normalizeTranslucency(sidebarTranslucency), sidebarDensity: SIDEBAR_DENSITIES.find((density) => density === sidebarDensity) ?? "standard", reduceMotion: reduceMotion === true, thinkingOrb: THINKING_ORBS.find((style) => style === thinkingOrb) ?? "auto", defaultModel, defaultProviderId, defaultEffort, defaultApprovalMode, harnessRules: normalizeHarnessRules(harnessRules), disableTerminal: disableTerminal === true, notifications: notifications ?? true, editor: editor && EDITOR_CHOICES.includes(editor) ? editor : "default", customCommands: normalizeCustomCommands(customCommands), suggestionsEnabled: suggestionsEnabled === true, suggestionsModelId: typeof suggestionsModelId === "string" && suggestionsModelId.trim() ? suggestionsModelId.trim() : undefined, shortcutOverrides: normalizeShortcutOverrides(shortcutOverrides), orchestratorEnabled: orchestratorEnabled === true, orchestratorGoal: normalizeOrchestratorGoal(orchestratorGoal), orchestratorModels: normalizeOrchestratorModels(orchestratorModels), hiddenModels: normalizeHiddenModels(hiddenModels), hiddenProviders: normalizeHiddenProviders(hiddenProviders), workspaces };
+  const { theme, uiFont, darkIntensity, accentColor, accentSidebar, sidebarTranslucency, sidebarDensity, reduceMotion, thinkingOrb, defaultModel, defaultProviderId, defaultEffort, defaultApprovalMode, harnessRules, protectedPaths, disableTerminal, notifications, editor, customCommands, suggestionsEnabled, suggestionsModelId, shortcutOverrides, orchestratorEnabled, orchestratorGoal, orchestratorModels, workspaces } = settings;
+  return { theme, uiFont: normalizeUiFont(uiFont), darkIntensity: DARK_INTENSITIES.find((level) => level === darkIntensity) ?? "mid", accentColor, accentSidebar, sidebarTranslucency: normalizeTranslucency(sidebarTranslucency), sidebarDensity: SIDEBAR_DENSITIES.find((density) => density === sidebarDensity) ?? "standard", reduceMotion: reduceMotion === true, thinkingOrb: THINKING_ORBS.find((style) => style === thinkingOrb) ?? "auto", defaultModel, defaultProviderId, defaultEffort, defaultApprovalMode, harnessRules: normalizeHarnessRules(harnessRules), protectedPaths: normalizeProtectedPaths(protectedPaths), disableTerminal: disableTerminal === true, notifications: notifications ?? true, editor: editor && EDITOR_CHOICES.includes(editor) ? editor : "default", customCommands: normalizeCustomCommands(customCommands), suggestionsEnabled: suggestionsEnabled === true, suggestionsModelId: typeof suggestionsModelId === "string" && suggestionsModelId.trim() ? suggestionsModelId.trim() : undefined, shortcutOverrides: normalizeShortcutOverrides(shortcutOverrides), orchestratorEnabled: orchestratorEnabled === true, orchestratorGoal: normalizeOrchestratorGoal(orchestratorGoal), orchestratorModels: normalizeOrchestratorModels(orchestratorModels), workspaces };
 }
 
 export class SettingsPersistence {

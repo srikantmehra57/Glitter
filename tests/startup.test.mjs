@@ -37,6 +37,10 @@ const replacements = {
     export const acpConsentSet=async(consented)=>{ if (globalThis.testInvoke) return globalThis.testInvoke('acp_isolation_consent_set',{consented}); };
     export const openLogFolder=async()=>globalThis.testInvoke ? globalThis.testInvoke('open_log_folder') : '/preview/logs/app.log';
     export const providerKeysGet=async(ids)=>ids.map((id)=>({id,configured:false,keyHint:null,baseUrl:null}));
+    export const modelLibraryList=async()=>({entries:[]});
+    export const modelLibraryPut=async(entry)=>({entries:[]});
+    export const modelLibraryRemove=async(modelId)=>({entries:[]});
+    export const listProviderModels=async(providerId)=>({models:[]});
     export const persistStoreDocument=async()=>{};
     export const preserveLegacyMuseKey=async()=>{};
     export const repairStoreDocument=async()=>({status:'ok'});
@@ -68,6 +72,7 @@ const replacements = {
     export const gitInit=async()=>({});
     export const gitStage=async()=>({});export const gitCommit=async()=>({});
     export const trustPreview=async()=>({ skills: [], rules: null });
+    export const setWorkspaceTrust=async()=>{};
     export const listWorkspaceFiles=async()=>[];
     export const cliLogout=async()=>{};export const pluginList=async()=>[];export const skillList=async()=>[];
     export const catalogList=async()=>({entries:[],skillsRoot:'',error:null});export const catalogInstall=async()=>({installedSkills:[],installedServers:[],skipped:[],errors:[]});export const catalogRemove=async()=>({removed:[],skipped:[],errors:[]});export const githubInstall=async()=>({id:'',skills:[],commands:[],servers:[],problems:[]});export const libraryList=async()=>({plugins:[],marketplaces:[],pluginsRoot:'',problems:[]});export const librarySetEnabled=async()=>({id:'',skills:[],commands:[],servers:[],problems:[]});export const libraryRemove=async()=>[];export const libraryCheckUpdates=async()=>[];export const marketplaceAdd=async()=>({});export const marketplaceRefresh=async()=>({});export const marketplaceRemove=async()=>{};export const marketplaceAvatars=async()=>0;

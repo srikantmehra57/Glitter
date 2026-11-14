@@ -31,7 +31,7 @@ test('classifyError routes a rejected or missing provider key to settings by its
 });
 
 test('a provider setup error keeps its own wording', () => {
-  const detail = 'Harness has no model provider yet. Add an API key in Settings → Providers.';
+  const detail = 'Harness has no model provider yet. Add an API key in Settings → Models & providers.';
   assert.equal(describeError('Could not load Harness models', new Error(detail)), `Could not load Harness models: ${detail}`);
 });
 
@@ -91,5 +91,5 @@ test('describeError keeps the reason for an unrecognized failure', () => {
 test('describeError replaces a recognized failure with its recovery', () => {
   const auth = Object.assign(new Error('401 from the provider'), { code: 'INVALID_CREDENTIAL' });
   assert.equal(describeError('Could not send', auth),
-    'The provider rejected the API key. 401 from the provider The draft is kept. Replace the key in Settings → Providers.');
+    'The provider rejected the API key. 401 from the provider The draft is kept. Replace the key in Settings → Models & providers.');
 });

@@ -53,7 +53,7 @@ export type Workspace = {
   trustPrompted?: boolean;
 };
 
-/** Settings → Models' Test: how long a one-word reply took, and the start of it. */
+/** The model Test in Settings: how long a one-word reply took, and the start of it. */
 export type ModelTestResult = { latencyMs: number; firstTokenMs: number | null; reply: string };
 
 /** A user-defined slash command: a prompt template. `$ARGUMENTS` in the body marks where the user's input goes. */
@@ -62,13 +62,13 @@ export const EDITOR_CHOICES = ["default", "vscode", "cursor", "zed", "idea"] as 
 export type EditorChoice = (typeof EDITOR_CHOICES)[number];
 export const EDITOR_LABELS: Record<EditorChoice, string> = { default: "System default", vscode: "VS Code", cursor: "Cursor", zed: "Zed", idea: "IntelliJ IDEA" };
 /** Settings pages, in navigation order. Names and groups are in `lib/settingsNav.ts`. */
-export const SETTINGS_TABS = ["Models", "Orchestrator", "Providers", "Extensions", "Permissions", "Threads", "General", "Theme", "Shortcuts", "Usage", "Diagnostics", "About"] as const;
+export const SETTINGS_TABS = ["Models & providers", "Orchestrator", "Extensions", "Permissions", "Threads", "General", "Theme", "Shortcuts", "Usage", "Diagnostics", "About"] as const;
 export type SettingsTab = (typeof SETTINGS_TABS)[number];
 
 /**
  * The app's agent: the built-in Harness, which calls model providers with the
- * user's own keys (Settings → Providers). The id stays a type so persisted
- * threads and settings keep one spelling for it.
+ * user's own keys (Settings → Models & providers). The id stays a type so
+ * persisted threads and settings keep one spelling for it.
  */
 export type AgentId = "harness";
 export const AGENT_LABELS: Record<AgentId, string> = { harness: "Harness" };
@@ -312,6 +312,7 @@ export type ApprovalRequest = {
   turnId: string;
   toolName: string;
   rawArgs: string;
+  delegatedTask?: string;
   availableChoices: ApprovalChoice[];
   subject?: Record<string, unknown>;
   /** Host-side decision deadline (epoch ms); the waiter rejects past it. */
@@ -375,7 +376,30 @@ export type OrchestratorRoute = {
   references: { plan?: string; contextPack?: string; buildReport?: string; reviewNotes?: string };
 };
 
-export type Model = { modelId: string; displayLabel?: string; providerId?: string; isActive?: boolean; isDefault?: boolean; unavailable?: boolean; /** Named by a thread or the saved default, but absent from the agent's catalog. */ unlisted?: boolean; description?: string | null; contextLimit?: number | null; releaseDate?: string | null; cost?: { input?: string; output?: string; cached?: string; cacheWrite?: string; currency?: string | null } | null; reasoningEfforts?: ReasoningEffort[]; defaultReasoningEffort?: ReasoningEffort; effortSource?: "host" | "vocabulary"; /** Cline's current free promotion. Absent for other agents. */ free?: boolean };
+export type Model = { modelId: string; displayLabel?: string; providerId?: string; isActive?: boolean; isDefault?: boolean; unavailable?: boolean; /** Named by a thread or the saved default, but absent from the agent's catalog. */ unlisted?: boolean; description?: string | null; contextLimit?: number | null; releaseDate?: string | null; cost?: { input?: string; output?: string; cached?: string; cacheWrite?: string; currency?: string | null } | null; reasoningEfforts?: ReasoningEffort[]; defaultReasoningEffort?: ReasoningEffort; effortSource?: "host" | "vocabulary"; /** Image support as the catalog or the library reports it; only images gate a request today. */ images?: boolean | null; documents?: boolean | null; video?: boolean | null; /** Cline's current free promotion. Absent for other agents. */ free?: boolean };
+
+/**
+ * One model library entry, as Settings adds and edits it and as the harness
+ * persists it (`models.json`). A field the user left open is `undefined` and
+ * the learned window, live catalog and family tables still answer for it; a
+ * field they set wins. `efforts` empty means the model exposes no effort
+ * choice; `images`/`documents`/`video` null means unknown.
+ */
+export type UserModelEntry = {
+  providerId: string;
+  model: string;
+  displayName?: string;
+  contextWindow?: number | null;
+  efforts?: ReasoningEffort[];
+  defaultEffort?: ReasoningEffort;
+  images?: boolean | null;
+  documents?: boolean | null;
+  video?: boolean | null;
+  cost?: { input?: string; output?: string; currency?: string | null } | null;
+  effortSource?: "fetched" | "user";
+  source: "user" | "migrated";
+  addedAt: string;
+};
 export type SessionMetadata = { sessionId: string; name?: string | null; title?: string | null; workspaceRoot?: string | null; updatedAt?: string; status?: string; activeTurnId?: string | null; modelId?: string | null; providerId?: string | null; approvalMode?: { mode: ApprovalMode } };
 export type SessionOpening = { sessionId: string; alreadyOpen?: boolean; userInputs?: UserInputRequest[]; opening?: { result: { session: SessionMetadata } } };
 
@@ -712,6 +736,8 @@ export type Settings = {
   defaultApprovalMode: ApprovalMode | undefined;
   /** Persistent allow and deny rules for every built-in agent thread. Syntax is checked by the harness. */
   harnessRules?: PermissionRule[];
+  /** Files the built-in agent's edits ask about in every mode and its shell cannot write. Absent means the defaults. */
+  protectedPaths?: string[];
   /** Prevent the app's interactive Terminal pane from starting a shell. */
   disableTerminal?: boolean;
   /** OS notifications for turn completion and approvals while the app is unfocused or another thread is selected. */
@@ -731,10 +757,6 @@ export type Settings = {
   orchestratorGoal?: OrchestratorGoal;
   /** Role assignments for built-in agent threads. Missing roles fall back per `lib/orchestrator.ts`. */
   orchestratorModels?: OrchestratorAssignments;
-  /** Models switched off in Settings → Models, as `modelVisibilityKey` strings. They leave the model picker, not the catalog. */
-  hiddenModels?: string[];
-  /** Providers switched off in Settings → Models, as `providerKey` strings. They leave the model picker. */
-  hiddenProviders?: string[];
   workspaces: Workspace[];
 };
 
@@ -763,8 +785,6 @@ export const DEFAULT_SETTINGS: Settings = {
   orchestratorEnabled: false,
   orchestratorGoal: "balanced",
   orchestratorModels: {},
-  hiddenModels: [],
-  hiddenProviders: [],
   workspaces: [],
 };
 
@@ -785,7 +805,7 @@ export const APPROVAL_DESCRIPTIONS: Record<ApprovalMode, string> = {
   promptUnmatched: "Edits run, commands ask.",
   onRequest: "Edits run, commands ask.",
   guarded: "Commands may read outside the workspace.",
-  allowAll: "No approval prompts.",
+  allowAll: "Asks only before changing protected files.",
 };
 
 /** Composer order, strict to open. Full access stays off the saved default. */

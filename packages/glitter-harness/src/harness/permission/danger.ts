@@ -14,7 +14,7 @@ export type Risk = { id: string; level: "block" | "ask"; reason: string };
 type Rule = Risk & { test: (program: string, args: readonly string[]) => boolean };
 
 /** Programs that run the rest of their argv as another command. */
-const WRAPPERS = new Set(["sudo", "doas", "env", "nice", "nohup", "time", "timeout", "command", "exec", "xargs", "stdbuf", "caffeinate", "ionice", "watch"]);
+export const WRAPPERS = new Set(["sudo", "doas", "env", "nice", "nohup", "time", "timeout", "command", "exec", "xargs", "stdbuf", "caffeinate", "ionice", "watch"]);
 const INTERPRETERS = new Set(["sh", "bash", "zsh", "dash", "ksh", "fish", "python", "python2", "python3", "node", "deno", "bun", "perl", "ruby", "php", "lua", "osascript"]);
 const ROOT_TARGETS = new Set(["/", "/*", "/.", "~", "~/", "~/*", "$HOME", "$HOME/", "$HOME/*", "${HOME}", "${HOME}/", "${HOME}/*"]);
 const DEVICE = /^\/dev\/r?(?:disk|sd|hd|nvme|xvd)/;
@@ -23,6 +23,19 @@ const flagged = (args: readonly string[], short: string, ...long: string[]) =>
   args.some((arg) => long.includes(arg) || (/^-[A-Za-z]+$/.test(arg) && [...short].some((flag) => arg.includes(flag))));
 const recursive = (args: readonly string[]) => flagged(args, "rR", "--recursive");
 const sub = (args: readonly string[]) => args.find((arg) => !arg.startsWith("-"));
+
+/** Git's global options precede the verb, and some consume the next word. */
+export function gitCommandArgs(args: readonly string[]): readonly string[] {
+  const withValue = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env", "--super-prefix"]);
+  let index = 0;
+  while (index < args.length) {
+    const arg = args[index];
+    if (arg === "--") return args.slice(index + 1);
+    if (!arg.startsWith("-") || arg === "-") break;
+    index += withValue.has(arg) ? 2 : 1;
+  }
+  return args.slice(index);
+}
 
 /** Inline code each interpreter accepts, by flag. */
 const INLINE_CODE: Record<string, string[]> = {
@@ -115,7 +128,8 @@ function commandRisks(command: SimpleCommand, stage: number, depth: number): Ris
     // A shell or interpreter with no script file reads its program from the pipe.
     risks.push({ id: "pipe-to-shell", level: "ask", reason: "Runs code piped from another command." });
   }
-  for (const rule of RULES) if (rule.test(program, args)) risks.push({ id: rule.id, level: rule.level, reason: rule.reason });
+  const riskArgs = program === "git" ? gitCommandArgs(args) : args;
+  for (const rule of RULES) if (rule.test(program, riskArgs)) risks.push({ id: rule.id, level: rule.level, reason: rule.reason });
   return risks;
 }
 

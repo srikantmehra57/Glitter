@@ -18,8 +18,10 @@ export type CliArgs = {
   cwd?: string;
   resume?: string;
   continueLast: boolean;
-  /** Start the MCP servers configured for this folder and in the home folder. */
+  /** Start the MCP servers configured for this folder and in the home folder. Implies `trust`. */
   mcp: boolean;
+  /** Load this folder's AGENTS.md, CLAUDE.md and skills. The app asks first; a terminal run says so here. */
+  trust: boolean;
   keychain: boolean;
   verbose: boolean;
 };
@@ -47,7 +49,7 @@ const VALUE_FLAGS: Record<string, keyof CliArgs> = {
 };
 
 export function parseArgs(argv: readonly string[]): CliArgs {
-  const args: CliArgs = { command: "chat", print: false, prompt: "", outputFormat: "text", continueLast: false, mcp: false, keychain: true, verbose: false };
+  const args: CliArgs = { command: "chat", print: false, prompt: "", outputFormat: "text", continueLast: false, mcp: false, trust: false, keychain: true, verbose: false };
   const words: string[] = [];
   for (let at = 0; at < argv.length; at += 1) {
     const raw = argv[at];
@@ -58,6 +60,7 @@ export function parseArgs(argv: readonly string[]): CliArgs {
     if (flag === "-p" || flag === "--print") { args.print = true; continue; }
     if (flag === "-c" || flag === "--continue") { args.continueLast = true; continue; }
     if (flag === "--mcp") { args.mcp = true; continue; }
+    if (flag === "--trust") { args.trust = true; continue; }
     if (flag === "--no-keychain") { args.keychain = false; continue; }
     if (flag === "--verbose") { args.verbose = true; continue; }
     const key = VALUE_FLAGS[flag];
@@ -117,13 +120,14 @@ Options
   -C, --cwd <dir>             Folder to work in. Default: the current folder.
   -c, --continue              Continue the latest thread in this folder.
   -r, --resume <id>           Continue a thread by id.
-      --mcp                   Start the MCP servers configured for this folder and your home folder.
+      --trust                 Trust this folder: load its AGENTS.md, CLAUDE.md and skills.
+      --mcp                   Start the MCP servers configured for this folder and your home folder. Implies --trust.
       --no-keychain           Use only provider keys from environment variables.
       --verbose               Show reasoning and full tool output.
   -h, --help                  Show this help.
   -v, --version               Show the version.
 
-Provider keys come from Glitter's Settings → Providers (the macOS Keychain).
+Provider keys come from Glitter's Settings → Models & providers (the macOS Keychain).
 Environment variables override them: ANTHROPIC_API_KEY, OPENAI_API_KEY,
 GEMINI_API_KEY, OPENROUTER_API_KEY, XAI_API_KEY, DEEPSEEK_API_KEY, GROQ_API_KEY,
 MISTRAL_API_KEY, NVIDIA_API_KEY, CLINE_API_KEY and KILO_API_KEY.

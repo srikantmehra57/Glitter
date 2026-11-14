@@ -59,6 +59,13 @@ function plain(command: SimpleCommand): boolean {
   return !command.dynamic && !command.assignments.length && !command.globbed.length && !command.redirects.length;
 }
 
+/**
+ * Path comparison as the workspace's file system makes it: case-insensitive on
+ * macOS and Windows, where `.ENV` is the same file as `.env`. Deny rules use
+ * the same comparison, so allow and deny agree on which file a path names.
+ */
+export const foldPath = (path: string) => (process.platform === "darwin" || process.platform === "win32" ? path.toLowerCase() : path);
+
 function prefixCovers(prefix: readonly string[], argv: readonly string[]): boolean {
   return prefix.length <= argv.length && prefix.every((word, index) => argv[index] === word);
 }
@@ -74,7 +81,8 @@ export function covers(grants: readonly Grant[], subject: Subject): boolean {
     return grants.some((grant) => grant.kind === "mcp" && grant.server === subject.server && (grant.match === "server" || grant.tool === subject.tool));
   }
   if (subject.kind === "path") {
-    return grants.some((grant) => grant.kind === "path" && (grant.match === "file" ? grant.path === subject.path : grant.path === "" || subject.path.startsWith(`${grant.path}/`)));
+    const path = foldPath(subject.path);
+    return grants.some((grant) => grant.kind === "path" && (grant.match === "file" ? foldPath(grant.path) === path : grant.path === "" || path.startsWith(`${foldPath(grant.path)}/`)));
   }
   if (subject.kind === "browser") {
     return Boolean(subject.origin) && grants.some((grant) => grant.kind === "browser" && grant.origin === subject.origin);

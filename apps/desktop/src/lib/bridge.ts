@@ -6,7 +6,7 @@ import { log } from "./logger";
 import { MOCK_FILES, MOCK_GIT, MOCK_GIT_GRAPH, MOCK_MODELS, MOCK_THREADS, mockAddMarketplace, mockGitReview, mockGithubInspect, mockGithubInstall, mockLibraryList, mockMarketplaceAvatars, mockRefreshMarketplace, mockRemoveMarketplace, mockRemovePlugin, mockSetPluginEnabled, mockThreads, mockWorkspaceFile, mockWorktree } from "./mock";
 import type { ProviderStatus } from "./providers";
 export type { ProviderStatus } from "./providers";
-import type { DiagnosticsSnapshot, EditorChoice, SupportPaths, ThemeMode, BrowserControlResult, BrowserFrame, BrowserStateEvent } from "./types";
+import type { DiagnosticsSnapshot, EditorChoice, SupportPaths, ThemeMode, BrowserControlResult, BrowserFrame, BrowserStateEvent, Model, UserModelEntry } from "./types";
 import type { AgentId, AgentSessionConfig, ApprovalRequest, CatalogEntry, CatalogInstallResult, CatalogList, CatalogRemoveResult, GithubPreview, MarketplaceSource, PluginInstallOutcome, PluginLibrary, PluginUpdate, ContextUsage, Detection, DroppedFile, GitBranch, GitGraph, GoalState, HarnessMcpConfig, HarnessMcpConfigServer, HarnessMcpReview, HarnessMcpScope, HarnessMcpServerInput, ModelCall, PlanItem, PullRequest, GitReview, GitReviewRequest, GitSnapshot, SessionConfig, SessionMetadata, SnapshotRestore, ThreadWorktree, TokenUsage, TranscriptItem, TurnSnapshot, UserInputRequest, WorkspaceFile, WorktreeRemoval, OrchestratorProbeResult, OrchestratorRole, OrchestratorRoute } from "./types";
 
 /**
@@ -211,7 +211,7 @@ function previewCatalogList(): CatalogList {
 function mockBridge(method: string, params: Record<string, unknown>): unknown {
   switch (method) {
     case "detect":
-      return { agents: [{ id: "harness", name: "Harness", protocol: "native", found: true, path: null, version: null, verified: true, signIn: "Add an API key for a model provider in Settings → Providers.", authenticated: true }] } satisfies Detection;
+      return { agents: [{ id: "harness", name: "Harness", protocol: "native", found: true, path: null, version: null, verified: true, signIn: "Add an API key for a model provider in Settings → Models & providers.", authenticated: true }] } satisfies Detection;
     case "listSessions":
       return {
         sessions: MOCK_THREADS.map((thread) => ({
@@ -227,6 +227,19 @@ function mockBridge(method: string, params: Record<string, unknown>): unknown {
       };
     case "listModels":
       return { models: MOCK_MODELS, source: "preview" };
+    case "modelLibraryList":
+      return { entries: previewLibrary() };
+    case "modelLibraryPut": {
+      const entry = params.entry as UserModelEntry;
+      const key = `${entry.providerId}/${entry.model}`;
+      previewLibraryEntries = [...previewLibrary().filter((item) => `${item.providerId}/${item.model}` !== key), entry];
+      return { entries: previewLibraryEntries };
+    }
+    case "modelLibraryRemove":
+      previewLibraryEntries = previewLibrary().filter((item) => `${item.providerId}/${item.model}` !== params.modelId);
+      return { entries: previewLibraryEntries };
+    case "listProviderModels":
+      return { models: MOCK_MODELS.filter((model) => model.providerId === params.providerId) };
     case "browserOpen":
     case "browserControl":
     case "browserClose":
@@ -674,6 +687,45 @@ export async function providerKeySet(ids: readonly string[], provider: string, c
   return invoke<ProviderStatus[]>("provider_key_set", { provider, key: change.key ?? null, baseUrl: change.baseUrl ?? null, name: change.name ?? null, wire: change.wire ?? null, clear: change.clear ?? null });
 }
 
+/** The model library: the models the user added, which the harness persists (`models.json`). */
+
+/** The preview keeps the library in memory, so adding and removing round-trips without the harness. */
+const previewEntry = (model: Model): UserModelEntry => ({
+  providerId: model.providerId ?? "",
+  model: model.modelId.includes("/") ? model.modelId.slice(model.modelId.indexOf("/") + 1) : model.modelId,
+  displayName: model.displayLabel,
+  contextWindow: model.contextLimit ?? null,
+  efforts: model.reasoningEfforts,
+  defaultEffort: model.defaultReasoningEffort,
+  images: true,
+  documents: null,
+  video: null,
+  cost: model.cost ? { input: model.cost.input, output: model.cost.output, currency: model.cost.currency ?? null } : null,
+  effortSource: "fetched",
+  source: "user",
+  addedAt: new Date(0).toISOString(),
+});
+let previewLibraryEntries: UserModelEntry[] | null = null;
+const previewLibrary = (): UserModelEntry[] => (previewLibraryEntries ??= MOCK_MODELS.map(previewEntry));
+
+export async function modelLibraryList(): Promise<{ entries: UserModelEntry[] }> {
+  return bridge<{ entries: UserModelEntry[] }>("modelLibraryList", {});
+}
+
+/** Add or update one library entry; answers the whole library, so the page re-renders from one source. */
+export async function modelLibraryPut(entry: Omit<UserModelEntry, "source" | "addedAt">): Promise<{ entries: UserModelEntry[] }> {
+  return bridge<{ entries: UserModelEntry[] }>("modelLibraryPut", { entry });
+}
+
+export async function modelLibraryRemove(modelId: string): Promise<{ entries: UserModelEntry[] }> {
+  return bridge<{ entries: UserModelEntry[] }>("modelLibraryRemove", { modelId });
+}
+
+/** One provider's own listing, for the add-model dialog's suggestions. Not the library. */
+export async function listProviderModels(providerId: string, refresh = false): Promise<{ models: Model[] }> {
+  return bridge<{ models: Model[] }>("listProviderModels", { providerId, ...(refresh ? { refresh: true } : {}) });
+}
+
 /** Reveal the app-log directory; resolves the current file's path for the notice. */
 export async function openLogFolder(): Promise<string> {
   if (!isTauri()) throw new Error("The log folder needs the desktop app.");
@@ -820,6 +872,16 @@ export async function marketplaceAvatars(): Promise<number> {
 export async function marketplaceRemove(id: string): Promise<void> {
   if (!isTauri()) { mockRemoveMarketplace(id); return; }
   await invoke("marketplace_remove", { id });
+}
+
+/**
+ * Record the user's trust decision where it is enforced. The settings document
+ * only remembers the choice; the native record is what decides whether the
+ * agent receives the workspace's rules and skills.
+ */
+export async function setWorkspaceTrust(grantId: string, trusted: boolean): Promise<void> {
+  if (!isTauri()) return;
+  await invoke<void>("workspace_trust_set", { grantId, trusted });
 }
 
 export async function trustPreview(grantId: string): Promise<import("./types").TrustPreview> {

@@ -702,7 +702,7 @@ export function Sidebar({ onOpenThreads }: { onOpenThreads?: () => void } = {}) 
     : checking ? { tone: "idle", label: "Starting the agent…" }
     : s.offline ? { tone: "bad", label: "Offline" }
     : ready.length ? null
-    : { tone: "warn", label: "Add a provider key", tab: "Providers" };
+    : { tone: "warn", label: "Add a provider key", tab: "Models & providers" };
   const statusTitle = undefined;
   const profileName = s.preview ? "Preview" : "Profile";
   const profileDetail = s.preview ? "Demo data" : "Preferences on this Mac";

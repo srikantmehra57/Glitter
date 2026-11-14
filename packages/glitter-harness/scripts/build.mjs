@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { chmodSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
@@ -32,3 +32,4 @@ await build({
   banner: { js: `#!/usr/bin/env node\n${STANDALONE_BANNER}` },
   logLevel: "info",
 });
+chmodSync(join(here, "..", "dist", "cli.js"), 0o755);

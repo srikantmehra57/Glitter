@@ -1,14 +1,21 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { ProvidersPanel } from "./ProvidersPanel";
+import { DEFAULT_SETTINGS } from "../lib/types";
+import { resetStore } from "../test/store";
+import { ModelsProviders } from "./ModelsProviders";
 
 const opened = vi.hoisted(() => ({ openUrl: vi.fn(async () => {}) }));
 vi.mock("../lib/bridge", async (original) => ({ ...(await original<typeof import("../lib/bridge")>()), openUrl: opened.openUrl }));
 
-describe("providers panel", () => {
+const noop = vi.fn();
+
+describe("models & providers panel", () => {
+  beforeEach(() => {
+    resetStore();
+  });
+
   it("saves an NVIDIA NIM key, links to where one is made, and shows only its mask", async () => {
-    const changed = vi.fn();
-    render(<ProvidersPanel onChanged={changed} />);
+    render(<ModelsProviders draft={DEFAULT_SETTINGS} edit={noop} />);
     const label = await screen.findByText("NVIDIA NIM");
     const row = label.closest(".provider-row") as HTMLElement;
     expect(within(row).getByText(/hosted by NVIDIA/)).toBeInTheDocument();
@@ -27,12 +34,10 @@ describe("providers panel", () => {
     expect(await within(row).findByText("Connected")).toBeInTheDocument();
     expect(within(row).getByText("Key ••••5678")).toBeInTheDocument();
     expect(row.textContent).not.toContain("nvapi-secret");
-    expect(changed).toHaveBeenCalledTimes(1);
   });
 
   it("adds a named custom endpoint with its API type, then another beside it", async () => {
-    const changed = vi.fn();
-    render(<ProvidersPanel onChanged={changed} />);
+    render(<ModelsProviders draft={DEFAULT_SETTINGS} edit={noop} />);
     fireEvent.click(await screen.findByRole("button", { name: /Add a custom endpoint/ }));
 
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Work gateway" } });
@@ -62,5 +67,27 @@ describe("providers panel", () => {
     fireEvent.click(within(secondRow).getByRole("button", { name: "Remove" }));
     await waitFor(() => expect(screen.queryByText("vLLM")).not.toBeInTheDocument());
     expect(screen.getByText("Work gateway")).toBeInTheDocument();
+  });
+
+  it("shows an empty library with the add-model action, and disables it without a key", async () => {
+    const { useAppStore } = await import("../lib/store");
+    useAppStore.setState({ providerStatus: [] });
+    render(<ModelsProviders draft={DEFAULT_SETTINGS} edit={noop} />);
+    expect(await screen.findByText("No models yet")).toBeInTheDocument();
+    const add = screen.getByRole("button", { name: "Add model" });
+    // No provider is connected, so there is nothing to add a model from yet.
+    expect(add).toBeDisabled();
+  });
+
+  it("opens the add-model dialog from a connected provider", async () => {
+    const fetchProviderModels = vi.fn(async () => []);
+    const { useAppStore } = await import("../lib/store");
+    useAppStore.setState({ providerStatus: [{ id: "openai", configured: true, keyHint: "••••1234", baseUrl: null, name: null, wire: null }] });
+    render(<ModelsProviders draft={DEFAULT_SETTINGS} edit={noop} />);
+    const add = await screen.findByRole("button", { name: "Add model" });
+    expect(add).toBeEnabled();
+    fireEvent.click(add);
+    expect(screen.getByRole("heading", { name: "Add a model" })).toBeInTheDocument();
+    expect(fetchProviderModels).not.toHaveBeenCalled();
   });
 });

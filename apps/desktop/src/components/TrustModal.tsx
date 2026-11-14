@@ -29,7 +29,7 @@ export function TrustModal() {
     <header className="settings-header">
       <div>
         <h2 id="trust-title">Trust {workspace?.name ?? "workspace"}?</h2>
-        <p>Trusting loads this folder's skills and rules into every thread. The host restarts to apply it.</p>
+        <p>Trusting loads this folder's skills and rules into every thread, starting with the next message.</p>
       </div>
       <button type="button" className="icon-btn settings-close" aria-label="Close trust dialog" onClick={close}><X size={16} /></button>
     </header>

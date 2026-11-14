@@ -274,7 +274,7 @@ describe("Sidebar", () => {
     expect(screen.getByText("No threads yet")).toBeInTheDocument();
     await userEvent.setup().click(screen.getByRole("button", { name: "Add a provider key" }));
     expect(useAppStore.getState().settingsOpen).toBe(true);
-    expect(useAppStore.getState().settingsTab).toBe("Providers");
+    expect(useAppStore.getState().settingsTab).toBe("Models & providers");
   });
 
   it("opens Usage straight from the footer beside the profile and Settings controls", async () => {

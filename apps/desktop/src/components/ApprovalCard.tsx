@@ -109,6 +109,7 @@ export function ApprovalCard() {
         <span className="approval-icon"><ShieldAlert size={14} aria-hidden="true" /></span>
         <div>
           <h3 id={titleId}>Allow {toolLabel}?</h3>
+          {shown.delegatedTask ? <p className="muted">Delegated run: {shown.delegatedTask}</p> : null}
           {subject ? <p className="muted">{subject}</p> : null}
           {more ? <p className="muted">+{more} more waiting</p> : null}
         </div>

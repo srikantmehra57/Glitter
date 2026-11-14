@@ -3,7 +3,7 @@ import { estimateTurnTokens, planAnchorFor, relativeToWorkspace, stepFromItem } 
 import { readTokenSpeed, recordTokenSpeed } from "./tokenSpeed";
 import { LazyStore } from "@tauri-apps/plugin-store";
 import { SettingsPersistence, settingsFields } from "./settingsPersistence";
-import { normalizeHarnessRules } from "./permissionRules";
+import { effectiveProtectedPaths, normalizeHarnessRules } from "./permissionRules";
 import { composeLineComments, LINE_COMMENT_LIMIT, type LineComment } from "./lineComments";
 import { rememberCommand } from "./palette";
 import { menuAccelerators } from "./shortcuts";
@@ -11,7 +11,7 @@ import { buildSuggestionPrompt, cheapestModel, parseSuggestions, suggestionSigna
 import { stepZoom } from "./zoom";
 import { asLedger, compact, EMPTY_LEDGER, recordTurn, turnEntry, type UsageLedger } from "./usageLedger";
 import { persistableDrafts, rememberPrompt, NewerSessionMemoryError, SessionMemoryPersistence, SESSION_MEMORY_VERSION, type Draft, type SessionMemory, type ThreadMeta } from "./sessionMemory";
-import { bridge, catalogInstall, catalogList, catalogRemove, githubInstall, libraryCheckUpdates, libraryList, libraryRemove, librarySetEnabled, marketplaceAdd, marketplaceAvatars, marketplaceRefresh, marketplaceRemove, gitCommit, gitDiscardAll, gitDiscardFiles, gitDiscardHunk, gitGraph as readGitGraph, gitInit, gitReview, gitBranches, gitPull, gitPullRequest, gitPush, gitSnapshot, gitStage, gitSwitch, gitWorktreeCreate, gitWorktreeHandoff, gitWorktreeRemove, turnSnapshots, restoreTurnSnapshot, forgetTurnSnapshots, listWorkspaceFiles, MOCK_FILES, mockThreads, mockWorkspaceFile, mockWorktree, providerKeysGet, readWorkspaceFile, onBridgeEvent, onWindowCloseRequested, persistStoreDocument, preserveLegacyMuseKey, pickFolder, readDroppedPaths, removeGrant, repairStoreDocument, setInterfaceZoom, setWindowAppearance, setMenuShortcuts, trustPreview, verifyGrants, type BridgeEventPayloads } from "./bridge";
+import { bridge, catalogInstall, catalogList, catalogRemove, githubInstall, libraryCheckUpdates, libraryList, libraryRemove, librarySetEnabled, marketplaceAdd, marketplaceAvatars, marketplaceRefresh, marketplaceRemove, gitCommit, gitDiscardAll, gitDiscardFiles, gitDiscardHunk, gitGraph as readGitGraph, gitInit, gitReview, gitBranches, gitPull, gitPullRequest, gitPush, gitSnapshot, gitStage, gitSwitch, gitWorktreeCreate, gitWorktreeHandoff, gitWorktreeRemove, turnSnapshots, restoreTurnSnapshot, forgetTurnSnapshots, listWorkspaceFiles, listProviderModels, modelLibraryList, modelLibraryPut, modelLibraryRemove, MOCK_FILES, mockThreads, mockWorkspaceFile, mockWorktree, providerKeysGet, readWorkspaceFile, onBridgeEvent, onWindowCloseRequested, persistStoreDocument, preserveLegacyMuseKey, pickFolder, readDroppedPaths, removeGrant, repairStoreDocument, setInterfaceZoom, setWindowAppearance, setMenuShortcuts, setWorkspaceTrust, trustPreview, verifyGrants, type BridgeEventPayloads } from "./bridge";
 import { MOCK_AGENTS, MOCK_GIT, MOCK_GIT_GRAPH, MOCK_MODELS, mockGitReview } from "./mock";
 import { KEYED_PROVIDER_IDS, type ProviderStatus } from "./providers";
 import { clampTier, modelFor, tiersFor } from "./effort";
@@ -48,7 +48,7 @@ import {
   type ThreadWorktree,
   type WorkspaceFile,
   type Workspace,
-  type ComposerImage, type ContextRef, type HostInfo, type Model, type ModelTestResult, type SessionConfig, type SessionMetadata, type SessionPreview,
+  type ComposerImage, type ContextRef, type HostInfo, type Model, type ModelTestResult, type SessionConfig, type SessionMetadata, type SessionPreview, type UserModelEntry,
   type UserInputResponse, type TokenUsage, type SubagentResult, type Suggestion, type TrustPreview, type SkillRow, type HarnessMcpStatus, type HarnessMcpConfig, type HarnessMcpScope, type HarnessMcpServerInput, type CatalogEntry, type CatalogInstallResult, type CatalogRemoveResult, type MarketplaceSource, type PluginInstallOutcome, type PluginLibrary, type PluginUpdate, type SettingsTab, type BrowserControlInput, type BrowserControlResult, type BrowserFrame, type BrowserState, type BrowserStateEvent, type OrchestratorModel, type OrchestratorProbeResult, type OrchestratorRole, type OrchestratorShape,
 } from "./types";
 
@@ -269,6 +269,18 @@ type AppStore = Settings & {
   providerStatusError: string | null;
   /** Re-read the provider keychain status (connection, key hint, custom names and wires). */
   refreshProviders: () => Promise<void>;
+  /** The model library: the entries the user added, as the harness persists them. */
+  modelLibrary: UserModelEntry[] | null;
+  /** The model library's read error; the page shows it instead of an empty list. */
+  modelLibraryError: string | null;
+  /** Read the library and refresh the models the pickers list from it. */
+  refreshModelLibrary: () => Promise<void>;
+  /** Add or update one library entry; the answer becomes the library. */
+  putModelEntry: (entry: Omit<UserModelEntry, "source" | "addedAt">) => Promise<void>;
+  /** Remove one library entry by its full `provider/model` id. */
+  removeModelEntry: (modelId: string) => Promise<void>;
+  /** One provider's own listing for the add-model dialog's suggestions. */
+  fetchProviderModels: (providerId: string, refresh?: boolean) => Promise<Model[]>;
   /** What the agent process reported when it started; null while it is not running. */
   hostInfo: HostInfo | null;
   /** Session-list time filter (`updatedAfter`) and all-workspace listing. */
@@ -409,8 +421,7 @@ type AppStore = Settings & {
   refreshModels: (refresh?: boolean) => Promise<void>;
   loadModelCatalog: (agentId: AgentId) => Promise<Model[]>;
   /** An agent's catalog from cache when one is held, for the picker's other providers. */
-  peekModelCatalog: (agentId: AgentId) => Promise<Model[]>;
-  /** One short request to a Harness model, timed. Settings → Models' Test. */
+  /** One short request to a Harness model, timed. The model Test in Settings. */
   testModel: (agentId: AgentId, model: Model) => Promise<ModelTestResult>;
   /** One role's fixed capability check against the Harness model Settings assigned it. */
   probeOrchestratorRole: (role: OrchestratorRole, model: OrchestratorModel, options?: { refresh?: boolean }) => Promise<OrchestratorProbeResult>;
@@ -912,6 +923,16 @@ export const needsWorkspace = (text: string | null | undefined) =>
   Boolean(text && /add a (project|workspace) folder first|open a (project|workspace) before sending/i.test(text));
 
 /**
+ * The settings document remembers which workspaces the user trusted; the native
+ * record is what the agent obeys. Carry a remembered "trusted" across to it so a
+ * workspace trusted before the agent honoured trust keeps its rules and skills.
+ * It only raises trust: Stop trusting lowers it, explicitly, through its own call.
+ */
+async function mirrorWorkspaceTrust(workspaces: Workspace[]): Promise<void> {
+  await Promise.allSettled(workspaces.filter((workspace) => workspace.trusted === true && workspace.grantId).map((workspace) => setWorkspaceTrust(workspace.grantId as string, true)));
+}
+
+/**
  * List one workspace's sessions from every ready agent and fold them into the
  * thread list. Shared by selecting a workspace and by merely expanding one in
  * the tree; `quiet` keeps a background expansion from raising banners that
@@ -935,7 +956,7 @@ async function listWorkspaceThreads(
     await detectionSettled();
     ready = readyAgents(get());
     if (!ready.length) {
-      fail("The agent is not ready yet. Add a model provider key in Settings → Providers.");
+      fail("The agent is not ready yet. Add a model provider key in Settings → Models & providers.");
       return;
     }
     // The listing is 200 rows × 10 pages with the time filter, across every
@@ -1146,6 +1167,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
   detection: null,
   providerStatus: null,
   providerStatusError: null,
+  modelLibrary: null,
+  modelLibraryError: null,
   hostInfo: null,
   listSince: null,
   showAllWorkspaces: false,
@@ -1167,7 +1190,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   libraryError: null,
   libraryUpdates: [],
   settingsOpen: false,
-  settingsTab: "Models",
+  settingsTab: "Models & providers",
   trajectoryThreadId: null,
   composerFocus: 0,
   titleEditRequest: 0,
@@ -1285,6 +1308,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
           set({ error: `${ungranted.length} ${ungranted.length === 1 ? "folder needs" : "folders need"} to be re-opened to restore access after a security upgrade. Use Open workspace and pick the folder again.` });
         }
         if (healed || coerced) void get().save();
+        // Before any thread is resumed, so the first turn already sees the user's decision.
+        await mirrorWorkspaceTrust(get().workspaces);
 
         // Everything above is local. From here on the app can be shown: what
         // remains — agent detection, starting the agent process,
@@ -1295,6 +1320,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
         const detecting = get().refreshDetection();
         detecting.catch(() => {});
         void get().refreshProviders();
+        // The model library backs every picker; it also refreshes the models.
+        void get().refreshModelLibrary();
         // Selection, draft and the changes dock need nothing from the host.
         const restoreId = memory.selectedWorkspaceId && get().workspaces.some((workspace) => workspace.id === memory.selectedWorkspaceId)
           ? memory.selectedWorkspaceId
@@ -1341,7 +1368,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     set({ ...patch });
     // Begin applying a rule change before persistence yields: a concurrent send
     // must wait for this change, even while the settings file is being saved.
-    const rulesUpdate = "harnessRules" in patch
+    const rulesUpdate = "harnessRules" in patch || "protectedPaths" in patch
       ? get().applyHarnessRules(true).catch((error) => { set({ error: describeError("Could not apply the permission rules", error) }); })
       : null;
     const settings = settingsFields(get());
@@ -1370,14 +1397,15 @@ export const useAppStore = create<AppStore>((set, get) => ({
         for (;;) {
           const generation = harnessRulesGeneration;
           const rules = normalizeHarnessRules(get().harnessRules);
-          const signature = JSON.stringify(rules);
+          const protectedPaths = effectiveProtectedPaths(get().protectedPaths);
+          const signature = JSON.stringify([rules, protectedPaths]);
           if (harnessRulesApplied === signature) return;
-          const result = await bridge<{ problems?: string[] }>("harnessRules", { agentId: "harness", rules });
+          const result = await bridge<{ problems?: string[] }>("harnessRules", { agentId: "harness", rules, protectedPaths });
           if (generation !== harnessRulesGeneration) throw new Error("The agent connection restarted while applying rules.");
           harnessRulesApplied = signature;
           // Settings may have changed while the bridge was answering. Install
           // the newest snapshot before releasing any waiting session or send.
-          if (JSON.stringify(normalizeHarnessRules(get().harnessRules)) !== signature) continue;
+          if (JSON.stringify([normalizeHarnessRules(get().harnessRules), effectiveProtectedPaths(get().protectedPaths)]) !== signature) continue;
           set({ harnessRuleProblems: result.problems ?? [], harnessRulesError: null });
           return;
         }
@@ -1399,6 +1427,50 @@ export const useAppStore = create<AppStore>((set, get) => ({
       // Pickers fall back to ids alone; the Providers page shows the error.
       set({ providerStatusError: describeError("Could not read saved providers", error) });
     }
+  },
+
+  refreshModelLibrary: async () => {
+    try {
+      const { entries } = await modelLibraryList();
+      set({ modelLibrary: entries, modelLibraryError: null });
+      // A saved default that predates the library keeps working: add it once, quietly.
+      const state = get();
+      const split = (modelId: string | undefined) => {
+        if (!modelId || !modelId.includes("/")) return null;
+        const slash = modelId.indexOf("/");
+        return { providerId: modelId.slice(0, slash), model: modelId.slice(slash + 1) };
+      };
+      const keyOf = (entry: { providerId: string; model: string }) => `${entry.providerId}/${entry.model}`;
+      const known = new Set(entries.map(keyOf));
+      const wanted = [split(state.defaultModel), ...Object.values(state.orchestratorModels ?? {}).map((role) => split(role?.modelId)), split(state.suggestionsModelId)].filter((entry): entry is { providerId: string; model: string } => Boolean(entry));
+      for (const entry of wanted) {
+        if (known.has(keyOf(entry))) continue;
+        known.add(keyOf(entry));
+        const added = { ...entry, source: "migrated" as const, addedAt: new Date().toISOString() };
+        const saved = await modelLibraryPut(added);
+        set({ modelLibrary: saved.entries });
+      }
+      void get().refreshModels();
+    } catch (error) {
+      set({ modelLibraryError: describeError("Could not load the model library", error) });
+    }
+  },
+
+  putModelEntry: async (entry) => {
+    const { entries } = await modelLibraryPut(entry);
+    set({ modelLibrary: entries, modelLibraryError: null });
+    void get().refreshModels();
+  },
+
+  removeModelEntry: async (modelId) => {
+    const { entries } = await modelLibraryRemove(modelId);
+    set({ modelLibrary: entries, modelLibraryError: null });
+    void get().refreshModels();
+  },
+
+  fetchProviderModels: async (providerId, refresh = false) => {
+    const { models } = await listProviderModels(providerId, refresh);
+    return models;
   },
 
   refreshDetection: async () => {
@@ -1447,13 +1519,6 @@ export const useAppStore = create<AppStore>((set, get) => ({
     return (await readModelCatalog("harness", get().preview, undefined, true)).models;
   },
 
-  peekModelCatalog: async () => {
-    if (get().models.length) return get().models;
-    const held = modelCatalogs.get("harness");
-    if (held?.length) return held;
-    return (await readModelCatalog("harness", get().preview)).models;
-  },
-
   testModel: async (_agentId, model) => {
     return bridge<ModelTestResult>("testModel", { agentId: "harness", modelId: model.modelId }, { timeoutMs: 45_000 });
   },
@@ -1489,9 +1554,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
     set({ modelsLoading: !showing, modelsError: null, ...(!get().models.length ? { models: known } : {}) });
     const run = (async () => {
       try {
-        let { models, modes } = await readModelCatalog(agentId, false, sessionId, refresh, draftModel);
-        // A catalog that lists nothing from its cache gets one fresh probe before the picker says so.
-        if (!refresh && !models.length) ({ models, modes } = await readModelCatalog(agentId, false, sessionId, true, draftModel));
+        // An empty answer is meaningful now — the library holds only what the user
+        // added — so an empty list is shown as-is, not re-probed.
+        const { models, modes } = await readModelCatalog(agentId, false, sessionId, refresh, draftModel);
         if (modes) set({ agentModes: { ...get().agentModes, [agentId]: modes } });
         // Only a listing newer than whatever wrote the cache may replace it: a
         // Rescan and a thread switch can overlap, and answers arrive out of order.
@@ -1540,6 +1605,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       if (grantId && (existing.grantId !== grantId || existing.path !== path)) {
         set({ workspaces: get().workspaces.map((item) => item.id === existing.id ? { ...item, path, name: workspaceName(path), grantId } : item) });
         await get().save();
+        await mirrorWorkspaceTrust(get().workspaces);
       }
       await get().selectWorkspace(existing.id);
       return;
@@ -1556,6 +1622,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
           if (hit) {
             set({ workspaces: get().workspaces.map((item) => item.id === hit.id ? { ...item, path, name: workspaceName(path), grantId } : item) });
             await get().save();
+            await mirrorWorkspaceTrust(get().workspaces);
             await get().selectWorkspace(hit.id);
             return;
           }
@@ -1923,6 +1990,10 @@ export const useAppStore = create<AppStore>((set, get) => ({
     if (!dialog || !dialog.preview) return;
     const workspace = get().workspaces.find((item) => item.id === dialog.workspaceId);
     if (!workspace) return;
+    // The decision counts once the native side holds it; if it cannot, say so and stay untrusted.
+    if (workspace.grantId) {
+      try { await setWorkspaceTrust(workspace.grantId, true); } catch (error) { set({ error: describeError("Could not trust this workspace", error) }); return; }
+    }
     set({ workspaces: get().workspaces.map((item) => item.id === workspace.id ? { ...item, trusted: true } : item), trustDialog: null });
     scheduleMemory(get);
     // Trust lives in the settings document; without a save the next launch
@@ -1937,6 +2008,10 @@ export const useAppStore = create<AppStore>((set, get) => ({
   untrustWorkspace: async (workspaceId) => {
     const workspace = get().workspaces.find((item) => item.id === workspaceId);
     if (!workspace?.trusted) return;
+    // Untrusting must reach the native record or the agent keeps loading the folder's rules.
+    if (workspace.grantId) {
+      try { await setWorkspaceTrust(workspace.grantId, false); } catch (error) { set({ error: describeError("Could not stop trusting this workspace", error) }); return; }
+    }
     set({ workspaces: get().workspaces.map((item) => item.id === workspaceId ? { ...item, trusted: false } : item) });
     scheduleMemory(get);
     void get().save();
@@ -3423,8 +3498,14 @@ function releaseThreadSessions(sessionIds: string[], stopped: Promise<unknown> =
 }
 
 async function cancelSession(sessionId: string, turnId?: string) {
-  try { await bridge("cancelTurn", { agentId: useAppStore.getState().threads.find((thread) => thread.sessionId === sessionId)?.agentId, sessionId, ...(turnId ? { turnId } : {}) }); }
-  catch (error) {
+  try {
+    const answer = await bridge<{ status?: string } | undefined>("cancelTurn", { agentId: useAppStore.getState().threads.find((thread) => thread.sessionId === sessionId)?.agentId, sessionId, ...(turnId ? { turnId } : {}) });
+    // The turn's end always arrives as its own event; this only says so when it has not yet. `stopping` means a tool is
+    // still running, so the thread stays on Stopping, says why, and nothing is declared finished early.
+    if (answer?.status === "stopping") {
+      useAppStore.setState((state) => ({ threads: state.threads.map((thread) => thread.sessionId === sessionId && thread.status === "running" ? { ...thread, notice: { level: "info" as const, message: "Still stopping: a command or tool is taking a moment to end." } } : thread) }));
+    }
+  } catch (error) {
     if (/already_terminal|already (?:ended|completed|finished)|not running|no active turn/i.test(message(error))) { settleEndedTurn(sessionId, turnId); return; }
     useAppStore.setState((state) => ({ threads: state.threads.map((thread) => thread.sessionId === sessionId ? { ...thread, cancelRequested: false, error: sentenceAfter(describeError("Stop failed", error), "Try Stop again.") } : thread) }));
   }

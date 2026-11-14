@@ -81,7 +81,7 @@ describe("PermissionRulesCard", () => {
 
   it("names the deny-only path form so an allow rule is not saved for nothing", () => {
     mount();
-    expect(screen.getByText(/Write a rule as Tool\(pattern\)/)).toHaveTextContent("A path — Edit(.env), Edit(src/**) — is deny-only");
+    expect(screen.getByText(/Write a rule as Tool\(pattern\)/)).toHaveTextContent("A path — Edit(.env), Read(.env), Edit(src/**) — is deny-only: edits already run in Ask and Auto, and reads never ask.");
     expect(screen.getByText(/Skips the approval this rule names, for commands, web calls and MCP tools/)).toBeInTheDocument();
   });
 

@@ -16,6 +16,7 @@ import { TrustModal } from "./components/TrustModal";
 import { Sidebar } from "./components/Sidebar";
 import { ThreadView } from "./components/ThreadView";
 import { openPicker } from "./lib/commands";
+import { approvalShortcutBlocked, approvalViewKey, trackShownApproval, type ShownApproval } from "./lib/approvalShortcut";
 import { modalOpen } from "./lib/dialogFocus";
 import { actionFor, chordOf, menuOwned, shortcutForMenu, type ShortcutId } from "./lib/shortcuts";
 import "@fontsource-variable/inter";
@@ -78,8 +79,21 @@ function runShortcut(id: ShortcutId) {
   }
 }
 
+/** The key of the approval card in view: the selected thread's pending one. */
+function visibleApprovalKey(): string | null {
+  const state = useAppStore.getState();
+  const thread = state.threads.find((item) => item.sessionId === state.selectedSessionId);
+  return approvalViewKey(thread?.sessionId, thread?.pendingApproval?.approvalId);
+}
+
 function useDesktopShortcuts() {
   useEffect(() => {
+    // When the card in view first appeared. A card that arrives, changes thread or
+    // comes back to a focused window starts its delay again (see approvalShortcut.ts).
+    let shown: ShownApproval | null = trackShownApproval(null, visibleApprovalKey(), Date.now());
+    const noteShown = () => { shown = trackShownApproval(shown, visibleApprovalKey(), Date.now()); };
+    const restartShown = () => { shown = trackShownApproval(null, visibleApprovalKey(), Date.now()); };
+    const unsubscribe = useAppStore.subscribe(noteShown);
     const onKey = (event: KeyboardEvent) => {
       const meta = event.metaKey || event.ctrlKey;
       if (event.key === "Escape") {
@@ -129,7 +143,8 @@ function useDesktopShortcuts() {
       }
       // Approval decisions: mod+Y takes the first allow choice, mod+Shift+Y the
       // wider-scoped second, mod+Backspace the first deny. Never fires while
-      // typing, while a decision is in flight, or past the host deadline.
+      // typing, while a decision is in flight, or past the host deadline. A held
+      // key never repeats a decision, and an allow waits for its card to be in view.
       if (event.key.toLowerCase() === "y" || event.key === "Backspace") {
         const state = useAppStore.getState();
         const thread = state.threads.find((item) => item.sessionId === state.selectedSessionId);
@@ -144,12 +159,26 @@ function useDesktopShortcuts() {
         const picked = thread?.approvalScope?.approvalId === approval.approvalId ? allow.find((option) => option.choiceId === thread.approvalScope?.choiceId) : undefined;
         const choice = event.key === "Backspace" ? deny[0] : event.shiftKey ? picked ?? allow[1] : allow[0];
         if (!choice) return;
+        // The key is consumed either way, so a blocked press cannot reach the page.
         event.preventDefault();
+        const blocked = approvalShortcutBlocked({
+          repeat: event.repeat,
+          allow: !choice.decision.startsWith("denied"),
+          shown,
+          key: visibleApprovalKey(),
+          now: Date.now(),
+        });
+        if (blocked) return;
         void state.decide(approval.approvalId, choice.choiceId);
       }
     };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("focus", restartShown);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("focus", restartShown);
+      unsubscribe();
+    };
   }, []);
 }
 

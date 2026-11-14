@@ -46,6 +46,23 @@ const BASE_ENV: &[&str] = &[
     "VISUAL",
     "HOMEBREW_PREFIX",
     "HOMEBREW_CELLAR",
+    "JAVA_HOME",
+    "JDK_HOME",
+    "CARGO_HOME",
+    "RUSTUP_HOME",
+    "GOPATH",
+    "GOROOT",
+    "PYENV_ROOT",
+    "PYENV_VERSION",
+    "RBENV_ROOT",
+    "RBENV_VERSION",
+    "BUN_INSTALL",
+    "NVM_DIR",
+    "VOLTA_HOME",
+    "ASDF_DATA_DIR",
+    "MISE_DATA_DIR",
+    "VIRTUAL_ENV",
+    "CONDA_PREFIX",
     "NODE_NO_WARNINGS",
 ];
 
@@ -127,10 +144,17 @@ mod tests {
 
     #[test]
     fn env_filter_drops_secrets() {
-        for key in ["AWS_SECRET_ACCESS_KEY", "GITHUB_TOKEN", "NODE_OPTIONS", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "XAI_API_KEY", "META_API_KEY"] {
+        for key in ["AWS_SECRET_ACCESS_KEY", "GITHUB_TOKEN", "NODE_OPTIONS", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "XAI_API_KEY", "META_API_KEY", "NPM_TOKEN", "JAVA_TOOL_OPTIONS", "PYTHONPATH", "RUBYOPT", "BASH_ENV"] {
             assert!(!keep_env_key(key), "kept {key}");
         }
         assert!(keep_env_key("PATH"));
         assert!(keep_env_key("HOME"));
+    }
+
+    #[test]
+    fn env_filter_keeps_toolchain_settings() {
+        for key in ["JAVA_HOME", "JDK_HOME", "CARGO_HOME", "RUSTUP_HOME", "GOPATH", "GOROOT", "PYENV_ROOT", "PYENV_VERSION", "RBENV_ROOT", "RBENV_VERSION", "BUN_INSTALL", "NVM_DIR", "VOLTA_HOME", "ASDF_DATA_DIR", "MISE_DATA_DIR", "VIRTUAL_ENV", "CONDA_PREFIX"] {
+            assert!(keep_env_key(key), "dropped {key}");
+        }
     }
 }

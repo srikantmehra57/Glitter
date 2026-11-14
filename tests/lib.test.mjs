@@ -26,7 +26,7 @@ const { settingsFields } = await bundle('apps/desktop/src/lib/settingsPersistenc
 const { resolveTheme, shellOpacity, normalizeTranslucency } = await bundle('apps/desktop/src/lib/theme.ts');
 const { UI_FONT_STACKS, normalizeUiFont } = await bundle('apps/desktop/src/lib/fonts.ts');
 const { mcpServerNameProblem, mcpServerSummary, parseMcpArguments, parseMcpKeyValues } = await bundle('apps/desktop/src/lib/mcpConfig.ts');
-const { modelVisibilityKey, normalizeHiddenModels, normalizeHiddenProviders, providerKey, isModelHidden, pickerModels, withModelsHidden } = await bundle('apps/desktop/src/lib/modelVisibility.ts');
+const { entryKey, normalizeEntry, normalizeLibrary, seedFromSessions } = await bundle('packages/glitter-harness/src/harness/library.ts');
 const { extensionArt, EXTENSION_TONES } = await bundle('apps/desktop/src/lib/extensionArt.ts');
 const { readGithubSource, componentSummary, unsupportedSummary, discoverRows, installedFromMarketplace, pluginTitle, selectableParts, FEATURED_SOURCES } = await bundle('apps/desktop/src/lib/pluginLibrary.ts');
 const { SETTINGS_NAV_GROUPS, SETTINGS_TAB_LABELS, SETTINGS_TAB_COPY, settingsTabsMatching } = await bundle('apps/desktop/src/lib/settingsNav.ts');
@@ -415,14 +415,14 @@ test('prompt history normalizes older saves and keeps the last 50 per workspace'
   assert.deepEqual(loaded.promptHistory.bad, []);
 });
 
-test('settings navigation survives memory persistence and invalid or older saves fall back to Models', async () => {
+test('settings navigation survives memory persistence and invalid or older saves fall back to Models & providers', async () => {
   let saved;
   const memory = new SessionMemoryPersistence({ get: async () => saved, set: async (_key, value) => { saved = value; }, save: async () => {} });
-  assert.equal((await memory.load()).settingsTab, 'Models');
+  assert.equal((await memory.load()).settingsTab, 'Models & providers');
   await memory.save(normalizeMemory({ settingsTab: 'About' }));
   assert.equal((await memory.load()).settingsTab, 'About');
-  assert.equal(normalizeMemory({ settingsTab: 'Missing' }).settingsTab, 'Models');
-  assert.equal(normalizeMemory({ settingsTab: null }).settingsTab, 'Models');
+  assert.equal(normalizeMemory({ settingsTab: 'Missing' }).settingsTab, 'Models & providers');
+  assert.equal(normalizeMemory({ settingsTab: null }).settingsTab, 'Models & providers');
 });
 
 test('dock width normalizes saved values and stays in bounds on screen', () => {
@@ -954,21 +954,39 @@ test('MCP names and row summaries match what the bridge writes', () => {
 });
 
 
-test('hidden models leave the picker by agent, provider and model, except the one in use', () => {
-  const sonnet = { modelId: 'anthropic/claude-sonnet', providerId: 'anthropic' };
-  const haiku = { modelId: 'anthropic/claude-haiku', providerId: 'anthropic' };
-  const routed = { modelId: 'anthropic/claude-haiku', providerId: 'openrouter' };
-  assert.equal(modelVisibilityKey('harness', haiku), 'harness|anthropic|anthropic/claude-haiku');
-  const hidden = withModelsHidden([], 'harness', [haiku, sonnet], true);
-  assert.deepEqual(pickerModels([sonnet, haiku, routed], 'harness', hidden).map((model) => model.providerId + model.modelId), ['openrouteranthropic/claude-haiku'], 'the same id under another provider stays');
-  assert.deepEqual(pickerModels([sonnet, haiku], 'harness', hidden, sonnet), [sonnet], 'the model a thread uses is kept');
-  assert.equal(isModelHidden(hidden, 'muse', haiku), false, 'another agent keeps its own choices');
-  assert.deepEqual(withModelsHidden(hidden, 'harness', [haiku], false), ['harness|anthropic|anthropic/claude-sonnet']);
-  assert.deepEqual(normalizeHiddenModels(['a|b|c', 'a|b|c', 7, 'no-pipes', 'x'.repeat(700)]), ['a|b|c']);
-  assert.deepEqual(normalizeHiddenModels('a|b|c'), []);
-  assert.equal(providerKey('harness', 'anthropic'), 'harness:anthropic');
-  assert.equal(providerKey('muse', 'meta'), 'muse:', 'a CLI agent is one provider whatever its labs');
-  assert.deepEqual(normalizeHiddenProviders(['harness:openai', 'harness:openai', 'nope', 3]), ['harness:openai']);
+test('the model library keys entries by provider and model, and cleans what it reads', () => {
+  const gateway = { providerId: 'openrouter', model: 'anthropic/claude-haiku', source: 'user', addedAt: '2026-01-01T00:00:00.000Z' };
+  assert.equal(entryKey(gateway), 'openrouter/anthropic/claude-haiku');
+  // The same model id under two providers stays distinct, and a full model id round-trips.
+  const saved = normalizeLibrary([
+    gateway,
+    { providerId: 'anthropic', model: 'claude-haiku', contextWindow: 200000, efforts: ['low', 'high'], defaultEffort: 'high', images: true, documents: null, video: false, source: 'user', addedAt: '2026-01-01T00:00:00.000Z' },
+    { providerId: 'anthropic', model: 'claude-haiku', source: 'user', addedAt: '2026-01-02T00:00:00.000Z' },
+    { providerId: '', model: 'no-provider' },
+    { providerId: 'anthropic', model: 'has spaces', source: 'user', addedAt: 'x' },
+    'junk',
+  ]);
+  assert.deepEqual(saved.map(entryKey), ['openrouter/anthropic/claude-haiku', 'anthropic/claude-haiku'], 'duplicates and junk rows drop out');
+  const kept = saved[1];
+  assert.equal(kept.contextWindow, 200000);
+  assert.deepEqual(kept.efforts, ['low', 'high']);
+  assert.equal(kept.defaultEffort, 'high');
+  assert.equal(kept.images, true);
+  assert.equal(kept.documents, null);
+  assert.equal(kept.video, false);
+  // An effort level outside the app's vocabulary does not survive, nor does a default that is not listed.
+  const cleaned = normalizeEntry({ providerId: 'anthropic', model: 'm', efforts: ['low', 'turbo'], defaultEffort: 'high', contextWindow: -5, source: 'user' });
+  assert.deepEqual(cleaned.efforts, ['low']);
+  assert.equal(cleaned.defaultEffort, undefined);
+  assert.equal(cleaned.contextWindow, undefined);
+  // The seed takes only the models past threads actually ran, provider-prefixed.
+  const seeded = seedFromSessions([
+    { sessionId: 'h-seed0001', workspaceRoot: '/w', title: null, createdAt: '', updatedAt: '', modelId: 'anthropic/claude-sonnet-5' },
+    { sessionId: 'h-seed0002', workspaceRoot: '/w', title: null, createdAt: '', updatedAt: '', manual: { modelId: 'openai/gpt-5' }, orchestrator: { goal: 'balanced', roles: { lead: { modelId: 'xai/grok-4' }, builder: { modelId: 'anthropic/claude-haiku-9' } } } },
+    { sessionId: 'h-seed0003', workspaceRoot: '/w', title: null, createdAt: '', updatedAt: '', modelId: 'bare-no-provider' },
+  ]);
+  assert.deepEqual(seeded.map(entryKey), ['anthropic/claude-haiku-9', 'anthropic/claude-sonnet-5', 'openai/gpt-5', 'xai/grok-4']);
+  assert.ok(seeded.every((entry) => entry.source === 'migrated'));
 });
 
 test('an extension gets its own icon and tint: by id in the store, by name otherwise, stable by kind', () => {
@@ -1047,17 +1065,18 @@ test('every Settings page has one name, one group and a line under its title, an
   }
   assert.ok(!SETTINGS_TABS.includes('Account') && !SETTINGS_TABS.includes('Agents'), 'no external agent pages remain');
   assert.deepEqual(settingsTabsMatching(''), [...SETTINGS_TABS]);
-  assert.ok(settingsTabsMatching('api key').includes('Providers'));
-  assert.ok(settingsTabsMatching('test latency').includes('Models'));
+  assert.ok(settingsTabsMatching('api key').includes('Models & providers'));
+  assert.ok(settingsTabsMatching('test latency').includes('Models & providers'));
   assert.ok(settingsTabsMatching('slash').includes('Shortcuts'));
   assert.deepEqual(settingsTabsMatching('zzzz'), []);
 });
 
-test('a remembered Account or Agents page opens Providers, where the built-in agent is set up', () => {
-  assert.equal(normalizeMemory({ settingsTab: 'Account' }).settingsTab, 'Providers');
-  assert.equal(normalizeMemory({ settingsTab: 'Agents' }).settingsTab, 'Providers');
+test('a remembered Account, Agents or Providers page opens Models & providers, where the built-in agent is set up', () => {
+  assert.equal(normalizeMemory({ settingsTab: 'Account' }).settingsTab, 'Models & providers');
+  assert.equal(normalizeMemory({ settingsTab: 'Agents' }).settingsTab, 'Models & providers');
+  assert.equal(normalizeMemory({ settingsTab: 'Providers' }).settingsTab, 'Models & providers');
   assert.equal(normalizeMemory({ settingsTab: 'Theme' }).settingsTab, 'Theme');
-  assert.equal(normalizeMemory({ settingsTab: 'Gone' }).settingsTab, 'Models');
+  assert.equal(normalizeMemory({ settingsTab: 'Gone' }).settingsTab, 'Models & providers');
 });
 
 test('a derived thread title drops attachment markers and keeps the words', () => {

@@ -50,33 +50,113 @@ function decodeEntities(text: string): string {
   });
 }
 
+/** Elements whose content is never shown. An unclosed script or style takes the rest of the page, as a browser treats it. */
+// `head` is not here: its title is read, and its scripts and styles are hidden on their own.
+const HIDDEN = new Set(["script", "style", "noscript", "svg", "template", "iframe"]);
+const TAKES_REST = new Set(["script", "style"]);
+const BLOCK_END = new Set(["p", "div", "section", "article", "header", "footer", "tr", "table", "ul", "ol", "blockquote", "li", "dd", "dt", "h1", "h2", "h3", "h4", "h5", "h6"]);
+
+/** The text between tags, with every tag dropped. One pass: a `<` with no `>` after it is text. */
+function stripTags(text: string): string {
+  let out = "";
+  let at = 0;
+  for (;;) {
+    const open = text.indexOf("<", at);
+    if (open < 0) return out + text.slice(at);
+    const close = text.indexOf(">", open);
+    if (close < 0) return out + text.slice(at);
+    out += text.slice(at, open);
+    at = close + 1;
+  }
+}
+
 /**
  * A readable text view of an HTML page: headings, list items, links with
  * their targets and code blocks survive; scripts, styles and markup do not.
  * Deliberately small; the browser tool is there for pages that need a DOM.
+ *
+ * One left-to-right pass. A page is untrusted and up to the fetch limit, and a
+ * tag that is never closed must not make each later tag rescan the rest: the
+ * search for a closing tag is remembered once it has failed, and everything a
+ * search finds is consumed, so the work is linear in the page.
  */
 export function htmlToText(html: string, base?: URL): string {
-  const title = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1];
-  let body = html
-    .replace(/<!--[\s\S]*?-->/g, "")
-    .replace(/<(script|style|noscript|svg|template|iframe|head)\b[\s\S]*?<\/\1>/gi, "")
-    .replace(/<pre\b[^>]*>([\s\S]*?)<\/pre>/gi, (_whole, code: string) => `\n\`\`\`\n${code.replace(/<[^>]+>/g, "")}\n\`\`\`\n`)
-    .replace(/<h([1-6])\b[^>]*>([\s\S]*?)<\/h\1>/gi, (_whole, level: string, text: string) => `\n\n${"#".repeat(Number(level))} ${text.replace(/<[^>]+>/g, "").trim()}\n\n`)
-    .replace(/<a\b[^>]*href\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi, (_whole, href: string, text: string) => {
-      const label = text.replace(/<[^>]+>/g, "").trim();
-      let target = href;
-      try { target = base ? new URL(href, base).href : href; } catch { /* keep as written */ }
-      if (!label) return "";
-      return /^(javascript|mailto|tel):/i.test(target) || target.startsWith("#") ? label : `[${label}](${target})`;
-    })
-    .replace(/<li\b[^>]*>/gi, "\n- ")
-    .replace(/<(br|hr)\b[^>]*>/gi, "\n")
-    .replace(/<\/(p|div|section|article|header|footer|tr|table|ul|ol|blockquote|li|dd|dt|h[1-6])>/gi, "\n")
-    .replace(/<(td|th)\b[^>]*>/gi, " | ")
-    .replace(/<code\b[^>]*>([\s\S]*?)<\/code>/gi, (_whole, code: string) => `\`${code.replace(/<[^>]+>/g, "")}\``)
-    .replace(/<[^>]+>/g, "");
+  const lower = html.toLowerCase();
+  const none = new Set<string>();
+  /** Where `</name` next appears at or after `from`, or -1, and never searched for again once absent. */
+  const closer = (name: string, from: number): number => {
+    if (none.has(name)) return -1;
+    let at = lower.indexOf(`</${name}`, from);
+    // `</a` also starts `</article>`: the name must end there.
+    while (at >= 0 && /[a-z0-9]/.test(lower[at + name.length + 2] ?? "")) at = lower.indexOf(`</${name}`, at + 1);
+    if (at < 0) none.add(name);
+    return at;
+  };
+  let noTagEnd = false;
+  let title: string | undefined;
+  let body = "";
+  let at = 0;
+  while (at < html.length) {
+    const open = html.indexOf("<", at);
+    if (open < 0) { body += html.slice(at); break; }
+    body += html.slice(at, open);
+    if (html.startsWith("<!--", open)) {
+      const end = html.indexOf("-->", open + 4);
+      if (end < 0) break;
+      at = end + 3;
+      continue;
+    }
+    const close = noTagEnd ? -1 : html.indexOf(">", open);
+    if (close < 0) { noTagEnd = true; body += html.slice(open); break; }
+    const tag = /^<(\/?)([a-z][a-z0-9]*)/i.exec(html.slice(open, Math.min(close + 1, open + 64)));
+    if (!tag) { body += html.slice(open, close + 1); at = close + 1; continue; }
+    const closing = tag[1] === "/";
+    const name = tag[2].toLowerCase();
+    const raw = html.slice(open, close + 1);
+    at = close + 1;
+    if (closing) {
+      if (BLOCK_END.has(name)) body += "\n";
+      continue;
+    }
+    if (HIDDEN.has(name)) {
+      const end = closer(name, at);
+      if (end >= 0) at = lower.indexOf(">", end) + 1 || html.length;
+      else if (TAKES_REST.has(name)) break;
+      continue;
+    }
+    if (name === "title") {
+      const end = closer("title", at);
+      if (end >= 0) {
+        title ??= html.slice(at, end);
+        at = lower.indexOf(">", end) + 1 || html.length;
+      }
+      continue;
+    }
+    if (name === "pre" || name === "code" || /^h[1-6]$/.test(name) || name === "a") {
+      const href = name === "a" ? /href\s*=\s*["']([^"']+)["']/i.exec(raw)?.[1] : undefined;
+      // A link without a target is only its text; no closing tag is searched for on its behalf.
+      if (name === "a" && href === undefined) continue;
+      const end = closer(name, at);
+      if (end < 0) continue;
+      const inner = html.slice(at, end);
+      at = lower.indexOf(">", end) + 1 || html.length;
+      if (name === "pre") body += `\n\`\`\`\n${stripTags(inner)}\n\`\`\`\n`;
+      else if (name === "code") body += `\`${stripTags(inner)}\``;
+      else if (name !== "a") body += `\n\n${"#".repeat(Number(name[1]))} ${stripTags(inner).trim()}\n\n`;
+      else {
+        const label = stripTags(inner).trim();
+        let target = href as string;
+        try { target = base ? new URL(target, base).href : target; } catch { /* keep as written */ }
+        if (label) body += /^(javascript|mailto|tel):/i.test(target) || target.startsWith("#") ? label : `[${label}](${target})`;
+      }
+      continue;
+    }
+    if (name === "li") body += "\n- ";
+    else if (name === "br" || name === "hr") body += "\n";
+    else if (name === "td" || name === "th") body += " | ";
+  }
   body = decodeEntities(body).replace(/[ \t\f\v\r]+/g, " ").replace(/ *\n */g, "\n").replace(/\n{3,}/g, "\n\n").trim();
-  const heading = title ? `# ${decodeEntities(title.replace(/<[^>]+>/g, "")).trim()}\n\n` : "";
+  const heading = title ? `# ${decodeEntities(stripTags(title)).trim()}\n\n` : "";
   return `${heading}${body}`;
 }
 
@@ -173,7 +253,7 @@ async function searchJson(name: string, response: Promise<Response>): Promise<Re
   let answer: Response;
   try { answer = await response; } catch (error) { throw new ToolError(`Could not reach ${name}: ${error instanceof Error ? error.message : String(error)}`); }
   if (!answer.ok) {
-    const hint = answer.status === 401 || answer.status === 403 ? " Check the key in Settings → Providers." : answer.status === 429 ? " The search provider is rate-limiting this key." : "";
+    const hint = answer.status === 401 || answer.status === 403 ? " Check the key in Settings → Models & providers." : answer.status === 429 ? " The search provider is rate-limiting this key." : "";
     throw new ToolError(`${name} returned ${answer.status}.${hint}`);
   }
   return await answer.json() as Record<string, unknown>;
@@ -230,7 +310,7 @@ export function webExtension(deps: { credentials: () => ProviderCredentials; fet
     validate: (_root, input) => (String(input.query ?? "").trim() ? undefined : "A query is required."),
     run: async (_root, input, signal) => {
       const provider = searchProvider(deps.credentials());
-      if (!provider) throw new ToolError("No web search provider is configured. The user can add a Tavily, Brave or Exa key in Settings → Providers.");
+      if (!provider) throw new ToolError("No web search provider is configured. The user can add a Tavily, Brave or Exa key in Settings → Models & providers.");
       const query = String(input.query).trim();
       const count = Math.min(10, Math.max(1, Math.floor(Number(input.count ?? 5)) || 5));
       const results = await search(provider, query, count, deps.fetchImpl(), signal);

@@ -139,7 +139,7 @@ export function CommandPalette() {
       }));
     const settings: Command[] = [
       { id: "settings", label: "Open settings", section: "Settings", icon: <Settings size={14} />, shortcut: shortcutText("settings"), run: () => s.setSettingsOpen(true) },
-      ...SETTINGS_TABS.map((tab) => ({ id: `settings-${tab}`, label: `Settings · ${SETTINGS_TAB_LABELS[tab]}`, section: "Settings" as const, icon: <Settings size={14} />, keywords: tab === "Extensions" ? "mcp skills plugins" : tab === "Models" ? "hide show test" : undefined, run: () => s.setSettingsOpen(true, tab) })),
+      ...SETTINGS_TABS.map((tab) => ({ id: `settings-${tab}`, label: `Settings · ${SETTINGS_TAB_LABELS[tab]}`, section: "Settings" as const, icon: <Settings size={14} />, keywords: tab === "Extensions" ? "mcp skills plugins" : tab === "Models & providers" ? "add model test provider key" : undefined, run: () => s.setSettingsOpen(true, tab) })),
     ];
     return [...actions, ...threads, ...files, ...settings];
   }, [s, thread, workspace, query, searching]);

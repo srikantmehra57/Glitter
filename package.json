@@ -23,6 +23,7 @@
     "test:ui": "npm run test:ui -w @glitter/desktop",
     "test:native": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml",
     "check:versions": "node scripts/check-versions.mjs",
+    "install:cli": "node scripts/install-cli.mjs",
     "notices": "node scripts/generate-third-party-notices.mjs",
     "check:notices": "node scripts/generate-third-party-notices.mjs --check",
     "check:a11y": "node scripts/check-a11y.mjs",

@@ -2,19 +2,18 @@ import { lazy, Suspense, useDeferredValue, useEffect, useRef, useState, type CSS
 import { useModalDialog } from "../lib/dialogFocus";
 import { describeError } from "../lib/errors";
 import { useShallow } from "zustand/react/shallow";
-import { Activity, ArchiveRestore, ArrowLeft, ChartNoAxesColumn, Check, Command, Cpu, FolderOpen, Info, Lock, MessagesSquare, Minus, Monitor, Moon, Palette, Plug, Plus, Puzzle, RefreshCw, Search, Settings2, ShieldAlert, ShieldCheck, Sun, Trash2, TriangleAlert, Workflow, X } from "lucide-react";
+import { Activity, ArchiveRestore, ArrowLeft, ChartNoAxesColumn, Check, Command, Cpu, FolderOpen, Info, Lock, MessagesSquare, Minus, Monitor, Moon, Palette, Plus, Puzzle, Search, Settings2, ShieldAlert, ShieldCheck, Sun, Trash2, TriangleAlert, Workflow, X } from "lucide-react";
 import { diagnosticsSnapshot, openLogFolder } from "../lib/bridge";
 import { isMacPlatform, isTauri } from "../lib/format";
-import { modelFor, VOCABULARY } from "../lib/effort";
-import { selectableModels } from "../lib/modelVisibility";
+import { modelFor } from "../lib/effort";
 import { APP_VERSION } from "../lib/version";
 import { AgentMark, ModelIcon } from "./AgentPicker";
-import { AGENT_LABELS, APPROVAL_DESCRIPTIONS, APPROVAL_LABELS, APPROVAL_ORDER, DARK_INTENSITIES, EDITOR_CHOICES, EDITOR_LABELS, EFFORT_LABELS, SIDEBAR_DENSITIES, THINKING_ORBS, UI_FONTS, type CustomCommand, type EditorChoice, type AccentColor, type AgentId, type ApprovalMode, type ReasoningEffort, type SettingsTab, type ThemeMode, type ThinkingOrbStyle, type DarkIntensity, type SidebarDensity, type Settings } from "../lib/types";
+import { AGENT_LABELS, APPROVAL_DESCRIPTIONS, APPROVAL_LABELS, APPROVAL_ORDER, DARK_INTENSITIES, EDITOR_CHOICES, EDITOR_LABELS, SIDEBAR_DENSITIES, THINKING_ORBS, UI_FONTS, type CustomCommand, type EditorChoice, type AccentColor, type AgentId, type ApprovalMode, type SettingsTab, type ThemeMode, type ThinkingOrbStyle, type DarkIntensity, type SidebarDensity, type Settings } from "../lib/types";
 import { humanizeModelLabel, humanizeProvider, relativeTime, shortcutLabel, worktreeRemovalNote } from "../lib/format";
 import { settingsFields } from "../lib/settingsPersistence";
 import { SETTINGS_NAV_GROUPS, SETTINGS_TAB_COPY, SETTINGS_TAB_LABELS, settingsTabsMatching } from "../lib/settingsNav";
 import { customCommandProblem } from "../lib/composerText";
-import { customProviders, providerName } from "../lib/providers";
+import { customProviders } from "../lib/providers";
 import { FIXED_SHORTCUTS, REMAPPABLE, SHORTCUT_IDS, bindingFor, bindingProblem, chordLabel, chordOf, type ShortcutId, type ShortcutOverrides } from "../lib/shortcuts";
 import { UI_FONT_COPY, UI_FONT_STACKS } from "../lib/fonts";
 import { ZOOM_LEVELS } from "../lib/zoom";
@@ -22,15 +21,12 @@ import { applyTheme, currentThread, currentWorkspace, hasWindowMaterial, useAppS
 import type { Model } from "../lib/types";
 const ExtensionsView = lazy(() => import("./ExtensionsView").then((module) => ({ default: module.ExtensionsView })));
 const UsageView = lazy(() => import("./UsageView").then((module) => ({ default: module.UsageView })));
-import { ModelLibrary } from "./ModelLibrary";
+import { ModelsProviders } from "./ModelsProviders";
 import { OrchestratorPanel } from "./OrchestratorPanel";
-import { PermissionRulesCard } from "./PermissionRulesCard";
+import { PermissionRulesCard, ProtectedPathsCard } from "./PermissionRulesCard";
 import { SelectMenu, type SelectMenuOption } from "./SelectMenu";
 import { Orb } from "./Orb";
-import { ProvidersPanel } from "./ProvidersPanel";
 import { SectionHead, SettingRow } from "./SettingsSection";
-
-const EFFORTS = VOCABULARY;
 
 const SHORTCUT_GROUPS = ["General", "Threads", "Composer", "Approvals"] as const;
 /** "⇧] / ⇧[" becomes "⌘⇧] / ⌘⇧[": every alternative gets the platform modifier. */
@@ -80,9 +76,8 @@ const SIDEBAR_DENSITY_OPTIONS: SelectMenuOption[] = SIDEBAR_DENSITIES.map((value
 
 function tabIcon(tab: SettingsTab) {
   const props = { size: 15, strokeWidth: 1.8, "aria-hidden": true } as const;
-  if (tab === "Models") return <Cpu {...props} />;
+  if (tab === "Models & providers") return <Cpu {...props} />;
   if (tab === "Orchestrator") return <Workflow {...props} />;
-  if (tab === "Providers") return <Plug {...props} />;
   if (tab === "Extensions") return <Puzzle {...props} />;
   if (tab === "Permissions") return <ShieldCheck {...props} />;
   if (tab === "Threads") return <MessagesSquare {...props} />;
@@ -365,6 +360,7 @@ function PermissionsPanel({ draft, onChange }: { draft: Settings; onChange: (pat
         <button type="button" role="switch" aria-labelledby="disable-terminal-label" aria-checked={draft.disableTerminal === true} className="toggle" onClick={() => onChange({ disableTerminal: !draft.disableTerminal })}><i /></button>
       </SettingRow>
     </section>
+    <ProtectedPathsCard paths={draft.protectedPaths} onChange={(protectedPaths) => onChange({ protectedPaths })} />
     <PermissionRulesCard rules={draft.harnessRules ?? []} onChange={(harnessRules) => onChange({ harnessRules })} problems={ruleProblems} syncError={rulesError} onRetry={() => { void useAppStore.getState().applyHarnessRules(true).catch(() => {}); }} />
   </div>;
 }
@@ -396,8 +392,6 @@ export function SettingsModal() {
     defaultApprovalMode: state.defaultApprovalMode,
     disableTerminal: state.disableTerminal,
     notifications: state.notifications,
-    hiddenModels: state.hiddenModels,
-    hiddenProviders: state.hiddenProviders,
     workspaces: state.workspaces,
     threads: state.threads,
     selectedSessionId: state.selectedSessionId,
@@ -409,7 +403,6 @@ export function SettingsModal() {
     providerStatus: state.providerStatus,
     models: state.models,
     loadModelCatalog: state.loadModelCatalog,
-    peekModelCatalog: state.peekModelCatalog,
     testModel: state.testModel,
     agents: state.agents,
     listSince: state.listSince,
@@ -440,19 +433,6 @@ export function SettingsModal() {
   const [search, setSearch] = useState("");
   const bodyRef = useRef<HTMLDivElement>(null);
   const defaultsAgentId: AgentId = "harness";
-  const [catalogRefresh, setCatalogRefresh] = useState(0);
-  const [modelCatalog, setModelCatalog] = useState<{ agentId: AgentId; models: Model[]; loading: boolean; error: string | null }>({ agentId: defaultsAgentId, models: [], loading: true, error: null });
-  useEffect(() => {
-    if (!s.settingsOpen || tab !== "Models") return;
-    let current = true;
-    setModelCatalog((previous) => ({ agentId: defaultsAgentId, models: previous.agentId === defaultsAgentId ? previous.models : [], loading: true, error: null }));
-    void s.loadModelCatalog(defaultsAgentId).then((models) => {
-      if (current) setModelCatalog({ agentId: defaultsAgentId, models, loading: false, error: null });
-    }).catch((error) => {
-      if (current) setModelCatalog((previous) => ({ ...previous, loading: false, error: describeError(`Could not load ${AGENT_LABELS[defaultsAgentId]} models`, error) }));
-    });
-    return () => { current = false; };
-  }, [s.settingsOpen, tab, defaultsAgentId, s.loadModelCatalog, s.preview, catalogRefresh]);
   const [draft, setDraft] = useState<Settings>(() => settingsFields(s));
   const edit = (patch: Partial<Settings>) => {
     setDraft((value) => ({ ...value, ...patch }));
@@ -482,23 +462,7 @@ export function SettingsModal() {
   useEffect(() => {
     if (s.settingsOpen) navRef.current?.querySelector<HTMLElement>('[aria-current="page"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }, [s.settingsOpen, tab, search]);
-  const defaultModels = modelCatalog.agentId === defaultsAgentId ? modelCatalog.models : [];
-  // The default model follows the same Settings → Models switches as the composer.
-  const offeredDefaults = selectableModels(defaultModels, defaultsAgentId, draft.hiddenModels, draft.hiddenProviders);
-  const modelOptions: SelectMenuOption[] = offeredDefaults.map((model) => ({
-    value: modelKey(model),
-    label: humanizeModelLabel(model.modelId, model.displayLabel),
-    description: humanizeProvider(model.providerId),
-    icon: <ModelIcon modelId={model.modelId} providerId={model.providerId} size={18} fallback={<AgentMark id={defaultsAgentId} size={18} />} />,
-  }));
-  const selectedDefault = modelFor(defaultModels, { modelId: draft.defaultModel, providerId: draft.defaultProviderId });
-  const defaultModelValue = draft.defaultModel ? modelKey(selectedDefault ?? { modelId: draft.defaultModel, providerId: draft.defaultProviderId }) : undefined;
-  const modelByKey = new Map(defaultModels.map((model) => [modelKey(model), model]));
-  const savedUnlisted = Boolean(draft.defaultModel && !selectedDefault && !modelCatalog.loading && !modelCatalog.error && defaultModels.length);
-  if (defaultModelValue && !modelOptions.some((option) => option.value === defaultModelValue)) {
-    modelOptions.push({ value: defaultModelValue, label: humanizeModelLabel(draft.defaultModel), description: selectedDefault ? "Off in Settings → Models" : "Saved selection · not in the current catalog" });
-  }
-  // The smart-suggestions model picker (General page): the catalog feeds the
+  // The smart-suggestions model picker (General page): the library feeds the
   // model list; "Cheapest" leaves the choice to the store.
   const suggestionAgentId = defaultsAgentId;
   const [suggestCatalog, setSuggestCatalog] = useState<{ agentId: AgentId; models: Model[]; loading: boolean; error: string | null }>({ agentId: suggestionAgentId, models: [], loading: true, error: null });
@@ -514,10 +478,9 @@ export function SettingsModal() {
     return () => { current = false; };
   }, [s.settingsOpen, tab, suggestionAgentId, draft.suggestionsEnabled, s.loadModelCatalog]);
   const suggestModels = suggestCatalog.agentId === suggestionAgentId ? suggestCatalog.models : [];
-  const offeredSuggest = selectableModels(suggestModels, suggestionAgentId, draft.hiddenModels, draft.hiddenProviders);
   const suggestModelOptions: SelectMenuOption[] = [
     { value: "", label: "Cheapest available", description: "The lowest-cost model the agent reports" },
-    ...offeredSuggest.filter((model) => !model.unavailable).map((model) => ({
+    ...suggestModels.filter((model) => !model.unavailable).map((model) => ({
       value: modelKey(model),
       label: humanizeModelLabel(model.modelId, model.displayLabel),
       description: [humanizeProvider(model.providerId), model.cost?.input ? `${model.cost.input}/M in` : ""].filter(Boolean).join(" · "),
@@ -528,13 +491,12 @@ export function SettingsModal() {
   const suggestModelValue = draft.suggestionsModelId ? modelKey(selectedSuggest ?? { modelId: draft.suggestionsModelId }) : "";
   const suggestByKey = new Map(suggestModels.map((model) => [modelKey(model), model]));
   if (suggestModelValue && !suggestModelOptions.some((option) => option.value === suggestModelValue)) {
-    suggestModelOptions.push({ value: suggestModelValue, label: humanizeModelLabel(draft.suggestionsModelId ?? suggestModelValue), description: selectedSuggest ? "Off in Settings → Models" : "Saved selection · not in the current catalog" });
+    suggestModelOptions.push({ value: suggestModelValue, label: humanizeModelLabel(draft.suggestionsModelId ?? suggestModelValue), description: selectedSuggest ? "Not in your model library" : "Saved selection · not in the current catalog" });
   }
   const discardAndClose = () => {
     setNotice("");
     s.setSettingsOpen(false);
   };
-  const libraryAgents = s.agents.filter((agent) => agent.id === "harness");
   const copyDiagnostics = async () => {
     let snapshot: Awaited<ReturnType<typeof diagnosticsSnapshot>> | null = null;
     let snapshotError: string | null = null;
@@ -606,18 +568,8 @@ export function SettingsModal() {
                 </>
               )}
             </header>
-        {page === "Models" ? <>
-          <SectionHead title="New thread defaults" help="The composer can change both for any thread." action={<button type="button" className="ghost-btn small" aria-label="Refresh default models" disabled={modelCatalog.loading} onClick={() => setCatalogRefresh((value) => value + 1)}><RefreshCw size={11} className={modelCatalog.loading ? "spin" : ""} aria-hidden="true" />Refresh</button>} />
-          {modelCatalog.error ? <p className="settings-note" role="alert">{modelCatalog.error} Refresh the list, or check your keys under Providers.</p> : modelCatalog.loading ? <p className="settings-note" role="status">Loading {AGENT_LABELS[defaultsAgentId]} models…</p> : !defaultModels.length ? <p className="settings-note" role="status">{AGENT_LABELS[defaultsAgentId]} did not report any models.</p> : null}
-          <section className="settings-card" aria-label="New thread defaults">
-          <SettingRow label={<label htmlFor="default-model">Default model</label>} help={<>{savedUnlisted ? <span>This saved model is no longer listed. Choose a current model. </span> : null}{draft.defaultModel ? <button className="text-btn" type="button" onClick={() => edit({ defaultModel: "", defaultProviderId: undefined })}>Use the agent’s default</button> : "New threads start on the agent’s own default."}</>}><SelectMenu id="default-model" ariaLabel="Default model" icon={draft.defaultModel && selectedDefault ? <ModelIcon modelId={selectedDefault.modelId} providerId={selectedDefault.providerId} size={15} hostName={providerName(selectedDefault.providerId, customProviders(s.providerStatus ?? []))} fallback={<AgentMark id={defaultsAgentId} size={15} />} /> : undefined} value={defaultModelValue} placeholder={modelCatalog.loading ? "Loading models…" : defaultModels.length ? "Agent default" : "Connect to load models"} options={modelOptions} disabled={modelCatalog.loading || !defaultModels.length} onChange={(value) => { const model = modelByKey.get(value); if (model) edit({ defaultModel: model.modelId, defaultProviderId: model.providerId }); }} /></SettingRow>
-          <SettingRow label={<label htmlFor="default-effort">Default reasoning effort</label>} help="More effort gives the model longer on hard problems; less suits quick edits and questions."><SelectMenu id="default-effort" ariaLabel="Default reasoning effort" value={draft.defaultEffort} placeholder="Agent default" options={EFFORTS.map((effort) => ({ value: effort, label: EFFORT_LABELS[effort] }))} onChange={(value) => edit({ defaultEffort: value as ReasoningEffort })} /></SettingRow>
-          </section>
-          <SectionHead title="Model library" help="Switch a provider or a single model off to keep it out of the composer’s picker. Test sends one word and times the reply, so a busy or retired model shows up before you rely on it." />
-          <ModelLibrary agents={libraryAgents} customProviders={customProviders(s.providerStatus ?? [])} hidden={draft.hiddenModels ?? []} onHiddenChange={(hiddenModels) => edit({ hiddenModels })} hiddenProviders={draft.hiddenProviders ?? []} onHiddenProvidersChange={(hiddenProviders) => edit({ hiddenProviders })} loadCatalog={s.peekModelCatalog} testModel={s.testModel} onManageProviders={() => setTab("Providers")} />
-        </> : null}
-        {page === "Orchestrator" ? <OrchestratorPanel draft={draft} onChange={edit} customProviders={customProviders(s.providerStatus ?? [])} onManageProviders={() => setTab("Providers")} /> : null}
-        {page === "Providers" ? <ProvidersPanel onChanged={() => { void s.refreshDetection().then(() => useAppStore.getState().refreshModels(true)); }} /> : null}
+        {page === "Models & providers" ? <ModelsProviders draft={draft} edit={edit} /> : null}
+        {page === "Orchestrator" ? <OrchestratorPanel draft={draft} onChange={edit} customProviders={customProviders(s.providerStatus ?? [])} onManageProviders={() => setTab("Models & providers")} /> : null}
         {page === "Extensions" ? <Suspense fallback={null}><ExtensionsView embedded /></Suspense> : null}
         {page === "Permissions" ? <PermissionsPanel draft={draft} onChange={edit} /> : null}
         {page === "Threads" ? <div className="archive-panel">

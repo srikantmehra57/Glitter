@@ -30,7 +30,7 @@ export function isGrantError(text: string | null | undefined): boolean {
 /** Harness failure codes the agent process preserves beside the message, mapped to recovery branches. */
 const KIND_BRANCH: Record<string, Omit<ClassifiedError, "detail">> = {
   MISSING_CREDENTIAL: { code: "auth", title: "The provider needs an API key", action: "settings", lost: "The draft is kept. Nothing was sent." },
-  INVALID_CREDENTIAL: { code: "auth", title: "The provider rejected the API key", action: "settings", lost: "The draft is kept. Replace the key in Settings → Providers." },
+  INVALID_CREDENTIAL: { code: "auth", title: "The provider rejected the API key", action: "settings", lost: "The draft is kept. Replace the key in Settings → Models & providers." },
   RATE_LIMIT: { code: "busy", title: "The provider is rate limiting", action: "retry", lost: "Retry in a bit." },
   SERVER: { code: "busy", title: "The provider is busy", action: "retry", lost: "Retry in a bit." },
   CONTEXT_WINDOW_EXCEEDED: { code: "invalid", title: "Too much input for this model", action: "retry", lost: "Compact the thread, shorten the prompt or drop attachments, then retry." },

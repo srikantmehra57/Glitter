@@ -21,8 +21,9 @@ npm run build:bridge # packages/glitter-harness/dist/index.js, needed by the nat
 If npm skipped optional packages and the esbuild binary is missing, run
 `npm rebuild esbuild`.
 
-No `.env` file is needed. The app reads no environment configuration at runtime:
-settings live in the app's own store and secrets in the OS keychain. See
+No `.env` file is needed. Settings live in the app's own store and provider
+secrets in the OS keychain. Toolchain discovery uses the inherited environment
+as described below. See
 [Environment variables](#environment-variables) for the optional development
 and release variables.
 
@@ -40,6 +41,7 @@ All commands run from the repository root.
 The macOS DMG target shells out to `create-dmg` (`brew install create-dmg`). Without it the `.app` still builds and `scripts/verify-macos-package.mjs` still passes, but the DMG step fails with `Not enough arguments`.
 | `npm run build:bridge` / `build:ui` / `build:website` | Build one part |
 | `./node_modules/.bin/glitter --help` | Run the source-build Harness CLI after `build:bridge`; `--cwd` selects a workspace and `-p` runs a single prompt |
+| `npm run install:cli` | Install the `glitter` launcher in `~/.local/bin`; it runs the CLI shipped in `/Applications/Glitter.app` with the app's bundled Node (`--uninstall` removes it) |
 | `npm run preview` | Build the renderer and serve it with `vite preview` (mock data) |
 | `npm run typecheck` | `tsc --noEmit` for the bridge and the renderer |
 | `npm test` | Node test suite (`tests/*.test.mjs`) |
@@ -117,6 +119,28 @@ None are required. Optional ones:
 | `GLITTER_BROWSER_ALLOW_UNSANDBOXED` | direct browser tests only | Set to `1` only when the development sandbox blocks Chromium's own sandbox. The native app ignores this escape hatch and always requires the sandbox. |
 | `BASE`, `CHROMIUM_PATH`, `GPU_ARGS` | `apps/website/scripts/verify-site.mjs` | Target URL and browser for the site check |
 | `APPLE_*` | `tauri build` | Signing and notarization, see [RELEASING.md](RELEASING.md). CI secrets only, never committed. |
+
+### Agent toolchains
+
+The native app augments the inherited PATH with installed standard directories
+for Cargo, pyenv, rbenv, Bun, Go, Homebrew and the existing Node version managers.
+For nvm it reads `~/.nvm/versions/node` and the default alias, including numeric
+versions and `lts/*` alias chains. With no default alias it uses the newest
+installed numeric version. It does not run shell startup files.
+
+Both environment filters preserve `JAVA_HOME`, `JDK_HOME`, `CARGO_HOME`,
+`RUSTUP_HOME`, `GOPATH`, `GOROOT`, `PYENV_ROOT`, `PYENV_VERSION`, `RBENV_ROOT`,
+`RBENV_VERSION`, `BUN_INSTALL`, `NVM_DIR`, `VOLTA_HOME`, `ASDF_DATA_DIR`,
+`MISE_DATA_DIR`, `VIRTUAL_ENV` and `CONDA_PREFIX`. Inherited absolute roots also
+contribute their binary/shim directories to the app's PATH; each absolute
+`GOPATH` entry contributes its `bin` directory. Active Python environments take
+precedence. Only directories that exist enter PATH.
+
+Settings exported only in a shell startup file are unavailable to a Finder
+launch. Install into a standard location or supply the root in the app's
+inherited environment. This lookup grants no additional write access; the
+package-cache policy and sandbox still apply. Provider/cloud/registry secrets
+and interpreter startup hooks remain excluded from inherited child environments.
 
 ## Making changes
 

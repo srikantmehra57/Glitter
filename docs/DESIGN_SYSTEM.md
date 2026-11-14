@@ -38,11 +38,15 @@ document should be corrected.
 | Browser | The shared, agent-controllable Chromium pane. Not the mock browser preview used for UI development, and not the user's normal browser profile |
 | Local / Worktree | Where a thread works: the workspace folder, or its own checkout on a `glitter/` branch. Not “sandbox”, “copy” or “isolated mode” |
 | Stop | Cancel turn (button label: Stop) |
-| Provider | Where models come from, as the model picker and Settings → Models list them: a provider the built-in agent calls with your key or a local endpoint. Not “source”, “lab” or “backend” |
+| Provider | Where models come from, as the model picker and Settings → Models & providers list them: a provider the built-in agent calls with your key or a local endpoint. Not “source”, “lab” or “backend” |
 | Built-in agent | Glitter’s own agent (`harness` in code). In copy it is “the built-in agent”; the composer addresses it by its model (“Ask Claude Sonnet 5…”), and before one resolves by the connected provider’s name (“Ask Anthropic to…”) — never by the code name |
-| Custom endpoint | A provider the user adds in Settings → Providers: their own name for it, its API type (OpenAI-compatible or Anthropic), its address, and a key only when the endpoint needs one. Not “custom provider” in copy |
+| Custom endpoint | A provider the user adds in Settings → Models & providers: their own name for it, its API type (OpenAI-compatible or Anthropic), its address, and a key only when the endpoint needs one. Not “custom provider” in copy |
 | Source | A plugin marketplace added from GitHub in Extensions → Sources; its plugins list in Discover. “Marketplace” only tags the kind of repository in a preview |
 | Allow in thread | An approval that reaches past this one call, for the rest of the thread. Its scope names what it covers (this exact command, a command prefix, one program, a file, a folder, the workspace). Not “session”, “rule” or “whitelist” |
+
+An approval requested by a delegated run names that run in the approval card.
+Its decisions apply to that call only, so the card does not offer an
+**Allow in thread** scope for it.
 
 Copy: short, present tense, no “successfully been executed.”
 
@@ -494,7 +498,7 @@ same footprint (see Goal below). Every agent has the same permissions control,
 headed Permissions. The app
 decides for every model: **Ask** (edits run, commands ask), **Auto** (ordinary
 commands run and can read outside the workspace; risky commands still ask) and
-**Full access** (no approval prompts). The Auto description names the outside
+**Full access** (asks only before changing protected files). The Auto description names the outside
 read boundary. A thread already
 on Read only keeps that choice until it is changed. Each description is one
 line, and the menu is wide enough to show it without a break. A mode never changes its shape, only its tone: Full access takes the warning
@@ -643,51 +647,58 @@ and the navigation, search and the command palette all read those names.
 
 | Group | Pages |
 |---|---|
-| AI | Models · Orchestrator · Providers · Agents |
+| AI | Models & providers · Orchestrator |
 | Workspace | Extensions · Permissions · Threads |
 | App | General · Appearance · Commands & shortcuts · Usage |
 | System | Diagnostics · About |
 
-- **Models**: new-thread defaults, then the model library — every provider as a
-  card whose header switch turns the whole provider off (the card dims and
-  folds, keeping its model choices for when it returns), and its models, each
-  with a switch that keeps it in or out of the picker, and for the
-  built-in agent's providers a **Test** icon button (Activity, a spinner while
-  it runs) that sends one word and shows the reply time as a chip, or why it
-  failed. A search field at the top searches every provider; a provider with
-  more than ten models has its own search inside its card. Long lists fold
-  after eight rows.
+- **Models & providers**: one page for where models come from and which models
+  the picker offers. **New thread defaults** first — the default model and
+  default reasoning effort, chosen from the library, with a quiet
+  **Refresh the library's details** note under the card. **Providers** next:
+  the bring-your-own-key callout, the **Model providers** card whose line
+  counts the connected ones, then the optional **Web search** card. Custom
+  endpoints are added with **Add a custom endpoint** (a full-width quiet row at
+  the foot of the card): the form asks for a name, the API type
+  (OpenAI-compatible — Chat Completions, or Anthropic — Messages), the address,
+  and a key that may stay empty when the endpoint needs none. The keychain
+  mints each endpoint's id; the app shows only the user's own name, and the
+  endpoint's mark is its name's initials on the custom tile. Any number can
+  coexist, each as its own row and its own provider in the model picker;
+  changing an endpoint's address asks for its key again, so a saved key is
+  never sent to a new server. Web search — Tavily, Brave Search and Exa, in
+  that order — reuses the provider row with a Globe mark in place of the
+  provider tile, a key form with no address, and a **Get a key at** link; its
+  heading names the provider the agent searches with once one is keyed, and
+  otherwise says the agent can still fetch pages the user or it names. The
+  first key saved is the one used. **Model library** last: only the models the
+  user added, grouped by provider, each row showing its name, context window,
+  effort range, price and modality tags, with **Edit**, **Test** (one word, the
+  reply time as a chip, or why it failed) and **Remove**, and a search field
+  over the library. **Add model** opens a dialog: choose the provider, pick a
+  suggestion from the provider's own listing or type the model id, and fill in
+  anything the provider does not report — a display name, the context window in
+  tokens, the effort levels as chips with one marked **Default**, and image,
+  document and video support that may stay **Unknown**. What the user sets is
+  what the model uses at runtime; what they leave open follows what the
+  provider reports. The dialog is 560px with the shared modal chrome: a head
+  with the title and close, a scrolling body, and a foot with the provider
+  summary, Cancel and the primary save.
 - **Orchestrator**: **Use Orchestrator for new threads** (off by default; the
   help names the default agent when it is not the built-in one), then **Goal** —
   Optimize for cost, Balanced or Optimize for output, each with a one-line
-  summary — then **Roles**: Lead, Builder and Small-task model pickers from
-  every connected provider, where Small-task offers **Same as Builder**. Each
-  picker carries its role's fixed capability check underneath: a spinner while
-  it runs, then a quiet **Ready** or **Not supported** chip with the reason and
-  an icon button to run it again. An inherited Small-task shows the Builder's
+  summary — then **Roles**: Lead, Builder and Small-task model pickers over the
+  model library, where Small-task offers **Same as Builder**. Each picker
+  carries its role's fixed capability check underneath: a spinner while it
+  runs, then a quiet **Ready** or **Not supported** chip with the reason and an
+  icon button to run it again. An inherited Small-task shows the Builder's
   check; the Router is checked when **Advanced** opens. A collapsed
   **Advanced** card holds the Router picker, which offers **Same as
-  Small-task**. A missing catalog shows one quiet card linking to Providers; an
-  enabled but incomplete setup states that a Lead and Builder are required. A
-  **Data disclosure** card lists each provider that will receive prompts and
-  code, grouped by role order, and names local providers. It applies to
-  built-in agent threads only.
-- **Providers**: API keys for the built-in agent. Custom endpoints are added
-  with **Add a custom endpoint** (a full-width quiet row at the foot of the
-  card): the form asks for a name, the API type (OpenAI-compatible — Chat
-  Completions, or Anthropic — Messages), the address, and a key that may stay
-  empty when the endpoint needs none. The keychain mints each endpoint's id;
-  the app shows only the user's own name, and the endpoint's mark is its
-  name's initials on the custom tile. Any number can coexist, each as its own
-  row and its own provider in the model picker; changing an endpoint's address
-  asks for its key again, so a saved key is never sent to a new server.
-  The page is two cards, each under its own heading: **Model providers**, whose
-  line counts the connected ones, and **Web search**. Web search is optional —
-  Tavily, Brave Search and Exa, in that order — and reuses the provider row with
-  a Globe mark in place of the provider tile, a key form with no address, and a
-  **Get a key at** link. Its heading names the provider the agent searches with
-  once one is keyed, and otherwise says the agent can still fetch pages the user
-  or it names. The first key saved is the one used.
+  Small-task**. A missing catalog shows one quiet card linking to Models &
+  providers; an enabled but incomplete setup states that a Lead and Builder are
+  required. A **Data disclosure** card lists each provider that will receive
+  prompts and code, grouped by role order, and names local providers. It
+  applies to built-in agent threads only.
 - **Extensions**: a bar of three tabs — **Discover**, **Installed** and
   **Sources**, each with a count — and **Add from GitHub** (primary) at its
   right; the bar sticks to the top of the page while it scrolls, and a tab
@@ -705,13 +716,19 @@ and the navigation, search and the command palette all read those names.
   save with the other settings; zoom uses the same session-memory preference as
   the View menu. Standard density and Reduce motion off preserve the original look.
 - **Permissions**: approvals for new threads, a **Disable Terminal pane**
-  switch, then built-in agent rules. The switch affects the interactive Terminal
+  switch, **Protected files**, then built-in agent rules. Protected files is
+  one card in the rule-list style: the patterns in effect (the defaults until
+  the user changes them) in monospace, each with Remove, then an input and an
+  **Add path** button; a note below explains the pattern syntax and that
+  `.git` is always off-limits, and offers **Restore defaults** as a text button
+  only when the list differs from the defaults. The switch affects the interactive Terminal
   only; agent commands continue to follow their approval and permission rules.
   Rules use separate **Always allow** and **Never allow**
   cards, with a monospace rule list, an input and an Add rule button in each.
   Invalid rules and failed application are explained beside the cards, with a
   retry for a failed application. Copy states that Edit rules cover built-in
-  edits, while shell commands can still change those files, and that commands
+  edits, while shell commands can still change those files, that Read rules
+  keep the read tools and search out of a file, and that commands
   executed indirectly by other programs cannot be inspected.
 - **Usage**: the heading reads **Usage stats**, with an **App usage** pill beside
   it and no sentence or hairline. The column is 960px so the year of activity
@@ -790,9 +807,9 @@ room. While `html[data-settings="open"]`, portaled Settings menus use the same
 backdrop blur; this root-scoped exception must not restyle composer or review
 menus.
 
-New-thread defaults query the preferred new-thread agent's current catalog
-when Models opens. They never reuse or replace a conversation's model list.
-Show loading or query errors, and identify unlisted saved selections explicitly;
+New-thread defaults read the model library when Models & providers opens.
+They never reuse or replace a conversation's model list. Show loading or
+errors, and identify a saved selection that is not in the library explicitly;
 preserve the preference until the user chooses another model or the agent's
 default.
 

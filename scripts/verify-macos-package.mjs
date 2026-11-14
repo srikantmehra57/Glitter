@@ -50,6 +50,8 @@ const scriptBytes = await readFile(script);
 const notices = await readFile(join(app, 'Contents/Resources/THIRD_PARTY_LICENSES.txt'), 'utf8');
 assert.ok(notices.includes('GLITTER THIRD-PARTY LICENSES') && notices.includes('playwright-core') && notices.includes('RUST PACKAGES'), 'Bundled third-party license texts are missing');
 assert.equal(digest(scriptBytes), digest(await readFile(join(root, 'packages/glitter-harness/dist/index.js'))), 'Packaged bridge is stale');
+// The `glitter` command runs this file with the bundled runtime (scripts/install-cli.mjs).
+assert.equal(digest(await readFile(join(app, 'Contents/Resources/glitter-harness/cli.js'))), digest(await readFile(join(root, 'packages/glitter-harness/dist/cli.js'))), 'Packaged CLI is stale');
 
 // Swap rejection, statically verifiable without launching the GUI:
 // build.rs bakes the bridge digest into the binary at compile time and

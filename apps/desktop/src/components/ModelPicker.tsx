@@ -1,13 +1,12 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { EXIT_FAST_MS, usePresence } from "../lib/presence";
-import { Activity, Check, ChevronDown, EyeOff, Info, KeyRound, Search, SlidersHorizontal, Sparkles, X, Zap } from "lucide-react";
+import { Activity, Check, ChevronDown, Info, KeyRound, Search, SlidersHorizontal, Sparkles, X, Zap } from "lucide-react";
 import { isFastModel } from "../lib/effort";
 import { freeModelCost, modelPriceParts } from "../lib/cost";
 import { humanizeModelLabel } from "../lib/format";
 import { menuPosition } from "../lib/menuPosition";
 import { leadingBrandSlug, modelBrand } from "../lib/brands";
-import { pickerModels } from "../lib/modelVisibility";
 import { ORCHESTRATOR_GOAL_COPY } from "../lib/orchestrator";
 import { providerIds, providerName, type ProviderEntry } from "../lib/providers";
 import { AGENT_LABELS, type Model, type OrchestratorConfig } from "../lib/types";
@@ -53,7 +52,7 @@ function contextLabel(limit?: number | null) {
 type Catalog = { models: Model[]; loading: boolean; error?: string | null };
 
 /** One provider in the rail: the agent calling that provider with the user's key. */
-type Source = RailSource & { providerId?: string; catalog: Catalog; models: Model[]; hidden: number };
+type Source = RailSource & { providerId?: string; catalog: Catalog; models: Model[]; hidden: number; unavailable?: boolean };
 
 type Props = {
   models: Model[];
@@ -64,15 +63,9 @@ type Props = {
   disabled: boolean;
   applying?: boolean;
   title?: string;
-  /** Settings → Models' switched-off models, as `modelVisibilityKey` strings. */
-  hidden?: readonly string[];
-  /** Providers switched off as a whole, as `providerKey` strings. */
-  hiddenProviders?: readonly string[];
   onChange: (model: Model) => void;
   onRescan?: () => Promise<void>;
   onManageModels?: () => void;
-  /** Settings → Providers, to add a key. */
-  onManageProviders?: () => void;
   /** The thread's Orchestrator block; null keeps the picker on manual models. */
   orchestrator?: OrchestratorConfig | null;
   /** False while Settings holds no Lead and Builder, so the row leads there first. */
@@ -91,7 +84,7 @@ const PLAIN_SIZE = { width: 420, height: 460 };
  * it and closes. The rail lists providers and the list shows that provider's
  * models — two levels, nothing nested. Effort is its own control (EffortPicker).
  */
-export function ModelPicker({ models, customProviders: customs = [], value, loading, disabled, applying, title, hidden, hiddenProviders, onChange, onRescan, onManageModels, onManageProviders, orchestrator, orchestratorReady = false, onOrchestratorChange, onManageOrchestrator }: Props) {
+export function ModelPicker({ models, customProviders: customs = [], value, loading, disabled, applying, title, onChange, onRescan, onManageModels, orchestrator, orchestratorReady = false, onOrchestratorChange, onManageOrchestrator }: Props) {
   const root = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
@@ -112,19 +105,15 @@ export function ModelPicker({ models, customProviders: customs = [], value, load
 
   const sources: Source[] = useMemo(() => {
     const catalog: Catalog = { models, loading };
-    const visibleModels = pickerModels(models, "harness", hidden, selected);
     const providers = providerIds(models);
-    // With no key yet, the agent still gets a row that leads to Providers.
+    // With no key yet, the agent still gets a row that leads to Models & providers.
     if (!providers.length) return [{ id: "harness:", name: loading ? "Your providers" : "Add a provider", mark: <span className="rail-key"><KeyRound size={12} aria-hidden="true" /></span>, catalog, models: [], hidden: 0 }];
-    const list: Source[] = providers.map((providerId) => {
-      const own = visibleModels.filter((model) => model.providerId === providerId);
+    return providers.map((providerId) => {
+      const own = models.filter((model) => model.providerId === providerId);
       const providerLabel = providerName(providerId, customs);
-      return { id: `harness:${providerId}`, providerId, name: providerLabel, mark: <ProviderMark id={providerId} size={18} name={providerLabel} />, count: own.length, catalog, models: own, hidden: models.filter((model) => model.providerId === providerId).length - own.length, live: selected?.providerId === providerId };
+      return { id: `harness:${providerId}`, providerId, name: providerLabel, mark: <ProviderMark id={providerId} size={18} name={providerLabel} />, count: own.length, catalog, models: own, hidden: 0, unavailable: own.length > 0 && own.every((model) => model.unavailable), live: selected?.providerId === providerId };
     });
-    // A provider switched off in Settings → Models, or one with every model off, leaves the
-    // rail — except the one the thread's model comes from, which stays reachable.
-    return list.filter((item) => item.live || (!hiddenProviders?.includes(item.id) && !(item.hidden > 0 && !item.models.length)));
-  }, [models, loading, hidden, hiddenProviders, selected, customs]);
+  }, [models, loading, selected, customs]);
 
   const homeId = `harness:${selected?.providerId ?? ""}`;
   const sourceId = pinned && sources.some((source) => source.id === pinned) ? pinned : sources.some((source) => source.id === homeId) ? homeId : sources[0]?.id;
@@ -239,7 +228,7 @@ export function ModelPicker({ models, customProviders: customs = [], value, load
   const summary = sourceLoading ? "Loading…" : needle ? `${rows.length} ${rows.length === 1 ? "match" : "matches"}` : `${rows.length} ${rows.length === 1 ? "model" : "models"}${freeCount ? ` · ${freeCount} free` : ""}`;
   const emptyText = query ? `No models match “${query}”.`
     : source?.catalog.error ? `${source.name} could not list its models. ${source.catalog.error}`
-    : source?.hidden ? "Every model here is switched off. Turn some back on in Settings → Models."
+    : source?.unavailable ? "This provider needs its key again. Reconnect it in Settings → Models & providers."
     : "No models yet. Add a provider key to see its models.";
 
   return (
@@ -416,12 +405,11 @@ export function ModelPicker({ models, customProviders: customs = [], value, load
               {unlisted.length ? <p className="picker-note"><Info size={11} aria-hidden="true" />{unlistedNote(unlisted.map((model) => modelName(model)))}</p> : null}
               {listModels.some((model) => CONTRIBUTOR.test(model.modelId)) ? <p className="picker-note"><Info size={11} aria-hidden="true" />Contributor models are discounted because your content, including inter-session messages, may be used for product improvement.</p> : null}
             </div>
-            {onManageModels || onManageProviders ? (
+            {onManageModels ? (
               <div className="model-picker-foot">
-                {source?.hidden && !needle ? <button type="button" className="ghost-btn small quiet" onClick={() => { close(); onManageModels?.(); }}><EyeOff size={11} aria-hidden="true" />{source.hidden} hidden</button> : <span />}
+                <span />
                 <span className="model-picker-foot-actions">
-                  {onManageProviders ? <button type="button" className="ghost-btn small" onClick={() => { close(); onManageProviders(); }}><KeyRound size={11} aria-hidden="true" />Manage providers</button> : null}
-                  {onManageModels ? <button type="button" className="ghost-btn small" onClick={() => { close(); onManageModels(); }}><SlidersHorizontal size={11} aria-hidden="true" />Manage models</button> : null}
+                  <button type="button" className="ghost-btn small" onClick={() => { close(); onManageModels(); }}><SlidersHorizontal size={11} aria-hidden="true" />Manage models & providers</button>
                 </span>
               </div>
             ) : null}

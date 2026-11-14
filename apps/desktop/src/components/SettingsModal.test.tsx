@@ -116,6 +116,25 @@ describe("settings navigation", () => {
     await vi.waitFor(() => expect(useAppStore.getState().harnessRules).toEqual([]));
   });
 
+  it("shows the protected files, saves a change, and restores the defaults", async () => {
+    seedStore({ settingsTab: "Permissions", protectedPaths: undefined });
+    render(<SettingsModal />);
+    const card = screen.getByRole("region", { name: "Protected files" });
+    expect(card).toHaveTextContent("AGENTS.md");
+    expect(card).toHaveTextContent(".env.*");
+    expect(screen.queryByRole("button", { name: "Restore defaults" })).toBeNull();
+    fireEvent.change(screen.getByRole("textbox", { name: "Add a protected path" }), { target: { value: "../outside" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add path" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("cannot contain empty, . or .. parts");
+    fireEvent.change(screen.getByRole("textbox", { name: "Add a protected path" }), { target: { value: "config/secrets/**" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add path" }));
+    await vi.waitFor(() => expect(useAppStore.getState().protectedPaths?.slice(-1)).toEqual(["config/secrets/**"]));
+    fireEvent.click(screen.getByRole("button", { name: "Stop protecting .envrc" }));
+    await vi.waitFor(() => expect(useAppStore.getState().protectedPaths).not.toContain(".envrc"));
+    fireEvent.click(screen.getByRole("button", { name: "Restore defaults" }));
+    await vi.waitFor(() => expect(useAppStore.getState().protectedPaths).toBeUndefined());
+  });
+
   it("lets the user turn the Terminal pane off without changing agent permissions", () => {
     seedStore({ settingsTab: "Permissions", disableTerminal: false, defaultApprovalMode: "onRequest" });
     render(<SettingsModal />);
@@ -126,75 +145,62 @@ describe("settings navigation", () => {
 
 
 
-  it("loads the defaults catalog independently of the open thread and labels a saved legacy model", async () => {
-    const catalog = [
+  it("offers the library as new-thread defaults and labels a saved model outside it", async () => {
+    const models = [
       { modelId: "anthropic/claude-opus-5", providerId: "anthropic", displayLabel: "Claude Opus 5" },
       { modelId: "anthropic/claude-sonnet-5", providerId: "anthropic", displayLabel: "Claude Sonnet 5" },
-      { modelId: "anthropic/claude-haiku-4-5", providerId: "anthropic", displayLabel: "Claude Haiku 4.5" },
     ];
-    const loadModelCatalog = vi.fn(async () => catalog);
-    seedStore({ settingsTab: "Models", defaultModel: "anthropic/claude-sonnet-3", models: [{ modelId: "xai/grok-4.7", providerId: "xai" }], loadModelCatalog, agents: [{ id: "harness", name: "Harness", protocol: "native", found: true, path: null, version: null, verified: true, signIn: "", authenticated: true }] });
+    seedStore({ settingsTab: "Models & providers", defaultModel: "anthropic/claude-sonnet-3", models, modelsLoading: false, refreshModelLibrary: vi.fn(async () => {}) });
     render(<SettingsModal />);
     const model = screen.getByRole("button", { name: "Default model" });
-    await vi.waitFor(() => expect(model).toBeEnabled());
-    expect(loadModelCatalog).toHaveBeenCalledWith("harness");
-    expect(screen.getByText(/This saved model is no longer listed/)).toBeInTheDocument();
+    expect(model).toBeEnabled();
+    expect(screen.getByText(/This saved model is not in your library/)).toBeInTheDocument();
     expect(useAppStore.getState().defaultModel).toBe("anthropic/claude-sonnet-3");
     fireEvent.click(model);
     const list = screen.getByRole("listbox", { name: "Default model" });
-    expect(within(list).getAllByRole("option")).toHaveLength(4);
-    expect(within(list).queryByText("grok-4.7")).toBeNull();
+    expect(within(list).getAllByRole("option")).toHaveLength(3);
     expect(within(list).getByText("Saved selection · not in the current catalog")).toBeInTheDocument();
     fireEvent.click(within(list).getByText("Claude Opus 5", { exact: true }));
     await vi.waitFor(() => expect(useAppStore.getState().defaultModel).toBe("anthropic/claude-opus-5"));
-    expect(useAppStore.getState().models.map((item) => item.modelId)).toEqual(["xai/grok-4.7"]);
   });
 
-  it("keeps providers and models switched off in the library out of the default model list", async () => {
-    seedStore({
-      settingsTab: "Models",
-      agents: [{ id: "harness", name: "Harness", protocol: "native", found: true, path: null, version: null, verified: true, signIn: "", authenticated: true }],
-      hiddenModels: ["harness|anthropic|anthropic/claude-haiku-4-5"],
-      hiddenProviders: ["harness:kilo"],
-    });
+  it("offers every library model to the default pickers", async () => {
+    const models = [
+      { modelId: "anthropic/claude-sonnet-5", providerId: "anthropic", displayLabel: "Claude Sonnet 5" },
+      { modelId: "anthropic/claude-haiku-4-5", providerId: "anthropic", displayLabel: "Claude Haiku 4.5" },
+      { modelId: "xai/grok-4.7", providerId: "xai", displayLabel: "grok-4.7" },
+    ];
+    seedStore({ settingsTab: "Models & providers", models, modelsLoading: false, refreshModelLibrary: vi.fn(async () => {}) });
     render(<SettingsModal />);
     const model = screen.getByRole("button", { name: "Default model" });
-    await vi.waitFor(() => expect(model).toBeEnabled());
+    expect(model).toBeEnabled();
     fireEvent.click(model);
     const list = within(screen.getByRole("listbox", { name: "Default model" }));
     expect(list.getByText("Claude Sonnet 5", { exact: true })).toBeInTheDocument();
-    expect(list.queryByText("Claude Haiku 4.5")).toBeNull();
-    expect(list.queryByText("anthropic/claude-sonnet-4.6")).toBeNull();
+    expect(list.getByText("Claude Haiku 4.5")).toBeInTheDocument();
+    expect(list.getByText("grok-4.7")).toBeInTheDocument();
   });
 
-  it("shows a catalog error instead of presenting the saved model as the only available choice", async () => {
-    seedStore({ settingsTab: "Models", defaultModel: "anthropic/claude-sonnet-3", loadModelCatalog: vi.fn(async () => { throw new Error("Connection closed"); }) });
+  it("shows the library's load error instead of pretending the list is empty", async () => {
+    seedStore({ settingsTab: "Models & providers", models: [], modelsLoading: false, modelsError: "Could not load models: Connection closed", refreshModelLibrary: vi.fn(async () => {}) });
     render(<SettingsModal />);
-    await screen.findByRole("alert");
-    expect(screen.getByRole("alert")).toHaveTextContent("Connection closed");
-    expect(screen.getByRole("button", { name: "Default model" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Refresh default models" })).toBeEnabled();
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Connection closed");
+    expect(screen.getByText("No models yet")).toBeInTheDocument();
   });
 
   it("keeps Harness provider setup errors specific", async () => {
-    const detail = "Harness has no model provider yet. Add an API key in Settings → Providers.";
-    const peekModelCatalog = vi.fn(async () => []);
-    seedStore({
-      settingsTab: "Models",
-      agents: [{ id: "harness", name: "Harness", protocol: "native", found: true, path: null, version: null, verified: true, signIn: "", authenticated: true }],
-      loadModelCatalog: vi.fn(async () => { throw new Error(detail); }),
-      peekModelCatalog,
-    });
+    const detail = "Harness has no model provider yet. Add an API key in Settings → Models & providers.";
+    seedStore({ settingsTab: "Models & providers", models: [], modelsLoading: false, modelsError: `Could not load models: ${detail}`, refreshModelLibrary: vi.fn(async () => {}) });
     render(<SettingsModal />);
 
     const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent(`Could not load Harness models: ${detail}`);
+    expect(alert).toHaveTextContent(detail);
     expect(alert).not.toHaveTextContent("Nothing was sent");
-    await vi.waitFor(() => expect(peekModelCatalog).toHaveBeenCalledWith("harness"));
   });
 
   it("saves the default reasoning effort at once without a restart", async () => {
-    seedStore({ settingsTab: "Models", defaultEffort: "high" });
+    seedStore({ settingsTab: "Models & providers", defaultEffort: "high" });
     render(<SettingsModal />);
     fireEvent.click(screen.getByRole("button", { name: "Default reasoning effort" }));
     const list = screen.getByRole("listbox", { name: "Default reasoning effort" });
@@ -337,60 +343,61 @@ describe("settings navigation", () => {
     expect(screen.getByRole("button", { name: "Font" })).toBeInTheDocument();
   });
 
-  it("groups the pages under AI, Workspace, App and System, with keys under Providers", () => {
+  it("groups the pages under AI, Workspace, App and System, with keys under Models & providers", () => {
     render(<SettingsModal />);
     const nav = screen.getByRole("navigation", { name: "Settings categories" });
     expect(within(nav).getByText("AI")).toBeInTheDocument();
     expect(within(nav).getByRole("button", { name: "Theme" })).toHaveTextContent("Appearance");
     expect(within(nav).getByRole("button", { name: "Shortcuts" })).toHaveTextContent("Commands & shortcuts");
-    // There is no Account or Agents page: the agent is set up under Providers.
+    // There is no Account, Agents or Providers page: the agent and its keys are set up under Models & providers.
     expect(within(nav).queryByRole("button", { name: "Account" })).toBeNull();
     expect(within(nav).queryByRole("button", { name: "Agents" })).toBeNull();
+    expect(within(nav).queryByRole("button", { name: "Providers" })).toBeNull();
     fireEvent.change(screen.getByRole("textbox", { name: "Search settings" }), { target: { value: "api key" } });
-    expect(within(nav).getByRole("button", { name: "Providers" })).toBeInTheDocument();
+    expect(within(nav).getByRole("button", { name: "Models & providers" })).toBeInTheDocument();
     expect(within(nav).queryByRole("button", { name: "Theme" })).toBeNull();
   });
 
-  it("switches a model out of the picker and back, and tests a Harness model's reply", async () => {
+  it("opens the edit dialog from a library row and tests a Harness model's reply", async () => {
     const models = [
       { modelId: "anthropic/claude-sonnet-5", providerId: "anthropic", displayLabel: "Claude Sonnet 5" },
       { modelId: "anthropic/claude-haiku-4-5", providerId: "anthropic", displayLabel: "Claude Haiku 4.5" },
     ];
     const testModel = vi.fn(async () => ({ latencyMs: 820, firstTokenMs: 400, reply: "ready" }));
     seedStore({
-      settingsTab: "Models", hiddenModels: [], testModel,
-      peekModelCatalog: vi.fn(async () => models),
-      agents: [{ id: "harness", name: "Harness", protocol: "native", found: true, path: null, version: null, verified: true, signIn: "", authenticated: true }],
+      settingsTab: "Models & providers", models, modelsLoading: false, testModel,
+      modelLibrary: [
+        { providerId: "anthropic", model: "claude-sonnet-5", displayName: "Claude Sonnet 5", contextWindow: 200000, efforts: ["high"], images: true, documents: null, video: null, source: "user", addedAt: "2026-01-01T00:00:00Z" },
+        { providerId: "anthropic", model: "claude-haiku-4-5", contextWindow: null, efforts: [], images: null, documents: null, video: null, source: "migrated", addedAt: "2026-01-01T00:00:00Z" },
+      ],
+      refreshModelLibrary: vi.fn(async () => {}),
     });
     render(<SettingsModal />);
     const group = await screen.findByRole("region", { name: "Anthropic" });
-    const haiku = await within(group).findByRole("switch", { name: "Show Claude Haiku 4.5 in the model picker" });
-    expect(haiku).toHaveAttribute("aria-checked", "true");
-    fireEvent.click(haiku);
-    await vi.waitFor(() => expect(useAppStore.getState().hiddenModels).toEqual(["harness|anthropic|anthropic/claude-haiku-4-5"]));
-    expect(within(group).getByText("1 of 2 in the picker")).toBeInTheDocument();
+    expect(within(group).getByText("2 models")).toBeInTheDocument();
     fireEvent.click(within(group).getByRole("button", { name: "Test Claude Sonnet 5" }));
     expect(testModel).toHaveBeenCalledWith("harness", models[0]);
     expect(await within(group).findByText("820 ms")).toBeInTheDocument();
-    fireEvent.click(within(group).getByRole("button", { name: "Show all" }));
-    await vi.waitFor(() => expect(useAppStore.getState().hiddenModels).toEqual([]));
+    // The row's own entry seeds the dialog: the context the user set, not the catalog's.
+    fireEvent.click(within(group).getByRole("button", { name: "Edit Claude Haiku 4.5" }));
+    expect(screen.getByRole("heading", { name: "Edit model" })).toBeInTheDocument();
+    expect(screen.getByLabelText(/Context window/)).toHaveValue("");
   });
 
-  it("switches a whole provider off and back on, folding its list while it is off", async () => {
+  it("folds and reopens a provider's group in the library", async () => {
     seedStore({
-      settingsTab: "Models", hiddenModels: [], hiddenProviders: [],
-      peekModelCatalog: vi.fn(async () => [{ modelId: "openai/gpt-5", providerId: "openai", displayLabel: "GPT-5" }]),
-      agents: [{ id: "harness", name: "Harness", protocol: "native", found: true, path: null, version: null, verified: true, signIn: "", authenticated: true }],
+      settingsTab: "Models & providers", modelsLoading: false,
+      models: [{ modelId: "openai/gpt-5", providerId: "openai", displayLabel: "GPT-5" }],
+      refreshModelLibrary: vi.fn(async () => {}),
     });
     render(<SettingsModal />);
     const group = await screen.findByRole("region", { name: "OpenAI" });
-    await within(group).findByRole("switch", { name: "Show GPT-5 in the model picker" });
-    fireEvent.click(within(group).getByRole("switch", { name: "Use OpenAI in the model picker" }));
-    await vi.waitFor(() => expect(useAppStore.getState().hiddenProviders).toEqual(["harness:openai"]));
-    expect(within(group).getByText("Off — not in the model picker")).toBeInTheDocument();
-    await vi.waitFor(() => expect(within(group).queryByRole("switch", { name: "Show GPT-5 in the model picker" })).toBeNull());
-    fireEvent.click(within(group).getByRole("switch", { name: "Use OpenAI in the model picker" }));
-    await vi.waitFor(() => expect(useAppStore.getState().hiddenProviders).toEqual([]));
+    const toggle = within(group).getByRole("button", { name: /OpenAI/ });
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
   });
 
   it("keeps notifications on a General tab, saved on toggle", async () => {
@@ -505,13 +512,12 @@ describe("settings navigation", () => {
     expect(screen.queryByRole("button", { name: "Save & restart connection" })).toBeNull();
   });
 
-  it("keeps providers and models switched off in the library out of the Orchestrator role lists", async () => {
+  it("offers the library to the Orchestrator role lists and marks a saved model outside it", async () => {
     seedStore({
       settingsTab: "Orchestrator",
       orchestratorEnabled: true,
       orchestratorModels: { lead: { modelId: "anthropic/claude-haiku-4-5", providerId: "anthropic" } },
-      hiddenModels: ["harness|anthropic|anthropic/claude-haiku-4-5"],
-      hiddenProviders: ["harness:kilo"],
+      loadModelCatalog: vi.fn(async () => [{ modelId: "anthropic/claude-sonnet-5", providerId: "anthropic", displayLabel: "Claude Sonnet 5" }]),
     });
     render(<SettingsModal />);
     const lead = screen.getByRole("button", { name: "Lead model" });
@@ -519,10 +525,8 @@ describe("settings navigation", () => {
     fireEvent.click(lead);
     const list = within(screen.getByRole("listbox", { name: "Lead model" }));
     expect(list.getByText("Claude Sonnet 5", { exact: true })).toBeInTheDocument();
-    expect(list.queryByText("Claude Haiku 4.5")).toBeNull();
-    expect(list.queryByText("anthropic/claude-sonnet-4.6")).toBeNull();
-    // The saved Lead is switched off, so it stays visible as the current choice.
-    expect(list.getByText("Off in Settings → Models")).toBeInTheDocument();
+    // The saved Lead is not in the library, so it stays visible as the current choice.
+    expect(list.getByText("Saved selection · not in the current catalog")).toBeInTheDocument();
   });
 
   it("asks for both required roles and discloses every provider that receives the prompt", async () => {
@@ -615,11 +619,11 @@ describe("settings navigation", () => {
     probe.mockRestore();
   });
 
-  it("sends an Orchestrator page with no connected providers to Providers", async () => {
+  it("sends an Orchestrator page with no connected providers to Models & providers", async () => {
     seedStore({ settingsTab: "Orchestrator", loadModelCatalog: vi.fn(async () => []) });
     render(<SettingsModal />);
     expect(await screen.findByText("No providers connected")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Add a provider" }));
-    expect(useAppStore.getState().settingsTab).toBe("Providers");
+    expect(useAppStore.getState().settingsTab).toBe("Models & providers");
   });
 });

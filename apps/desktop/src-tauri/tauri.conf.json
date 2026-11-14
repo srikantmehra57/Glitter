@@ -55,6 +55,7 @@
     "externalBin": ["binaries/glitter-node"],
     "resources": {
       "../../../packages/glitter-harness/dist/index.js": "glitter-harness/index.js",
+      "../../../packages/glitter-harness/dist/cli.js": "glitter-harness/cli.js",
       "resources/THIRD_PARTY_LICENSES.txt": "THIRD_PARTY_LICENSES.txt"
     }
   }

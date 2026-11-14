@@ -3,9 +3,8 @@ import type { ToolDefinition } from "./tools.js";
 
 /**
  * Delegation: the main agent hands one self-contained task to a child agent.
- * The child gets a narrowed tool profile, its own step budget and no approval
- * channel, so anything the thread's permission mode would ask about is refused
- * rather than asked. Depth is stamped into the child's session, so a resumed
+ * The child gets a narrowed tool profile, its own step budget and a parent approval
+ * channel when available. Depth is stamped into the child's session, so a resumed
  * child keeps its place and can never delegate as if it were top-level.
  */
 
@@ -45,7 +44,7 @@ export function delegationExtension(delegator: Delegator): Extension {
       {
         placement: "stable",
         text: (context) => (context.delegationDepth ?? 0) > 0
-          ? "You are a delegated child agent working on one task for the main agent. Complete it and reply with a concise result. You cannot ask the user questions, you cannot see the conversation that sent you the task, and anything the thread's permission mode would ask about is refused."
+          ? "You are a delegated child agent working on one task for the main agent. Complete it and reply with a concise result. You cannot ask the user questions or see the conversation that sent you the task. Tool approvals are requested in the parent thread when a channel is available."
           : "",
       },
       {

@@ -417,7 +417,10 @@ class StdioExchange implements Exchange {
   private termination?: ReturnType<typeof terminateTree>;
   private closed = false;
 
-  private constructor(private readonly config: McpServerConfig, private readonly child: ReturnType<typeof spawnIsolated>["child"]) {
+  /** The server is no longer answering: it exited, failed to start, or was closed. */
+  get dead(): boolean { return this.closed; }
+
+  private constructor(private readonly config: McpServerConfig, readonly child: ReturnType<typeof spawnIsolated>["child"]) {
     child.stdin.on("error", () => {});
     child.stdout.on("data", (chunk: Buffer) => {
       if (this.closed) return;
@@ -436,8 +439,8 @@ class StdioExchange implements Exchange {
     child.on("error", (error) => this.fail(`The ${config.name} MCP server could not start: ${error.message}`));
   }
 
-  static async start(config: McpServerConfig, workspaceRoot: string): Promise<StdioExchange> {
-    const { child } = spawnIsolated(config.command ?? "", [...config.args], { workspace: workspaceRoot, cwd: workspaceRoot, extraEnv: config.env });
+  static async start(config: McpServerConfig, workspaceRoot: string, protectedPaths?: readonly string[]): Promise<StdioExchange> {
+    const { child } = spawnIsolated(config.command ?? "", [...config.args], { workspace: workspaceRoot, cwd: workspaceRoot, extraEnv: config.env, protectedPaths });
     const exchange = new StdioExchange(config, child);
     try {
       await exchange.initialize();
@@ -720,6 +723,56 @@ function parseTool(row: unknown, server: string): McpTool | undefined {
   return Object.freeze({ name, description, inputSchema });
 }
 
+/** How many times a stdio server that died is started again in one generation, and the first wait; each wait doubles. */
+const MAX_RESTARTS = 3;
+const RESTART_BASE_MS = 250;
+
+/**
+ * A stdio server that exits after it was running stayed dead until the user
+ * refreshed or edited the configuration, and every call to it failed the same
+ * way. This starts it again on the next call, a bounded number of times with a
+ * doubling wait, and then says how to bring it back by hand. A call that was in
+ * flight when it died is not repeated: a tool call may already have acted.
+ */
+class RestartingExchange implements Exchange {
+  private restarts = 0;
+  private starting?: Promise<StdioExchange>;
+  private closedByUs = false;
+
+  constructor(private current: StdioExchange, private readonly name: string, private readonly start: () => Promise<StdioExchange>, private readonly tuning: { restartBaseMs: number; maxRestarts: number }) {}
+
+  private async alive(signal?: AbortSignal): Promise<StdioExchange> {
+    if (this.closedByUs) throw new Error(`The ${this.name} MCP server was closed.`);
+    if (!this.current.dead) return this.current;
+    if (this.starting) return this.starting;
+    if (this.restarts >= this.tuning.maxRestarts) throw new Error(`The ${this.name} MCP server stopped and was restarted ${this.tuning.maxRestarts} times. Refresh MCP in Settings → Extensions to start it again.`);
+    const attempt = this.restarts + 1;
+    this.restarts = attempt;
+    this.starting = (async () => {
+      await new Promise<void>((resolve) => { const timer = setTimeout(resolve, this.tuning.restartBaseMs * 2 ** (attempt - 1)); timer.unref?.(); signal?.addEventListener("abort", () => { clearTimeout(timer); resolve(); }, { once: true }); });
+      if (signal?.aborted || this.closedByUs) throw new Error("The turn was stopped.");
+      try {
+        this.current = await this.start();
+      } catch (error) {
+        throw new Error(`The ${this.name} MCP server stopped and could not be started again (${messageOf(error)}). Refresh MCP in Settings → Extensions to try again.`);
+      }
+      return this.current;
+    })().finally(() => { this.starting = undefined; });
+    return this.starting;
+  }
+
+  /** The process currently serving this server, for diagnostics. */
+  get child() { return this.current.child; }
+
+  async listTools(signal?: AbortSignal): Promise<McpTool[]> { return (await this.alive(signal)).listTools(signal); }
+  async callTool(name: string, input: Record<string, unknown>, signal?: AbortSignal) { return (await this.alive(signal)).callTool(name, input, signal); }
+
+  async close(): Promise<void> {
+    this.closedByUs = true;
+    await Promise.allSettled([this.starting?.then((exchange) => exchange.close()), this.current.close()]);
+  }
+}
+
 type McpConnection = Readonly<{ config: McpServerConfig; exchange: Exchange; tools: McpTool[] }>;
 
 type Generation = {
@@ -733,12 +786,23 @@ type Generation = {
   retired: boolean;
 };
 
-function generationTools(servers: McpConnection[]): Generation["byName"] {
+/**
+ * The model-facing tools of every connected server. A server whose tool names
+ * collide with an earlier one's, or with each other, is left out whole: with a
+ * name the model cannot tell apart, no call to it can be trusted to reach the
+ * right tool. The rest still start, and the left-out server is named.
+ */
+function generationTools(servers: McpConnection[]): { byName: Generation["byName"]; kept: McpConnection[]; excluded: Array<{ connection: McpConnection; reason: string }> } {
   const byName = new Map<string, { server: string; tool: McpTool; definition: ToolDefinition }>();
-  for (const { config, exchange, tools } of servers) {
+  const kept: McpConnection[] = [];
+  const excluded: Array<{ connection: McpConnection; reason: string }> = [];
+  for (const connection of servers) {
+    const { config, exchange, tools } = connection;
+    const rows = new Map<string, { server: string; tool: McpTool; definition: ToolDefinition }>();
+    let clash: string | undefined;
     for (const tool of tools) {
       const name = mcpToolName(config.name, tool.name);
-      if (byName.has(name)) throw new Error(`MCP tool name ${name} is produced twice; the generation was not swapped in.`);
+      if (byName.has(name) || rows.has(name)) { clash = name; break; }
       const definition: ToolDefinition = {
         schema: {
           name,
@@ -757,10 +821,13 @@ function generationTools(servers: McpConnection[]): Generation["byName"] {
           return { value: { kind: "mcp", server: config.name, tool: tool.name, text: result.text, ...(result.isError ? { isError: true } : {}) } };
         },
       };
-      byName.set(name, { server: config.name, tool, definition });
+      rows.set(name, { server: config.name, tool, definition });
     }
+    if (clash) { excluded.push({ connection, reason: `Its tool name ${clash} is produced twice, so none of its tools were loaded.` }); continue; }
+    for (const [name, row] of rows) byName.set(name, row);
+    kept.push(connection);
   }
-  return byName;
+  return { byName, kept, excluded };
 }
 
 function searchTool(generation: Generation): ToolDefinition {
@@ -854,7 +921,10 @@ export class McpManager {
   /** Swapped-out generations still held by a running turn; `close()` reaps them too. */
   private readonly retired = new Set<Generation>();
 
-  constructor(private readonly homeDir: string, private readonly emit: Emit) {}
+  /** Settings → Permissions' protected paths, which a stdio server's sandbox cannot write. Servers started later use the new set. */
+  protectedPaths?: readonly string[];
+
+  constructor(private readonly homeDir: string, private readonly emit: Emit, private readonly tuning: { restartBaseMs?: number; maxRestarts?: number } = {}) {}
 
   /** The generation a turn is using, acquired once per turn context. */
   acquire(context: TurnContext): Generation | null {
@@ -936,18 +1006,28 @@ export class McpManager {
     const built: Exchange[] = [];
     for (const config of servers) diagnostics.rememberValues([...Object.values(config.env), ...Object.values(config.headers)]);
     const starts = servers.map(async (config): Promise<McpConnection> => {
-      const exchange = config.transport === "stdio"
-        ? await StdioExchange.start(config, workspaceRoot)
-        : await HttpExchange.start(config);
+      let exchange: Exchange;
+      if (config.transport === "stdio") {
+        const begin = () => StdioExchange.start(config, workspaceRoot, this.protectedPaths);
+        exchange = new RestartingExchange(await begin(), config.name, begin, { restartBaseMs: this.tuning.restartBaseMs ?? RESTART_BASE_MS, maxRestarts: this.tuning.maxRestarts ?? MAX_RESTARTS });
+      } else {
+        exchange = await HttpExchange.start(config);
+      }
       built.push(exchange);
       return { config, exchange, tools: await exchange.listTools() };
     });
     try {
       const connections = await Promise.all(starts);
-      const byName = generationTools(connections);
+      const { byName, kept, excluded } = generationTools(connections);
+      // A server left out for a name clash does not take the others down with it.
+      for (const { connection, reason } of excluded) {
+        skipped = [...skipped, { name: connection.config.name, transport: connection.config.transport, tools: 0 as const, skipped: true as const, reason }];
+        this.notice({ sessionId, level: "warning", message: `MCP server ${connection.config.name} was left out. ${reason}` }, true);
+      }
+      await Promise.allSettled(excluded.map(({ connection }) => connection.exchange.close()));
       const generation: Generation = {
         fingerprint,
-        servers: connections,
+        servers: kept,
         skipped,
         byName,
         definitions: [...byName.values()].map((row) => row.definition),

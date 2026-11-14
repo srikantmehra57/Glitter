@@ -8,9 +8,9 @@ import { pathToFileURL } from "node:url";
 
 const directory = await mkdtemp(join(tmpdir(), "glitter-wire-"));
 const outfile = join(directory, "wire.mjs");
-await writeFile(join(directory, "entry.ts"), `export { streamChat, isTransientProviderError, parseRetryAfter } from ${JSON.stringify(resolve("packages/glitter-harness/src/harness/wire.ts"))};\nexport { imageRequestProblem } from ${JSON.stringify(resolve("packages/glitter-harness/src/harness/images.ts"))};\n`);
+await writeFile(join(directory, "entry.ts"), `export { streamChat, isTransientProviderError, parseRetryAfter, parseContextLimit } from ${JSON.stringify(resolve("packages/glitter-harness/src/harness/wire.ts"))};\nexport { imageRequestProblem } from ${JSON.stringify(resolve("packages/glitter-harness/src/harness/images.ts"))};\n`);
 await build({ entryPoints: [join(directory, "entry.ts")], bundle: true, platform: "node", format: "esm", outfile, logLevel: "silent" });
-const { streamChat, isTransientProviderError, imageRequestProblem, parseRetryAfter } = await import(pathToFileURL(outfile).href);
+const { streamChat, isTransientProviderError, imageRequestProblem, parseRetryAfter, parseContextLimit } = await import(pathToFileURL(outfile).href);
 
 function png(width, height) {
   const bytes = Buffer.alloc(24);
@@ -182,8 +182,27 @@ test("cache controls stay on the wire that supports them, and Retry-After is a b
   assert.equal(JSON.stringify(groqBody).includes("cache_control"), false);
   assert.equal(parseRetryAfter("0"), 0);
   assert.equal(parseRetryAfter("1.2"), 1200);
-  assert.equal(parseRetryAfter("100"), 20_000);
+  // Bounded by the host's whole retry budget, not by 20 s: a provider that asks for a minute is honored, one that asks for an hour is not.
+  assert.equal(parseRetryAfter("100"), 100_000);
+  assert.equal(parseRetryAfter("3600"), 120_000);
   assert.equal(parseRetryAfter("not-a-date"), undefined);
+});
+
+test("a stated context limit is parsed out of overflow prose, and prompt sizes are not", () => {
+  // OpenAI and vLLM phrasing: the limit comes first, the prompt size is the distractor.
+  assert.equal(parseContextLimit("This model's maximum context length is 131072 tokens. However, your messages resulted in 150000 tokens. Please reduce the length of the messages."), 131_072);
+  assert.equal(parseContextLimit("litellm.BadRequestError: OpenAIException - This model's maximum context length is 4096 tokens. However, you requested 5000 tokens."), 4_096);
+  // Anthropic phrasing: the maximum trails the prompt size.
+  assert.equal(parseContextLimit("prompt is too long: 250000 tokens > 200000 maximum"), 200_000);
+  assert.equal(parseContextLimit("input length exceeds maximum context length of 8192 tokens"), 8_192);
+  assert.equal(parseContextLimit("maximum context length is 32768 tokens"), 32_768);
+  // No stated maximum: the host falls back to estimating, never guesses from these.
+  assert.equal(parseContextLimit("prompt is too long for the context window"), null);
+  assert.equal(parseContextLimit("your messages resulted in 150000 tokens. Please reduce the length."), null);
+  assert.equal(parseContextLimit("Request too large: please reduce tokens."), null);
+  // Implausible stated limits are ignored, not adopted.
+  assert.equal(parseContextLimit("maximum context length is 512 tokens"), null);
+  assert.equal(parseContextLimit("maximum context length is 99999999999 tokens"), null);
 });
 
 test.after(async () => { await rm(directory, { recursive: true, force: true }); });

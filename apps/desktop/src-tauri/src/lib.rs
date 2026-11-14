@@ -152,6 +152,10 @@ const BRIDGE_METHODS: &[&str] = &[
     "stopHost",
     "listSessions",
     "listModels",
+    "modelLibraryList",
+    "modelLibraryPut",
+    "modelLibraryRemove",
+    "listProviderModels",
     "suggest",
     "startSession",
     "resumeSession",
@@ -603,20 +607,87 @@ struct GitReviewRequest {
 /// GUI-launched apps do not inherit the user's shell PATH, so Homebrew,
 /// ~/.local/bin, nvm, and similar installs are invisible to a bare `which`.
 fn extra_bin_dirs() -> Vec<PathBuf> {
+    extra_bin_dirs_for(dirs::home_dir().as_deref(), &|key| std::env::var_os(key))
+}
+
+fn extra_bin_dirs_for(home: Option<&Path>, env: &impl Fn(&str) -> Option<std::ffi::OsString>) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
-    if let Some(home) = dirs::home_dir() {
+    let setting = |key| env(key).map(PathBuf::from).filter(|path| path.is_absolute());
+    for key in ["VIRTUAL_ENV", "CONDA_PREFIX", "JAVA_HOME", "JDK_HOME", "GOROOT"] {
+        if let Some(root) = setting(key) {
+            dirs.push(root.join("bin"));
+        }
+    }
+    if let Some(home) = home {
+        let root = |key, fallback| setting(key).unwrap_or_else(|| home.join(fallback));
         dirs.extend([
             home.join(".local/bin"),
-            home.join(".volta/bin"),
-            home.join(".asdf/shims"),
+            root("CARGO_HOME", ".cargo").join("bin"),
+            root("PYENV_ROOT", ".pyenv").join("shims"),
+            root("PYENV_ROOT", ".pyenv").join("bin"),
+            root("RBENV_ROOT", ".rbenv").join("shims"),
+            root("RBENV_ROOT", ".rbenv").join("bin"),
+            root("BUN_INSTALL", ".bun").join("bin"),
+            root("VOLTA_HOME", ".volta").join("bin"),
+            root("ASDF_DATA_DIR", ".asdf").join("shims"),
             home.join(".nodenv/shims"),
-            home.join(".nvm/current/bin"),
-            home.join(".local/share/mise/shims"),
+            root("MISE_DATA_DIR", ".local/share/mise").join("shims"),
             home.join(".local/share/fnm/aliases/default/bin"),
         ]);
+        let nvm = root("NVM_DIR", ".nvm");
+        if let Some(bin) = nvm_default_bin(&nvm) {
+            dirs.push(bin);
+        } else if !nvm.join("alias/default").exists() {
+            dirs.push(nvm.join("current/bin"));
+        }
+        if let Some(paths) = env("GOPATH").filter(|value| !value.is_empty()) {
+            dirs.extend(std::env::split_paths(&paths).filter(|path| path.is_absolute()).map(|path| path.join("bin")));
+        } else {
+            dirs.push(home.join("go/bin"));
+        }
     }
     dirs.extend([PathBuf::from("/opt/homebrew/bin"), PathBuf::from("/opt/homebrew/opt/node/bin"), PathBuf::from("/usr/local/bin"), PathBuf::from("/usr/local/opt/node/bin")]);
     dirs
+}
+
+/// Resolve installed nvm versions and bounded alias files without running shell
+/// startup files. Version order is numeric (v24.10.0 follows v24.9.0).
+fn nvm_default_bin(root: &Path) -> Option<PathBuf> {
+    fn version(value: &str) -> Option<Vec<u32>> {
+        let parts: Vec<_> = value.strip_prefix('v').unwrap_or(value).split('.').collect();
+        if parts.is_empty() || parts.len() > 3 || parts.iter().any(|part| part.is_empty() || !part.bytes().all(|byte| byte.is_ascii_digit())) {
+            return None;
+        }
+        parts.into_iter().map(|part| part.parse().ok()).collect()
+    }
+    fn alias(root: &Path, name: &str) -> Option<String> {
+        if name.len() > 128 || name.split('/').any(|part| part.is_empty() || part == "." || part == ".." || !part.bytes().all(|byte| byte.is_ascii_alphanumeric() || b"._-*".contains(&byte))) {
+            return None;
+        }
+        let mut value = String::new();
+        std::fs::File::open(root.join("alias").join(name)).ok()?.take(1025).read_to_string(&mut value).ok()?;
+        (value.len() <= 1024).then(|| value.trim().to_string())
+    }
+    let mut versions: Vec<_> = std::fs::read_dir(root.join("versions/node")).ok()?.flatten().filter_map(|entry| {
+        let number = version(entry.file_name().to_str()?)?;
+        (number.len() == 3 && entry.path().join("bin").is_dir()).then(|| (number, entry.path().join("bin")))
+    }).collect();
+    versions.sort_by(|a, b| b.0.cmp(&a.0));
+    let mut selector = if root.join("alias/default").exists() { alias(root, "default")? } else { "node".into() };
+    let mut seen = HashSet::new();
+    for _ in 0..8 {
+        if !seen.insert(selector.clone()) {
+            return None;
+        }
+        if let Some(prefix) = version(&selector) {
+            return versions.into_iter().find(|(number, _)| number.starts_with(&prefix)).map(|(_, bin)| bin);
+        }
+        if selector == "node" || selector == "stable" {
+            return versions.into_iter().next().map(|(_, bin)| bin);
+        }
+        selector = alias(root, &selector)?;
+    }
+    None
 }
 
 fn augmented_path() -> std::ffi::OsString {
@@ -980,7 +1051,7 @@ fn bridge_request_impl<R: Runtime>(state: &AppState, app: &AppHandle<R>, id: Str
         let object = params.as_object_mut().ok_or("Bridge parameters must be an object")?;
         object.insert("workspaceRoot".into(), Value::String(root.to_string_lossy().into_owned()));
     }
-    if matches!(method.as_str(), "startSession" | "resumeSession" | "sendTurn" | "harnessMcp" | "harnessMcpConfig") {
+    if matches!(method.as_str(), "startSession" | "resumeSession" | "sendTurn" | "listSkills" | "harnessMcp" | "harnessMcpConfig") {
         let grant_id = if method == "startSession" {
             params.get("grantId").and_then(Value::as_str).unwrap_or("").to_string()
         } else {
@@ -989,7 +1060,12 @@ fn bridge_request_impl<R: Runtime>(state: &AppState, app: &AppHandle<R>, id: Str
         if !grant_id.is_empty() {
             // Supply absence of consent too: a changed or revoked approval must
             // not leave the previous authorization in the bridge's session map.
-            mcp_consent::inject(state, &grant_id, &mut params)?;
+            // A worktree thread is trusted while the workspace it came from is.
+            let origin = worktree_store_for(app, state, &grant_id).ok().and_then(|store| {
+                let dir = grant_root(state, &grant_id).ok()?;
+                worktree_origin(state, &store, &dir)
+            });
+            mcp_consent::inject(state, &grant_id, origin.as_deref(), &mut params)?;
         }
     }
     if method == "decideApproval" {
@@ -1037,6 +1113,8 @@ fn bridge_request_impl<R: Runtime>(state: &AppState, app: &AppHandle<R>, id: Str
                 // turn's baseline: it cannot overlap its own session's turn,
                 // only a run in another session.
                 snapshots.prepare(&id, &grant, &root, session, params.get("clientTurnId").and_then(Value::as_str), params.get("ifBusy").and_then(Value::as_str));
+                let restored = snapshots.restore_context(&grant, &root);
+                params.as_object_mut().ok_or("Bridge parameters must be an object")?.insert("workspaceRestores".into(), serde_json::to_value(restored).map_err(|_| "Restored file context is unavailable.")?);
             }
         }
     }
@@ -1162,7 +1240,7 @@ fn run_git(cwd: &Path, args: &[&str]) -> Result<String, String> {
 /// the agent's own `git add` / `git commit` in the same repository fail with
 /// "Unable to create index.lock" for as long as the refresh runs.
 fn run_git_read(cwd: &Path, args: &[&str]) -> Result<String, String> {
-    run_git_output(read_git_command(cwd), args)
+    run_git_output(read_git_command(cwd)?, args)
 }
 
 /// Remove ambient `GIT_*` overrides (`GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`)
@@ -1176,17 +1254,176 @@ pub(crate) fn strip_ambient_git_env(cmd: &mut Command) {
     }
 }
 
-fn read_git_command(cwd: &Path) -> Command {
+/// Settings every app git call forces, whatever the repository says. Hooks and
+/// fsmonitor belong to the repository, which an agent can modify; native Git
+/// runs with the app's authority, so it must never execute them. `ext::`
+/// remote URLs run a command, so they stay off too.
+const FORCED_GIT_CONFIG: [(&str, &str); 3] = [("core.hooksPath", "/dev/null"), ("core.fsmonitor", "false"), ("protocol.ext.allow", "never")];
+
+/// What an app git call is about to do, which decides the repository settings
+/// it must refuse to run with.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum GitUse {
+    Local,
+    Commit,
+    Network,
+}
+
+/// The repository's own settings (local and worktree scope) that would make
+/// the app's git run a program or send a connection somewhere else. The agent
+/// can write `.git/config`, so these are not trusted the way the user's global
+/// settings are. Filter and diff drivers are blanked, because git reaches them
+/// on a background status refresh with no click. Keys that cannot be blanked
+/// safely refuse the operations that would read them. Read at call time, so
+/// the overrides match what git itself is about to read; the agent's sandbox
+/// cannot write the files that config comes from (`.git/config`,
+/// `config.worktree`, `commondir`), so it cannot change it in between.
+#[derive(Debug, Default, PartialEq)]
+struct RepoGitConfig {
+    overrides: Vec<(String, String)>,
+    any: Vec<String>,
+    commit: Vec<String>,
+    network: Vec<String>,
+}
+
+impl RepoGitConfig {
+    fn read(cwd: &Path) -> Result<Self, String> {
+        let mut cmd = command("git");
+        strip_ambient_git_env(&mut cmd);
+        for (key, value) in FORCED_GIT_CONFIG {
+            cmd.arg("-c").arg(format!("{key}={value}"));
+        }
+        let output = cmd
+            .current_dir(cwd)
+            .args(["config", "--list", "--show-scope", "--null"])
+            .stdin(std::process::Stdio::null())
+            .output()
+            .map_err(|err| format!("git failed: {err}"))?;
+        // No config at all may end with a failure status and print nothing.
+        // Anything on stderr (a malformed file, a Git too old for
+        // `--show-scope`) refuses rather than reading as "no settings".
+        if !output.status.success() && (!output.stdout.is_empty() || !output.stderr.iter().all(u8::is_ascii_whitespace)) {
+            return Err(format!("Could not read this repository's Git settings: {}", String::from_utf8_lossy(&output.stderr).trim()));
+        }
+        Ok(Self::parse(&String::from_utf8_lossy(&output.stdout)))
+    }
+
+    /// `--show-scope --null` prints `scope\0key\nvalue\0` per entry.
+    fn parse(listing: &str) -> Self {
+        let mut config = Self::default();
+        let mut fields = listing.split('\0');
+        while let (Some(scope), Some(entry)) = (fields.next(), fields.next()) {
+            if scope == "local" || scope == "worktree" {
+                config.classify(entry.split_once('\n').map_or(entry, |(key, _)| key));
+            }
+        }
+        config
+    }
+
+    fn classify(&mut self, key: &str) {
+        let (Some((section, rest)), Some((_, name))) = (key.split_once('.'), key.rsplit_once('.')) else {
+            return;
+        };
+        let section = section.to_ascii_lowercase();
+        let name = name.to_ascii_lowercase();
+        // The subsection keeps its case; git matches it case-sensitively.
+        let sub = rest.rsplit_once('.').map(|(sub, _)| sub);
+        // A subsection holding `=` cannot be written as `-c key=value`.
+        if sub.is_some_and(|sub| sub.contains('=')) && matches!(section.as_str(), "filter" | "diff") {
+            self.any.push(key.to_string());
+            return;
+        }
+        let mut blank = |key: String, value: &str| {
+            if !self.overrides.iter().any(|(existing, _)| *existing == key) {
+                self.overrides.push((key, value.to_string()));
+            }
+        };
+        match (section.as_str(), sub, name.as_str()) {
+            ("filter", Some(sub), "clean" | "smudge" | "process") => {
+                blank(format!("filter.{sub}.{name}"), "");
+                blank(format!("filter.{sub}.required"), "false");
+            }
+            ("diff", Some(sub), "command" | "textconv") => blank(format!("diff.{sub}.{name}"), ""),
+            ("diff", None, "external") => blank("diff.external".into(), ""),
+            ("core", None, "worktree") => self.any.push(key.to_string()),
+            ("gpg", _, "program") | ("gpg", Some(_), "defaultkeycommand") => self.commit.push(key.to_string()),
+            ("core", None, "sshcommand" | "gitproxy" | "askpass")
+            | ("credential", _, "helper")
+            | ("url", Some(_), "insteadof" | "pushinsteadof")
+            | ("remote", Some(_), "uploadpack" | "receivepack" | "vcs" | "proxy")
+            | ("http", _, "proxy" | "sslverify" | "sslcainfo" | "sslcapath" | "curloptresolve") => self.network.push(key.to_string()),
+            _ => {}
+        }
+    }
+
+    /// The settings this use must not run with, as an error the user can act on.
+    fn refusal(&self, used: GitUse) -> Option<String> {
+        let key = self.any.first().or(match used {
+            GitUse::Local => None,
+            GitUse::Commit => self.commit.first(),
+            GitUse::Network => self.network.first(),
+        })?;
+        Some(format!(
+            "This repository's own Git settings set {key}, which can run a program or send the connection somewhere else, so Glitter will not use it. Remove it with `git config --local --unset-all {key}` in a terminal, then try again."
+        ))
+    }
+
+    /// The forced settings and the blanked drivers.
+    fn pairs(&self) -> impl Iterator<Item = (&str, &str)> + '_ {
+        FORCED_GIT_CONFIG.iter().copied().chain(self.overrides.iter().map(|(key, value)| (key.as_str(), value.as_str())))
+    }
+
+    /// Settings for this use, or the reason it must not run.
+    fn guard(cwd: &Path, used: GitUse) -> Result<Self, String> {
+        let config = Self::read(cwd)?;
+        match config.refusal(used) {
+            Some(reason) => Err(reason),
+            None => Ok(config),
+        }
+    }
+
+    fn apply_args(&self, cmd: &mut Command) {
+        for (key, value) in self.pairs() {
+            cmd.arg("-c").arg(format!("{key}={value}"));
+        }
+    }
+
+    /// For a program that runs git itself (`gh`): the same settings through
+    /// git's environment, which every git it starts reads.
+    fn apply_env(&self, cmd: &mut Command) {
+        let start = std::env::var("GIT_CONFIG_COUNT").ok().and_then(|count| count.parse::<usize>().ok()).unwrap_or(0);
+        let mut count = start;
+        for (key, value) in self.pairs() {
+            cmd.env(format!("GIT_CONFIG_KEY_{count}"), key).env(format!("GIT_CONFIG_VALUE_{count}"), value);
+            count += 1;
+        }
+        cmd.env("GIT_CONFIG_COUNT", count.to_string());
+    }
+}
+
+fn workspace_git_command_for(cwd: &Path, used: GitUse) -> Result<Command, String> {
+    let config = RepoGitConfig::guard(cwd, used)?;
     let mut cmd = command("git");
     strip_ambient_git_env(&mut cmd);
-    cmd.args(["--no-optional-locks", "-c", "core.fsmonitor=false"]).current_dir(cwd);
-    cmd
+    config.apply_args(&mut cmd);
+    cmd.current_dir(cwd);
+    Ok(cmd)
+}
+
+fn workspace_git_command(cwd: &Path) -> Result<Command, String> {
+    workspace_git_command_for(cwd, GitUse::Local)
+}
+
+fn read_git_command(cwd: &Path) -> Result<Command, String> {
+    let mut cmd = workspace_git_command(cwd)?;
+    cmd.arg("--no-optional-locks");
+    Ok(cmd)
 }
 
 fn run_git_with(cwd: &Path, global: &[&str], args: &[&str]) -> Result<String, String> {
-    let mut cmd = command("git");
-    strip_ambient_git_env(&mut cmd);
-    cmd.args(global).current_dir(cwd);
+    let used = if args.first() == Some(&"commit") { GitUse::Commit } else { GitUse::Local };
+    let mut cmd = workspace_git_command_for(cwd, used)?;
+    cmd.args(global);
     run_git_output(cmd, args)
 }
 
@@ -1203,7 +1440,7 @@ fn run_git_output(mut cmd: Command, args: &[&str]) -> Result<String, String> {
 /// lockfile rewrite is easily tens of megabytes) only to throw most of it away.
 /// Returns the text and whether it was cut.
 fn run_git_capped(cwd: &Path, args: &[&str], limit: usize) -> Result<(String, bool), String> {
-    run_git_command_capped(read_git_command(cwd), args, limit)
+    run_git_command_capped(read_git_command(cwd)?, args, limit)
 }
 
 /// The private snapshot repository supplies its own isolated Git environment.
@@ -1263,9 +1500,8 @@ fn run_git_stdin(cwd: &Path, args: &[&str], input: &str) -> Result<String, Strin
 /// warnings or errors exceeding the OS pipe buffer before EOF.
 fn run_git_stdin_bytes(cwd: &Path, args: &[&str], input: &[u8]) -> Result<String, String> {
     use std::io::Write;
-    let mut cmd = command("git");
-    strip_ambient_git_env(&mut cmd);
-    let mut child = cmd.args(args).current_dir(cwd).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn().map_err(|err| format!("git failed: {err}"))?;
+    let mut cmd = workspace_git_command(cwd)?;
+    let mut child = cmd.args(args).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn().map_err(|err| format!("git failed: {err}"))?;
     let mut stdin = child.stdin.take().ok_or_else(|| "git failed: stdin unavailable".to_string())?;
     let (output, written) = std::thread::scope(|scope| {
         let writer = scope.spawn(move || stdin.write_all(input));
@@ -1925,17 +2161,23 @@ async fn git_worktree_handoff(app: AppHandle, grant_id: String) -> Result<Worktr
     .await
 }
 
+/// The granted workspace an app-made worktree was created from, when that
+/// workspace is still granted. `None` for any other folder, including one a
+/// user picked that merely lives under the store.
+fn worktree_origin(state: &AppState, store: &Path, dir: &Path) -> Option<PathBuf> {
+    let home = dir.parent().filter(|home| home.parent() == Some(store))?;
+    let grants = state.grants.lock().ok()?;
+    grants.values().find(|root| !root.starts_with(store) && worktrees::repo_store(store, root) == home).cloned()
+}
+
 fn git_worktree_handoff_inner(state: &AppState, store: &Path, grant_id: &str) -> Result<WorktreeHandoff, String> {
     let dir = grant_root(state, grant_id)?;
-    let home = dir.parent().filter(|home| home.parent() == Some(store)).ok_or("That folder is not a worktree made by Glitter.")?;
+    dir.parent().filter(|home| home.parent() == Some(store)).ok_or("That folder is not a worktree made by Glitter.")?;
     // The destination is the granted workspace this worktree was made from; a
     // revoked workspace cannot be written to through its worktree.
-    let repo = {
-        let grants = state.grants.lock().map_err(|err| err.to_string())?;
-        grants.values().find(|root| !root.starts_with(store) && worktrees::repo_store(store, root) == home).cloned()
-    }
-    .filter(|repo| repo.exists())
-    .ok_or("The workspace this worktree came from is not open. Re-open it, then try again.")?;
+    let repo = worktree_origin(state, store, &dir)
+        .filter(|repo| repo.exists())
+        .ok_or("The workspace this worktree came from is not open. Re-open it, then try again.")?;
     let _write = git_write_lock();
     let Some(patch) = worktrees::changes(&repo, &dir)? else {
         return Ok(WorktreeHandoff {
@@ -2161,14 +2403,22 @@ struct GitPush {
 /// A network git or `gh` command. It runs with the user's own environment so
 /// their credential helper, SSH agent and `gh` login apply; this app never
 /// handles a git credential. Nothing can prompt: there is no terminal, so a
-/// missing credential fails at once instead of hanging.
-fn network_command(program: &str, cwd: &Path) -> Command {
+/// missing credential fails at once instead of hanging. The repository's own
+/// settings are guarded as for every app git call; `gh` runs git itself, so it
+/// gets the same settings through git's environment.
+fn network_command(program: &str, cwd: &Path) -> Result<Command, String> {
+    let config = RepoGitConfig::guard(cwd, GitUse::Network)?;
     let mut cmd = command(program);
+    if program == "git" {
+        config.apply_args(&mut cmd);
+    } else {
+        config.apply_env(&mut cmd);
+    }
     cmd.current_dir(cwd).env("GIT_TERMINAL_PROMPT", "0").env("GH_PROMPT_DISABLED", "1").env("GH_NO_UPDATE_NOTIFIER", "1");
     if std::env::var_os("GIT_SSH_COMMAND").is_none() {
         cmd.env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes");
     }
-    cmd
+    Ok(cmd)
 }
 
 const NETWORK_TIMEOUT: Duration = Duration::from_secs(120);
@@ -2198,7 +2448,7 @@ fn git_push_at(cwd: &Path) -> Result<GitPush, String> {
         return Err("Check out a branch before pushing. HEAD is detached.".into());
     }
     let tracked = run_git_read(cwd, &["config", "--get", &format!("branch.{branch}.remote")]).map(|out| out.trim().to_string()).unwrap_or_default();
-    let mut cmd = network_command("git", cwd);
+    let mut cmd = network_command("git", cwd)?;
     let remote = if !tracked.is_empty() && tracked != "." {
         cmd.arg("push");
         tracked
@@ -2249,7 +2499,7 @@ fn git_pull_at(cwd: &Path) -> Result<(), String> {
     if run_git_read(cwd, &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"]).is_err() {
         return Err(format!("{branch} has no upstream to pull from. Push it first, or set the upstream with git."));
     }
-    let mut cmd = network_command("git", cwd);
+    let mut cmd = network_command("git", cwd)?;
     cmd.args(["pull", "--ff-only", "--no-rebase"]);
     let output = run_bounded(cmd, "git pull", NETWORK_TIMEOUT)?;
     if !output.status.success() {
@@ -2332,7 +2582,7 @@ fn git_pull_request_at(cwd: &Path, create: bool) -> Result<PullRequest, String> 
             ..PullRequest::default()
         })
     };
-    let mut auth = network_command("gh", cwd);
+    let mut auth = network_command("gh", cwd)?;
     auth.args(["auth", "status"]);
     match run_bounded(auth, "GitHub CLI", Duration::from_secs(30)) {
         Err(err) if err.starts_with("Could not start") => return unavailable("Install the GitHub CLI (gh) to create pull requests here."),
@@ -2341,14 +2591,14 @@ fn git_pull_request_at(cwd: &Path, create: bool) -> Result<PullRequest, String> 
         Ok(_) => {}
     }
     if create {
-        let mut cmd = network_command("gh", cwd);
+        let mut cmd = network_command("gh", cwd)?;
         cmd.args(["pr", "create", "--fill"]);
         let output = run_bounded(cmd, "GitHub CLI", NETWORK_TIMEOUT)?;
         if !output.status.success() {
             return Err(tool_failure("Could not create the pull request", &output));
         }
     }
-    let mut view = network_command("gh", cwd);
+    let mut view = network_command("gh", cwd)?;
     view.args(["pr", "view", "--json", "url,number,state,statusCheckRollup"]);
     let output = run_bounded(view, "GitHub CLI", NETWORK_TIMEOUT)?;
     if !output.status.success() {
@@ -2720,7 +2970,7 @@ async fn git_commit(state: State<'_, AppState>, grant_id: String, message: Strin
     }
     let cwd = grant_root(&state, &grant_id)?;
     let include_unstaged = include_unstaged.unwrap_or(false);
-    // Commit hooks can run for a long time; they must not run on the UI thread.
+    // Git can take a long time; it must not run on the UI thread.
     blocking(move || {
         let _write = git_write_lock();
         let snapshot = git_commit_at(&cwd, &trimmed, include_unstaged)?;
@@ -3504,10 +3754,17 @@ fn editor_program(editor: Option<&str>) -> Result<Option<&'static str>, String> 
 }
 
 /// Extensions the OS default handler EXECUTES rather than opens as text:
-/// macOS bundles, `.command` scripts and Automator/AppleScript files. Only a
-/// system-default open is refused: a chosen editor reads the same file as a
-/// document, which is safe.
-const EXECUTABLE_EXTENSIONS: &[&str] = &["app", "command", "scpt", "workflow", "action"];
+/// macOS bundles; `.command` and `.tool` scripts and `.terminal` settings,
+/// which Terminal runs; Automator and AppleScript files; `.fileloc`, `.webloc`
+/// and `.inetloc` links, which open whatever they point at, a local app
+/// included; and Java archives, installer packages, preference panes,
+/// configuration profiles, Shortcuts and screen savers, which run or install
+/// code. Only a system-default open is refused: a chosen editor reads the same
+/// file as a document, which is safe.
+const EXECUTABLE_EXTENSIONS: &[&str] = &[
+    "app", "command", "tool", "terminal", "scpt", "scptd", "applescript", "workflow", "action", "fileloc", "webloc", "inetloc", "jar", "pkg", "mpkg", "prefpane",
+    "mobileconfig", "shortcut", "saver",
+];
 
 fn default_open_would_execute(path: &Path) -> bool {
     if path
@@ -4736,7 +4993,88 @@ mod tests {
     #[test]
     fn extra_bin_dirs_include_user_local_bin() {
         let home = dirs::home_dir().expect("home directory");
-        assert!(extra_bin_dirs().contains(&home.join(".local/bin")));
+        let dirs = extra_bin_dirs_for(Some(&home), &|_| None);
+        assert!(dirs.contains(&home.join(".local/bin")));
+        for relative in [".cargo/bin", ".pyenv/bin", ".pyenv/shims", ".rbenv/bin", ".rbenv/shims", ".bun/bin"] {
+            assert!(dirs.contains(&home.join(relative)), "missing {relative}");
+        }
+    }
+
+    #[test]
+    fn toolchain_dirs_honor_custom_roots_and_ignore_relative_paths() {
+        let home = Path::new("/fixture/home");
+        let env = |key: &str| match key {
+            "CARGO_HOME" => Some("/custom/cargo".into()),
+            "PYENV_ROOT" => Some("/custom/pyenv".into()),
+            "RBENV_ROOT" => Some("/custom/rbenv".into()),
+            "BUN_INSTALL" => Some("/custom/bun".into()),
+            "JAVA_HOME" => Some("/custom/jdk".into()),
+            "GOROOT" => Some("/custom/go-sdk".into()),
+            "VIRTUAL_ENV" => Some("/custom/venv".into()),
+            "GOPATH" => Some("/custom/go-a:/custom/go-b:relative".into()),
+            "CONDA_PREFIX" => Some("relative/conda".into()),
+            _ => None,
+        };
+        let dirs = extra_bin_dirs_for(Some(home), &env);
+        assert_eq!(dirs[0], Path::new("/custom/venv/bin"));
+        for relative in ["cargo/bin", "pyenv/shims", "pyenv/bin", "rbenv/shims", "rbenv/bin", "bun/bin", "jdk/bin", "go-sdk/bin", "go-a/bin", "go-b/bin"] {
+            assert!(dirs.contains(&Path::new("/custom").join(relative)), "missing {relative}");
+        }
+        assert!(dirs.iter().all(|path| path.is_absolute()), "a cwd-relative entry must not reach PATH");
+        assert!(!dirs.contains(&home.join(".cargo/bin")), "a configured root replaces its fallback");
+    }
+
+    #[test]
+    fn toolchain_dirs_run_commands_with_only_a_gui_path() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = store_dir("toolchains");
+        let nvm = home.join(".nvm");
+        for (relative, name) in [(".cargo/bin", "cargo"), (".pyenv/shims", "python"), (".rbenv/shims", "ruby"), (".bun/bin", "bun"), (".nvm/versions/node/v24.10.0/bin", "node")] {
+            let bin = home.join(relative);
+            std::fs::create_dir_all(&bin).unwrap();
+            let executable = bin.join(name);
+            std::fs::write(&executable, format!("#!/bin/sh\nprintf '%s\\n' '{name}-fixture'\n")).unwrap();
+            std::fs::set_permissions(executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        std::fs::create_dir_all(nvm.join("alias")).unwrap();
+        std::fs::write(nvm.join("alias/default"), "24\n").unwrap();
+        let mut dirs: Vec<_> = extra_bin_dirs_for(Some(&home), &|_| None).into_iter().filter(|path| path.is_dir()).collect();
+        dirs.extend([PathBuf::from("/usr/bin"), PathBuf::from("/bin")]);
+        let result = Command::new("/bin/sh").env_clear().env("PATH", std::env::join_paths(dirs).unwrap()).args(["-c", "cargo; python; ruby; bun; node"]).output().unwrap();
+        assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+        assert_eq!(String::from_utf8_lossy(&result.stdout), "cargo-fixture\npython-fixture\nruby-fixture\nbun-fixture\nnode-fixture\n");
+        std::fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn nvm_uses_default_aliases_and_numeric_installed_versions_without_a_shell() {
+        let root = store_dir("nvm");
+        for name in ["v22.9.0", "v22.10.0", "v24.8.1", "v24.10.0", "v999.invalid.0"] {
+            std::fs::create_dir_all(root.join("versions/node").join(name).join("bin")).unwrap();
+        }
+        let expected = |name: &str| Some(root.join("versions/node").join(name).join("bin"));
+        assert_eq!(nvm_default_bin(&root), expected("v24.10.0"), "no default uses the newest installed version");
+        std::fs::create_dir_all(root.join("alias/lts")).unwrap();
+        for (selector, chosen) in [("22", "v22.10.0"), ("v22.9.0", "v22.9.0"), ("24.8", "v24.8.1"), ("node", "v24.10.0"), ("stable", "v24.10.0")] {
+            std::fs::write(root.join("alias/default"), format!("{selector}\n")).unwrap();
+            assert_eq!(nvm_default_bin(&root), expected(chosen), "default {selector}");
+        }
+        std::fs::write(root.join("alias/default"), "lts/*\n").unwrap();
+        std::fs::write(root.join("alias/lts/*"), "lts/fixture\n").unwrap();
+        std::fs::write(root.join("alias/lts/fixture"), "v22.10.0\n").unwrap();
+        assert_eq!(nvm_default_bin(&root), expected("v22.10.0"));
+        let home = root.join("home");
+        let dirs = extra_bin_dirs_for(Some(&home), &|key| (key == "NVM_DIR").then(|| root.as_os_str().to_owned()));
+        assert!(dirs.contains(&expected("v22.10.0").unwrap()), "a custom NVM_DIR is discovered");
+        for selector in ["system", "99", "../outside", "$(touch marker)", "cycle", ""] {
+            std::fs::write(root.join("alias/default"), selector).unwrap();
+            std::fs::write(root.join("alias/cycle"), "cycle\n").unwrap();
+            assert_eq!(nvm_default_bin(&root), None, "unsupported, missing or cyclic default {selector}");
+        }
+        std::fs::write(root.join("alias/default"), "v".repeat(1025)).unwrap();
+        assert_eq!(nvm_default_bin(&root), None, "alias reads are bounded");
+        assert!(!root.join("marker").exists(), "alias text is never run");
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -5222,11 +5560,13 @@ mod tests {
         assert!(!default_open_would_execute(&dir), "directories are not executables");
         // Listed extensions refuse even without the bit — which extension is
         // listed is platform-specific, so the test takes the list's own word.
-        if let Some(ext) = EXECUTABLE_EXTENSIONS.first() {
-            let listed = dir.join(format!("tool.{ext}"));
+        for ext in EXECUTABLE_EXTENSIONS {
+            let listed = dir.join(format!("tool.{}", ext.to_ascii_uppercase()));
             std::fs::write(&listed, b"echo hi\n").expect("fixture file");
             assert!(default_open_would_execute(&listed), ".{ext} must be refused");
         }
+        // L9: a `.terminal` file runs its CommandString when Terminal opens it.
+        assert!(EXECUTABLE_EXTENSIONS.contains(&"terminal") && EXECUTABLE_EXTENSIONS.contains(&"fileloc"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -6161,6 +6501,152 @@ while :; do sleep 1; done
         assert!(git_push_at(&dir).unwrap_err().contains("detached"));
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&remote);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn workspace_git_actions_do_not_run_repository_hooks() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (_state, _grant, dir) = fixture_repo("untrusted-hooks");
+        std::fs::write(dir.join("a.txt"), "base\n").expect("fixture");
+        commit_all(&dir, "base");
+        let branch = run_git(&dir, &["symbolic-ref", "--short", "HEAD"]).expect("head").trim().to_string();
+        let unique = uuid::Uuid::new_v4().simple().to_string();
+        let remote = std::env::temp_dir().join(format!("glitter-hooks-remote-{unique}.git"));
+        let other = std::env::temp_dir().join(format!("glitter-hooks-other-{unique}"));
+        let worktrees = std::env::temp_dir().join(format!("glitter-hooks-worktrees-{unique}"));
+        run_git(&dir, &["init", "-q", "--bare", &remote.to_string_lossy()]).expect("bare");
+        run_git(&dir, &["remote", "add", "origin", &remote.to_string_lossy()]).expect("remote");
+        git_push_at(&dir).expect("initial push");
+        run_git(&dir, &["clone", "-q", "--branch", &branch, &remote.to_string_lossy(), &other.to_string_lossy()]).expect("clone");
+        for (key, value) in [("user.email", "other@example.com"), ("user.name", "Other"), ("commit.gpgsign", "false")] {
+            run_git(&other, &["config", key, value]).expect("config");
+        }
+        std::fs::write(other.join("remote.txt"), "remote\n").expect("edit");
+        commit_all(&other, "remote change");
+        run_git(&other, &["push", "-q"]).expect("remote push");
+
+        let hooks = dir.join("planted-hooks");
+        std::fs::create_dir(&hooks).expect("hooks directory");
+        let marker = dir.join("hook-ran");
+        let quoted_marker = marker.to_string_lossy().replace('\'', "'\\''");
+        for name in ["pre-commit", "post-checkout", "pre-push", "post-merge"] {
+            let hook = hooks.join(name);
+            std::fs::write(&hook, format!("#!/bin/sh\nprintf '%s\\n' '{name}' >> '{quoted_marker}'\n")).expect("hook");
+            std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).expect("executable hook");
+        }
+        run_git(&dir, &["config", "core.hooksPath", &hooks.to_string_lossy()]).expect("configure hooks");
+
+        git_pull_at(&dir).expect("fast-forward");
+        std::fs::write(dir.join("a.txt"), "local\n").expect("edit");
+        git_commit_at(&dir, "local change", true).expect("commit");
+        git_push_at(&dir).expect("push");
+        git_switch_at(&dir, "feature", true).expect("switch");
+        worktrees::create(&dir, &worktrees, None).expect("worktree");
+
+        let executed = std::fs::read_to_string(&marker).unwrap_or_default();
+        for path in [&dir, &remote, &other, &worktrees] {
+            let _ = std::fs::remove_dir_all(path);
+        }
+        assert!(executed.is_empty(), "workspace hooks ran: {executed}");
+    }
+
+    /// C1: drivers the agent plants in `.git/config` must not run under the
+    /// app's git, including the background refresh nobody clicks.
+    #[test]
+    fn workspace_git_never_runs_repository_drivers() {
+        let (_state, grant, dir) = fixture_repo("drivers");
+        std::fs::write(dir.join("a.txt"), "base\n").expect("fixture");
+        commit_all(&dir, "base");
+        let branch = run_git(&dir, &["symbolic-ref", "--short", "HEAD"]).expect("head").trim().to_string();
+        let unique = uuid::Uuid::new_v4().simple().to_string();
+        let remote = std::env::temp_dir().join(format!("glitter-drivers-remote-{unique}.git"));
+        let worktrees = std::env::temp_dir().join(format!("glitter-drivers-worktrees-{unique}"));
+        run_git(&dir, &["init", "-q", "--bare", &remote.to_string_lossy()]).expect("bare");
+        run_git(&dir, &["remote", "add", "origin", &remote.to_string_lossy()]).expect("remote");
+        git_push_at(&dir).expect("initial push");
+
+        let marker = dir.join("driver-ran");
+        let quoted = marker.to_string_lossy().replace('\'', "'\\''");
+        for (key, name) in [
+            ("filter.Evil.clean", "clean"),
+            ("filter.Evil.smudge", "smudge"),
+            ("diff.evil.textconv", "textconv"),
+            ("diff.evil.command", "command"),
+            ("diff.external", "external"),
+            ("filter.proc.process", "process"),
+        ] {
+            run_git(&dir, &["config", key, &format!("sh -c 'echo {name} >> \"{quoted}\"; cat'")]).expect("plant driver");
+        }
+        run_git(&dir, &["config", "filter.Evil.required", "true"]).expect("required");
+        run_git(&dir, &["config", "protocol.ext.allow", "always"]).expect("ext");
+        std::fs::write(dir.join(".gitattributes"), "*.txt filter=Evil diff=evil\n*.md filter=proc\n").expect("attributes");
+        std::fs::write(dir.join("a.txt"), "edited\n").expect("edit");
+        std::fs::write(dir.join("b.md"), "new\n").expect("new");
+
+        let snapshot = git_snapshot_for(&dir).expect("background refresh");
+        assert!(snapshot.files.iter().any(|file| file.path == "a.txt"), "the refresh still reports the change");
+        git_review_for(&dir, &GitReviewRequest { scope: ReviewScope::Unstaged, base: None, session_id: None, snapshot_id: None }).expect("review");
+        git_stage_at(&dir.canonicalize().expect("canonical"), &grant, vec!["a.txt".into()], true).expect("stage");
+        git_commit_at(&dir, "drivers", true).expect("commit");
+        git_push_at(&dir).expect("push");
+        git_pull_at(&dir).expect("pull");
+        git_switch_at(&dir, "feature", true).expect("switch");
+        git_switch_at(&dir, &branch, false).expect("switch back");
+        worktrees::create(&dir, &worktrees, None).expect("worktree");
+
+        let executed = std::fs::read_to_string(&marker).unwrap_or_default();
+        for path in [&dir, &remote, &worktrees] {
+            let _ = std::fs::remove_dir_all(path);
+        }
+        assert!(executed.is_empty(), "repository drivers ran: {executed}");
+    }
+
+    #[test]
+    fn repository_settings_that_redirect_or_run_programs_refuse_their_operation() {
+        let (_state, _grant, dir) = fixture_repo("redirect");
+        std::fs::write(dir.join("a.txt"), "base\n").expect("fixture");
+        commit_all(&dir, "base");
+        run_git(&dir, &["remote", "add", "origin", "https://example.invalid/r.git"]).expect("remote");
+        run_git(&dir, &["config", "url.https://attacker.invalid/.pushInsteadOf", "https://example.invalid/"]).expect("insteadOf");
+        let refused = git_push_at(&dir).unwrap_err();
+        assert!(refused.contains("url.https://attacker.invalid/.pushinsteadof"), "{refused}");
+        assert!(refused.contains("--unset-all"), "{refused}");
+        run_git(&dir, &["config", "--unset-all", "url.https://attacker.invalid/.pushInsteadOf"]).expect("unset");
+
+        run_git(&dir, &["config", "gpg.program", "/tmp/not-gpg"]).expect("gpg");
+        std::fs::write(dir.join("a.txt"), "changed\n").expect("edit");
+        assert!(git_commit_at(&dir, "signed", true).unwrap_err().contains("gpg.program"));
+        assert!(git_snapshot_for(&dir).is_ok(), "a signing program does not block reads");
+        run_git(&dir, &["config", "--unset-all", "gpg.program"]).expect("unset");
+
+        run_git(&dir, &["config", "core.worktree", "/"]).expect("worktree");
+        assert!(git_snapshot_for(&dir).unwrap_err().contains("core.worktree"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn repository_git_config_listing_is_classified_by_scope() {
+        let listing = "global\0filter.lfs.process\ngit-lfs filter-process\0local\0filter.Evil.clean\nsh\0local\0filter.Evil.smudge\nsh\0worktree\0diff.x.textconv\ncat\0local\0core.sshcommand\nssh -i k\0local\0gpg.ssh.defaultkeycommand\nk\0local\0user.name\nT\0";
+        let config = RepoGitConfig::parse(listing);
+        assert_eq!(
+            config.overrides,
+            vec![
+                ("filter.Evil.clean".to_string(), String::new()),
+                ("filter.Evil.required".to_string(), "false".to_string()),
+                ("filter.Evil.smudge".to_string(), String::new()),
+                ("diff.x.textconv".to_string(), String::new()),
+            ],
+            "the user's global LFS filter is kept; repository drivers are blanked"
+        );
+        assert_eq!(config.network, vec!["core.sshcommand".to_string()]);
+        assert_eq!(config.commit, vec!["gpg.ssh.defaultkeycommand".to_string()]);
+        assert!(config.refusal(GitUse::Local).is_none());
+        assert!(config.refusal(GitUse::Commit).is_some());
+        assert!(config.refusal(GitUse::Network).is_some());
+        let odd = RepoGitConfig::parse("local\0filter.a=b.clean\nsh\0");
+        assert!(odd.overrides.is_empty() && odd.refusal(GitUse::Local).is_some(), "a driver that cannot be blanked refuses");
     }
 
     #[test]

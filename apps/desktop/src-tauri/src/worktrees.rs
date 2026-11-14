@@ -102,9 +102,8 @@ pub fn changes(repo: &Path, dir: &Path) -> Result<Option<Vec<u8>>, String> {
     let base = run_git_read(repo, &["merge-base", &ours, &theirs]).map_err(|_| "The worktree and the workspace share no history.")?.trim().to_string();
     let index = std::env::temp_dir().join(format!("glitter-handoff-{}.index", uuid::Uuid::new_v4().simple()));
     let with_index = |args: &[&str]| -> Result<Vec<u8>, String> {
-        let mut cmd = super::command("git");
-        super::strip_ambient_git_env(&mut cmd);
-        cmd.current_dir(dir).env("GIT_INDEX_FILE", &index).args(args);
+        let mut cmd = super::workspace_git_command(dir)?;
+        cmd.env("GIT_INDEX_FILE", &index).args(args);
         let output = cmd.output().map_err(|err| format!("git failed: {err}"))?;
         if !output.status.success() {
             return Err(format!("git {} failed: {}", args[0], String::from_utf8_lossy(&output.stderr).trim()));

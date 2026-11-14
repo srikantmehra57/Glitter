@@ -150,6 +150,9 @@ test('a block that has been followed by another never changes as the stream grow
   const docs = [...Object.entries(SAMPLES).filter(([name]) => !crossBlock.has(name)).map(([, text]) => text), ...(await repositoryDocuments()).map(([, text]) => text)];
   for (const text of docs) {
     const full = splitMarkdownBlocks(text);
+    // Repository documents can also acquire a cross-block construct. A final
+    // single block has no finalized split blocks whose identity can be tested.
+    if (full.length === 1) continue;
     const step = Math.max(1, Math.floor(text.length / 80));
     for (let cut = 1; cut <= text.length; cut += step) {
       const partial = splitMarkdownBlocks(text.slice(0, cut));

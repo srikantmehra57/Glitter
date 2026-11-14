@@ -50,7 +50,7 @@ export type StreamEvent =
 /** Stable prefix (cached) plus the part that may change between calls. */
 export type SystemPrompt = { stable: string; volatile: string };
 
-export type StreamTimeouts = { idleMs?: number; firstEventMs?: number };
+export type StreamTimeouts = { idleMs?: number; firstEventMs?: number; headersMs?: number };
 
 /**
  * Stable failure codes. Retry and the UI branch on these, not on the wording
@@ -72,6 +72,22 @@ export type ProviderFailureCode =
 /** A provider's 400 prose that means the input does not fit, even when the code says nothing. Exported so the host can retry an overflow reactively. */
 export const CONTEXT_WINDOW = /context window|context length|maximum context|too many tokens|prompt is too long|exceeds the context|max(?:imum)? context|input is too long/i;
 
+/**
+ * The context limit a provider states in its own overflow prose, when it states one. The
+ * patterns anchor to maximum-phrasings, so a prompt-size count in the same sentence ("your
+ * messages resulted in 150000 tokens") is never mistaken for the window. Values outside the
+ * plausible band are ignored: a stated limit is trusted only when it looks like one.
+ */
+export function parseContextLimit(message: string): number | null {
+  for (const pattern of [/maximum context length is (\d+)/i, /maximum context length of (\d+)/i, /context length (?:is|of) (\d+)/i, /(\d+) tokens? > (\d+)/i]) {
+    const match = message.match(pattern);
+    if (!match) continue;
+    const stated = Number(match[match.length - 1]);
+    if (Number.isFinite(stated) && stated >= 1024 && stated <= 10_000_000) return stated;
+  }
+  return null;
+}
+
 /** Map an HTTP status and a provider message onto one code. Status wins over prose except for a context-window overflow, which is never a retry. */
 export function classifyProviderFailure(status: number | undefined, message: string): ProviderFailureCode {
   if (status === 429) return "RATE_LIMIT";
@@ -86,6 +102,25 @@ export function classifyProviderFailure(status: number | undefined, message: str
   return "MALFORMED_RESPONSE";
 }
 
+/**
+ * What a provider's mid-stream error frame means for a retry, read from the
+ * frame's own `type` (Anthropic) or `code` (the OpenAI family) rather than its
+ * prose. A stream that fails after a 200 has no status, and with none every
+ * such failure used to read as a dropped connection and was retried, including
+ * the ones that can never succeed. `undefined` leaves the old reading.
+ */
+export function classifyStreamError(kind: string | undefined, message: string): ProviderFailureCode | undefined {
+  const name = (kind ?? "").toLowerCase();
+  if (name === "context_length_exceeded" || CONTEXT_WINDOW.test(message)) return "CONTEXT_WINDOW_EXCEEDED";
+  if (["overloaded_error", "api_error", "server_error", "internal_error", "service_unavailable", "bad_gateway", "engine_overloaded_error"].includes(name)) return "SERVER";
+  if (["rate_limit_error", "rate_limit_exceeded", "too_many_requests", "tokens", "requests"].includes(name)) return "RATE_LIMIT";
+  if (["timeout_error", "request_timeout", "gateway_timeout"].includes(name)) return "TIMEOUT";
+  if (["authentication_error", "permission_error", "invalid_api_key", "invalid_authentication"].includes(name)) return "INVALID_CREDENTIAL";
+  // Nothing about the same request will change: an invalid or unknown request, a refusal, an exhausted quota.
+  if (["invalid_request_error", "not_found_error", "request_too_large", "invalid_prompt", "content_filter", "insufficient_quota", "billing_error", "unsupported_value", "invalid_value"].includes(name)) return "MALFORMED_RESPONSE";
+  return undefined;
+}
+
 export class ProviderError extends Error {
   readonly code: ProviderFailureCode;
   constructor(message: string, readonly status?: number, code?: ProviderFailureCode, readonly retryAfterMs?: number) {
@@ -95,14 +130,17 @@ export class ProviderError extends Error {
   }
 }
 
-/** `Retry-After` as a delay, capped at 20s. Delta-seconds or an HTTP date. Unusable values are ignored. */
+/** The longest wait a provider can ask for that is still worth taking: the host's whole retry budget. Beyond it the caller reports the failure instead. */
+export const RETRY_AFTER_MAX_MS = 120_000;
+
+/** `Retry-After` as a delay, capped at the retry budget. Delta-seconds or an HTTP date. Unusable values are ignored. */
 export function parseRetryAfter(header: string | null, now = Date.now()): number | undefined {
   if (!header?.trim()) return undefined;
   const seconds = Number(header);
-  if (Number.isFinite(seconds) && seconds >= 0) return Math.min(20_000, Math.ceil(seconds * 1000));
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.min(RETRY_AFTER_MAX_MS, Math.ceil(seconds * 1000));
   const when = Date.parse(header);
   if (!Number.isFinite(when)) return undefined;
-  return Math.min(20_000, Math.max(0, when - now));
+  return Math.min(RETRY_AFTER_MAX_MS, Math.max(0, when - now));
 }
 
 /** Codes the host may retry, still inside the elapsed budget from Phase 1. An empty body that carried an HTTP status is not a hung stream. */
@@ -135,6 +173,10 @@ export type ChatRequest = {
 const IDLE_MS = 180_000;
 /** No complete frame for this long after the provider accepts ends the call. A separate clock from the idle one: accepting and then hanging is not the same as going quiet mid-stream. */
 const FIRST_EVENT_MS = 60_000;
+/** No response headers for this long after the request is sent: the provider took the connection and went quiet. */
+const HEADERS_MS = 60_000;
+/** One server-sent event may not grow past this. A custom endpoint that never ends an event would otherwise fill the process's memory. */
+const MAX_EVENT_CHARS = 16 * 1024 * 1024;
 
 /** A reply cut off by a provider limit. Streamed tool arguments can be valid JSON and still incomplete. */
 export function isTruncatedStop(stopReason: string): boolean {
@@ -213,11 +255,24 @@ export function repairHistory(messages: ChatMessage[]): ChatMessage[] {
 async function post(request: ChatRequest, url: string, headers: Record<string, string>, body: unknown): Promise<Response> {
   const fetcher = request.fetchImpl ?? fetch;
   let response: Response;
+  // The caller's Stop and a clock for the headers share one signal. The clock is
+  // dropped once headers arrive; Stop stays linked, so it still ends the body.
+  const controller = new AbortController();
+  let silent = false;
+  const stop = () => controller.abort(request.signal?.reason);
+  if (request.signal?.aborted) stop(); else request.signal?.addEventListener("abort", stop, { once: true });
+  const headersMs = request.timeouts?.headersMs ?? HEADERS_MS;
+  const timer = setTimeout(() => { silent = true; controller.abort(); }, headersMs);
+  timer.unref?.();
   try {
-    response = await fetcher(url, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body), signal: request.signal });
+    response = await fetcher(url, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body), signal: controller.signal });
   } catch (error) {
+    request.signal?.removeEventListener("abort", stop);
     if (request.signal?.aborted) throw error;
+    if (silent) throw new ProviderError(`${request.provider.name} did not answer within ${Math.round(headersMs / 1000)}s.`, undefined, "TIMEOUT");
     throw new ProviderError(`Could not reach ${request.provider.name}: ${error instanceof Error ? error.message : String(error)}`);
+  } finally {
+    clearTimeout(timer);
   }
   if (!response.ok) throw new ProviderError(await errorText(request.provider.name, response), response.status, undefined, parseRetryAfter(response.headers.get("retry-after")));
   if (!response.body) throw new ProviderError(`${request.provider.name} sent an empty response.`, response.status, "EMPTY_RESPONSE");
@@ -236,7 +291,7 @@ async function errorText(name: string, response: Response): Promise<string> {
       detail = raw;
     }
   } catch { /* no body */ }
-  const hint = response.status === 401 || response.status === 403 ? " Check the key in Settings → Providers." : response.status === 429 ? " The provider is rate-limiting this key; wait, then retry." : "";
+  const hint = response.status === 401 || response.status === 403 ? " Check the key in Settings → Models & providers." : response.status === 429 ? " The provider is rate-limiting this key; wait, then retry." : "";
   return `${name} returned ${response.status}${detail ? `: ${detail.slice(0, 600)}` : ""}.${hint}`;
 }
 
@@ -277,6 +332,10 @@ async function* sse(response: Response, signal?: AbortSignal, timeouts?: StreamT
       // Bytes before the first complete frame do not postpone the first-event clock.
       if (sawFrame) arm("idle", timeouts?.idleMs ?? IDLE_MS);
       buffer += decoder.decode(read.value, { stream: true }).replace(/\r\n/g, "\n");
+      if (buffer.length > MAX_EVENT_CHARS) {
+        void reader.cancel(new Error("event too large")).catch(() => {});
+        throw new ProviderError("The provider sent a single event larger than 16 MB, so the reply was dropped.", undefined, "MALFORMED_RESPONSE");
+      }
       let boundary: number;
       while ((boundary = buffer.indexOf("\n\n")) >= 0) {
         const block = buffer.slice(0, boundary);
@@ -464,8 +523,9 @@ async function* streamAnthropic(request: ChatRequest): AsyncGenerator<StreamEven
     if (type === "message_start") opened = true;
     else if (type === "message_stop") finished = true;
     if (type === "error") {
-      const error = frame.error as { message?: string } | undefined;
-      throw new ProviderError(`${request.provider.name}: ${error?.message ?? "stream error"}`);
+      const error = frame.error as { message?: string; type?: string } | undefined;
+      const message = error?.message ?? "stream error";
+      throw new ProviderError(`${request.provider.name}: ${message}`, undefined, classifyStreamError(error?.type, message));
     }
     if (type === "message_start") {
       const usage = (frame.message as { usage?: Usage } | undefined)?.usage;
@@ -640,8 +700,9 @@ async function* streamOpenAi(request: ChatRequest): AsyncGenerator<StreamEvent> 
     const frame = json(data);
     if (!frame) continue;
     if (frame.error) {
-      const error = frame.error as { message?: string } | string;
-      throw new ProviderError(`${request.provider.name}: ${typeof error === "string" ? error : error.message ?? "stream error"}`);
+      const error = frame.error as { message?: string; type?: string; code?: string } | string;
+      const message = typeof error === "string" ? error : error.message ?? "stream error";
+      throw new ProviderError(`${request.provider.name}: ${message}`, undefined, typeof error === "string" ? classifyStreamError(undefined, message) : classifyStreamError(error.type ?? error.code, message));
     }
     const usage = frame.usage as { prompt_tokens?: number; completion_tokens?: number; prompt_tokens_details?: PromptDetails } | undefined;
     if (usage && (usage.prompt_tokens != null || usage.completion_tokens != null)) {
@@ -765,8 +826,9 @@ async function* streamResponses(request: ChatRequest): AsyncGenerator<StreamEven
     if (!frame) continue;
     const type = String(frame.type ?? "");
     if (type === "error" || type === "response.failed") {
-      const failure = (type === "error" ? frame : (frame.response as Record<string, unknown> | undefined)?.error) as { message?: string; code?: string } | undefined;
-      throw new ProviderError(`${request.provider.name}: ${failure?.message ?? "stream error"}`, undefined, failure?.code === "context_length_exceeded" ? "CONTEXT_WINDOW_EXCEEDED" : undefined);
+      const failure = (type === "error" ? frame : (frame.response as Record<string, unknown> | undefined)?.error) as { message?: string; code?: string; type?: string } | undefined;
+      const message = failure?.message ?? "stream error";
+      throw new ProviderError(`${request.provider.name}: ${message}`, undefined, classifyStreamError(failure?.code ?? failure?.type, message));
     }
     if (type === "response.output_text.delta" && typeof frame.delta === "string") {
       text += frame.delta;

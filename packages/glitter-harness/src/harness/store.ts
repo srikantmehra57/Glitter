@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { appendFile, mkdir, open, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { appendFile, copyFile, mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { PendingQuestion } from "./questions.js";
@@ -9,6 +9,9 @@ import type { OrchestratorSettings, RouteRecord } from "./orchestrator/types.js"
 import type { ChatMessage, ContentPart } from "./wire.js";
 
 export type PendingSteer = { itemId: string; text: string; images?: Array<{ mediaType: string; base64Data: string }> };
+
+/** Native restore facts supplied with a send, never a renderer-authored notice. */
+export type WorkspaceRestore = { id: string; text: string };
 
 /** A fresh Builder session for one plan; active until it finishes or a new task replaces it. */
 export type BuilderSessionRecord = {
@@ -61,6 +64,8 @@ export type SessionMeta = {
 
 type Record_ =
   | { type: "message"; message: ChatMessage }
+  /** Delivery survives model-history compaction and process restarts. */
+  | { type: "workspaceRestores"; ids: string[] }
   | { type: "item"; item: Record<string, unknown> }
   | { type: "toolStarted"; id: string; replay?: "safe" }
   /** Written once, at child creation, so the policy survives even without the index. */
@@ -107,6 +112,19 @@ export function harnessDir(): string {
 const LOCK_WAIT_MS = 5_000;
 const LOCK_STALE_MS = 15_000;
 
+/** Fill `into` from an index file's text, or throw when any entry is not a valid thread. */
+function parseIndex(contents: string, into: Map<string, SessionMeta>): Map<string, SessionMeta> {
+  const raw: unknown = JSON.parse(contents);
+  if (!Array.isArray(raw)) throw new Error("Expected an array of sessions.");
+  for (const meta of raw) {
+    if (!meta || typeof meta !== "object" || typeof meta.sessionId !== "string" || !SESSION_ID.test(meta.sessionId)
+      || typeof meta.workspaceRoot !== "string" || typeof meta.createdAt !== "string" || typeof meta.updatedAt !== "string"
+      || !(meta.title === null || typeof meta.title === "string") || into.has(meta.sessionId)) throw new Error("Invalid or duplicate session metadata.");
+    into.set(meta.sessionId, meta as SessionMeta);
+  }
+  return into;
+}
+
 /**
  * The index is shared: the app's agent process and the `glitter` CLI both
  * write it. Each process keeps a parsed copy, re-reads it whenever the file
@@ -120,8 +138,12 @@ export class SessionStore {
   /** True while this process holds the index lock. */
   private holdingLock = false;
   private writes: Promise<unknown> = Promise.resolve();
+  /** True while the index in memory came from the backup because the file on disk was unreadable; the next write replaces the file. */
+  private restored = false;
+  /** Told when the index had to be restored, so the person sees it instead of finding threads missing. */
+  onRepair?: (message: string) => void;
 
-  constructor(private readonly root = harnessDir()) {}
+  constructor(readonly root = harnessDir()) {}
 
   private get sessionsDir() { return join(this.root, "sessions"); }
   private get indexFile() { return join(this.root, "index.json"); }
@@ -137,7 +159,13 @@ export class SessionStore {
     return run;
   }
 
+  /** Resolves when every write queued so far has finished, so a shutdown does not abandon one. */
+  settled(): Promise<void> {
+    return this.writes.then(() => undefined, () => undefined);
+  }
+
   private get lockFile() { return `${this.indexFile}.lock`; }
+  private get backupFile() { return `${this.indexFile}.bak`; }
 
   private async stampOf(): Promise<string> {
     try {
@@ -168,26 +196,43 @@ export class SessionStore {
         files = [];
       }
       // A writer in another process may be between the first log and the first index.
-      if (files.some((file) => file.endsWith(".jsonl")) && (this.holdingLock || !existsSync(this.lockFile))) throw new Error(`The session index is missing at ${this.indexFile}, but session logs still exist at ${this.sessionsDir}. Restore the index before creating threads.`);
+      if (files.some((file) => file.endsWith(".jsonl")) && (this.holdingLock || !existsSync(this.lockFile))) {
+        const recovered = await this.recover(`The session index is missing at ${this.indexFile}`);
+        if (recovered) { this.indexStamp = stamp; return recovered; }
+        throw new Error(`The session index is missing at ${this.indexFile}, but session logs still exist at ${this.sessionsDir}. Restore the index before creating threads.`);
+      }
       this.index = index;
       this.indexStamp = "missing";
       return index;
     }
     try {
-      const raw: unknown = JSON.parse(contents);
-      if (!Array.isArray(raw)) throw new Error("Expected an array of sessions.");
-      for (const meta of raw) {
-        if (!meta || typeof meta !== "object" || typeof meta.sessionId !== "string" || !SESSION_ID.test(meta.sessionId)
-          || typeof meta.workspaceRoot !== "string" || typeof meta.createdAt !== "string" || typeof meta.updatedAt !== "string"
-          || !(meta.title === null || typeof meta.title === "string") || index.has(meta.sessionId)) throw new Error("Invalid or duplicate session metadata.");
-        index.set(meta.sessionId, meta as SessionMeta);
-      }
+      parseIndex(contents, index);
     } catch (error) {
-      throw new Error(`The session index at ${this.indexFile} is corrupt or invalid. It and the session logs have not been changed. Restore the index before creating threads.`, { cause: error });
+      const recovered = await this.recover(`The session index at ${this.indexFile} is corrupt or invalid`);
+      if (recovered) { this.indexStamp = stamp; return recovered; }
+      throw new Error(`The session index at ${this.indexFile} is corrupt or invalid. It and the session logs have not been changed, and there is no usable backup. Restore the index before creating threads.`, { cause: error });
     }
     this.index = index;
     this.indexStamp = stamp;
+    this.restored = false;
     return index;
+  }
+
+  /**
+   * The last good copy of the index, kept beside it on every write. Used when the
+   * index file cannot be read, so a damaged file costs the threads created since
+   * that copy, not the whole list. The unreadable file is set aside on the next
+   * write, never deleted, and the logs are not touched.
+   */
+  private async recover(why: string): Promise<Map<string, SessionMeta> | null> {
+    let backup: Map<string, SessionMeta>;
+    try { backup = parseIndex(await readFile(this.backupFile, "utf8"), new Map()); } catch { return null; }
+    this.index = backup;
+    this.restored = true;
+    let orphans = 0;
+    try { orphans = (await readdir(this.sessionsDir)).filter((file) => file.endsWith(".jsonl") && !backup.has(file.slice(0, -6))).length; } catch { /* no logs yet */ }
+    this.onRepair?.(`${why}, so the thread list was restored from its last good copy.${orphans ? ` ${orphans} thread${orphans === 1 ? "" : "s"} made since then ${orphans === 1 ? "is" : "are"} not listed; ${orphans === 1 ? "its log is" : "their logs are"} still in ${this.sessionsDir}.` : ""}`);
+    return backup;
   }
 
   /** Hold the cross-process index lock for `work`. An abandoned lock is broken after `LOCK_STALE_MS`. */
@@ -225,9 +270,14 @@ export class SessionStore {
     return this.locked(async () => {
       const index = await this.load();
       await change(index);
+      // The file on disk is only a trusted copy when it was what this process read. A restored index
+      // means it was not: keep it aside for inspection and do not let it replace the good backup.
+      if (this.restored) await rename(this.indexFile, `${this.indexFile}.corrupt-${Date.now()}`).catch(() => undefined);
+      else await copyFile(this.indexFile, this.backupFile).catch(() => undefined);
       const temporary = `${this.indexFile}.${process.pid}.tmp`;
       await writeFile(temporary, JSON.stringify([...index.values()]), { mode: 0o600 });
       await rename(temporary, this.indexFile);
+      this.restored = false;
       this.indexStamp = await this.stampOf();
     });
   }
@@ -340,12 +390,13 @@ export class SessionStore {
   }
 
   /** Messages for the model and items for the transcript. A torn last line (a crash mid-write) is skipped. */
-  async read(sessionId: string): Promise<{ messages: ChatMessage[]; items: Array<Record<string, unknown>>; steering?: PendingSteer[]; question?: PendingQuestion; delegation?: DelegationPolicy; routes?: Array<{ turnId: string; route: RouteRecord }>; leadMessages?: ChatMessage[]; builder?: BuilderSessionRecord; checkpoint: { turn?: TurnCheckpoint; approvals: ApprovalCheckpoint[] } }> {
+  async read(sessionId: string): Promise<{ messages: ChatMessage[]; items: Array<Record<string, unknown>>; workspaceRestoreIds?: string[]; steering?: PendingSteer[]; question?: PendingQuestion; delegation?: DelegationPolicy; routes?: Array<{ turnId: string; route: RouteRecord }>; leadMessages?: ChatMessage[]; builder?: BuilderSessionRecord; damaged?: { lines: number; tornTail: boolean }; checkpoint: { turn?: TurnCheckpoint; approvals: ApprovalCheckpoint[] } }> {
     const path = this.file(sessionId);
     if (!existsSync(path)) return { messages: [], items: [], checkpoint: { approvals: [] } };
     let question: PendingQuestion | undefined;
     let delegation: DelegationPolicy | undefined;
     const messages: ChatMessage[] = [];
+    const workspaceRestoreIds = new Set<string>();
     const leadMessages: ChatMessage[] = [];
     let builder: BuilderSessionRecord | undefined;
     const items = new Map<string, Record<string, unknown>>();
@@ -355,11 +406,20 @@ export class SessionStore {
     const safeReplay = new Set<string>();
     let turn: TurnCheckpoint | undefined;
     const approvals = new Map<string, ApprovalCheckpoint>();
-    for (const line of (await readFile(path, "utf8")).split("\n")) {
+    const lines = (await readFile(path, "utf8")).split("\n");
+    // The last entry may be torn by a crash mid-write, which is expected; any other unreadable line is damage the person should hear about.
+    let last = lines.length - 1;
+    while (last >= 0 && !lines[last].trim()) last -= 1;
+    let unreadable = 0;
+    let tornTail = false;
+    for (const [at, line] of lines.entries()) {
       if (!line.trim()) continue;
       let record: Record_;
-      try { record = JSON.parse(line) as Record_; } catch { continue; }
+      try { record = JSON.parse(line) as Record_; } catch { if (at === last) tornTail = true; else unreadable += 1; continue; }
       if (record.type === "message") messages.push(record.message);
+      else if (record.type === "workspaceRestores" && Array.isArray(record.ids)) {
+        for (const id of record.ids) if (typeof id === "string") workspaceRestoreIds.add(id);
+      }
       else if (record.type === "compaction" && Array.isArray(record.messages)) messages.splice(0, messages.length, ...record.messages);
       else if (record.type === "leadMessage" && record.message) leadMessages.push(record.message);
       else if (record.type === "leadReset") leadMessages.length = 0;
@@ -411,7 +471,7 @@ export class SessionStore {
     stamp(messages);
     stamp(leadMessages);
     if (builder) stamp(builder.messages);
-    return { messages, items: [...items.values()], checkpoint: { ...(turn ? { turn } : {}), approvals: [...approvals.values()] }, ...(steering.size ? { steering: [...steering.values()] } : {}), ...(question ? { question } : {}), ...(delegation ? { delegation } : {}), ...(routes.length ? { routes } : {}), ...(leadMessages.length ? { leadMessages } : {}), ...(builder ? { builder } : {}) };
+    return { messages, items: [...items.values()], ...(workspaceRestoreIds.size ? { workspaceRestoreIds: [...workspaceRestoreIds] } : {}), ...(unreadable || tornTail ? { damaged: { lines: unreadable, tornTail } } : {}), checkpoint: { ...(turn ? { turn } : {}), approvals: [...approvals.values()] }, ...(steering.size ? { steering: [...steering.values()] } : {}), ...(question ? { question } : {}), ...(delegation ? { delegation } : {}), ...(routes.length ? { routes } : {}), ...(leadMessages.length ? { leadMessages } : {}), ...(builder ? { builder } : {}) };
   }
 
   remove(sessionId: string): Promise<void> {

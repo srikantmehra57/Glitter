@@ -18,6 +18,8 @@ export type PolicyInput = {
   mode: ApprovalMode;
   planMode: boolean;
   grants: readonly Grant[];
+  /** The protected-path pattern an edit's path falls under (Settings → Permissions), if any. */
+  protectedPath?: (path: string) => string | undefined;
 };
 
 export type Verdict =
@@ -38,6 +40,15 @@ export function decide(input: PolicyInput): Verdict {
   // its own authority. Neither is reliably read-only just from its name.
   if (input.planMode && (kind === "shell" || kind === "mcp")) return { kind: "deny", reason: "Plan mode is on: commands and MCP tools cannot run. Use the workspace read tools, or ask the user to switch to Build." };
   if (kind === "edit" && input.planMode) return { kind: "deny", reason: "Plan mode is on: files are not edited. Finish the plan, or ask the user to switch to Build." };
+  if (kind === "edit" && subject.kind === "path") {
+    const pattern = input.protectedPath?.(subject.path);
+    // Every mode asks, Full access included, and the card offers no grant:
+    // approving one change to AGENTS.md must not approve the next.
+    if (pattern) {
+      if (mode === "denyUnmatched") return { kind: "deny", reason: "The thread is read-only: file edits are refused. Ask the user to change the permission mode if this is needed." };
+      return { kind: "ask", scopes: [], risk: `${subject.path} is protected (${pattern}): it holds agent instructions, settings or secrets that outlive this turn. Each change asks first, in every mode.` };
+    }
+  }
   if (kind === "web" && subject.kind === "web") return decideWeb(input, subject);
   if (kind === "shell" && subject.kind === "command" && subject.network) return decideOnline(input, subject);
   if (mode === "denyUnmatched") return { kind: "deny", reason: `The thread is read-only: ${kind === "edit" ? "file edits are" : kind === "mcp" ? "MCP tool calls are" : kind === "browser" ? "browser control is" : "commands are"} refused. Ask the user to change the permission mode if this is needed.` };

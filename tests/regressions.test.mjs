@@ -133,6 +133,10 @@ const storeReplacements = {
     export const acpConsentSet=async(consented)=>{ if (globalThis.testInvoke) return globalThis.testInvoke('acp_isolation_consent_set',{consented}); };
     export const openLogFolder=async()=>globalThis.testInvoke ? globalThis.testInvoke('open_log_folder') : '/preview/logs/app.log';
     export const providerKeysGet=async(ids)=>ids.map((id)=>({id,configured:false,keyHint:null,baseUrl:null}));
+    export const modelLibraryList=async()=>({entries:[]});
+    export const modelLibraryPut=async(entry)=>({entries:[]});
+    export const modelLibraryRemove=async(modelId)=>({entries:[]});
+    export const listProviderModels=async(providerId)=>({models:[]});
     export const persistStoreDocument=async(...args)=>globalThis.persistStoreDocument?.(...args);
     export const preserveLegacyMuseKey=async()=>{};
     export const repairStoreDocument=async()=>globalThis.storeRepair ?? {status:'ok'};
@@ -166,6 +170,7 @@ const storeReplacements = {
     export const mockWorktree=(base)=>({grantId:'preview-worktree',path:'/preview/worktree',branch:'muse/preview',base:base||'main'});
     export const gitInit=async(...args)=>{globalThis.initCalls.push(args);return globalThis.discardedGit;};
     export const trustPreview=async()=>globalThis.trustPreviewResult ?? { skills: [], rules: null };
+    export const setWorkspaceTrust=async(grantId,trusted)=>{ if (globalThis.workspaceTrustFails) throw new Error("native refused"); (globalThis.workspaceTrustCalls ??= []).push([grantId,trusted]); };
     export const listWorkspaceFiles=async()=>globalThis.fileIndexPaths ?? [];
     export const cliLogout=async()=>{globalThis.cliLoggedOut=true;};
     export const pluginList=async()=>globalThis.pluginEntries ?? [];
@@ -433,6 +438,19 @@ test('an agent process exit invalidates opened sessions and says so once', async
   assert.deepEqual(store.getState().threads[0].userInputs, []);
 });
 
+// F1.6. The agent now says `stopping` when a tool outlives the wait; the app must not call that finished.
+test('Stop that is still waiting on a tool says so and leaves the thread running', async () => {
+  const store = await frontendStore();
+  globalThis.storeBridge = async (method) => method === 'cancelTurn' ? { status: 'stopping' } : {};
+  store.setState({ preview: false, selectedSessionId: 's', threads: [{ ...thread('s', '/a'), status: 'running', activeTurnId: 'turn', items: [{ itemId: 't', kind: 'toolCall', status: 'inProgress', turnId: 'turn' }] }] });
+  await store.getState().stopTurn();
+  const waiting = store.getState().threads[0];
+  assert.equal(waiting.status, 'running', 'the turn is not declared over');
+  assert.equal(waiting.cancelRequested, true, 'and it stays on Stopping');
+  assert.match(waiting.notice?.message ?? '', /Still stopping/);
+  assert.equal(waiting.items[0].status, 'inProgress');
+});
+
 test('preview cancellation settles the turn, plan, and running agents together', async () => {
   const store = await frontendStore();
   store.setState({ preview: true, selectedSessionId: 's', threads: [{ ...thread('s', '/a'), status: 'running', activeTurnId: 'turn', turnStartedAt: Date.now() - 1000,
@@ -516,6 +534,46 @@ test('an untrusted workspace with nothing to trust marks prompted silently', asy
   assert.equal(store.getState().workspaces[0].trustPrompted, true);
 });
 
+// F0.7. "Trust workspace" used to set a renderer-only flag the agent never saw, so
+// the decision must reach the native record, which is what gates rules and skills.
+test('trusting and untrusting a workspace reaches the native record, and a failure changes nothing', async () => {
+  const store = await frontendStore();
+  globalThis.storeBridge = async () => ({});
+  globalThis.workspaceTrustCalls = [];
+  globalThis.workspaceTrustFails = false;
+  try {
+    store.setState({ workspaces: [{ id: 'w', path: '/repo', name: 'repo', grantId: 'g', trusted: false }], selectedWorkspaceId: 'w', trustDialog: { workspaceId: 'w', loading: false, error: null, preview: { skills: [], rules: null } }, preview: false });
+    globalThis.workspaceTrustFails = true;
+    await store.getState().confirmTrust();
+    assert.equal(store.getState().workspaces[0].trusted, false, 'a refused native call leaves the workspace untrusted');
+    assert.match(store.getState().error ?? '', /Could not trust this workspace/);
+    assert.deepEqual(globalThis.workspaceTrustCalls, []);
+    globalThis.workspaceTrustFails = false;
+    await store.getState().confirmTrust();
+    assert.equal(store.getState().workspaces[0].trusted, true);
+    assert.deepEqual(globalThis.workspaceTrustCalls, [['g', true]]);
+    globalThis.workspaceTrustFails = true;
+    await store.getState().untrustWorkspace('w');
+    assert.equal(store.getState().workspaces[0].trusted, true, 'a refused native call must not report trust as withdrawn');
+    globalThis.workspaceTrustFails = false;
+    await store.getState().untrustWorkspace('w');
+    assert.equal(store.getState().workspaces[0].trusted, false);
+    assert.deepEqual(globalThis.workspaceTrustCalls, [['g', true], ['g', false]]);
+  } finally { delete globalThis.workspaceTrustFails; delete globalThis.workspaceTrustCalls; }
+});
+
+test('a workspace remembered as trusted is carried to the native record when its grant is restored', async () => {
+  const store = await frontendStore();
+  globalThis.window.__TAURI_INTERNALS__ = {};
+  globalThis.workspaceTrustCalls = [];
+  try {
+    globalThis.storeBridge = async () => ({});
+    store.setState({ workspaces: [{ id: 'w', path: '/repo', name: 'repo', grantId: null, trusted: true }, { id: 'x', path: '/other', name: 'other', grantId: 'gx', trusted: false }] });
+    await store.getState().addWorkspace('/repo', 'wg-reattached');
+    assert.deepEqual(globalThis.workspaceTrustCalls, [['wg-reattached', true]], 'only the trusted workspace is raised; nothing is ever lowered by syncing');
+  } finally { delete globalThis.window.__TAURI_INTERNALS__; delete globalThis.workspaceTrustCalls; }
+});
+
 test('confirm resolves with the answer and a second confirm cancels the first', async () => {
   const store = await frontendStore();
   const first = store.getState().confirm({ title: 'Delete thread?' });
@@ -562,7 +620,7 @@ function nodes(element) {
 async function settingsComponent() {
   const runtime = hooks(); globalThis.componentHooks = runtime;
   const commits = [];
-  const state = { ...DEFAULT_SETTINGS, models: [], agents: [], settingsOpen: true, settingsTab: "Models", preview: false, hostInfo: null,
+  const state = { ...DEFAULT_SETTINGS, models: [], agents: [], settingsOpen: true, settingsTab: "Models & providers", preview: false, hostInfo: null,
     setSettingsOpen: (value, tab) => { state.settingsOpen = value; if (tab) state.settingsTab = tab; },
     loadModelCatalog: async () => state.models,
     commitSettings: async patch => { commits.push(patch); Object.assign(state, patch); },
@@ -580,7 +638,7 @@ async function settingsComponent() {
     './OrchestratorPanel': 'export const OrchestratorPanel=()=>null;',
     './AgentPicker': 'export const AgentMark=()=>null;export const ProviderMark=()=>null;export const ModelIcon=()=>null;',
     './ExtensionsView': 'export const ExtensionsView=()=>null;',
-    './ModelLibrary': 'export const ModelLibrary=()=>null;',
+    './ModelsProviders': 'export const ModelsProviders=()=>null;',
     './UsageView': 'export const UsageView=()=>null;',
   });
   const render = () => runtime.render(SettingsModal);

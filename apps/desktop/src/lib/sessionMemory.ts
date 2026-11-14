@@ -165,7 +165,7 @@ export const EMPTY_MEMORY: SessionMemory = {
   promptHistory: {},
   lineComments: {},
   recentCommands: [],
-  settingsTab: "Models",
+  settingsTab: "Models & providers",
   dockOpen: true,
   dockWidth: DOCK_DEFAULT_WIDTH,
   zoom: 1,
@@ -179,10 +179,10 @@ type Store = {
   save(): Promise<unknown>;
 };
 
-/** Account, then Agents, held the agent connection; the built-in agent is set up under Providers. */
+/** Account, Agents and Providers held the agent connection; it now lives under Models & providers. */
 function settingsTabOf(saved: string | undefined): SettingsTab {
-  if (saved === "Account" || saved === "Agents") return "Providers";
-  return SETTINGS_TABS.find((tab) => tab === saved) ?? "Models";
+  if (saved === "Account" || saved === "Agents" || saved === "Providers") return "Models & providers";
+  return SETTINGS_TABS.find((tab) => tab === saved) ?? "Models & providers";
 }
 
 export function normalizeMemory(value: Partial<SessionMemory> | undefined): SessionMemory {

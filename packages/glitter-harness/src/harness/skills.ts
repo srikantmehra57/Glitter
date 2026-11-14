@@ -107,14 +107,17 @@ function labelFor(folder: string, workspace: string, home: string): string {
 /**
  * Every skill the workspace and the home folder provide, by name. A skill
  * without a description, with an invalid name, or whose folder or `SKILL.md`
- * resolves outside its root (a symlink out) is skipped.
+ * resolves outside its root (a symlink out) is skipped. The workspace's own
+ * skills are text a repository supplies to the model, so they are read only
+ * once the user has trusted that workspace; the home folder's are the user's.
  */
-export function discoverSkills(workspaceRoot: string, homeDir: string): Skill[] {
+export function discoverSkills(workspaceRoot: string, homeDir: string, workspaceTrusted: boolean): Skill[] {
   const workspace = realDirectory(workspaceRoot) ?? workspaceRoot;
   const home = realDirectory(homeDir) ?? homeDir;
   const found = new Map<string, Skill>();
   const seenRoots = new Set<string>();
   for (const root of ROOTS) {
+    if (root.scope === "project" && !workspaceTrusted) continue;
     const base = realDirectory(join(root.scope === "project" ? workspace : home, ...root.path));
     // A workspace that is the home folder would list the same root twice.
     if (!base || seenRoots.has(base)) continue;
@@ -267,7 +270,7 @@ export function skillsExtension(homeDir: string): Extension {
   const perTurn = new WeakMap<TurnContext, Skill[]>();
   const catalog = (context: TurnContext) => {
     let skills = perTurn.get(context);
-    if (!skills) perTurn.set(context, (skills = discoverSkills(context.workspaceRoot, homeDir)));
+    if (!skills) perTurn.set(context, (skills = discoverSkills(context.workspaceRoot, homeDir, context.workspaceTrusted)));
     return skills;
   };
   return {
@@ -287,9 +290,9 @@ export function skillsExtension(homeDir: string): Extension {
  * A `/name args` the user typed: the transcript shows what they typed, the
  * model gets the skill rendered as the tool would return it, then the request.
  */
-export function expandInvocation(workspaceRoot: string, homeDir: string, invocation: { selector: string; arguments?: string }, text: string): { display: string; content: string } {
+export function expandInvocation(workspaceRoot: string, homeDir: string, workspaceTrusted: boolean, invocation: { selector: string; arguments?: string }, text: string): { display: string; content: string } {
   const wanted = invocation.selector.replace(/^\//, "").trim().toLowerCase();
-  const skill = discoverSkills(workspaceRoot, homeDir).find((candidate) => candidate.name.toLowerCase() === wanted);
+  const skill = discoverSkills(workspaceRoot, homeDir, workspaceTrusted).find((candidate) => candidate.name.toLowerCase() === wanted);
   if (!skill) throw new SkillError(`/${invocation.selector.replace(/^\//, "")} is no longer available: the skill list changed. Pick the skill again.`, "skillNotFound");
   const args = (invocation.arguments ?? "").trim();
   const request = [args, text.trim()].filter(Boolean).join("\n\n");

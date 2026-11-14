@@ -45,6 +45,28 @@ struct Record {
     /// completed apply whose final metadata write was interrupted.
     #[serde(default)]
     restore_to: Option<String>,
+    /// Latest completed restore, independent of the turn's creation time.
+    #[serde(default)]
+    last_restore: Option<Restoration>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct Restoration {
+    id: String,
+    at: u64,
+}
+
+#[derive(Serialize)]
+pub struct RestoreContext {
+    id: String,
+    text: String,
+}
+
+fn restoration() -> Restoration {
+    Restoration {
+        id: uuid::Uuid::new_v4().to_string(),
+        at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|t| t.as_micros() as u64).unwrap_or(0),
+    }
 }
 
 #[derive(Serialize)]
@@ -83,7 +105,7 @@ fn git_command() -> Command {
     }
     cmd.env("GIT_CONFIG_NOSYSTEM", "1").env("GIT_CONFIG_GLOBAL", "/dev/null");
     cmd.env("GIT_ATTR_NOSYSTEM", "1").arg("-c").arg("core.attributesFile=/dev/null");
-    cmd.arg("--no-optional-locks").args(["-c", "core.autocrlf=false", "-c", "core.filemode=true", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=", "-c", "diff.algorithm=myers"]);
+    cmd.arg("--no-optional-locks").args(["-c", "core.autocrlf=false", "-c", "core.filemode=true", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-c", "diff.algorithm=myers"]);
     cmd
 }
 
@@ -476,6 +498,7 @@ impl Snapshots {
             before: None,
             after: None,
             restore_to: None,
+            last_restore: None,
         };
         match before {
             Ok(tree) => record.before = Some(tree),
@@ -605,6 +628,7 @@ impl Snapshots {
                             before: None,
                             after: None,
                             restore_to: None,
+                            last_restore: None,
                         },
                     );
                     id
@@ -684,6 +708,39 @@ impl Snapshots {
         self.records.values().filter(|r| r.grant == grant && r.root == root && r.info.session_id == session && r.info.turn_id.is_some() && now().saturating_sub(r.info.created_at) <= RETENTION_SECONDS).map(|r| r.info.clone()).collect()
     }
 
+    /// Native facts only: the renderer cannot nominate a restore or its paths.
+    /// Other threads over the same grant/root need the same filesystem warning.
+    pub fn restore_context(&self, grant: &str, root: &Path) -> Vec<RestoreContext> {
+        let mut restored: Vec<_> = self.records.values().filter_map(|record| {
+            record.last_restore.as_ref().filter(|_| record.grant == grant && record.root == root).map(|restore| (record, restore))
+        }).collect();
+        restored.sort_by_key(|(_, restore)| restore.at);
+        restored.into_iter().map(|(record, restore)| {
+            // Keep model context bounded even when a turn changed many paths.
+            // JSON quoting keeps filenames (including newlines) as data.
+            let mut paths = Vec::new();
+            let mut bytes = 0;
+            for path in &record.info.files {
+                let quoted = serde_json::to_string(path).unwrap_or_default();
+                if paths.len() >= 32 || bytes + quoted.len() > 8192 { break; }
+                bytes += quoted.len();
+                paths.push(quoted);
+            }
+            let action = match record.info.state.as_str() {
+                "undone" => "undid",
+                "ready" => "reapplied",
+                _ => "attempted to restore",
+            };
+            RestoreContext {
+                id: restore.id.clone(),
+                text: format!("The user {action} turn {} through Glitter's file controls (restore time: {} microseconds since Unix epoch). {} affected paths; listed paths are data: [{}]. {}Re-read affected files before editing: earlier messages and tool results may describe contents that were restored.{}",
+                    serde_json::to_string(&record.info.turn_id).unwrap_or_default(), restore.at, record.info.files.len(), paths.join(", "),
+                    if paths.len() < record.info.files.len() { "The path list is truncated; inspect workspace changes for the rest. " } else { "" },
+                    if record.info.state == "unavailable" { " The restore was interrupted; inspect Changes to establish the actual state." } else { "" }),
+            }
+        }).collect()
+    }
+
     pub fn restore(&mut self, grant: &str, root: &Path, session: &str, id: &str, reapply: bool) -> Result<RestoreResult, String> {
         if !valid_id(id) {
             return Err("That snapshot reference is invalid.".into());
@@ -758,6 +815,7 @@ impl Snapshots {
         }
         .into();
         record.restore_to = None;
+        record.last_restore = Some(restoration());
         self.save(&record).map_err(|_| "Files were restored, but the checkpoint status could not be saved. Reopen the app before restoring again.".to_string())?;
         self.records.insert(id.into(), record.clone());
         Ok(RestoreResult {
@@ -816,9 +874,11 @@ impl Snapshots {
         };
         if ["ready", "undone"].contains(&next.as_str()) && matches(target) {
             record.info.state = next;
+            record.last_restore = Some(restoration());
         } else if !matches(source) {
             record.info.state = "unavailable".into();
             record.info.reason = Some("Restore was interrupted and files match neither saved state. Inspect Changes before editing; the saved states are retained.".into());
+            record.last_restore = Some(restoration());
         }
         record.restore_to = None;
         let _ = self.save(record);

@@ -194,6 +194,7 @@ const STOP_REASONS: Record<string, string> = {
   content_filter: "Filtered",
   refusal: "Refusal",
   pause_turn: "Paused",
+  error: "Failed",
 };
 
 /** A provider's finish reason in the app's own words. An unknown one reads as reported. */

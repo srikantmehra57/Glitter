@@ -119,8 +119,6 @@ function ComposerView({ above }: { above?: ReactNode }) {
     reclaimApprovalFeedback: state.reclaimApprovalFeedback,
     sendPrompt: state.sendPrompt,
     stopTurn: state.stopTurn,
-    hiddenModels: state.hiddenModels,
-    hiddenProviders: state.hiddenProviders,
     refreshDetection: state.refreshDetection,
     refreshModels: state.refreshModels,
     setSessionConfig: state.setSessionConfig,
@@ -790,12 +788,9 @@ function ComposerView({ above }: { above?: ReactNode }) {
               disabled={Boolean(pickerLocked)}
               applying={Boolean(thread?.configPending)}
               title={thread?.configPending ? "Applying your last change…" : lockReason}
-              hidden={s.hiddenModels}
-              hiddenProviders={s.hiddenProviders}
               onChange={(next) => void s.setSessionConfig({ modelId: next.modelId, providerId: next.providerId })}
               onRescan={async () => { await s.refreshDetection(); await s.refreshModels(true); }}
-              onManageModels={() => s.setSettingsOpen(true, "Models")}
-              onManageProviders={() => s.setSettingsOpen(true, "Providers")}
+              onManageModels={() => s.setSettingsOpen(true, "Models & providers")}
               orchestrator={orchestrator}
               orchestratorReady={Boolean(settingsOrchestrator)}
               onOrchestratorChange={setOrchestratorMode}

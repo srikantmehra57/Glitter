@@ -45,7 +45,10 @@ async function main(argv: string[]): Promise<number> {
   const credentials = loadCredentials({ keychain: args.keychain });
   const defaults = appDefaults();
   const dataDir = harnessDataDir();
-  let authorization: McpAuthorization = { workspaceTrusted: false };
+  // A terminal has no trust prompt, so the folder is untrusted until a flag says
+  // otherwise: its AGENTS.md, CLAUDE.md and skills stay out of the prompt, as in the app.
+  // --trust alone leaves workspace MCP servers off, because no configuration digest is approved.
+  let authorization: McpAuthorization = { workspaceTrusted: args.trust || args.mcp };
   if (args.mcp) {
     const fingerprints = await mcpConfigFingerprints(workspaceRoot, homedir());
     authorization = { workspaceTrusted: true, ...fingerprints };
@@ -59,12 +62,14 @@ async function main(argv: string[]): Promise<number> {
   const host = new HarnessHost((event, payload) => session.event(event, payload as Json), new SessionStore(dataDir), fetch, {}, () => authorization);
   session.host = host;
   host.setCredentials(credentials);
-  const ruleProblems = host.setPermissionRules(defaults.rules).problems;
+  const ruleProblems = host.setPermissionRules(defaults.rules, defaults.protectedPaths).problems;
   if (ruleProblems.length && !args.print) renderer.notice(`Some saved permission rules were skipped: ${ruleProblems.join(" ")}`);
 
   try {
+    // Reads the model library the app keeps beside the threads.
+    await host.start();
     if (!configuredProviders(credentials).length) {
-      process.stderr.write("glitter: no model provider is set up. Add an API key in Glitter → Settings → Providers, or set one such as ANTHROPIC_API_KEY.\n");
+      process.stderr.write("glitter: no model provider is set up. Add an API key in Glitter → Settings → Models & providers, or set one such as ANTHROPIC_API_KEY.\n");
       return 1;
     }
     if (args.command === "models") return await listModels(host);
@@ -238,7 +243,8 @@ class Session {
         this.adopt({ config: payload.config });
         break;
       case "approval":
-        void this.decide(payload as unknown as ApprovalEvent);
+        // `decide` already denies when asking fails; the failure itself has nowhere to go.
+        void this.decide(payload as unknown as ApprovalEvent).catch(() => undefined);
         break;
       case "userInputs": {
         const requests = Array.isArray(payload.requests) ? payload.requests as UserInputRequest[] : [];

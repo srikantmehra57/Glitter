@@ -13,8 +13,148 @@ licence terms.
 Entries record changes as they landed. Some describe behavior since
 superseded, including the retired Muse and ACP integrations.
 
+### Changed
+
+- **Delegated runs can request tool approval.** A child run's request appears
+  in its parent thread, names the run and can be allowed once or denied. Stop
+  cancels a waiting request; headless runs still refuse requests they cannot ask.
+- **The agent finds more installed toolchains.** GUI launches now look for
+  Cargo, pyenv, rbenv, Bun and Go binaries, plus nvm's installed default Node
+  version. Custom toolchain roots, active Python environments and settings such
+  as `JAVA_HOME` and `GOPATH` survive both child-environment filters. Secrets and
+  interpreter startup hooks remain excluded.
+- **Package installs and stdio MCP launchers can use their caches.** The
+  macOS sandbox now allows npm, Cargo, Gradle, Maven, Go, Bun and Yarn cache
+  folders, including Cargo's cache locks and bookkeeping. Toolchain binaries,
+  configuration and credentials remain outside these grants. Cache symlinks
+  cannot grant access to another folder; network and approval rules still apply.
+- **Search skips what `.gitignore` excludes, and says what it left out.**
+  `grep` and `list_files` read the project's `.gitignore` files, tell the model
+  how many paths were left out, and list files over 1 MB and binary files they
+  could not search. `include_ignored` searches them anyway.
+- **A pattern that backtracks can no longer freeze every thread.** `grep` runs
+  in its own thread, stops after 20 seconds or when you press Stop, and says
+  why. A web page built to make the text converter slow now converts in linear
+  time.
+- **Stop is honest.** When a command or tool outlives the wait, the thread
+  stays on Stopping with a note instead of being called finished.
+- **A workspace you have not trusted no longer feeds the agent its rules or
+  skills.** `AGENTS.md`, `CLAUDE.md` and the folder's skills now reach the
+  model only after **Trust workspace**, as the trust dialog always said; before,
+  only MCP servers checked. Trusting and **Stop trusting** now take effect on
+  the next message. Workspaces you had already trusted stay trusted, and a
+  worktree thread is trusted while its workspace is. Your own `~/.glitter`
+  rules and skills always load. In the terminal, `glitter --trust` loads a
+  folder's rules and skills; `--mcp` implies it.
+- **Commands that run offline can only reach this Mac.** An offline command can
+  no longer look up an outside name (which could carry data out as a hostname)
+  or use the Docker socket; `localhost`, local servers and the tools' own
+  sockets in the workspace and temp still work. This Mac's own `.local` name
+  does not resolve offline, so a test that needs it should run with the
+  network. Offline commands also cannot read `~/.ssh`, GPG private keys or the
+  saved threads of any workspace.
+- **Bundled MCP servers run an exact version.** The Extension store's servers no
+  longer launch whatever was published last, so an update changes the
+  configuration and asks for approval again. Servers installed by an earlier
+  build can still be removed, and installing one again moves it to the pinned
+  version.
+- **App Git actions skip repository hooks.** Git operations started by Glitter,
+  including commit, push, pull, switching branches and creating worktrees, no
+  longer run project hooks or a configured fsmonitor. Run project checks from
+  the terminal when needed.
+- **One Models & providers page, and a model library of exactly what you add.**
+  The Models and Providers tabs are combined. The picker, new-thread defaults
+  and Orchestrator role lists now offer only the models you added, each with
+  the metadata you chose: context window, reasoning levels with a default, and
+  image, document and video support. Adding a model suggests the provider's own
+  listing and fills in what it reports; anything it leaves out you set, and
+  what you set is what the model uses. Existing installs keep working: the
+  models your past threads used (and your saved defaults) are added for you.
+  Provider keys, custom endpoints and web search keys live on the same page as
+  before; `hiddenModels` and `hiddenProviders` are retired.
+
 ### Fixed
 
+- **Binary and non-UTF-8 files are no longer damaged by edits.** The agent
+  refuses to read, edit or overwrite a file that is not valid UTF-8, is binary,
+  or is over 8 MB, and says how to proceed. Files with Windows line endings take
+  multi-line edits and keep their endings.
+- **A command ends when its shell does.** `sleep 60 &` no longer holds the call
+  for a minute, a timeout or Stop ends the call in seconds even when a child has
+  left the process group, and those children are stopped. Background shells are
+  stopped if the app's agent process is killed, and finished ones are forgotten.
+- **One failed save no longer ends every thread.** A full disk or a locked index
+  is a warning on the thread it belongs to; a turn that cannot start is marked
+  failed instead of leaving the thread busy; a turn that finishes always tells
+  the app.
+- **Provider errors are told apart.** An overloaded or rate-limited reply
+  retries, with the wait the provider asks for up to two minutes; a rejected
+  request, a refusal or an exhausted quota fails at once instead of burning the
+  retry budget. A provider that never answers times out after a minute, and an
+  endless event is refused.
+- **A reply cut off by an error is no longer saved as finished or shown twice.**
+  It is marked cut off, or replaced when the call is retried. A compaction after
+  a restart no longer overwrites an earlier one's row.
+- **Damage is reported, not hidden.** Unreadable entries in a thread's log are
+  named when it opens, and a damaged thread list is restored from its last good
+  copy with a notice instead of locking every thread.
+- **MCP servers recover.** A server that exits is started again on its next
+  call, up to three times; one whose tools collide with another's is left out
+  alone instead of disabling every MCP tool.
+- **Holding ⌘Y no longer approves the next card unseen.** A held key does not
+  repeat a decision, and an approval shortcut waits until its card has been in
+  view for a moment; a deny is never delayed.
+- **Withdrawing MCP approval no longer untrusts the workspace.** The workspace's
+  rules and skills keep loading; only its MCP servers stop.
+- **The app's Git no longer runs what a repository plants in its settings.**
+  Filter and diff drivers defined in a repository's own `.git/config` are not
+  run by Glitter's Git views, review, staging, commit, branch switching or
+  worktrees, including the background refresh. Push, pull and pull requests
+  are refused, with the setting named and how to remove it, when the repository
+  redirects its remote or sets its own SSH command, proxy or credential helper;
+  a commit is refused when it sets its own signing program. Your global Git
+  settings, Git LFS included, still apply. Repository-only filters such as
+  `git-crypt` are not applied in Glitter's views.
+- **Protected files ask before every agent change, in every mode.** Agent
+  edits to `AGENTS.md`, `CLAUDE.md`, `.glitter/`, `.agents/`, `.env` files,
+  `.envrc` and key files now ask each time, Full access included, and the
+  approval covers that one change only. The agent's commands cannot write
+  them at all. Edit the list under Settings → Permissions → Protected files.
+  Full access's description now reads "Asks only before changing protected
+  files."
+- **Read rules.** A `Read(path)` rule in Never allow keeps the agent's read
+  and search tools out of a file or folder, such as `Read(.env)`.
+- **The agent can no longer change Git's own settings or hooks.** Its shell
+  cannot write `.git/config`, `.git/hooks`, `commondir` or the `.git` entry
+  itself, and its file tools refuse anything inside `.git`. `git add` and
+  `git commit` still work; run `git init`, `git config` and `git remote add`
+  yourself.
+- **Deny rules hold against paths, wrappers, Git options and case.**
+  `Bash(git push *)` now also refuses `/usr/bin/git push`, `env git push`,
+  `command git push`, `sudo -u root git push`, `git -C . push`, `xargs git` and
+  `GIT push`, and `Edit(.env)` refuses `.ENV` on case-insensitive disks. Edit
+  grants compare paths the same way.
+- **More files that run code are never opened with their default app.**
+  `.terminal`, `.tool`, `.fileloc`, `.webloc`, `.inetloc`, `.jar`, installer
+  packages, preference panes, configuration profiles, Shortcuts and screen
+  savers join `.app` and `.command`; they still open in a chosen editor.
+- **Sandbox startup errors fail closed.** If starting the sandbox throws, the
+  requested command is refused instead of being retried without isolation.
+- **Risky Git commands remain detectable after global options.** Force pushes,
+  destructive resets and other classified actions are checked even when flags
+  such as `-C` or `-c` precede the Git subcommand.
+- **Threads from the app and the terminal no longer overwrite each other.**
+  The thread index is re-read when another process changes it and is written
+  under a lock, so a thread created in one is never dropped by the other.
+- **Unknown context windows are learned, not a dead end.** A model whose window
+  no catalog row or family table knows (a custom endpoint's model, for
+  instance) no longer loses its turn on the first overflow. The provider's own
+  rejection states the limit; the harness adopts it for the retry and every
+  later call — fitting, auto-compaction and the context meter included. A
+  rejection that states no number gets one speculative refit against half the
+  estimated request before the failure stands. A listed window is no longer
+  announced as unknown, and the once-per-model notice remains for genuinely
+  unknown windows.
 - **Context and image requests fail safely.** A model call no longer starts if
   the system prompt and tool definitions already fill its context budget.
   Overflow retries keep their fixed prompt budget, and replayed reasoning and
@@ -124,9 +264,14 @@ superseded, including the retired Muse and ACP integrations.
 
 ### Added
 
-- **Harness CLI for source builds.** Run the same agent in a terminal, using
-  the app's provider keys and local threads. It supports interactive chat,
-  single-prompt runs, model selection and continuing a saved thread.
+- **The `glitter` command.** Run the Harness agent in a terminal: `glitter`
+  chats in the current folder and asks before risky steps, and `glitter -p`
+  runs one prompt and prints text, JSON or a JSON event stream. It uses the
+  app's provider keys, model library, defaults, permission rules and threads,
+  so a thread moves between the terminal and the app. The app now ships the
+  CLI, and `npm run install:cli` puts a `glitter` launcher on your PATH that
+  runs it with the app's bundled Node. Environment keys override saved ones,
+  and `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` select a proxy.
 - **Plugins from GitHub.** Settings → Extensions has Discover, Installed and
   Sources, and **Add from GitHub**: paste a repository link and Glitter fetches
   it, shows what it holds — skills, commands, MCP servers with their command

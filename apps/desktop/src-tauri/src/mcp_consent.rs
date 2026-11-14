@@ -132,6 +132,9 @@ fn config_roots(state: &AppState, grant_id: &str) -> Result<(PathBuf, PathBuf), 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpReview {
+    /// An MCP startup approval is on record, current or not. Trusting the
+    /// workspace alone does not set it, so "changed" never describes a
+    /// configuration that was never approved.
     trusted: bool,
     current: bool,
     has_workspace_config: bool,
@@ -148,7 +151,7 @@ pub fn review_mcp(state: tauri::State<'_, AppState>, grant_id: String) -> Result
     let home = read_config(&home)?;
     let fingerprint = fingerprint(&root, &workspace, &home);
     let permission = state.workspace_security.records.lock().map_err(|err| err.to_string())?.get(&root.to_string_lossy().into_owned()).cloned().unwrap_or_default();
-    Ok(McpReview { trusted: permission.trusted, current: permission.configuration.as_deref() == Some(fingerprint.as_str()), has_workspace_config: !workspace.is_empty(), configuration_digest: fingerprint })
+    Ok(McpReview { trusted: permission.trusted && permission.configuration.is_some(), current: permission.configuration.as_deref() == Some(fingerprint.as_str()), has_workspace_config: !workspace.is_empty(), configuration_digest: fingerprint })
 }
 
 #[tauri::command]
@@ -160,7 +163,10 @@ pub fn consent_mcp(state: tauri::State<'_, AppState>, grant_id: String, approve:
     if approve && expected_digest.as_deref() != Some(fingerprint.as_str()) {
         return Err("The MCP configuration changed. Review it again before approving.".into());
     }
-    let permission = Permission { trusted: approve, configuration: approve.then_some(fingerprint) };
+    // Approving servers to start trusts the workspace. Withdrawing that approval
+    // does not untrust it: the user's rules and skills are a separate decision.
+    let was_trusted = state.workspace_security.records.lock().map_err(|err| err.to_string())?.get(&root.to_string_lossy().into_owned()).is_some_and(|permission| permission.trusted);
+    let permission = Permission { trusted: approve || was_trusted, configuration: approve.then_some(fingerprint) };
     state.workspace_security.set(&root, permission)
 }
 
@@ -181,14 +187,21 @@ pub fn workspace_trust_set(state: tauri::State<'_, AppState>, grant_id: String, 
 
 /// Recompute the complete authorization on every request. An explicit false
 /// replaces any prior bridge-side consent when config changes or trust is revoked.
-pub fn inject(state: &AppState, grant_id: &str, params: &mut Value) -> Result<(), String> {
+///
+/// `origin` is the granted workspace a worktree grant was made from. A worktree
+/// is a checkout of that workspace, so it is trusted exactly while the workspace
+/// is; it never trusts the workspace in return, and its MCP approval is its own.
+pub fn inject(state: &AppState, grant_id: &str, origin: Option<&Path>, params: &mut Value) -> Result<(), String> {
     let (root, home) = config_roots(state, grant_id)?;
     let (root, workspace) = config(&root)?;
     let home = read_config(&home)?;
     let approved = state.workspace_security.records.lock().map_err(|err| err.to_string())?.get(&root.to_string_lossy().into_owned()).cloned().and_then(|permission| permission.configuration);
     let fingerprint = fingerprint(&root, &workspace, &home);
     let approved = approved.filter(|digest| digest == &fingerprint);
-    let trusted = state.workspace_security.records.lock().map_err(|err| err.to_string())?.get(&root.to_string_lossy().into_owned()).is_some_and(|permission| permission.trusted);
+    let records = state.workspace_security.records.lock().map_err(|err| err.to_string())?;
+    let trusted_at = |at: &Path| records.get(&at.to_string_lossy().into_owned()).is_some_and(|permission| permission.trusted);
+    let trusted = trusted_at(&root) || origin.and_then(|origin| origin.canonicalize().ok()).is_some_and(|origin| trusted_at(&origin));
+    drop(records);
     let object = params.as_object_mut().ok_or("Bridge parameters must be an object")?;
     object.insert("harnessMcpTrust".into(), serde_json::json!({
         "workspaceTrusted": trusted,
@@ -240,8 +253,58 @@ mod tests {
         assert!(error.contains("configuration changed"));
         assert!(!review_mcp(app.state::<AppState>(), grant.clone()).unwrap().current);
         consent_mcp(app.state::<AppState>(), grant.clone(), false, None).unwrap();
-        let revoked = review_mcp(app.state::<AppState>(), grant).unwrap();
+        let revoked = review_mcp(app.state::<AppState>(), grant.clone()).unwrap();
         assert!(!revoked.trusted && !revoked.current);
+        // F0.7: the workspace stays trusted, so its rules and skills keep loading.
+        let mut params = json!({});
+        inject(app.state::<AppState>().inner(), &grant, None, &mut params).unwrap();
+        assert_eq!(params["harnessMcpTrust"]["workspaceTrusted"], true, "withdrawing MCP startup does not untrust the workspace");
+        assert_eq!(params["harnessMcpTrust"]["configurationDigest"], Value::Null);
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn trusting_a_workspace_is_not_an_mcp_approval() {
+        let (state, root, grant, _) = fixture();
+        let app = tauri::test::mock_app();
+        app.manage(state);
+        workspace_trust_set(app.state::<AppState>(), grant.clone(), true).unwrap();
+        assert!(workspace_trust(app.state::<AppState>(), grant.clone()).unwrap());
+        let review = review_mcp(app.state::<AppState>(), grant.clone()).unwrap();
+        assert!(!review.trusted && !review.current, "no servers are approved to start by trusting the folder");
+        let mut params = json!({});
+        inject(app.state::<AppState>().inner(), &grant, None, &mut params).unwrap();
+        assert_eq!(params["harnessMcpTrust"]["workspaceTrusted"], true);
+        assert_eq!(params["harnessMcpTrust"]["configurationDigest"], Value::Null, "MCP stays off until its configuration is approved");
+        workspace_trust_set(app.state::<AppState>(), grant.clone(), false).unwrap();
+        inject(app.state::<AppState>().inner(), &grant, None, &mut params).unwrap();
+        assert_eq!(params["harnessMcpTrust"]["workspaceTrusted"], false);
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn a_worktree_is_trusted_while_the_workspace_it_came_from_is() {
+        let (state, root, workspace_grant, _) = fixture();
+        let checkout = root.join("checkout");
+        fs::create_dir_all(&checkout).unwrap();
+        let worktree_grant = "wg-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string();
+        state.grants.lock().unwrap().insert(worktree_grant.clone(), checkout.canonicalize().unwrap());
+        let app = tauri::test::mock_app();
+        app.manage(state);
+        let origin = root.canonicalize().unwrap();
+        let mut params = json!({});
+        inject(app.state::<AppState>().inner(), &worktree_grant, Some(&origin), &mut params).unwrap();
+        assert_eq!(params["harnessMcpTrust"]["workspaceTrusted"], false, "an untrusted workspace's worktree is untrusted");
+        workspace_trust_set(app.state::<AppState>(), workspace_grant.clone(), true).unwrap();
+        inject(app.state::<AppState>().inner(), &worktree_grant, Some(&origin), &mut params).unwrap();
+        assert_eq!(params["harnessMcpTrust"]["workspaceTrusted"], true, "the worktree follows its workspace");
+        inject(app.state::<AppState>().inner(), &worktree_grant, None, &mut params).unwrap();
+        assert_eq!(params["harnessMcpTrust"]["workspaceTrusted"], false, "a grant with no known origin gets no inherited trust");
+        workspace_trust_set(app.state::<AppState>(), worktree_grant.clone(), true).unwrap();
+        workspace_trust_set(app.state::<AppState>(), workspace_grant.clone(), false).unwrap();
+        inject(app.state::<AppState>().inner(), &worktree_grant, Some(&origin), &mut params).unwrap();
+        assert_eq!(params["harnessMcpTrust"]["workspaceTrusted"], true, "a worktree trusted on its own stays trusted");
+        assert!(!workspace_trust(app.state::<AppState>(), workspace_grant).unwrap(), "trust never flows back up to the workspace");
         fs::remove_dir_all(root).ok();
     }
 
@@ -251,18 +314,18 @@ mod tests {
         let app = tauri::test::mock_app();
         app.manage(state);
         let mut params = json!({"harnessMcpTrust": {"workspaceTrusted": true, "configurationDigest": "f".repeat(64)}});
-        inject(app.state::<AppState>().inner(), &grant, &mut params).unwrap();
+        inject(app.state::<AppState>().inner(), &grant, None, &mut params).unwrap();
         crate::dto::strip_native_fields("sendTurn", &mut params);
         assert_eq!(params["harnessMcpTrust"]["workspaceTrusted"], false);
         assert_eq!(params["harnessMcpTrust"]["configurationDigest"], Value::Null);
         let reviewed = review_mcp(app.state::<AppState>(), grant.clone()).unwrap();
         consent_mcp(app.state::<AppState>(), grant.clone(), true, Some(reviewed.configuration_digest)).unwrap();
-        inject(app.state::<AppState>().inner(), &grant, &mut params).unwrap();
+        inject(app.state::<AppState>().inner(), &grant, None, &mut params).unwrap();
         crate::dto::strip_native_fields("sendTurn", &mut params);
         assert_eq!(params["harnessMcpTrust"]["workspaceTrusted"], true);
         assert_eq!(params["harnessMcpTrust"]["configurationDigest"].as_str().unwrap().len(), 64);
         fs::write(root.join(".glitter/mcp.json"), b"{}").unwrap();
-        inject(app.state::<AppState>().inner(), &grant, &mut params).unwrap();
+        inject(app.state::<AppState>().inner(), &grant, None, &mut params).unwrap();
         crate::dto::strip_native_fields("sendTurn", &mut params);
         assert_eq!(params["harnessMcpTrust"]["configurationDigest"], Value::Null);
         assert_eq!(params["harnessMcpTrust"]["workspaceTrusted"], true, "trust remains; only MCP authorization is withdrawn");
@@ -275,7 +338,7 @@ mod tests {
         crate::run_git(&root, &["init", "--quiet"]).unwrap();
         let before = crate::run_git(&root, &["status", "--porcelain"]).unwrap();
         let mut params = json!({});
-        inject(&state, &grant, &mut params).unwrap();
+        inject(&state, &grant, None, &mut params).unwrap();
         let after = crate::run_git(&root, &["status", "--porcelain"]).unwrap();
         assert_eq!(after, before);
         assert!(!root.join(".glitter-mcp-review").exists());

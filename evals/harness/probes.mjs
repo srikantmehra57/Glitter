@@ -214,6 +214,8 @@ async function withHost({ HarnessHost, SessionStore, root, family, label, hostLi
   const log = createLog();
   const host = new HarnessHost(log.emit, new SessionStore(join(dir, "sessions")), fetchImpl, { homeDir: home, ...hostLimits });
   host.setCredentials(family.credentials);
+  // The picker lists the model library, so the probed model is added the way Settings adds one.
+  await host.modelLibraryPut({ providerId: family.id, model: family.model });
   try {
     await run({ host, log, workspace });
     return log;

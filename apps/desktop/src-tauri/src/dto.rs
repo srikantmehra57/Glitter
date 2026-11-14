@@ -25,6 +25,12 @@ const SHORT_TEXT_LIMIT: usize = 100_000;
 const CURSOR_LIMIT: usize = 4_096;
 const MODEL_LIMIT: usize = 256;
 const PROVIDER_LIMIT: usize = 256;
+/// A library entry's display name; the model id itself is the identity.
+const MODEL_NAME_LIMIT: usize = 120;
+/// Effort levels per library entry (the app's tier vocabulary has seven).
+const MODEL_EFFORTS_LIMIT: usize = 8;
+/// A library entry's context window, in tokens (100M is far past any model).
+const MODEL_WINDOW_MAX: i64 = 100_000_000;
 /// `setSessionOption` option names (`effort`, `mode`, agent-specific).
 const OPTION_LIMIT: usize = 64;
 const OPTION_VALUE_LIMIT: usize = 4_096;
@@ -319,6 +325,69 @@ struct TestModelParams {
     model_id: String,
 }
 
+/// One model library entry as the add/edit dialog submits it. A field the
+/// renderer leaves out is one the user left open; the harness keeps whatever
+/// the live catalog and family tables say about it.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ModelLibraryEntry {
+    provider_id: String,
+    model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    display_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    context_window: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    efforts: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    default_effort: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    images: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    documents: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    video: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cost: Option<ModelEntryCost>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    effort_source: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ModelEntryCost {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    input: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    output: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    currency: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ModelLibraryListParams {}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ModelLibraryPutParams {
+    entry: ModelLibraryEntry,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ModelLibraryRemoveParams {
+    model_id: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ListProviderModelsParams {
+    provider_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    refresh: Option<bool>,
+}
+
 /// Settings → Permissions' rules for the built-in agent. The bridge parses the
 /// pattern; here only the effect is closed and the list and each rule bounded.
 #[derive(Debug, Deserialize, Serialize)]
@@ -326,6 +395,10 @@ struct TestModelParams {
 struct HarnessRulesParams {
     agent_id: AgentId,
     rules: Vec<PermissionRuleParam>,
+    /// Settings → Permissions' protected paths. Absent keeps the bridge's
+    /// current set (the defaults). Each one is a workspace-relative glob.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    protected_paths: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -344,6 +417,9 @@ struct PermissionRuleParam {
 
 const RULES_LIMIT: usize = 200;
 const RULE_LIMIT: usize = 300;
+/// Mirrors `PROTECTED_PATH_LIMIT` and `PROTECTED_PATH_LENGTH` in the harness.
+const PROTECTED_PATHS_LIMIT: usize = 100;
+const PROTECTED_PATH_LIMIT: usize = 200;
 
 /// Settings → Orchestrator's role check: one probe against one Harness model.
 #[derive(Debug, Deserialize, Serialize)]
@@ -840,6 +916,59 @@ pub fn validate_request_id(id: &str) -> Result<(), String> {
 
 /// Validate one method's params and return the canonical object to forward.
 /// A JSON null body counts as `{}` so empty-param verbs stay callable.
+/// The model library entry's shape and bounds; which provider ids exist and
+/// whether an effort level is real are the harness's call, not the DTO's.
+fn validate_model_entry(method: &str, entry: &ModelLibraryEntry) -> Result<(), String> {
+    required(method, "providerId", &entry.provider_id)?;
+    capped(method, "providerId", &entry.provider_id, PROVIDER_LIMIT)?;
+    required(method, "model", &entry.model)?;
+    capped(method, "model", &entry.model, MODEL_LIMIT)?;
+    if entry.model.chars().any(|c| c.is_whitespace()) {
+        return Err(format!("Invalid {method} parameters: model must not contain whitespace."));
+    }
+    if let Some(name) = entry.display_name.as_deref() {
+        capped(method, "displayName", name, MODEL_NAME_LIMIT)?;
+    }
+    if let Some(window) = entry.context_window {
+        if window <= 0 || window > MODEL_WINDOW_MAX {
+            return Err(format!("Invalid {method} parameters: contextWindow must be 1-{MODEL_WINDOW_MAX}."));
+        }
+    }
+    if let Some(efforts) = &entry.efforts {
+        if efforts.len() > MODEL_EFFORTS_LIMIT {
+            return Err(format!("Invalid {method} parameters: at most {MODEL_EFFORTS_LIMIT} effort levels."));
+        }
+        for effort in efforts {
+            required(method, "efforts", effort)?;
+            capped(method, "efforts", effort, OPTION_LIMIT)?;
+        }
+    }
+    if let Some(default) = entry.default_effort.as_deref() {
+        required(method, "defaultEffort", default)?;
+        capped(method, "defaultEffort", default, OPTION_LIMIT)?;
+        let listed = entry.efforts.as_ref().is_some_and(|efforts| efforts.iter().any(|effort| effort == default));
+        if !listed {
+            return Err(format!("Invalid {method} parameters: defaultEffort must be one of efforts."));
+        }
+    }
+    if let Some(source) = entry.effort_source.as_deref() {
+        if source != "fetched" && source != "user" {
+            return Err(format!("Invalid {method} parameters: effortSource must be fetched or user."));
+        }
+    }
+    if let Some(cost) = &entry.cost {
+        for (field, value) in [("input", cost.input.as_deref()), ("output", cost.output.as_deref())] {
+            if let Some(value) = value {
+                capped(method, field, value, 40)?;
+            }
+        }
+        if let Some(currency) = cost.currency.as_deref() {
+            capped(method, "currency", currency, 8)?;
+        }
+    }
+    Ok(())
+}
+
 pub fn validate_params(method: &str, params: &Value) -> Result<Value, String> {
     let empty = Value::Object(Default::default());
     let body = if params.is_null() {
@@ -904,6 +1033,27 @@ pub fn validate_params(method: &str, params: &Value) -> Result<Value, String> {
                 required(method, "modelId", model)?;
                 capped(method, "modelId", model, MODEL_LIMIT)?;
             }
+            emit(method, &parsed)
+        }
+        "modelLibraryList" => {
+            let parsed: ModelLibraryListParams = parse(method, body)?;
+            emit(method, &parsed)
+        }
+        "modelLibraryPut" => {
+            let parsed: ModelLibraryPutParams = parse(method, body)?;
+            validate_model_entry(method, &parsed.entry)?;
+            emit(method, &parsed)
+        }
+        "modelLibraryRemove" => {
+            let parsed: ModelLibraryRemoveParams = parse(method, body)?;
+            required(method, "modelId", &parsed.model_id)?;
+            capped(method, "modelId", &parsed.model_id, MODEL_LIMIT)?;
+            emit(method, &parsed)
+        }
+        "listProviderModels" => {
+            let parsed: ListProviderModelsParams = parse(method, body)?;
+            required(method, "providerId", &parsed.provider_id)?;
+            capped(method, "providerId", &parsed.provider_id, PROVIDER_LIMIT)?;
             emit(method, &parsed)
         }
         "startSession" => {
@@ -999,6 +1149,19 @@ pub fn validate_params(method: &str, params: &Value) -> Result<Value, String> {
                 capped(method, "rule", &rule.rule, RULE_LIMIT)?;
                 if rule.rule.chars().any(char::is_control) {
                     return Err(format!("Invalid {method} parameters: a rule cannot contain control characters."));
+                }
+            }
+            let paths = parsed.protected_paths.as_deref().unwrap_or_default();
+            if paths.len() > PROTECTED_PATHS_LIMIT {
+                return Err(format!("Invalid {method} parameters: at most {PROTECTED_PATHS_LIMIT} protected paths."));
+            }
+            for path in paths {
+                required(method, "protectedPaths", path)?;
+                capped(method, "protectedPaths", path, PROTECTED_PATH_LIMIT)?;
+                // The bridge builds seatbelt rules from these, so anything that
+                // could leave the workspace or break out of a regex is refused.
+                if path.chars().any(|ch| ch.is_control() || matches!(ch, '"' | '\\' | '[' | ']' | '{' | '}')) || path.starts_with('/') || path.starts_with('~') || path.split('/').any(|part| part.is_empty() || part == "." || part == "..") {
+                    return Err(format!("Invalid {method} parameters: a protected path is a pattern inside the workspace."));
                 }
             }
             emit(method, &parsed)
@@ -1194,6 +1357,12 @@ mod tests {
             ("listModels", json!({ "agentId": "harness", "sessionId": "h-1" })),
             ("listModels", json!({ "refresh": true })),
             ("listModels", json!({ "modelId": "anthropic/claude-sonnet-4" })),
+            ("modelLibraryList", json!({})),
+            ("modelLibraryPut", json!({ "entry": { "providerId": "anthropic", "model": "claude-sonnet-4-5" } })),
+            ("modelLibraryPut", json!({ "entry": { "providerId": "custom-1", "model": "glm-5.3", "displayName": "GLM", "contextWindow": 200000, "efforts": ["low", "high"], "defaultEffort": "high", "images": true, "documents": false, "video": null, "cost": { "input": "3", "output": "15", "currency": "USD" }, "effortSource": "user" } })),
+            ("modelLibraryRemove", json!({ "modelId": "anthropic/claude-sonnet-4-5" })),
+            ("listProviderModels", json!({ "providerId": "openrouter" })),
+            ("listProviderModels", json!({ "providerId": "openrouter", "refresh": true })),
             ("startSession", json!({ "agentId": "harness", "mode": "plan" })),
             ("suggest", json!({ "grantId": "wg-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "prompt": "Project: repo", "modelId": "m", "providerId": "p", "timeoutMs": 75000 })),
             ("suggest", json!({ "agentId": "harness", "grantId": "wg-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "prompt": "names only", "modelId": "zen/a" })),
@@ -1271,6 +1440,7 @@ mod tests {
             ("startSession", json!({ "agentId": "harness", "grantId": "g" })),
             ("resumeSession", json!({ "sessionId": "h-1" })),
             ("sendTurn", json!({ "sessionId": "h-1", "text": "hi" })),
+            ("listSkills", json!({ "sessionId": "h-1" })),
             ("harnessMcp", json!({ "sessionId": "h-1" })),
             ("harnessMcpConfig", json!({ "sessionId": "h-1" })),
         ] {
@@ -1311,6 +1481,11 @@ mod tests {
         assert!(validate_params("harnessMcpAddServer", &json!({ "sessionId": "s", "scope": "workspace", "server": { "name": "x", "transport": "stdio", "command": "x", "timeoutMs": 100 } })).is_err());
         assert!(validate_params("harnessMcpAddServer", &json!({ "sessionId": "s", "scope": "workspace", "server": { "name": "x".repeat(65), "transport": "stdio", "command": "x" } })).is_err());
         assert!(validate_params("harnessRules", &json!({ "agentId": "muse", "rules": [] })).is_err(), "no other agent exists");
+        assert!(validate_params("harnessRules", &json!({ "agentId": "harness", "rules": [], "protectedPaths": [".env", "*.pem", ".glitter/**"] })).is_ok());
+        for bad in ["../x", "/etc/passwd", "~/.ssh", "a//b", "a\"b", "a\\b", "[a]", ""] {
+            assert!(validate_params("harnessRules", &json!({ "agentId": "harness", "rules": [], "protectedPaths": [bad] })).is_err(), "{bad}");
+        }
+        assert!(validate_params("harnessRules", &json!({ "agentId": "harness", "rules": [], "protectedPaths": (0..101).map(|i| format!("f{i}")).collect::<Vec<_>>() })).is_err());
         assert!(validate_params("harnessRules", &json!({ "agentId": "harness", "rules": [{ "effect": "ask", "rule": "Bash(x)" }] })).is_err(), "the effect is closed");
         assert!(validate_params("harnessRules", &json!({ "agentId": "harness", "rules": [{ "effect": "allow", "rule": "" }] })).is_err());
         assert!(validate_params("harnessRules", &json!({ "agentId": "harness", "rules": [{ "effect": "allow", "rule": "x".repeat(301) }] })).is_err());
@@ -1369,6 +1544,27 @@ mod tests {
         assert!(validate_params("respondUserInput", &json!({ "sessionId": "s", "userInputId": "q", "response": { "action": "maybe" } })).is_err());
         // Wrong case is not normalized into a valid variant.
         assert!(validate_params("setApprovalMode", &json!({ "sessionId": "s", "mode": "AllowAll" })).is_err());
+    }
+
+    #[test]
+    fn model_library_entries_are_bounded() {
+        let entry = |model: Value| json!({ "entry": model });
+        assert!(validate_params("modelLibraryPut", &entry(json!({ "providerId": "anthropic", "model": "m" }))).is_ok());
+        assert!(validate_params("modelLibraryPut", &entry(json!({ "providerId": "", "model": "m" }))).is_err());
+        assert!(validate_params("modelLibraryPut", &entry(json!({ "providerId": "anthropic", "model": "" }))).is_err());
+        assert!(validate_params("modelLibraryPut", &entry(json!({ "providerId": "anthropic", "model": "a b" }))).is_err());
+        assert!(validate_params("modelLibraryPut", &entry(json!({ "providerId": "anthropic", "model": "m", "contextWindow": 0 }))).is_err());
+        assert!(validate_params("modelLibraryPut", &entry(json!({ "providerId": "anthropic", "model": "m", "contextWindow": 100_000_001 }))).is_err());
+        assert!(validate_params("modelLibraryPut", &entry(json!({ "providerId": "anthropic", "model": "m", "contextWindow": 200_000 }))).is_ok());
+        // A default level must be one the entry lists.
+        assert!(validate_params("modelLibraryPut", &entry(json!({ "providerId": "anthropic", "model": "m", "defaultEffort": "high" }))).is_err());
+        assert!(validate_params("modelLibraryPut", &entry(json!({ "providerId": "anthropic", "model": "m", "efforts": ["low", "high"], "defaultEffort": "high" }))).is_ok());
+        assert!(validate_params("modelLibraryPut", &entry(json!({ "providerId": "anthropic", "model": "m", "effortSource": "guessed" }))).is_err());
+        let nine: Vec<Value> = (0..9).map(|_| json!("low")).collect();
+        assert!(validate_params("modelLibraryPut", &entry(json!({ "providerId": "anthropic", "model": "m", "efforts": nine }))).is_err());
+        assert!(validate_params("modelLibraryPut", &entry(json!({ "providerId": "anthropic", "model": "m", "extra": true }))).is_err());
+        assert!(validate_params("modelLibraryRemove", &json!({ "modelId": "" })).is_err());
+        assert!(validate_params("listProviderModels", &json!({ "providerId": "" })).is_err());
     }
 
     #[test]

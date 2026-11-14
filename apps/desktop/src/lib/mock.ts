@@ -516,7 +516,7 @@ export function mockGitReview(request: GitReviewRequest): GitReview {
 }
 
 export const MOCK_AGENTS: AgentInfo[] = [
-  { id: "harness", name: "Harness", protocol: "native", found: true, path: null, version: null, verified: true, signIn: "Add an API key for a model provider in Settings → Providers.", authenticated: true },
+  { id: "harness", name: "Harness", protocol: "native", found: true, path: null, version: null, verified: true, signIn: "Add an API key for a model provider in Settings → Models & providers.", authenticated: true },
 ];
 
 /** The preview's Harness catalog: models from several providers, as the real catalog lists them. */

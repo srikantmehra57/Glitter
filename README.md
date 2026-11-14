@@ -63,10 +63,23 @@ are no Windows or Linux versions. No signed build has been published yet; see [K
   centred seam, the changed files form one review card, and the turn closes with
   a single **Done** line: duration, input and output tokens, estimated cost and the model,
   with Undo beside it.
-- **Approvals.** Write and edit calls show a diff preview, each choice explains
-  its scope, approvals expire after 10 minutes, and there are keyboard shortcuts
-  (`⌘Y`, `⌘⇧Y`, `⌘⌫`). Permission modes are Ask, Auto and Full access, the same
-  for every agent and model, decided by the app.
+- **Approvals.** Permission modes are Ask, Auto and Full access, the same for
+  every agent and model, decided by the app. File edits run without asking in
+  Ask and Auto. Protected files (agent
+  instructions such as `AGENTS.md`, `.glitter/`, `.env` files and key files,
+  set in Settings → Permissions) ask before every change in every mode, Full
+  access included, and the agent's shell cannot write them; nothing inside
+  `.git` can be edited by the agent at all. An edit that asks shows a diff
+  preview, each choice explains its scope,
+  approvals expire after 10 minutes, and there are keyboard shortcuts (`⌘Y`,
+  `⌘⇧Y`, `⌘⌫`).
+- **Package caches.** On macOS, commands and stdio MCP servers may write the
+  standard npm, Cargo, Gradle, Maven, Go, Bun and Yarn cache folders. These are
+  shared across workspaces and can contain executable package code. Toolchain
+  binaries, configuration, credentials and custom locations outside the writable
+  roots need your own setup or a cache inside the workspace. The
+  [cache policy](docs/DECISIONS.md#package-managers-share-bounded-writable-caches)
+  lists the folders and tradeoffs; network permissions still apply.
 - **Composer.** Model, reasoning-effort and permission pickers — models are
   reached through an icon rail of providers. `@` file mentions from a workspace
   file index, slash prompt macros, file and image attachments by picker or drag
@@ -162,19 +175,36 @@ npm run dev          # native app with hot reload
 npm run dev:ui       # UI only, in a browser, with mock data (no Rust or CLI needed)
 ```
 
-**Use the source-build CLI:**
+**Use the `glitter` command:**
+
+The app ships a terminal CLI that runs the same Harness agent. Install the
+launcher once, after Glitter is in `/Applications`:
 
 ```bash
-npm run build:bridge
-./node_modules/.bin/glitter --help
-./node_modules/.bin/glitter --cwd /path/to/workspace
+npm run install:cli      # writes ~/.local/bin/glitter (--bin to choose, --uninstall to remove)
+glitter                  # chat in the current folder, with approvals
+glitter -p "explain src/main.ts" --output-format json   # one prompt, then exit
+glitter -c               # continue this folder's latest thread
+glitter models           # models in your library
+glitter --help
 ```
 
-It uses the app's provider keys and local Harness threads. `-p` runs one prompt
-without an interactive chat; approval-requiring calls are denied in that mode
-unless a less restrictive permission mode is explicitly selected. The CLI is a
-workspace tool in source builds and is not installed on the system PATH by the
-desktop app.
+The launcher runs the CLI inside the app with the app's bundled Node, so it
+needs no Node install. From a checkout, `npm run build:bridge` and then
+`./node_modules/.bin/glitter` runs the source build instead.
+
+The CLI shares the app's provider keys (read from the Keychain entry Settings →
+Providers writes; macOS may ask once whether `security` may read it), its model
+library, default model, permission mode and permission rules, and its thread
+store: a thread started in the terminal opens in the app, and the reverse.
+Environment variables such as `ANTHROPIC_API_KEY` override saved keys, and
+`ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` point a provider at a proxy (https, or
+http on this machine). Permission modes are `read-only`, `ask` (default),
+`auto` and `full-access`. A `-p` run has no one to ask, so a step that needs
+approval is denied unless `--permission-mode full-access` is set; a change to a
+protected file always needs approval, so `-p` refuses it. A folder's own
+`AGENTS.md`, `CLAUDE.md` and skills load only with `--trust` (the app asks
+first), and its MCP servers start only with `--mcp`, which implies `--trust`.
 
 **Build an unsigned bundle:**
 
@@ -242,7 +272,8 @@ Coding agents should start with [AGENTS.md](AGENTS.md).
   that request, and a summary can miss details. The full transcript remains
   available in the thread.
 - **Harness threads are local.** They live in this Mac's app data folder, with no
-  sync. The included Harness CLI can use the same local session store.
+  sync. The `glitter` CLI uses the same store, so both list the same threads.
+  Do not continue one thread in the app and the terminal at the same time.
 - **Thread lifecycle.** Harness threads do not yet support fork or export.
 - **Coverage gaps.** Native dialogs (folder picker, save panel) and a live,
   authenticated end-to-end session aren't covered by automated tests. The
@@ -265,8 +296,8 @@ Removing the app doesn't delete its local data.
 | Application and security logs | `~/Library/Logs/com.glitter.desktop/` |
 | Credentials and workspace grants | Keychain service `com.glitter.desktop` |
 
-The app points its bridge at that harness folder. Run the bridge outside the
-app, and the same threads default to `~/.glitter/harness/`.
+The app points its agent process at that harness folder, and the `glitter`
+CLI uses the same one (`GLITTER_HARNESS_DIR` overrides it for both).
 
 Session history for the Muse CLI and ACP agents stays in each CLI's own data
 directory; Glitter no longer opens those sessions.
@@ -296,14 +327,12 @@ one Glitter on the Mac.
 ## Documentation
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): processes, trust boundary, data flow, module map
-- [docs/HARNESS_UPGRADE_PLAN.md](docs/HARNESS_UPGRADE_PLAN.md): the current forward roadmap for the built-in agent
-- [docs/harness-context-budget.md](docs/harness-context-budget.md): how a long harness thread is fitted into the model's window
+- [docs/REMEDIATION_PLAN.md](docs/REMEDIATION_PLAN.md): the single source of truth — audit fixes and the delivery roadmap (includes context budgeting and production readiness)
 - [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md): setup, commands, testing, debugging, conventions
 - [docs/AGENT_GUIDE.md](docs/AGENT_GUIDE.md): rules and workflow for AI agents and new contributors
 - [docs/DECISIONS.md](docs/DECISIONS.md): architectural decision log
 - [docs/DESIGN_SYSTEM.md](docs/DESIGN_SYSTEM.md): tokens, typography, copy, component behavior
 - [docs/RELEASING.md](docs/RELEASING.md): versioning, signing, packaging, rollback
-- [docs/production-readiness.md](docs/production-readiness.md): the pre-release audit
 - [CHANGELOG.md](CHANGELOG.md) · [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) · [apps/website/README.md](apps/website/README.md)
 
 ## License

@@ -3,10 +3,12 @@ import { LineFrames, encodeFrame } from "./framing.js";
 import { queueDelta, writeFrame } from "./output.js";
 import { HARNESS_ID, HARNESS_NAME, HarnessHost } from "./harness/host.js";
 import type { McpAuthorization, McpScope, McpServerInput } from "./harness/mcp.js";
+import type { WorkspaceRestore } from "./harness/store.js";
 import { nativeProviderCredentials } from "./harness/providers.js";
 import type { BrowserControlInput, BrowserManager } from "./browser.js";
 import type { BridgeRequest, UserInputResponse } from "./protocol.js";
 import { CREATE_CACHE_TTL_MS, HOST_QUEUE_LIMIT } from "./isolation.js";
+import { normalizeProtectedPaths } from "./harness/permission/protected.js";
 
 /**
  * The app's agent process. The native shell spawns it once and speaks NDJSON
@@ -57,7 +59,44 @@ function skillParam(value: unknown): { selector: string; arguments?: string } | 
   return skill && typeof skill.selector === "string" ? { selector: skill.selector, ...(typeof skill.arguments === "string" ? { arguments: skill.arguments } : {}) } : undefined;
 }
 
+/** A model library entry from the renderer: trimmed to strings, numbers and booleans for the host to validate. */
+function modelEntryParam(value: unknown) {
+  const row = (value ?? {}) as Record<string, unknown>;
+  const cost = row.cost && typeof row.cost === "object" ? row.cost as { input?: unknown; output?: unknown; currency?: unknown } : undefined;
+  const efforts = Array.isArray(row.efforts) ? row.efforts.filter((item): item is string => typeof item === "string") : undefined;
+  const effortSource = row.effortSource === "fetched" || row.effortSource === "user" ? row.effortSource as "fetched" | "user" : undefined;
+  return {
+    providerId: typeof row.providerId === "string" ? row.providerId : "",
+    model: typeof row.model === "string" ? row.model : "",
+    displayName: typeof row.displayName === "string" ? row.displayName : null,
+    contextWindow: typeof row.contextWindow === "number" && Number.isFinite(row.contextWindow) ? Math.trunc(row.contextWindow) : null,
+    ...(efforts ? { efforts } : {}),
+    defaultEffort: typeof row.defaultEffort === "string" ? row.defaultEffort : undefined,
+    images: typeof row.images === "boolean" ? row.images : null,
+    documents: typeof row.documents === "boolean" ? row.documents : null,
+    video: typeof row.video === "boolean" ? row.video : null,
+    cost: cost ? {
+      ...(typeof cost.input === "string" ? { input: cost.input } : {}),
+      ...(typeof cost.output === "string" ? { output: cost.output } : {}),
+      currency: typeof cost.currency === "string" ? cost.currency : null,
+    } : null,
+    ...(effortSource ? { effortSource } : {}),
+  };
+}
+
 const ROUTE_SHAPES = ["direct-small", "direct-builder", "lead-guided", "lead-only"] as const;
+/** Native-only context; the Rust SendTurn DTO refuses renderer-supplied facts. */
+function workspaceRestoresParam(value: unknown): WorkspaceRestore[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length > 100) throw new Error("Invalid workspace restore context.");
+  return value.map((row: unknown) => {
+    if (!row || typeof row !== "object" || !("id" in row) || !("text" in row)
+      || typeof row.id !== "string" || !row.id || row.id.length > 128
+      || typeof row.text !== "string" || row.text.length > 16_384) throw new Error("Invalid workspace restore context.");
+    return { id: row.id, text: row.text };
+  });
+}
+
 /** One message's requested shape, for a routed Harness turn. */
 function shapeParam(value: unknown): (typeof ROUTE_SHAPES)[number] | undefined {
   if (value === undefined) return undefined;
@@ -270,7 +309,7 @@ async function dispatch(method: string, params: Record<string, unknown>) {
   if (method === "detect") {
     // The agent ships with the app; it is ready once a provider is configured.
     const ready = harnessProviders(params).length > 0;
-    return { agents: [{ id: HARNESS_ID, name: HARNESS_NAME, protocol: "native", found: true, path: null, version: null, verified: true, signIn: "Add an API key for a model provider in Settings → Providers.", authenticated: ready }] };
+    return { agents: [{ id: HARNESS_ID, name: HARNESS_NAME, protocol: "native", found: true, path: null, version: null, verified: true, signIn: "Add an API key for a model provider in Settings → Models & providers.", authenticated: ready }] };
   }
   await ensureBrowser();
   harness.setCredentials(nativeProviderCredentials(params.providerKeys));
@@ -296,6 +335,14 @@ async function dispatchHarness(method: string, params: Record<string, unknown>) 
       return harness.listSessions(workspaceRoot || undefined);
     case "listModels":
       return harness.listModels(sessionId || undefined, params.refresh === true);
+    case "modelLibraryList":
+      return harness.modelLibraryList();
+    case "modelLibraryPut":
+      return harness.modelLibraryPut(modelEntryParam(params.entry));
+    case "modelLibraryRemove":
+      return harness.modelLibraryRemove(String(params.modelId ?? ""));
+    case "listProviderModels":
+      return harness.listProviderModels(String(params.providerId ?? ""), params.refresh === true);
     case "startSession": {
       const replayed = replayCreate("startSession", params);
       if (replayed) return replayed;
@@ -332,6 +379,7 @@ async function dispatchHarness(method: string, params: Record<string, unknown>) 
         ifBusy: ifBusy as "queue" | "steer" | "replace" | undefined,
         skill: skillParam(params.skill),
         forcedShape: shapeParam(params.forcedShape),
+        workspaceRestores: workspaceRestoresParam(params.workspaceRestores),
       });
     }
     case "steerTurn":
@@ -388,7 +436,10 @@ async function dispatchHarness(method: string, params: Record<string, unknown>) 
         refresh: params.refresh === true,
       });
     case "harnessRules":
-      return harness.setPermissionRules(Array.isArray(params.rules) ? (params.rules as Array<{ effect?: unknown; rule?: unknown }>).filter((entry) => (entry.effect === "allow" || entry.effect === "deny") && typeof entry.rule === "string").map((entry) => ({ effect: entry.effect as "allow" | "deny", rule: entry.rule as string })) : []);
+      return harness.setPermissionRules(
+        Array.isArray(params.rules) ? (params.rules as Array<{ effect?: unknown; rule?: unknown }>).filter((entry) => (entry.effect === "allow" || entry.effect === "deny") && typeof entry.rule === "string").map((entry) => ({ effect: entry.effect as "allow" | "deny", rule: entry.rule as string })) : [],
+        Array.isArray(params.protectedPaths) ? normalizeProtectedPaths(params.protectedPaths) : undefined,
+      );
     case "compactSession":
       return harness.compactSession({ sessionId });
     case "closeSession": {

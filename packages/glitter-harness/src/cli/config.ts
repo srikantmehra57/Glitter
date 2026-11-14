@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { PROVIDERS, nativeProviderCredentials, type ProviderCredentials } from "../harness/providers.js";
 import type { PermissionRule } from "../harness/permission/rules.js";
+import { normalizeProtectedPaths } from "../harness/permission/protected.js";
 
 /**
  * What the CLI shares with the app: provider keys from the app's Keychain
@@ -123,6 +124,8 @@ export type AppDefaults = {
   effort?: string;
   approvalMode?: string;
   rules: PermissionRule[];
+  /** Settings → Permissions' protected paths; absent means the defaults. */
+  protectedPaths?: string[];
 };
 
 /** The app's saved defaults and permission rules from its settings file. */
@@ -142,6 +145,7 @@ export function appDefaults(file = join(appDataDir(), "glitter.json")): AppDefau
     : [];
   const modelId = text(settings.defaultModel);
   return {
+    ...(Array.isArray(settings.protectedPaths) ? { protectedPaths: normalizeProtectedPaths(settings.protectedPaths) } : {}),
     // Harness models are `provider/model`. An id saved for an earlier agent has no provider and is ignored.
     ...(modelId?.includes("/") ? { modelId } : {}),
     ...(text(settings.defaultEffort) ? { effort: text(settings.defaultEffort) } : {}),
